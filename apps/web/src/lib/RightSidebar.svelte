@@ -727,6 +727,7 @@
   class="flex flex-col h-full border-l border-border bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out
     {collapsed ? 'w-0 opacity-0 overflow-hidden md:w-0' : 'w-72'}
     fixed right-0 md:relative z-40 md:z-auto"
+  data-spotlight="properties-panel"
 >
   <!-- Header with collapse button -->
   <div

@@ -59,6 +59,15 @@ export interface BundlePluginDependency {
 
 export type BundleTypographyPreset = Partial<TypographySettings>;
 
+export type SpotlightPlacement = "top" | "bottom" | "left" | "right";
+
+export interface SpotlightStep {
+  target: string;
+  title: string;
+  description: string;
+  placement: SpotlightPlacement;
+}
+
 export interface BundleRegistryEntry {
   kind: "bundle";
   id: string;
@@ -78,6 +87,8 @@ export interface BundleRegistryEntry {
   typography_id: string | null;
   typography: BundleTypographyPreset | null;
   plugins: BundlePluginDependency[];
+  starter_workspace_id: string | null;
+  spotlight: SpotlightStep[] | null;
 }
 
 export interface TemplateRegistryEntry {

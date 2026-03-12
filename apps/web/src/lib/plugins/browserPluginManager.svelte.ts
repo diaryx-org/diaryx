@@ -517,10 +517,16 @@ export async function dispatchFileOpenedEvent(path: string): Promise<void> {
   });
 }
 
-export async function dispatchFileSavedEvent(path: string): Promise<void> {
+export async function dispatchFileSavedEvent(
+  path: string,
+  options?: { bodyChanged?: boolean },
+): Promise<void> {
   await dispatchEvent({
     event_type: "file_saved",
-    payload: { path: normalizePluginEventPath(path) },
+    payload: {
+      path: normalizePluginEventPath(path),
+      body_changed: options?.bodyChanged ?? true,
+    },
   });
 }
 

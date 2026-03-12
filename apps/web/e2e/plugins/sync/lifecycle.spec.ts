@@ -14,6 +14,7 @@ import {
   installSyncPlugin,
   installSyncPluginInCurrentWorkspace,
   signInWithDevMagicLink,
+  removeCurrentDeviceFromAccount,
   waitForE2EBridge,
   waitForSyncSession,
   createSyncedWorkspaceViaUi,
@@ -137,6 +138,10 @@ test.describe("Sync › Lifecycle", () => {
       console.log("[sync-e2e:re-snapshot] step: re-uploading snapshot");
       await uploadWorkspaceSnapshot(pageA, pair.remoteId);
 
+      console.log("[sync-e2e:re-snapshot] step: freeing one registered device for fresh client");
+      await removeCurrentDeviceFromAccount(pageB);
+      await pair.contextB.close();
+
       // Download in a fresh third client and verify.
       const contextC = await browser.newContext();
       await contextC.addInitScript(() => {
@@ -157,12 +162,11 @@ test.describe("Sync › Lifecycle", () => {
         await waitForAppReady(pageC, 45000);
         await installSyncPlugin(pageC, wasmBase64);
 
-        const cEmail = `sync-e2e-re-snapshot-c-${runId}@example.com`;
-        await signInWithDevMagicLink(pageC, cEmail);
+        await signInWithDevMagicLink(pageC, pair.email);
         await waitForE2EBridge(pageC);
         await pageC.evaluate(() => (globalThis as any).__diaryx_e2e.setAutoAllowPermissions(true));
 
-        await downloadRemoteWorkspaceViaUi(pageC, `Sync E2E re-snapshot ${runId}`);
+        await downloadRemoteWorkspaceViaUi(pageC, `Sync E2E re-snapshot ${runId}`, pair.remoteId);
         await installSyncPluginInCurrentWorkspace(pageC, wasmBase64);
         await waitForSyncSession(pageC);
 

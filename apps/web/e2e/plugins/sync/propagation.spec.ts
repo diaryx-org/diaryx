@@ -47,7 +47,7 @@ test.describe("Sync › Propagation", () => {
     test.setTimeout(300000);
 
     const pair = await setupSyncedPair(browser, "crud");
-    const { pageA, pageB } = pair;
+    const { pageA, pageB, rootPathB } = pair;
 
     try {
       const runId = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
@@ -69,6 +69,7 @@ test.describe("Sync › Propagation", () => {
       await expect
         .poll(async () => await readEntryBody(pageB, createdEntryPath), { timeout: 30000 })
         .toContain(createdEntryMarker);
+      await openEntryForSync(pageB, rootPathB);
 
       // --- Rename ---
       const renamedEntryPath = await renameEntry(
@@ -76,7 +77,6 @@ test.describe("Sync › Propagation", () => {
         createdEntryPath,
         renamedEntryFilename,
       );
-      await openEntryForSync(pageA, renamedEntryPath);
 
       // --- Move ---
       const destinationParentPath = await createIndexEntry(pageA, destinationParentStem);

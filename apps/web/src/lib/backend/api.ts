@@ -150,7 +150,7 @@ export function createApi(backend: Backend) {
       if (effectivePath !== path) {
         await dispatchFileMovedEvent(path, effectivePath);
       }
-      await dispatchFileSavedEvent(effectivePath);
+      await dispatchFileSavedEvent(effectivePath, { bodyChanged: true });
       await mirrorWorkspaceMutation();
 
       return newPath;
@@ -196,7 +196,7 @@ export function createApi(backend: Backend) {
       });
       const renamedPath = expectResponse(response, 'String').data;
       await dispatchFileMovedEvent(path, renamedPath);
-      await dispatchFileSavedEvent(renamedPath);
+      await dispatchFileSavedEvent(renamedPath, { bodyChanged: false });
       await mirrorWorkspaceMutation();
       return renamedPath;
     },
@@ -263,7 +263,7 @@ export function createApi(backend: Backend) {
       } else {
         // Relationship-only moves update frontmatter/contents without changing the file path.
         // Emit a save event so sync listeners re-read the affected entry metadata.
-        await dispatchFileSavedEvent(entryPath);
+        await dispatchFileSavedEvent(entryPath, { bodyChanged: false });
       }
       await mirrorWorkspaceMutation();
       return nextPath;
@@ -356,7 +356,7 @@ export function createApi(backend: Backend) {
       if (effectivePath !== path) {
         await dispatchFileMovedEvent(path, effectivePath);
       }
-      await dispatchFileSavedEvent(effectivePath);
+      await dispatchFileSavedEvent(effectivePath, { bodyChanged: false });
       await mirrorWorkspaceMutation();
       if (response.type === 'String') {
         return response.data;
@@ -370,7 +370,7 @@ export function createApi(backend: Backend) {
         type: 'RemoveFrontmatterProperty',
         params: { path, key },
       });
-      await dispatchFileSavedEvent(path);
+      await dispatchFileSavedEvent(path, { bodyChanged: false });
       await mirrorWorkspaceMutation();
     },
 

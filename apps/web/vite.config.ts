@@ -12,9 +12,29 @@ const isTauri = !!process.env.TAURI_ENV_PLATFORM;
 const useWasmCdn = !!process.env.VITE_WASM_CDN_URL;
 const tauriDevHost = process.env.TAURI_DEV_HOST;
 const useHttps = !!process.env.VITE_HTTPS;
-const devPort = 5174;
 const canonicalDevHost = "localhost";
 const enableCrossOriginIsolation = process.env.VITE_DISABLE_COI !== "1";
+
+function readCliFlag(flagName: string): string | undefined {
+  const exactIndex = process.argv.findIndex((arg) => arg === `--${flagName}`);
+  if (exactIndex >= 0) {
+    return process.argv[exactIndex + 1];
+  }
+
+  const prefixed = process.argv.find((arg) => arg.startsWith(`--${flagName}=`));
+  return prefixed?.slice(flagName.length + 3);
+}
+
+const requestedDevPort = process.env.PW_WEB_PORT ?? readCliFlag("port");
+const requestedDevHost = readCliFlag("host");
+const explicitDevOrigin = process.env.PW_BASE_URL;
+const devPort = Number(requestedDevPort ?? 5174);
+const devOrigin = explicitDevOrigin
+  ?? `${useHttps ? "https" : "http"}://${
+    requestedDevHost && requestedDevHost !== "127.0.0.1"
+      ? requestedDevHost
+      : canonicalDevHost
+  }:${devPort}`;
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -30,10 +50,10 @@ export default defineConfig({
   server: {
     port: devPort,
     strictPort: isTauri, // Tauri expects a fixed port
-    host: isTauri ? tauriDevHost || false : canonicalDevHost,
+    host: isTauri ? tauriDevHost || false : requestedDevHost || canonicalDevHost,
     origin: isTauri
       ? undefined
-      : `${useHttps ? "https" : "http"}://${canonicalDevHost}:${devPort}`,
+      : devOrigin,
     hmr: tauriDevHost
       ? {
           protocol: "ws",

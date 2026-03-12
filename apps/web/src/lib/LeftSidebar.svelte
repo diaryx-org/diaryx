@@ -92,6 +92,7 @@
     onWorkspaceSwitchStart?: () => void;
     onWorkspaceSwitchComplete?: () => void;
     onInitializeWorkspace?: () => void;
+    onShowWelcome?: () => void;
     onSetAudience?: (path: string) => void;
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
@@ -137,6 +138,7 @@
     onWorkspaceSwitchStart,
     onWorkspaceSwitchComplete,
     onInitializeWorkspace,
+    onShowWelcome,
     onSetAudience,
     requestedTab = null,
     onRequestedTabConsumed,
@@ -298,7 +300,9 @@
     }
 
     const filtered = new Set(
-      Array.from(selectedEntryPaths).filter((path) => knownTreePaths.has(path)),
+      Array.from(selectedEntryPaths).filter(
+        (path) => knownTreePaths.has(path) || path === selectedEntryPath,
+      ),
     );
     if (filtered.size !== selectedEntryPaths.size) {
       selectedEntryPaths = filtered;
@@ -1264,13 +1268,14 @@
   <div
     class="flex items-center justify-between px-4 py-4 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+1rem)]"
   >
-    <a
-      href="/"
+    <button
+      type="button"
+      onclick={onShowWelcome}
       class="text-xl font-semibold text-sidebar-foreground hover:text-sidebar-foreground/80 transition-colors flex items-baseline gap-1.5"
     >
       Diaryx
       <span class="text-xs font-normal text-sidebar-foreground/50">v{__APP_VERSION__}</span>
-    </a>
+    </button>
     <Tooltip.Root>
       <Tooltip.Trigger>
         <Button
@@ -1337,7 +1342,7 @@
               </Button>
             </div>
           {/if}
-          <div class="space-y-0.5" role="tree" aria-label="Workspace entries">
+          <div class="space-y-0.5" role="tree" aria-label="Workspace entries" data-spotlight="workspace-tree">
             {@render treeNode(tree, 0)}
           </div>
         {/if}
@@ -1592,6 +1597,7 @@
               onclick={handleOpenMarketplaceClick}
               class="size-8"
               aria-label="Open marketplace"
+              data-spotlight="marketplace-button"
             >
               <Store class="size-4" />
             </Button>

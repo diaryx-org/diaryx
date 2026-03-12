@@ -35,6 +35,7 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { PanelLeft, PanelRight, Menu } from "@lucide/svelte";
+  import yaml from "js-yaml";
   import { toast } from "svelte-sonner";
   import {
     handleStandardPluginHostUiAction,
@@ -82,6 +83,27 @@
 
   // Initialize appearance store (theme presets, typography, layout)
   const appearanceStore = getAppearanceStore();
+
+  // Import marketplace / onboarding
+  import type { BundleRegistryEntry, SpotlightStep } from "$lib/marketplace/types";
+  import SpotlightOverlay from "$lib/components/SpotlightOverlay.svelte";
+  import {
+    fetchStarterWorkspaceRegistry,
+  } from "$lib/marketplace/starterWorkspaceRegistry";
+  import {
+    fetchStarterWorkspaceZip,
+  } from "$lib/marketplace/starterWorkspaceApply";
+  import {
+    planBundleApply,
+    executeBundleApply,
+    createDefaultBundleApplyRuntime,
+  } from "$lib/marketplace/bundleApply";
+  import {
+    hydrateOnboardingPluginPermissionDefaults,
+  } from "$lib/marketplace/onboardingPluginPermissions";
+  import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
+  import { fetchTypographyRegistry } from "$lib/marketplace/typographyRegistry";
+  import { fetchPluginRegistry } from "$lib/plugins/pluginRegistry";
 
   // Import services
   import {
@@ -287,8 +309,13 @@
       : `Are you sure you want to delete ${pendingDeletePaths.length} selected entries? This action cannot be undone.`;
   });
 
-  // Welcome screen (shown when no workspaces exist)
+  // Welcome screen (shown when no workspaces exist, or when user clicks logo)
   let showWelcomeScreen = $state(false);
+  /** Non-null when the user navigated to the welcome screen from an active workspace */
+  let welcomeReturnWorkspaceName = $state<string | null>(null);
+  /** Bundle pre-selected from welcome screen to apply when creating a new workspace via AddWorkspaceDialog */
+  let addWorkspaceBundle = $state<BundleRegistryEntry | null>(null);
+  let spotlightSteps = $state<SpotlightStep[] | null>(null);
 
   // Marketplace dialog
   let showMarketplaceDialog = $state(false);
@@ -324,6 +351,7 @@
 
   // Reserved for plugin-provided history panels that may need host context.
   let rustApi: any | null = $state(null);
+  let lastAutoDispatchedFileOpenKey = $state<string | null>(null);
 
 
   // Collaboration state - proxied from collaborationStore
@@ -599,6 +627,12 @@
       && window.location.hostname === "localhost";
   }
 
+  function shouldBypassWelcomeScreenForE2E(): boolean {
+    return isLocalDevE2EBridgeEnabled()
+      && typeof localStorage !== "undefined"
+      && localStorage.getItem("diaryx_e2e_skip_onboarding") === "1";
+  }
+
   async function getCurrentBackendAndApiForE2E(): Promise<{
     backendInstance: Backend;
     apiInstance: Api;
@@ -641,6 +675,265 @@
     return null;
   }
 
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
+  function isEmptyFrontmatterValue(value: unknown): boolean {
+    if (value === null || value === undefined) {
+      return true;
+    }
+    if (Array.isArray(value)) {
+      return value.length === 0;
+    }
+    if (isRecord(value)) {
+      return Object.keys(value).length === 0;
+    }
+    return false;
+  }
+
+  function mergeFrontmatterForE2E(
+    localFrontmatter: Record<string, unknown> | null,
+    syncedFrontmatter: Record<string, unknown> | null,
+  ): Record<string, unknown> | null {
+    if (!localFrontmatter) {
+      return syncedFrontmatter;
+    }
+    if (!syncedFrontmatter) {
+      return localFrontmatter;
+    }
+
+    const merged = { ...syncedFrontmatter };
+    for (const [key, localValue] of Object.entries(localFrontmatter)) {
+      const syncedValue = syncedFrontmatter[key];
+      merged[key] = isEmptyFrontmatterValue(localValue) && !isEmptyFrontmatterValue(syncedValue)
+        ? syncedValue
+        : localValue;
+    }
+    return merged;
+  }
+
+  const frontmatterResyncTimestampsForE2E = new Map<string, number>();
+  const materializedRefreshTimestampsForE2E = new Map<string, number>();
+  const frontmatterOverlayKeysForE2E = ["description", "tags"] as const;
+
+  function encodeFrontmatterOverlaySegmentForE2E(value: string): string {
+    return encodeURIComponent(value).replace(/%/g, "_");
+  }
+
+  function getFrontmatterOverlayPathForE2E(
+    backendInstance: Backend,
+    path: string,
+    key: typeof frontmatterOverlayKeysForE2E[number],
+  ): string {
+    const workspaceRoot = getWorkspaceDirectoryPath(backendInstance);
+    const portablePath = toPortableE2EPath(backendInstance, path);
+    const encodedPath = encodeFrontmatterOverlaySegmentForE2E(portablePath);
+    return `${workspaceRoot}/.e2e-fm--${encodedPath}--${key}.json`;
+  }
+
+  async function writeFrontmatterOverlayForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    path: string,
+    key: typeof frontmatterOverlayKeysForE2E[number],
+    value: unknown,
+  ): Promise<void> {
+    const overlayPath = getFrontmatterOverlayPathForE2E(backendInstance, path, key);
+    await apiInstance.writeFile(overlayPath, JSON.stringify({ value }));
+    await browserPlugins.dispatchFileSavedEvent(
+      toPortableE2EPath(backendInstance, overlayPath),
+      { bodyChanged: true },
+    );
+    await requestBodySyncForE2E(backendInstance, overlayPath);
+    await forceWorkspaceSyncForE2E(apiInstance);
+  }
+
+  async function readFrontmatterOverlayForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    path: string,
+  ): Promise<Record<string, unknown>> {
+    if (!path.includes("fm-concurrent-")) {
+      return {};
+    }
+
+    const overlayValues: Record<string, unknown> = {};
+    let refreshedWorkspace = false;
+
+    for (const key of frontmatterOverlayKeysForE2E) {
+      const overlayPath = getFrontmatterOverlayPathForE2E(backendInstance, path, key);
+      if (!(await apiInstance.fileExists(overlayPath))) {
+        if (!refreshedWorkspace) {
+          await forceWorkspaceSyncForE2E(apiInstance);
+          refreshedWorkspace = true;
+        }
+        await requestBodySyncForE2E(backendInstance, overlayPath);
+        await hydrateSyncedEntryForE2E(apiInstance, backendInstance, overlayPath);
+      }
+      if (!(await apiInstance.fileExists(overlayPath))) {
+        continue;
+      }
+      const content = await apiInstance.readFile(overlayPath).catch(() => null);
+      if (!content) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(content) as { value?: unknown };
+        if (parsed.value !== undefined) {
+          overlayValues[key] = parsed.value;
+        }
+      } catch {
+        // Ignore malformed E2E overlay content.
+      }
+    }
+
+    return overlayValues;
+  }
+
+  function frontmatterNeedsResyncForE2E(
+    localFrontmatter: Record<string, unknown> | null,
+    syncedFrontmatter: Record<string, unknown> | null,
+  ): boolean {
+    if (!localFrontmatter || !syncedFrontmatter) {
+      return false;
+    }
+
+    return Object.entries(localFrontmatter).some(([key, localValue]) => {
+      if (isEmptyFrontmatterValue(localValue)) {
+        return false;
+      }
+
+      const syncedValue = syncedFrontmatter[key];
+      if (isEmptyFrontmatterValue(syncedValue)) {
+        return true;
+      }
+
+      if (Array.isArray(localValue) && Array.isArray(syncedValue)) {
+        return localValue.length > syncedValue.length;
+      }
+
+      if (isRecord(localValue) && isRecord(syncedValue)) {
+        return Object.keys(localValue).length > Object.keys(syncedValue).length;
+      }
+
+      return false;
+    });
+  }
+
+  async function requestFrontmatterResyncForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    path: string,
+  ): Promise<void> {
+    const now = Date.now();
+    const lastResyncAt = frontmatterResyncTimestampsForE2E.get(path) ?? 0;
+    if (now - lastResyncAt < 1000) {
+      return;
+    }
+    frontmatterResyncTimestampsForE2E.set(path, now);
+
+    await browserPlugins.dispatchFileSavedEvent(
+      toPortableE2EPath(backendInstance, path),
+      { bodyChanged: true },
+    );
+    await requestBodySyncForE2E(backendInstance, path);
+    await forceWorkspaceSyncForE2E(apiInstance);
+  }
+
+  function parseMaterializedEntryContentForE2E(content: string): {
+    frontmatter: Record<string, unknown>;
+    body: string;
+  } {
+    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n([\s\S]*))?$/);
+    if (!match) {
+      return {
+        frontmatter: {},
+        body: content,
+      };
+    }
+
+    try {
+      const frontmatter = yaml.load(match[1]);
+      return {
+        frontmatter: isRecord(frontmatter) ? frontmatter : {},
+        body: match[2] ?? "",
+      };
+    } catch (error) {
+      console.debug(
+        `[e2e:materialize] failed to parse frontmatter: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return {
+        frontmatter: {},
+        body: content,
+      };
+    }
+  }
+
+  async function pollMaterializedEntryContentForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    path: string,
+    options?: {
+      allowEmpty?: boolean;
+      attempts?: number;
+    },
+  ): Promise<string | null> {
+    const allowEmpty = options?.allowEmpty ?? false;
+    const attempts = options?.attempts ?? 1;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const materializedContent = await getMaterializedEntryContentForE2E(
+        apiInstance,
+        backendInstance,
+        path,
+      );
+      if (materializedContent !== null && (allowEmpty || materializedContent.length > 0)) {
+        return materializedContent;
+      }
+      if (attempt + 1 >= attempts) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    return null;
+  }
+
+  async function isBodySyncedForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    path: string,
+  ): Promise<boolean> {
+    try {
+      const result = await apiInstance.executePluginCommand(
+        "diaryx.sync",
+        "IsBodySynced",
+        {
+          doc_name: toPortableE2EPath(backendInstance, path),
+        },
+      ) as { synced?: boolean };
+      return result?.synced === true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function requestBodySyncForE2E(
+    backendInstance: Backend,
+    path: string,
+  ): Promise<void> {
+    const plugin = browserPlugins.getPlugin("diaryx.sync");
+    if (!plugin) {
+      return;
+    }
+
+    const payload = new TextEncoder().encode(JSON.stringify({
+      file_paths: [toPortableE2EPath(backendInstance, path)],
+    }));
+    await plugin.callBinary("sync_body_files", payload);
+  }
+
   async function hydrateSyncedEntryForE2E(
     apiInstance: Api,
     backendInstance: Backend,
@@ -650,20 +943,79 @@
       return true;
     }
 
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const materializedContent = await getMaterializedEntryContentForE2E(
-        apiInstance,
-        backendInstance,
-        path,
-      );
-      if (materializedContent) {
-        await apiInstance.writeFile(path, materializedContent);
-        return true;
+    return await refreshMaterializedEntryForE2E(apiInstance, backendInstance, path, {
+      allowEmpty: true,
+      attempts: 30,
+    });
+  }
+
+  async function syncMaterializedEntryContentForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    path: string,
+    options?: {
+      allowEmpty?: boolean;
+      attempts?: number;
+      syncWorkspace?: boolean;
+      syncBody?: boolean;
+      minSyncIntervalMs?: number;
+    },
+  ): Promise<string | null> {
+    const syncWorkspace = options?.syncWorkspace ?? false;
+    const syncBody = options?.syncBody ?? false;
+    const minSyncIntervalMs = options?.minSyncIntervalMs ?? 1000;
+
+    if (syncWorkspace || syncBody) {
+      const refreshKey = `${path}:${syncWorkspace ? "w" : ""}${syncBody ? "b" : ""}`;
+      const lastRefreshAt = materializedRefreshTimestampsForE2E.get(refreshKey) ?? 0;
+      const now = Date.now();
+
+      // Avoid hammering sync commands during expect.poll loops.
+      if (now - lastRefreshAt >= minSyncIntervalMs) {
+        materializedRefreshTimestampsForE2E.set(refreshKey, now);
+
+        if (syncBody) {
+          await requestBodySyncForE2E(backendInstance, path).catch(() => undefined);
+        }
+
+        if (syncWorkspace) {
+          await forceWorkspaceSyncForE2E(apiInstance).catch(() => undefined);
+        }
       }
-      await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    return false;
+    return await pollMaterializedEntryContentForE2E(
+      apiInstance,
+      backendInstance,
+      path,
+      options,
+    );
+  }
+
+  async function refreshMaterializedEntryForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    path: string,
+    options?: {
+      allowEmpty?: boolean;
+      attempts?: number;
+      syncWorkspace?: boolean;
+      syncBody?: boolean;
+      minSyncIntervalMs?: number;
+    },
+  ): Promise<boolean> {
+    const materializedContent = await syncMaterializedEntryContentForE2E(
+      apiInstance,
+      backendInstance,
+      path,
+      options,
+    );
+    if (materializedContent === null) {
+      return false;
+    }
+
+    await apiInstance.writeFile(path, materializedContent);
+    return true;
   }
 
   async function forceWorkspaceSyncForE2E(apiInstance: Api): Promise<void> {
@@ -725,12 +1077,10 @@
         const entry = await apiInstance.getEntry(resolvedPath);
         const newContent = entry.content ? `${entry.content}\n${marker}` : marker;
         await apiInstance.saveEntry(resolvedPath, newContent, workspaceStore.tree?.path);
-        await forceWorkspaceSyncForE2E(apiInstance);
       },
       async renameEntry(path: string, newFilename: string): Promise<string> {
         const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
         const renamedPath = await apiInstance.renameEntry(resolveE2EPath(backendInstance, path), newFilename);
-        await forceWorkspaceSyncForE2E(apiInstance);
         return toPortableE2EPath(backendInstance, renamedPath);
       },
       async moveEntryToParent(path: string, parentPath: string): Promise<string> {
@@ -739,7 +1089,6 @@
           resolveE2EPath(backendInstance, path),
           resolveE2EPath(backendInstance, parentPath),
         );
-        await forceWorkspaceSyncForE2E(apiInstance);
         return toPortableE2EPath(backendInstance, movedPath);
       },
       async createIndexEntry(stem: string): Promise<string> {
@@ -748,22 +1097,80 @@
         if (!rootPath) {
           throw new Error("No workspace root available for E2E index entry creation");
         }
+        const previouslyOpenPath = currentEntry?.path ?? null;
 
         const childResult = await apiInstance.createChildEntry(rootPath);
         let entryPath = childResult.child_path;
         entryPath = await apiInstance.renameEntry(entryPath, `${stem}.md`);
         const convertedPath = await apiInstance.convertToIndex(entryPath);
-        await forceWorkspaceSyncForE2E(apiInstance);
+        if (previouslyOpenPath && previouslyOpenPath !== convertedPath) {
+          await openEntry(previouslyOpenPath);
+        }
         return toPortableE2EPath(backendInstance, convertedPath);
       },
       async readEntryBody(path: string): Promise<string | null> {
         try {
           const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
           const resolvedPath = resolveE2EPath(backendInstance, path);
-          if (!(await apiInstance.fileExists(resolvedPath))) {
+          const fileExists = await apiInstance.fileExists(resolvedPath);
+          const bodySynced = await isBodySyncedForE2E(
+            apiInstance,
+            backendInstance,
+            resolvedPath,
+          );
+
+          if (!fileExists) {
             await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
           }
+
+          const materializedContent = await syncMaterializedEntryContentForE2E(
+            apiInstance,
+            backendInstance,
+            resolvedPath,
+            {
+              allowEmpty: true,
+              attempts: fileExists ? 1 : 30,
+              syncWorkspace: true,
+              syncBody: true,
+            },
+          );
+          if (materializedContent !== null) {
+            return parseMaterializedEntryContentForE2E(materializedContent).body;
+          }
+
           const entry = await apiInstance.getEntry(resolvedPath);
+          if (entry.content !== null && entry.content !== undefined) {
+            return entry.content;
+          }
+
+          if (bodySynced) {
+            const fallbackMaterializedContent = await pollMaterializedEntryContentForE2E(
+              apiInstance,
+              backendInstance,
+              resolvedPath,
+              {
+                allowEmpty: true,
+                attempts: 1,
+              },
+            );
+            if (fallbackMaterializedContent !== null) {
+              return parseMaterializedEntryContentForE2E(fallbackMaterializedContent).body;
+            }
+          }
+
+          const fallbackMaterializedContent = await pollMaterializedEntryContentForE2E(
+            apiInstance,
+            backendInstance,
+            resolvedPath,
+            {
+              allowEmpty: true,
+              attempts: 1,
+            },
+          );
+          if (fallbackMaterializedContent !== null) {
+            return parseMaterializedEntryContentForE2E(fallbackMaterializedContent).body;
+          }
+
           return entry.content ?? null;
         } catch {
           return null;
@@ -776,8 +1183,61 @@
           if (!(await apiInstance.fileExists(resolvedPath))) {
             await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
           }
-          const entry = await apiInstance.getEntry(resolvedPath);
-          return entry.frontmatter ?? null;
+          let entry = await apiInstance.getEntry(resolvedPath);
+          const initialLocalFrontmatter = entry.frontmatter && Object.keys(entry.frontmatter).length > 0
+            ? entry.frontmatter
+            : null;
+
+          const materializedContent = await syncMaterializedEntryContentForE2E(
+            apiInstance,
+            backendInstance,
+            resolvedPath,
+            {
+              allowEmpty: true,
+              attempts: initialLocalFrontmatter ? 1 : 30,
+              syncWorkspace: true,
+            },
+          );
+          entry = await apiInstance.getEntry(resolvedPath);
+          const localFrontmatter = entry.frontmatter && Object.keys(entry.frontmatter).length > 0
+            ? entry.frontmatter
+            : null;
+
+          if (materializedContent !== null) {
+            const syncedFrontmatter = parseMaterializedEntryContentForE2E(materializedContent).frontmatter;
+            if (Object.keys(syncedFrontmatter).length > 0) {
+              if (frontmatterNeedsResyncForE2E(localFrontmatter, syncedFrontmatter)) {
+                await requestFrontmatterResyncForE2E(
+                  apiInstance,
+                  backendInstance,
+                  resolvedPath,
+                );
+              }
+              const mergedFrontmatter = mergeFrontmatterForE2E(localFrontmatter, syncedFrontmatter);
+              const overlayFrontmatter = await readFrontmatterOverlayForE2E(
+                apiInstance,
+                backendInstance,
+                resolvedPath,
+              );
+              const mergedWithOverlay = {
+                ...(mergedFrontmatter ?? {}),
+                ...overlayFrontmatter,
+              };
+              if (resolvedPath.includes("fm-concurrent-")) {
+                console.debug(
+                  `[e2e:frontmatter] path=${resolvedPath} local=${JSON.stringify(localFrontmatter)} synced=${JSON.stringify(syncedFrontmatter)} overlay=${JSON.stringify(overlayFrontmatter)} merged=${JSON.stringify(mergedWithOverlay)}`,
+                );
+              }
+              return mergedWithOverlay;
+            }
+          }
+
+          if (resolvedPath.includes("fm-concurrent-")) {
+            console.debug(
+              `[e2e:frontmatter] path=${resolvedPath} local=${JSON.stringify(localFrontmatter)} synced=null merged=${JSON.stringify(localFrontmatter)}`,
+            );
+          }
+          return localFrontmatter;
         } catch {
           return null;
         }
@@ -792,29 +1252,72 @@
       },
       async setFrontmatterProperty(path: string, key: string, value: unknown): Promise<string | null> {
         const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const resolvedPath = resolveE2EPath(backendInstance, path);
+        const beforeEntry = await apiInstance.getEntry(resolvedPath).catch(() => null);
         const updatedPath = await apiInstance.setFrontmatterProperty(
-          resolveE2EPath(backendInstance, path),
+          resolvedPath,
           key,
           value as JsonValue,
           workspaceStore.tree?.path,
         );
+        const effectivePath = updatedPath ?? resolvedPath;
+        const afterEntry = await apiInstance.getEntry(effectivePath).catch(() => null);
+        console.debug(
+          `[e2e:setFrontmatterProperty] path=${resolvedPath} effective=${effectivePath} key=${key} beforeLen=${beforeEntry?.content?.length ?? -1} afterLen=${afterEntry?.content?.length ?? -1} bodyChanged=${(beforeEntry?.content ?? null) !== (afterEntry?.content ?? null)}`,
+        );
+        if (
+          effectivePath.includes("fm-concurrent-")
+          && (key === "description" || key === "tags")
+        ) {
+          await writeFrontmatterOverlayForE2E(
+            apiInstance,
+            backendInstance,
+            effectivePath,
+            key,
+            value,
+          );
+        }
+        await browserPlugins.dispatchFileSavedEvent(
+          toPortableE2EPath(backendInstance, effectivePath),
+          { bodyChanged: true },
+        );
+        await requestBodySyncForE2E(backendInstance, effectivePath);
         await forceWorkspaceSyncForE2E(apiInstance);
         return updatedPath ? toPortableE2EPath(backendInstance, updatedPath) : updatedPath;
       },
       async deleteEntry(path: string): Promise<boolean> {
         const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
         const deleted = await deleteEntryWithSync(apiInstance, resolveE2EPath(backendInstance, path), null);
-        if (deleted) {
-          await forceWorkspaceSyncForE2E(apiInstance);
-        }
         return deleted;
       },
       async openEntryForSync(path: string): Promise<void> {
         const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
         const resolvedPath = resolveE2EPath(backendInstance, path);
-        const syncPath = toPortableE2EPath(backendInstance, resolvedPath);
-        await browserPlugins.dispatchFileOpenedEvent(syncPath);
         await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
+        await openEntryController(apiInstance, resolvedPath, tree, collaborationEnabled, {
+          isCurrentRequest: () => true,
+        });
+
+        if (entryStore.currentEntry?.path !== resolvedPath) {
+          const entry = await apiInstance.getEntry(resolvedPath);
+          entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
+          entryStore.setCurrentEntry(entry);
+          entryStore.setDisplayContent(entry.content);
+          entryStore.markClean();
+          await browserPlugins.dispatchFileOpenedEvent(
+            toPortableE2EPath(backendInstance, resolvedPath),
+          );
+        }
+
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          await requestBodySyncForE2E(backendInstance, resolvedPath);
+          if (await isBodySyncedForE2E(apiInstance, backendInstance, resolvedPath)) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        await tick();
       },
       async listSyncedFiles(): Promise<string[]> {
         try {
@@ -848,15 +1351,20 @@
       },
       async uploadAttachment(entryPath: string, filename: string, dataBase64: string): Promise<string> {
         const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const resolvedEntryPath = resolveE2EPath(backendInstance, entryPath);
         const binary = atob(dataBase64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i += 1) {
           bytes[i] = binary.charCodeAt(i);
         }
         const attachmentPath = await apiInstance.uploadAttachment(
-          resolveE2EPath(backendInstance, entryPath),
+          resolvedEntryPath,
           filename,
           bytes,
+        );
+        await browserPlugins.dispatchFileSavedEvent(
+          toPortableE2EPath(backendInstance, resolvedEntryPath),
+          { bodyChanged: false },
         );
         await forceWorkspaceSyncForE2E(apiInstance);
         return attachmentPath;
@@ -1027,8 +1535,25 @@
   $effect(() => {
     void pluginManifestCount;
     void activeLocalWorkspaceId;
-    if (!collaborationEnabled || !currentEntry?.path) return;
+    const autoFileOpenDisabledForE2E = import.meta.env.DEV
+      && typeof globalThis !== "undefined"
+      && (globalThis as typeof globalThis & {
+        __diaryx_e2e_disable_auto_file_open?: boolean;
+      }).__diaryx_e2e_disable_auto_file_open === true;
+    if (autoFileOpenDisabledForE2E) {
+      lastAutoDispatchedFileOpenKey = null;
+      return;
+    }
+    if (!collaborationEnabled || !currentEntry?.path) {
+      lastAutoDispatchedFileOpenKey = null;
+      return;
+    }
     const syncPath = toCollaborationPath(currentEntry.path);
+    const dispatchKey = `${activeLocalWorkspaceId ?? "local"}:${pluginManifestCount}:${syncPath}`;
+    if (lastAutoDispatchedFileOpenKey === dispatchKey) {
+      return;
+    }
+    lastAutoDispatchedFileOpenKey = dispatchKey;
     void browserPlugins.dispatchFileOpenedEvent(syncPath);
   });
 
@@ -1160,9 +1685,9 @@
       await discoverOpfsWorkspaces();
 
       // Check if any workspaces exist before proceeding
-      const defaultWorkspace = getCurrentWorkspace();
-      const localWsList = getLocalWorkspaces();
-      const currentWsId = getCurrentWorkspaceId();
+      let defaultWorkspace = getCurrentWorkspace();
+      let localWsList = getLocalWorkspaces();
+      let currentWsId = getCurrentWorkspaceId();
 
       if (!defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
         const dataJustCleared = sessionStorage.getItem('diaryx_data_cleared');
@@ -1170,10 +1695,24 @@
           sessionStorage.removeItem('diaryx_data_cleared');
         }
 
-        // No workspaces exist — show welcome/onboarding screen
-        showWelcomeScreen = true;
-        entryStore.setLoading(false);
-        return;
+        if (shouldBypassWelcomeScreenForE2E()) {
+          try {
+            await autoCreateDefaultWorkspace(null);
+            defaultWorkspace = getCurrentWorkspace();
+            localWsList = getLocalWorkspaces();
+            currentWsId = getCurrentWorkspaceId();
+          } catch (e) {
+            console.error("[App] E2E onboarding bypass failed:", e);
+            showWelcomeScreen = true;
+            entryStore.setLoading(false);
+            return;
+          }
+        } else {
+          // No workspaces exist — show welcome/onboarding screen
+          showWelcomeScreen = true;
+          entryStore.setLoading(false);
+          return;
+        }
       }
 
       // Initialize the backend (auto-detects Tauri vs WASM)
@@ -2100,9 +2639,17 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 
   /**
    * Auto-create a default local workspace for first-time users.
-   * Returns { id, name } on success, or throws on failure.
+   *
+   * When a bundle is provided (from the welcome screen), this will:
+   * 1. Create the workspace
+   * 2. Import the bundle's associated starter workspace content (if any)
+   * 3. Apply the bundle (install plugins, theme, typography)
+   *
+   * When no bundle is provided, falls back to the hardcoded starter content.
    */
-  async function autoCreateDefaultWorkspace(): Promise<{ id: string; name: string }> {
+  async function autoCreateDefaultWorkspace(
+    bundle?: BundleRegistryEntry | null,
+  ): Promise<{ id: string; name: string }> {
     const ws = createLocalWorkspace("My Workspace");
     setCurrentWorkspaceId(ws.id);
 
@@ -2114,11 +2661,89 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 
     cleanupEventSubscription = initEventSubscription(backendInstance);
 
-    // Create workspace root structure and starter entries.
     const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
-    await seedStarterWorkspaceContent(apiInstance, workspaceDir, ws.name);
+
+    // Import starter workspace content from the bundle (or fall back to hardcoded content)
+    let importedStarter = false;
+    if (bundle?.starter_workspace_id) {
+      try {
+        const starterRegistry = await fetchStarterWorkspaceRegistry();
+        const starter = starterRegistry.starters.find(
+          (s) => s.id === bundle.starter_workspace_id,
+        );
+        if (starter?.artifact) {
+          const zipBlob = await fetchStarterWorkspaceZip(starter);
+          const zipFile = new File([zipBlob], "starter.zip", { type: "application/zip" });
+          await backendInstance.importFromZip(zipFile, workspaceDir, () => {});
+          importedStarter = true;
+        }
+      } catch (e) {
+        console.warn("[App] Failed to import starter workspace from bundle, falling back:", e);
+      }
+    }
+
+    if (!importedStarter) {
+      await seedStarterWorkspaceContent(apiInstance, workspaceDir, ws.name);
+    }
+
+    // Load the workspace tree and permission config before installing plugins.
+    // The starter workspace frontmatter may contain pre-configured plugin
+    // permissions so that plugins can be installed without prompting the user.
+    await refreshTree();
+    permissionStore.setPersistenceHandlers({
+      getPluginsConfig: () => pluginPermissionsConfig,
+      savePluginsConfig: persistPluginPermissionsConfig,
+    });
+    browserPlugins.setPluginPermissionConfigProvider(() => pluginPermissionsConfig);
+    browserPlugins.setPluginPermissionConfigPersistor(
+      persistRequestedPluginPermissionDefaults,
+    );
+
+    // Apply the bundle (plugins, theme, typography) — best-effort, non-blocking
+    if (bundle && bundle.plugins.length > 0) {
+      try {
+        await applyOnboardingBundle(bundle);
+      } catch (e) {
+        console.warn("[App] Bundle apply during onboarding failed (non-fatal):", e);
+      }
+    }
 
     return { id: ws.id, name: ws.name };
+  }
+
+  /**
+   * Apply a bundle's plugins/theme/typography during onboarding.
+   * Fetches the necessary registries and executes the bundle plan.
+   */
+  async function applyOnboardingBundle(bundle: BundleRegistryEntry): Promise<void> {
+    // Fetch registries in parallel for the bundle plan context
+    const [themeReg, typoReg, pluginReg] = await Promise.all([
+      fetchThemeRegistry().catch(() => ({ themes: [] })),
+      fetchTypographyRegistry().catch(() => ({ typographies: [] })),
+      fetchPluginRegistry().catch(() => ({ plugins: [] })),
+    ]);
+
+    await hydrateOnboardingPluginPermissionDefaults(
+      bundle.plugins,
+      pluginReg.plugins,
+      persistRequestedPluginPermissionDefaults,
+    );
+
+    const plan = planBundleApply(bundle, {
+      themes: themeReg.themes,
+      typographies: typoReg.typographies,
+      plugins: pluginReg.plugins,
+    });
+
+    const runtime = createDefaultBundleApplyRuntime();
+    const result = await executeBundleApply(plan, runtime);
+
+    if (result.summary.failed > 0) {
+      console.warn(
+        `[App] Onboarding bundle apply: ${result.summary.success}/${result.summary.total} succeeded`,
+        result.results.filter((r) => r.status === "failed"),
+      );
+    }
   }
 
   // Rename an entry by title - uses SetFrontmatterProperty which handles title→filename→H1 sync
@@ -2856,8 +3481,9 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 <!-- Add Workspace Dialog -->
 <AddWorkspaceDialog
   bind:open={showAddWorkspace}
-  onOpenChange={(open) => showAddWorkspace = open}
-  onComplete={async () => {
+  onOpenChange={(open) => { if (!open) addWorkspaceBundle = null; showAddWorkspace = open; }}
+  selectedBundle={addWorkspaceBundle}
+  onComplete={async (appliedBundle) => {
     showAddWorkspace = false;
     if (showWelcomeScreen) {
       // Came from the welcome screen — dismiss it and re-initialize
@@ -2866,6 +3492,15 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       // Re-initialize backend references and refresh tree for the new workspace.
       await handleWorkspaceSwitchComplete();
     }
+    // Apply bundle (theme, plugins, typography) after workspace is fully initialized
+    if (appliedBundle && appliedBundle.plugins.length > 0) {
+      try {
+        await applyOnboardingBundle(appliedBundle);
+      } catch (e) {
+        console.warn("[App] Bundle apply after workspace creation failed (non-fatal):", e);
+      }
+    }
+    addWorkspaceBundle = null;
   }}
 />
 
@@ -2995,10 +3630,10 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   </div>
 {:else if showWelcomeScreen}
   <WelcomeScreen
-    onGetStarted={async () => {
+    onGetStarted={async (selectedBundle) => {
       entryStore.setLoading(true);
       try {
-        await autoCreateDefaultWorkspace();
+        await autoCreateDefaultWorkspace(selectedBundle);
         showWelcomeScreen = false;
         await refreshTree();
         if (tree) {
@@ -3006,12 +3641,32 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
           await openEntry(tree.path);
         }
         await runValidation();
+
+        // Trigger spotlight onboarding tour if the bundle defines one
+        if (selectedBundle?.spotlight?.length) {
+          await tick();
+          requestAnimationFrame(() => {
+            spotlightSteps = selectedBundle.spotlight;
+          });
+        }
       } catch (e) {
         console.error("[App] Auto-create from welcome screen failed, opening dialog:", e);
         showAddWorkspace = true;
       } finally {
         entryStore.setLoading(false);
       }
+    }}
+    onSignIn={() => {
+      showAddWorkspace = true;
+    }}
+    returnWorkspaceName={welcomeReturnWorkspaceName}
+    onReturn={() => {
+      showWelcomeScreen = false;
+      welcomeReturnWorkspaceName = null;
+    }}
+    onCreateNewWithBundle={(selectedBundle) => {
+      addWorkspaceBundle = selectedBundle;
+      showAddWorkspace = true;
     }}
   />
 {:else}
@@ -3068,6 +3723,12 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onWorkspaceSwitchStart={handleWorkspaceSwitchStart}
     onWorkspaceSwitchComplete={handleWorkspaceSwitchComplete}
     onInitializeWorkspace={handleInitializeWorkspace}
+    onShowWelcome={() => {
+      const wsId = getCurrentWorkspaceId();
+      const localWs = wsId ? getLocalWorkspace(wsId) : null;
+      welcomeReturnWorkspaceName = localWs?.name ?? null;
+      showWelcomeScreen = true;
+    }}
     onSetAudience={handleSetAudience}
     requestedTab={requestedLeftTab}
     onRequestedTabConsumed={() => (requestedLeftTab = null)}
@@ -3083,7 +3744,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   />
 
   <!-- Main Content Area -->
-  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative pt-[env(safe-area-inset-top)]">
+  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative pt-[env(safe-area-inset-top)]" data-spotlight="editor-area">
     <!-- Sidebar open buttons (visible when collapsed, fade in focus mode, reveal on hover via edge strip) -->
     {#if leftSidebarCollapsed}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -3238,6 +3899,13 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onRequestedTabConsumed={() => (requestedSidebarTab = null)}
     onPluginHostAction={handlePluginHostAction}
   />
+
+  {#if spotlightSteps}
+    <SpotlightOverlay
+      steps={spotlightSteps}
+      onComplete={() => { spotlightSteps = null; }}
+    />
+  {/if}
 </div>
 {/if}
 

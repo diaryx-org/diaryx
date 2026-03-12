@@ -735,6 +735,26 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
             .unwrap_or("")
             .to_string();
 
+        let known_keys: &[&str] = &[
+            "title",
+            "part_of",
+            "contents",
+            "attachments",
+            "deleted",
+            "audience",
+            "description",
+            "updated",
+        ];
+        let mut extra = std::collections::HashMap::new();
+        for (key, value) in fm {
+            if known_keys.contains(&key.as_str()) || key.starts_with('_') {
+                continue;
+            }
+            if let Ok(json_val) = serde_json::to_value(value) {
+                extra.insert(key.clone(), json_val);
+            }
+        }
+
         Ok(FileMetadata {
             filename,
             title: fm.get("title").and_then(|v| v.as_str()).map(String::from),
@@ -779,7 +799,7 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                 .get("description")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            extra: std::collections::HashMap::new(), // TODO: Parse extra fields
+            extra,
             // Read 'updated' from frontmatter if present, otherwise use current time
             modified_at: fm
                 .get("updated")

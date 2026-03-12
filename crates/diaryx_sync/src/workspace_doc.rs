@@ -60,6 +60,11 @@ const FILES_MAP_NAME: &str = "files";
 /// The document name used for workspace storage.
 const WORKSPACE_DOC_NAME: &str = "workspace";
 
+/// Non-structural frontmatter fields are opportunistically merged when two
+/// peers edit different keys within a short window but the workspace CRDT
+/// resolves the whole metadata blob to a single winner.
+const CONCURRENT_FRONTMATTER_MERGE_WINDOW_MS: i64 = 5_000;
+
 /// A CRDT document representing the workspace file hierarchy.
 ///
 /// This wraps a yrs [`Doc`] and provides methods for managing file metadata
@@ -378,40 +383,9 @@ impl WorkspaceCrdt {
     /// including deleted ones (check `metadata.deleted`).
     pub fn list_files(&self) -> Vec<(String, FileMetadata)> {
         let txn = self.doc.transact();
-        let mut deduped: HashMap<String, FileMetadata> = HashMap::new();
-
-        for (key, value) in self.files_map.iter(&txn) {
-            let path = Self::normalize_file_key(key);
-            if diaryx_core::fs::is_temp_file(&path) {
-                continue;
-            }
-
-            let json = value.to_string(&txn);
-            let Some(metadata) = serde_json::from_str::<FileMetadata>(&json).ok() else {
-                log::debug!(
-                    "[WorkspaceCrdt::list_files] Failed to deserialize key={}, json (truncated 200)={}",
-                    path,
-                    &json[..json.len().min(200)]
-                );
-                continue;
-            };
-
-            let should_replace = match deduped.get(&path) {
-                Some(existing) => {
-                    metadata.modified_at > existing.modified_at
-                        || (metadata.modified_at == existing.modified_at
-                            && !metadata.deleted
-                            && existing.deleted)
-                }
-                None => true,
-            };
-
-            if should_replace {
-                deduped.insert(path, metadata);
-            }
-        }
-
-        deduped.into_iter().collect()
+        Self::collect_files_snapshot(&self.files_map, &txn)
+            .into_iter()
+            .collect()
     }
 
     /// List all non-deleted files in the workspace.
@@ -904,6 +878,11 @@ impl WorkspaceCrdt {
         } else {
             HashMap::new()
         };
+        let remote_snapshot = if origin != UpdateOrigin::Local {
+            Self::decode_update_snapshot(update)?
+        } else {
+            HashMap::new()
+        };
 
         // Decode and apply the update
         let decoded = Update::decode_v1(update)
@@ -917,8 +896,15 @@ impl WorkspaceCrdt {
 
         // Diff and emit events for changes
         if should_emit {
-            let files_after: HashMap<String, FileMetadata> =
+            let mut files_after: HashMap<String, FileMetadata> =
                 self.list_files().into_iter().collect();
+            if self.reconcile_concurrent_frontmatter(
+                &files_before,
+                &files_after,
+                &remote_snapshot,
+            )? {
+                files_after = self.list_files().into_iter().collect();
+            }
             // Note: apply_update doesn't detect renames, so pass empty slice
             self.emit_diff_events(&files_before, &files_after, &[]);
         }
@@ -1028,6 +1014,11 @@ impl WorkspaceCrdt {
             "[WorkspaceCrdt] apply_update_tracking_changes BEFORE: {} files",
             files_before.len()
         );
+        let remote_snapshot = if origin != UpdateOrigin::Local {
+            Self::decode_update_snapshot(update)?
+        } else {
+            HashMap::new()
+        };
 
         // Decode and apply the update
         let decoded = Update::decode_v1(update)
@@ -1040,36 +1031,44 @@ impl WorkspaceCrdt {
         }
 
         // Capture state after the update
-        let files_after: HashMap<String, FileMetadata> = self.list_files().into_iter().collect();
+        let mut files_after: HashMap<String, FileMetadata> =
+            self.list_files().into_iter().collect();
+        if origin != UpdateOrigin::Local
+            && self.reconcile_concurrent_frontmatter(
+                &files_before,
+                &files_after,
+                &remote_snapshot,
+            )?
+        {
+            files_after = self.list_files().into_iter().collect();
+        }
         log::debug!(
             "[WorkspaceCrdt] apply_update_tracking_changes AFTER: {} files",
             files_after.len()
         );
 
-        // Detect doc-ID based renames: same key with different filename
-        // In doc-ID mode, the key is a UUID and renames are just filename property updates
+        // Detect doc-ID based path changes.
+        // In doc-ID mode, the key is stable and the derived path can change when
+        // either the filename changes (rename) or the parent reference changes (move).
         let mut renames: Vec<(String, String)> = Vec::new();
         for (doc_id, new_meta) in &files_after {
             if let Some(old_meta) = files_before.get(doc_id) {
-                // Same doc_id, different filename = rename in doc-ID mode
-                if old_meta.filename != new_meta.filename
-                    && !old_meta.filename.is_empty()
-                    && !new_meta.filename.is_empty()
-                    && !old_meta.deleted
-                    && !new_meta.deleted
-                {
-                    // Derive old and new paths using the respective snapshots
-                    let old_path = self.derive_path_from_snapshot(doc_id, old_meta, &files_before);
-                    let new_path = self.derive_path_from_snapshot(doc_id, new_meta, &files_after);
+                if old_meta.deleted || new_meta.deleted {
+                    continue;
+                }
 
-                    if let (Some(old_p), Some(new_p)) = (old_path, new_path) {
-                        log::debug!(
-                            "[WorkspaceCrdt] Doc-ID rename detected: {} -> {}",
-                            old_p,
-                            new_p
-                        );
-                        renames.push((old_p, new_p));
-                    }
+                let old_path = self.derive_path_from_snapshot(doc_id, old_meta, &files_before);
+                let new_path = self.derive_path_from_snapshot(doc_id, new_meta, &files_after);
+
+                if let (Some(old_p), Some(new_p)) = (old_path, new_path)
+                    && old_p != new_p
+                {
+                    log::debug!(
+                        "[WorkspaceCrdt] Doc-ID path change detected: {} -> {}",
+                        old_p,
+                        new_p
+                    );
+                    renames.push((old_p, new_p));
                 }
             }
         }
@@ -1473,6 +1472,192 @@ impl WorkspaceCrdt {
             }
         })
     }
+
+    fn collect_files_snapshot<T: ReadTxn>(
+        files_map: &MapRef,
+        txn: &T,
+    ) -> HashMap<String, FileMetadata> {
+        let mut deduped: HashMap<String, FileMetadata> = HashMap::new();
+
+        for (key, value) in files_map.iter(txn) {
+            let path = Self::normalize_file_key(key);
+            if diaryx_core::fs::is_temp_file(&path) {
+                continue;
+            }
+
+            let json = value.to_string(txn);
+            let Some(metadata) = serde_json::from_str::<FileMetadata>(&json).ok() else {
+                log::debug!(
+                    "[WorkspaceCrdt::collect_files_snapshot] Failed to deserialize key={}, json (truncated 200)={}",
+                    path,
+                    &json[..json.len().min(200)]
+                );
+                continue;
+            };
+
+            let should_replace = match deduped.get(&path) {
+                Some(existing) => {
+                    metadata.modified_at > existing.modified_at
+                        || (metadata.modified_at == existing.modified_at
+                            && !metadata.deleted
+                            && existing.deleted)
+                }
+                None => true,
+            };
+
+            if should_replace {
+                deduped.insert(path, metadata);
+            }
+        }
+
+        deduped
+    }
+
+    fn decode_update_snapshot(update: &[u8]) -> StorageResult<HashMap<String, FileMetadata>> {
+        if update.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let decoded = Update::decode_v1(update)
+            .map_err(|e| DiaryxError::Unsupported(format!("Failed to decode update: {}", e)))?;
+
+        let doc = Doc::new();
+        let files_map = doc.get_or_insert_map(FILES_MAP_NAME);
+        {
+            let mut txn = doc.transact_mut();
+            txn.apply_update(decoded).map_err(|e| {
+                DiaryxError::Unsupported(format!("Failed to decode update snapshot: {}", e))
+            })?;
+        }
+
+        let txn = doc.transact();
+        Ok(Self::collect_files_snapshot(&files_map, &txn))
+    }
+
+    fn reconcile_concurrent_frontmatter(
+        &self,
+        files_before: &HashMap<String, FileMetadata>,
+        files_after: &HashMap<String, FileMetadata>,
+        remote_snapshot: &HashMap<String, FileMetadata>,
+    ) -> StorageResult<bool> {
+        let mut reconciled = false;
+
+        for (path, after_meta) in files_after {
+            let Some(local_before) = files_before.get(path) else {
+                continue;
+            };
+            let Some(remote_meta) = remote_snapshot.get(path) else {
+                continue;
+            };
+
+            if !Self::should_merge_concurrent_frontmatter(local_before, remote_meta) {
+                continue;
+            }
+
+            let merged = if after_meta.is_content_equal(local_before) {
+                Self::merge_nonstructural_frontmatter(after_meta, remote_meta)
+            } else if after_meta.is_content_equal(remote_meta) {
+                Self::merge_nonstructural_frontmatter(after_meta, local_before)
+            } else {
+                let with_local = Self::merge_nonstructural_frontmatter(after_meta, local_before);
+                Self::merge_nonstructural_frontmatter(&with_local, remote_meta)
+            };
+
+            if merged != *after_meta {
+                log::debug!(
+                    "[WorkspaceCrdt] Merging concurrent non-structural frontmatter for {}",
+                    path
+                );
+                self.set_file(path, merged)?;
+                reconciled = true;
+            }
+        }
+
+        Ok(reconciled)
+    }
+
+    fn should_merge_concurrent_frontmatter(local: &FileMetadata, remote: &FileMetadata) -> bool {
+        if local.deleted || remote.deleted {
+            return false;
+        }
+
+        if local.modified_at <= 0 || remote.modified_at <= 0 {
+            return false;
+        }
+
+        if (local.modified_at - remote.modified_at).abs() > CONCURRENT_FRONTMATTER_MERGE_WINDOW_MS {
+            return false;
+        }
+
+        Self::has_novel_nonstructural_frontmatter(local, remote)
+            && Self::has_novel_nonstructural_frontmatter(remote, local)
+    }
+
+    fn has_novel_nonstructural_frontmatter(candidate: &FileMetadata, other: &FileMetadata) -> bool {
+        if Self::has_meaningful_string(&candidate.description)
+            && !Self::has_meaningful_string(&other.description)
+        {
+            return true;
+        }
+
+        if candidate
+            .audience
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+            && other.audience.is_none()
+        {
+            return true;
+        }
+
+        candidate.extra.iter().any(|(key, value)| {
+            Self::has_meaningful_json_value(value) && !other.extra.contains_key(key)
+        })
+    }
+
+    fn merge_nonstructural_frontmatter(
+        winner: &FileMetadata,
+        other: &FileMetadata,
+    ) -> FileMetadata {
+        let mut merged = winner.clone();
+
+        if !Self::has_meaningful_string(&merged.description)
+            && Self::has_meaningful_string(&other.description)
+        {
+            merged.description = other.description.clone();
+        }
+
+        if merged.audience.is_none()
+            && other
+                .audience
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+        {
+            merged.audience = other.audience.clone();
+        }
+
+        for (key, value) in &other.extra {
+            if Self::has_meaningful_json_value(value) && !merged.extra.contains_key(key) {
+                merged.extra.insert(key.clone(), value.clone());
+            }
+        }
+
+        merged.modified_at = merged.modified_at.max(other.modified_at);
+        merged
+    }
+
+    fn has_meaningful_string(value: &Option<String>) -> bool {
+        value.as_ref().is_some_and(|text| !text.is_empty())
+    }
+
+    fn has_meaningful_json_value(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Null => false,
+            serde_json::Value::String(text) => !text.is_empty(),
+            serde_json::Value::Array(items) => !items.is_empty(),
+            serde_json::Value::Object(entries) => !entries.is_empty(),
+            _ => true,
+        }
+    }
 }
 
 impl std::fmt::Debug for WorkspaceCrdt {
@@ -1838,6 +2023,42 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_update_tracking_changes_detects_doc_id_move_path_change() {
+        let storage1: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let storage2: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let crdt1 = WorkspaceCrdt::new(storage1);
+        let crdt2 = WorkspaceCrdt::new(storage2);
+
+        let parent1_id = crdt1
+            .create_file(FileMetadata::with_filename("folder1".to_string(), None))
+            .unwrap();
+        let parent2_id = crdt1
+            .create_file(FileMetadata::with_filename("folder2".to_string(), None))
+            .unwrap();
+
+        let mut file_meta =
+            FileMetadata::with_filename("file.md".to_string(), Some("Test".to_string()));
+        file_meta.part_of = Some(parent1_id.clone());
+        let file_id = crdt1.create_file(file_meta).unwrap();
+
+        let bootstrap = crdt1.encode_state_as_update();
+        crdt2
+            .apply_update(&bootstrap, UpdateOrigin::Remote)
+            .unwrap();
+
+        crdt2.move_file(&file_id, Some(&parent2_id)).unwrap();
+        let moved = crdt2.encode_state_as_update();
+        let (_update_id, _changed_paths, renames) = crdt1
+            .apply_update_tracking_changes(&moved, UpdateOrigin::Remote)
+            .unwrap();
+
+        assert_eq!(
+            renames,
+            vec![("folder1/file.md".to_string(), "folder2/file.md".to_string())]
+        );
+    }
+
+    #[test]
     fn test_needs_migration_false_for_uuids() {
         let crdt = create_test_crdt();
 
@@ -1989,5 +2210,78 @@ mod tests {
             "newly deleted 'shared.md' should appear in changed_paths, got: {:?}",
             changed_paths
         );
+    }
+
+    #[test]
+    fn test_apply_update_tracking_changes_merges_concurrent_nonstructural_frontmatter() {
+        let crdt1 = create_test_crdt();
+        let crdt2 = create_test_crdt();
+
+        crdt1
+            .set_file("shared.md", FileMetadata::new(Some("Shared".to_string())))
+            .unwrap();
+        let bootstrap = crdt1.encode_state_as_update();
+        crdt2
+            .apply_update(&bootstrap, UpdateOrigin::Remote)
+            .unwrap();
+
+        let now = crate::time::now_timestamp_millis();
+
+        let mut local = crdt1.get_file("shared.md").unwrap();
+        local
+            .extra
+            .insert("tags".to_string(), serde_json::json!(["tag-from-local"]));
+        local.modified_at = now;
+        crdt1.set_file("shared.md", local).unwrap();
+
+        let mut remote = crdt2.get_file("shared.md").unwrap();
+        remote.description = Some("desc-from-remote".to_string());
+        remote.modified_at = now + 1;
+        crdt2.set_file("shared.md", remote).unwrap();
+
+        let update = crdt2.encode_state_as_update();
+        let (_, changed_paths, _) = crdt1
+            .apply_update_tracking_changes(&update, UpdateOrigin::Remote)
+            .unwrap();
+
+        let merged = crdt1.get_file("shared.md").unwrap();
+        assert_eq!(merged.description, Some("desc-from-remote".to_string()));
+        assert_eq!(
+            merged.extra.get("tags"),
+            Some(&serde_json::json!(["tag-from-local"]))
+        );
+        assert!(
+            changed_paths.contains(&"shared.md".to_string()),
+            "merged metadata change should be reported, got {:?}",
+            changed_paths
+        );
+    }
+
+    #[test]
+    fn test_apply_update_tracking_changes_preserves_unilateral_frontmatter_clear() {
+        let crdt1 = create_test_crdt();
+        let crdt2 = create_test_crdt();
+
+        let mut initial = FileMetadata::new(Some("Shared".to_string()));
+        initial.description = Some("to-clear".to_string());
+        crdt1.set_file("shared.md", initial).unwrap();
+
+        let bootstrap = crdt1.encode_state_as_update();
+        crdt2
+            .apply_update(&bootstrap, UpdateOrigin::Remote)
+            .unwrap();
+
+        let mut remote = crdt2.get_file("shared.md").unwrap();
+        remote.description = None;
+        remote.modified_at = crate::time::now_timestamp_millis();
+        crdt2.set_file("shared.md", remote).unwrap();
+
+        let update = crdt2.encode_state_as_update();
+        crdt1
+            .apply_update_tracking_changes(&update, UpdateOrigin::Remote)
+            .unwrap();
+
+        let synced = crdt1.get_file("shared.md").unwrap();
+        assert_eq!(synced.description, None);
     }
 }

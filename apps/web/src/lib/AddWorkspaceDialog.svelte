@@ -53,7 +53,7 @@
   import {
     fetchStarterWorkspaceRegistry,
   } from "$lib/marketplace/starterWorkspaceRegistry";
-  import type { StarterWorkspaceRegistryEntry } from "$lib/marketplace/types";
+  import type { StarterWorkspaceRegistryEntry, BundleRegistryEntry } from "$lib/marketplace/types";
   import {
     fetchStarterWorkspaceZip,
   } from "$lib/marketplace/starterWorkspaceApply";
@@ -61,13 +61,16 @@
   interface Props {
     open?: boolean;
     onOpenChange?: (open: boolean) => void;
-    onComplete?: () => void;
+    onComplete?: (appliedBundle?: BundleRegistryEntry | null) => void;
+    /** Pre-selected bundle to apply after workspace creation (theme, plugins, etc.) */
+    selectedBundle?: BundleRegistryEntry | null;
   }
 
   let {
     open = $bindable(false),
     onOpenChange,
     onComplete,
+    selectedBundle = null,
   }: Props = $props();
 
   const pluginStore = getPluginStore();
@@ -378,7 +381,7 @@
         await handleDownloadCloud();
         toast.success("Workspace downloaded", { description: `"${wsName}" is ready.` });
         handleClose();
-        onComplete?.();
+        onComplete?.(selectedBundle);
         return;
       } else if (contentSource === 'open_folder') {
         await handleOpenFolder(wsName);
@@ -414,7 +417,7 @@
       );
 
       handleClose();
-      onComplete?.();
+      onComplete?.(selectedBundle);
     } catch (e) {
       console.error("[AddWorkspace] Initialization error:", e);
       if (isTierLimitError(e)) {

@@ -45,6 +45,9 @@ plugin storage on `file_opened`, so a browser refresh does not need the host
 to special-case sync state restoration. `file_deleted` is also enough for the
 guest to tear down focused/body-sync state for that path; once a file is
 tombstoned, late body packets are ignored instead of recreating it on disk.
+Those mutation-triggered provider commands are routed through the normal
+backend/plugin-command path so the guest sees the current workspace runtime
+context and linked remote workspace ID.
 
 ## Files
 

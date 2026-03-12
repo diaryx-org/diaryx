@@ -267,7 +267,7 @@ fn persist_requested_permission_defaults(
 
     let workspace = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
     let root_index_path =
-        tauri::async_runtime::block_on(workspace.find_root_index_in_dir(workspace_root))
+        futures_lite::future::block_on(workspace.find_root_index_in_dir(workspace_root))
             .map_err(|e: diaryx_core::error::DiaryxError| e.to_serializable())?;
 
     let Some(root_index_path) = root_index_path else {
@@ -324,7 +324,7 @@ fn persist_requested_permission_defaults(
         path: Some(root_index_path.clone()),
     })?;
 
-    tauri::async_runtime::block_on(workspace.set_frontmatter_property(
+    futures_lite::future::block_on(workspace.set_frontmatter_property(
         &root_index_path,
         "plugins",
         plugins_value,

@@ -138,7 +138,7 @@ describe("browserPluginManager permission defaults", () => {
 
     expect(pluginInstance.callEvent).toHaveBeenNthCalledWith(1, {
       event_type: "file_saved",
-      payload: { path: "/workspace/live-propagation.md" },
+      payload: { path: "/workspace/live-propagation.md", body_changed: true },
     });
     expect(pluginInstance.callEvent).toHaveBeenNthCalledWith(2, {
       event_type: "file_moved",

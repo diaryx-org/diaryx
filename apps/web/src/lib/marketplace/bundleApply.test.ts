@@ -157,6 +157,8 @@ function createBundle(): BundleRegistryEntry {
       { plugin_id: "missing.required", required: true, enable: true },
       { plugin_id: "missing.optional", required: false, enable: true },
     ],
+    starter_workspace_id: null,
+    spotlight: null,
   };
 }
 

@@ -471,6 +471,10 @@ export function getPermissionStore() {
     checkPermission,
     getPermissionLabel,
     formatTarget,
+    /** Return the current in-memory plugins config (from persistence handlers). */
+    getPluginsConfig(): Record<string, PluginConfig> | undefined {
+      return persistenceHandlers?.getPluginsConfig();
+    },
     setAutoAllow(enabled: boolean) {
       autoAllowAll = enabled;
     },

@@ -45,11 +45,12 @@ dotenvy = "0.15"
 # Optional: Extism third-party plugin runtime
 diaryx_extism = { path = "../../../crates/diaryx_extism", optional = true }
 dirs = { version = "6.0", optional = true }
+futures-lite = { version = "2", optional = true }
 
 [features]
 default = ["custom-protocol", "extism-plugins"]
 custom-protocol = ["tauri/custom-protocol"]
 iap = ["dep:tauri-plugin-iap"]
-extism-plugins = ["dep:diaryx_extism", "dep:dirs", "diaryx_extism/wasi-runner", "diaryx_extism/http", "diaryx_extism/ws-transport"]
+extism-plugins = ["dep:diaryx_extism", "dep:dirs", "dep:futures-lite", "diaryx_extism/wasi-runner", "diaryx_extism/http", "diaryx_extism/ws-transport"]
 
 [dev-dependencies]

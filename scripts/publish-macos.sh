@@ -15,6 +15,7 @@ TAURI_DIR="$REPO_ROOT/apps/tauri"
 SRC_TAURI="$TAURI_DIR/src-tauri"
 APP_BUNDLE="$REPO_ROOT/target/release/bundle/macos/Diaryx.app"
 ENTITLEMENTS="$SRC_TAURI/Entitlements.plist"
+PROVISIONING_PROFILE="$SRC_TAURI/embedded.provisionprofile"
 PKG_OUTPUT="$REPO_ROOT/Diaryx.pkg"
 
 # ── Build number ─────────────────────────────────────────────────────
@@ -38,21 +39,30 @@ echo "==> Setting CFBundleVersion to $BUILD_NUMBER..."
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" \
   "$APP_BUNDLE/Contents/Info.plist"
 
-# ── Step 3: Sign the .app ───────────────────────────────────────────
+# ── Step 3: Embed provisioning profile ─────────────────────────────
+echo "==> Embedding provisioning profile..."
+if [ ! -f "$PROVISIONING_PROFILE" ]; then
+  echo "ERROR: $PROVISIONING_PROFILE not found."
+  echo "Download it from https://developer.apple.com/account/resources/profiles/list"
+  exit 1
+fi
+cp "$PROVISIONING_PROFILE" "$APP_BUNDLE/Contents/embedded.provisionprofile"
+
+# ── Step 4: Sign the .app ───────────────────────────────────────────
 echo "==> Signing Diaryx.app..."
 codesign --deep --force --options runtime \
   --sign "$APP_SIGN_IDENTITY" \
   --entitlements "$ENTITLEMENTS" \
   "$APP_BUNDLE"
 
-# ── Step 4: Package as .pkg ──────────────────────────────────────────
+# ── Step 5: Package as .pkg ──────────────────────────────────────────
 echo "==> Creating Diaryx.pkg..."
 productbuild \
   --component "$APP_BUNDLE" /Applications \
   --sign "$PKG_SIGN_IDENTITY" \
   "$PKG_OUTPUT"
 
-# ── Step 5: Upload ───────────────────────────────────────────────────
+# ── Step 6: Upload ───────────────────────────────────────────────────
 echo "==> Uploading to App Store Connect..."
 xcrun altool --upload-app --type macos \
   --file "$PKG_OUTPUT" \

@@ -1,6 +1,6 @@
 import yaml from "js-yaml";
 
-import type { BundleRegistryEntry } from "./types";
+import type { BundleRegistryEntry, SpotlightStep } from "./types";
 
 export interface BundleRegistry {
   schema_version: 1;
@@ -178,6 +178,35 @@ function normalizePluginDependencies(
   });
 }
 
+const VALID_SPOTLIGHT_PLACEMENTS = new Set(["top", "bottom", "left", "right"]);
+
+function normalizeSpotlight(value: unknown): SpotlightStep[] | null {
+  if (value == null) return null;
+  if (!Array.isArray(value)) {
+    throw new Error("Bundle registry validation error: spotlight must be an array or null");
+  }
+
+  return value.map((item) => {
+    if (!isRecord(item)) {
+      throw new Error("Bundle registry validation error: spotlight step must be an object");
+    }
+
+    const placement = readString(item, "placement");
+    if (!VALID_SPOTLIGHT_PLACEMENTS.has(placement)) {
+      throw new Error(
+        `Bundle registry validation error: spotlight.placement must be one of top, bottom, left, right`,
+      );
+    }
+
+    return {
+      target: readString(item, "target"),
+      title: readString(item, "title"),
+      description: readString(item, "description"),
+      placement: placement as SpotlightStep["placement"],
+    };
+  });
+}
+
 export function normalizeBundleRegistryEntry(input: unknown): BundleRegistryEntry {
   if (!isRecord(input)) {
     throw new Error("Bundle registry validation error: bundle entry must be an object");
@@ -202,6 +231,8 @@ export function normalizeBundleRegistryEntry(input: unknown): BundleRegistryEntr
     typography_id: readOptionalString(input, "typography_id"),
     typography: normalizeTypography(input.typography),
     plugins: normalizePluginDependencies(input.plugins),
+    starter_workspace_id: readOptionalString(input, "starter_workspace_id"),
+    spotlight: normalizeSpotlight(input.spotlight),
   };
 }
 

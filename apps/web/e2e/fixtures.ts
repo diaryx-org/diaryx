@@ -110,26 +110,121 @@ export class EditorHelper {
  * Complete the welcome screen onboarding flow if it appears.
  * Creates a default workspace so tests can proceed to the editor.
  */
+async function completeAddWorkspaceDialog(page: Page, timeoutMs: number): Promise<void> {
+  const addWorkspaceDialog = page.getByRole('dialog', { name: 'Add Workspace' })
+  if (!(await addWorkspaceDialog.isVisible().catch(() => false))) {
+    return
+  }
+
+  const startFreshButton = addWorkspaceDialog.getByRole('button', { name: /start fresh/i }).first()
+  if (await startFreshButton.isVisible().catch(() => false)) {
+    await startFreshButton.click().catch(() => undefined)
+  }
+
+  const emptyWorkspaceButton = addWorkspaceDialog.getByRole('button', { name: /empty workspace/i }).first()
+  if (await emptyWorkspaceButton.isVisible().catch(() => false)) {
+    await emptyWorkspaceButton.click().catch(() => undefined)
+  }
+
+  const createWorkspaceButton = addWorkspaceDialog.getByRole('button', {
+    name: /create workspace|create & sync|import workspace|open workspace|download workspace/i,
+  })
+  await expect(createWorkspaceButton).toBeVisible({ timeout: 5000 })
+  await expect(createWorkspaceButton).toBeEnabled({ timeout: timeoutMs })
+  await createWorkspaceButton.click()
+
+  const dialogHideTimeout = Math.min(timeoutMs, 15000)
+  const dialogClosed = await addWorkspaceDialog
+    .waitFor({ state: 'hidden', timeout: dialogHideTimeout })
+    .then(() => true)
+    .catch(() => false)
+
+  if (!dialogClosed) {
+    throw new Error('Add Workspace dialog did not close after submission')
+  }
+}
+
+async function bootstrapWorkspaceFallback(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const registry = await import('/src/lib/storage/localWorkspaceRegistry.svelte')
+    const backendModule = await import('/src/lib/backend')
+
+    const currentWorkspaceId = registry.getCurrentWorkspaceId()
+    const existingWorkspace = currentWorkspaceId
+      ? registry.getLocalWorkspace(currentWorkspaceId)
+      : null
+    const workspace = existingWorkspace ?? registry.getLocalWorkspaces()[0] ?? registry.createLocalWorkspace('My Workspace')
+
+    registry.setCurrentWorkspaceId(workspace.id)
+    backendModule.resetBackend()
+
+    const backend = await backendModule.getBackend(
+      workspace.id,
+      workspace.name,
+      registry.getWorkspaceStorageType(workspace.id),
+      registry.getWorkspaceStoragePluginId(workspace.id),
+    )
+    const api = backendModule.createApi(backend)
+    const workspaceDir = backend.getWorkspacePath()
+      .replace(/\/index\.md$/, '')
+      .replace(/\/README\.md$/, '')
+
+    const isAlreadyExistsError = (error: unknown): boolean => {
+      const message = error instanceof Error ? error.message : String(error)
+      return (
+        message.includes('Workspace already exists') ||
+        message.includes('WorkspaceAlreadyExists')
+      )
+    }
+
+    try {
+      await api.findRootIndex(workspaceDir)
+    } catch {
+      try {
+        await api.createWorkspace(workspaceDir, workspace.name)
+      } catch (error) {
+        if (!isAlreadyExistsError(error)) {
+          throw error
+        }
+      }
+    }
+  })
+
+  await page.reload({ waitUntil: 'domcontentloaded' })
+}
+
 async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promise<void> {
   const editor = page.locator('.ProseMirror, [contenteditable="true"]')
   const welcomeHeading = page.getByRole('heading', { name: 'Welcome to Diaryx' })
+  const addWorkspaceDialog = page.getByRole('dialog', { name: 'Add Workspace' })
 
-  // Wait for either the editor or welcome screen to appear
+  // Wait for the initial app state to settle into either the editor, the
+  // welcome screen, or the welcome fallback dialog.
   await Promise.race([
     editor.first().waitFor({ state: 'visible', timeout: timeoutMs }),
     welcomeHeading.waitFor({ state: 'visible', timeout: timeoutMs }),
+    addWorkspaceDialog.waitFor({ state: 'visible', timeout: timeoutMs }),
   ])
 
-  // If the welcome screen appeared, complete it
+  // If the welcome screen appeared, try the standard auto-create path first.
   if (await welcomeHeading.isVisible().catch(() => false)) {
-    // Click "Get Started" — this auto-creates a default workspace
     const getStartedButton = page.getByRole('button', { name: 'Get Started' })
     await expect(getStartedButton).toBeVisible({ timeout: 5000 })
     await getStartedButton.click()
 
-    // Wait for the editor to load after workspace creation
-    await editor.first().waitFor({ state: 'visible', timeout: timeoutMs })
+    await Promise.race([
+      editor.first().waitFor({ state: 'visible', timeout: timeoutMs }),
+      addWorkspaceDialog.waitFor({ state: 'visible', timeout: timeoutMs }),
+    ])
   }
+
+  // New onboarding can fall back to the Add Workspace dialog if auto-create
+  // does not complete. Finish that flow here so tests still land in the editor.
+  if (await addWorkspaceDialog.isVisible().catch(() => false)) {
+    await completeAddWorkspaceDialog(page, timeoutMs)
+  }
+
+  await editor.first().waitFor({ state: 'visible', timeout: timeoutMs })
 }
 
 /**
@@ -141,7 +236,22 @@ export async function waitForAppReady(page: Page, timeoutMs: number = 20000): Pr
   await page.waitForSelector('body', { state: 'visible' })
 
   // Handle welcome screen if it appears (first run / cleared storage)
-  await handleWelcomeScreenIfNeeded(page, timeoutMs)
+  try {
+    await handleWelcomeScreenIfNeeded(page, timeoutMs)
+  } catch (error) {
+    const welcomeHeading = page.getByRole('heading', { name: 'Welcome to Diaryx' })
+    const addWorkspaceDialog = page.getByRole('dialog', { name: 'Add Workspace' })
+    const needsBootstrapFallback =
+      await welcomeHeading.isVisible().catch(() => false)
+      || await addWorkspaceDialog.isVisible().catch(() => false)
+
+    if (!needsBootstrapFallback) {
+      throw error
+    }
+
+    await bootstrapWorkspaceFallback(page)
+    await handleWelcomeScreenIfNeeded(page, timeoutMs)
+  }
 
   // Additional check: ensure no loading spinners are visible
   const spinner = page.locator('.loading, [data-loading="true"]')

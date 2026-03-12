@@ -124,12 +124,13 @@ pub fn materialize_workspace(
         let yaml = fm.to_yaml();
 
         // Read body content.
-        let body_key = format!("body:{}/{}", workspace_id, path);
-        let mut body = body_docs.get_or_create(&body_key).get_body();
-        if body.is_empty() && key != path {
-            let alt_key = format!("body:{}/{}", workspace_id, key);
-            body = body_docs.get_or_create(&alt_key).get_body();
-        }
+        //
+        // The live sync path stores body docs under the normalized file key
+        // (`path` for legacy workspaces, doc-id for doc-id workspaces). Older
+        // snapshot/export paths used a fully qualified `body:<workspace>/<key>`
+        // storage key. Prefer the live key and fall back to the legacy one so
+        // materialization works for both layouts.
+        let body = read_materialized_body(body_docs, workspace_id, &path, &key);
 
         let content = if yaml.is_empty() {
             body
@@ -148,6 +149,48 @@ pub fn materialize_workspace(
         files: result_files,
         skipped,
     }
+}
+
+fn read_materialized_body(
+    body_docs: &BodyDocManager,
+    workspace_id: &str,
+    path: &str,
+    key: &str,
+) -> String {
+    let current_keys = if key == path {
+        vec![path.to_string()]
+    } else {
+        vec![path.to_string(), key.to_string()]
+    };
+
+    for candidate in &current_keys {
+        if let Some(doc) = body_docs.get(candidate) {
+            let body = doc.get_body();
+            if !body.is_empty() {
+                return body;
+            }
+        }
+    }
+
+    let legacy_keys = if key == path {
+        vec![format!("body:{workspace_id}/{path}")]
+    } else {
+        vec![
+            format!("body:{workspace_id}/{path}"),
+            format!("body:{workspace_id}/{key}"),
+        ]
+    };
+
+    for candidate in &legacy_keys {
+        if let Some(doc) = body_docs.get(candidate) {
+            let body = doc.get_body();
+            if !body.is_empty() {
+                return body;
+            }
+        }
+    }
+
+    String::new()
 }
 
 /// Resolve a doc-ID or path-key to a filesystem path.
@@ -329,10 +372,11 @@ mod tests {
         let meta = FileMetadata::with_filename("hello.md".to_string(), Some("Hello".to_string()));
         let doc_id = workspace.create_file(meta).unwrap();
 
-        let body_key = format!(
-            "body:test-ws/{}",
-            workspace.get_path(&doc_id).unwrap().to_string_lossy()
-        );
+        let body_key = workspace
+            .get_path(&doc_id)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         body_docs
             .get_or_create(&body_key)
             .set_body("Hello world")
@@ -382,7 +426,7 @@ mod tests {
         let child_path = workspace.get_path(&child_id).unwrap();
         assert_eq!(child_path.to_string_lossy(), "daily/note.md");
 
-        let body_key = format!("body:test-ws/{}", child_path.to_string_lossy());
+        let body_key = child_path.to_string_lossy().to_string();
         body_docs
             .get_or_create(&body_key)
             .set_body("Daily note content")
@@ -393,6 +437,28 @@ mod tests {
         let child_file = result.files.iter().find(|f| f.path == "daily/note.md");
         assert!(child_file.is_some());
         assert!(child_file.unwrap().content.contains("Daily note content"));
+    }
+
+    #[test]
+    fn test_materialize_reads_legacy_prefixed_body_key() {
+        let storage = Arc::new(MemoryStorage::new());
+        let workspace = WorkspaceCrdt::new(storage.clone());
+        let body_docs = BodyDocManager::new(storage);
+
+        let meta = FileMetadata::with_filename("legacy.md".to_string(), Some("Legacy".to_string()));
+        let doc_id = workspace.create_file(meta).unwrap();
+        let body_key = format!(
+            "body:test-ws/{}",
+            workspace.get_path(&doc_id).unwrap().to_string_lossy()
+        );
+        body_docs
+            .get_or_create(&body_key)
+            .set_body("Legacy body")
+            .unwrap();
+
+        let result = materialize_workspace(&workspace, &body_docs, "test-ws");
+        assert_eq!(result.files.len(), 1);
+        assert!(result.files[0].content.contains("Legacy body"));
     }
 
     #[test]

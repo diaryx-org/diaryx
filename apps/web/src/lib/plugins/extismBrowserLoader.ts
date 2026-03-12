@@ -423,9 +423,10 @@ class BrowserSyncTransportController {
   private reconnectAttempt = 0;
   private readonly maxReconnectDelay = 30_000;
   private shouldReconnect = false;
+
   private connectionKey: string | null = null;
   private connectRequest: SyncTransportConnectRequest | null = null;
-  private connected = false;
+  private openWaiters: Array<(connected: boolean) => void> = [];
 
   bindCallbacks(callbacks: SyncTransportCallbacks): void {
     this.callbacks = callbacks;
@@ -459,6 +460,34 @@ class BrowserSyncTransportController {
   /** Return the workspace_id from the active connection, or null. */
   getConnectedWorkspaceId(): string | null {
     return this.connectRequest?.workspace_id ?? null;
+  }
+
+  isOpen(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  async ensureConnected(
+    request: SyncTransportConnectRequest,
+    timeoutMs = 5_000,
+  ): Promise<boolean> {
+    await this.connect(request);
+    if (this.isOpen()) {
+      return true;
+    }
+
+    return await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.openWaiters = this.openWaiters.filter((waiter) => waiter !== onResult);
+        resolve(this.isOpen());
+      }, timeoutMs);
+
+      const onResult = (connected: boolean) => {
+        clearTimeout(timeout);
+        resolve(connected);
+      };
+
+      this.openWaiters.push(onResult);
+    });
   }
 
   private normalizeServerBase(serverUrl: string): string {
@@ -533,8 +562,11 @@ class BrowserSyncTransportController {
     this.ws = ws;
 
     ws.onopen = () => {
-      this.connected = true;
       this.reconnectAttempt = 0;
+      const waiters = this.openWaiters.splice(0);
+      for (const waiter of waiters) {
+        waiter(true);
+      }
       void this.invokeBinaryExport(
         "on_connected",
         new TextEncoder().encode(
@@ -581,7 +613,7 @@ class BrowserSyncTransportController {
       if (this.ws === ws) {
         this.ws = null;
       }
-      this.connected = false;
+
       void this.invokeBinaryExport("on_disconnected", new Uint8Array());
       if (this.shouldReconnect && this.connectRequest) {
         this.scheduleReconnect(this.connectRequest);
@@ -632,8 +664,6 @@ class BrowserSyncTransportController {
 
     const ws = this.ws;
     this.ws = null;
-    const shouldNotify = this.connected;
-    this.connected = false;
 
     if (ws) {
       ws.onopen = null;
@@ -643,14 +673,17 @@ class BrowserSyncTransportController {
       ws.close();
     }
 
-    if (shouldNotify) {
-      await this.invokeBinaryExport("on_disconnected", new Uint8Array());
-    }
-
     if (clearState) {
       this.connectionKey = null;
       this.connectRequest = null;
       this.reconnectAttempt = 0;
+    }
+
+    if (!this.shouldReconnect) {
+      const waiters = this.openWaiters.splice(0);
+      for (const waiter of waiters) {
+        waiter(false);
+      }
     }
   }
 }
@@ -1360,6 +1393,33 @@ export async function loadBrowserPlugin(
   }
 
   const transport = new BrowserSyncTransportController();
+  async function ensureWorkspaceTransportConnection(): Promise<string | null> {
+    const runtime = await getRuntimeContextSnapshot();
+    const workspaceId = readPluginWorkspaceId(runtime, manifest.id as unknown as string);
+    const serverUrl =
+      typeof runtime.server_url === "string" && runtime.server_url.trim().length > 0
+        ? runtime.server_url
+        : null;
+    const authToken =
+      typeof runtime.auth_token === "string" && runtime.auth_token.trim().length > 0
+        ? runtime.auth_token
+        : undefined;
+
+    if (!workspaceId || !serverUrl) {
+      return null;
+    }
+
+    const connected = await transport.ensureConnected({
+      type: "connect",
+      server_url: serverUrl,
+      workspace_id: workspaceId,
+      auth_token: authToken,
+      write_to_disk: true,
+    });
+
+    return connected ? workspaceId : null;
+  }
+
   async function emitWorkspaceUpdateFromCommand(command: unknown, result: unknown): Promise<void> {
     const commandType = extractWorkspaceUpdateCommandType(command);
 
@@ -1375,7 +1435,10 @@ export async function loadBrowserPlugin(
     // The WASM plugin returns raw SyncMessage bytes. The sync server expects
     // v2-framed messages: [u8: doc_id_len][doc_id_bytes][payload].
     // Frame the workspace update with the proper workspace doc_id before sending.
-    const workspaceId = transport.getConnectedWorkspaceId();
+    let workspaceId = transport.getConnectedWorkspaceId();
+    if (!workspaceId || !transport.isOpen()) {
+      workspaceId = await ensureWorkspaceTransportConnection();
+    }
     console.debug(`[extism] emitWorkspaceUpdateFromCommand: commandType=${commandType} workspaceId=${workspaceId} base64Len=${base64Data.length}`);
     if (!workspaceId) {
       console.warn("[extism] emitWorkspaceUpdateFromCommand: no connected workspace_id, dropping update");

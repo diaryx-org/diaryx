@@ -811,6 +811,27 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_callback_skips_remote_apply_update() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let source = create_body_doc("test.md");
+        let target = create_body_doc("test.md");
+        let fired = Arc::new(AtomicUsize::new(0));
+        let fired_clone = Arc::clone(&fired);
+
+        target.set_sync_callback(Arc::new(move |_doc_name, _update| {
+            fired_clone.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        source.set_body("remote body").unwrap();
+        let update = source.encode_state_as_update();
+        target.apply_update(&update, UpdateOrigin::Remote).unwrap();
+
+        assert_eq!(target.get_body(), "remote body");
+        assert_eq!(fired.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn test_doc_name() {
         let doc = create_body_doc("workspace/notes/hello.md");
         assert_eq!(doc.doc_name(), "workspace/notes/hello.md");

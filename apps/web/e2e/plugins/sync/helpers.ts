@@ -275,6 +275,10 @@ export async function installSyncPluginInCurrentWorkspace(
   }, wasmBase64);
 
   await acceptDialog;
+  await page.reload();
+  await waitForAppReady(page, 45000);
+  await waitForE2EBridge(page);
+  await page.evaluate(() => (globalThis as any).__diaryx_e2e.setAutoAllowPermissions(true));
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +344,37 @@ export async function signInWithDevMagicLink(
 
   await expect(page.getByText(email).first()).toBeVisible({ timeout: 15000 });
   await page.locator("main").click({ position: { x: 40, y: 40 } });
+}
+
+export async function removeCurrentDeviceFromAccount(
+  page: import("@playwright/test").Page,
+): Promise<string> {
+  return page.evaluate(async () => {
+    const token = localStorage.getItem("diaryx_auth_token");
+    const serverUrl = localStorage.getItem("diaryx_sync_server_url");
+    if (!token || !serverUrl) {
+      throw new Error("Expected authenticated sync session before removing device");
+    }
+
+    const [{ getDeviceId }, { proxyFetch }] = await Promise.all([
+      import("/src/lib/device/deviceId"),
+      import("/src/lib/backend/proxyFetch"),
+    ]);
+
+    const deviceId = getDeviceId();
+    const response = await proxyFetch(`${serverUrl}/auth/devices/${deviceId}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete current device: HTTP ${response.status}`);
+    }
+
+    return deviceId;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +515,7 @@ export async function createSyncedWorkspaceViaUi(
 export async function downloadRemoteWorkspaceViaUi(
   page: import("@playwright/test").Page,
   remoteWorkspaceName: string,
+  remoteWorkspaceId?: string,
 ): Promise<void> {
   const selectorName = await currentWorkspaceName(page);
   if (!selectorName) {
@@ -488,10 +524,71 @@ export async function downloadRemoteWorkspaceViaUi(
   process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: clicking selector for "${selectorName}"\n`);
 
   await page.getByRole("button", { name: new RegExp(escapeRegex(selectorName)) }).last().click();
-  process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: clicking "more on"\n`);
-  await page.getByRole("button", { name: /more on/i }).click();
-  process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: clicking remote workspace "${remoteWorkspaceName}"\n`);
-  await page.getByRole("button", { name: new RegExp(escapeRegex(remoteWorkspaceName)) }).click();
+  const newWorkspaceButton = page.getByRole("button", { name: /^new workspace$/i });
+  await expect(newWorkspaceButton).toBeVisible({ timeout: 15000 });
+
+  const moreOnButton = page.getByRole("button", { name: /more on/i }).first();
+  const hasRemoteShortcut = await moreOnButton.isVisible().catch(() => false);
+
+  if (hasRemoteShortcut) {
+    process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: using selector remote shortcut\n`);
+    await moreOnButton.click();
+    process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: clicking remote workspace "${remoteWorkspaceName}"\n`);
+    const remoteWorkspaceButton = page.getByRole("button", {
+      name: new RegExp(escapeRegex(remoteWorkspaceName), "i"),
+    }).first();
+    await expect(remoteWorkspaceButton).toBeVisible({ timeout: 15000 });
+    await remoteWorkspaceButton.click();
+  } else if (remoteWorkspaceId) {
+    process.stderr.write(
+      `[sync-e2e] downloadRemoteWorkspace: using direct provider download for "${remoteWorkspaceName}" (${remoteWorkspaceId})\n`,
+    );
+    await Promise.all([
+      page.evaluate(async ({ remoteId, name }) => {
+        const { downloadWorkspace } = await import("/src/lib/sync/workspaceProviderService");
+        await downloadWorkspace("diaryx.sync", { remoteId, name, link: true });
+      }, { remoteId: remoteWorkspaceId, name: remoteWorkspaceName }),
+      allowPermissionPrompts(page, 1000, 15000),
+    ]);
+  } else {
+    process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: falling back to add-workspace dialog\n`);
+    await newWorkspaceButton.click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: /add workspace/i })).toBeVisible({ timeout: 15000 });
+
+    const downloadFromCloudButton = dialog.getByRole("button", { name: /download from cloud/i });
+    await expect(downloadFromCloudButton).toBeVisible({ timeout: 15000 });
+    await downloadFromCloudButton.click();
+
+    const remoteWorkspaceButton = dialog.getByRole("button", {
+      name: new RegExp(escapeRegex(remoteWorkspaceName), "i"),
+    }).first();
+    const cloudLoadingIndicator = dialog.getByText(/loading cloud workspaces/i);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (await remoteWorkspaceButton.isVisible().catch(() => false)) {
+        break;
+      }
+
+      const loading = await cloudLoadingIndicator.isVisible().catch(() => false);
+      if (!loading) {
+        process.stderr.write(
+          `[sync-e2e] downloadRemoteWorkspace: refreshing cloud workspace list (attempt ${attempt + 1})\n`,
+        );
+        await downloadFromCloudButton.click();
+      }
+
+      await page.waitForTimeout(1000);
+    }
+
+    await expect(remoteWorkspaceButton).toBeVisible({ timeout: 5000 });
+    await remoteWorkspaceButton.click();
+
+    const downloadWorkspaceButton = dialog.getByRole("button", { name: /^download workspace$/i });
+    await expect(downloadWorkspaceButton).toBeEnabled({ timeout: 15000 });
+    await downloadWorkspaceButton.click();
+  }
+
   process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: allowing permission prompts\n`);
   await allowPermissionPrompts(page);
   process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: starting poll\n`);
@@ -959,12 +1056,30 @@ export async function executePluginCommand(
   command: string,
   params: Record<string, unknown>,
 ): Promise<unknown> {
-  return page.evaluate(async ({ pid, cmd, par }) => {
-    const { getBackend, createApi } = await import("/src/lib/backend");
-    const backend = await getBackend();
-    const api = createApi(backend);
-    return await api.executePluginCommand(pid, cmd, par);
-  }, { pid: pluginId, cmd: command, par: params });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await page.evaluate(async ({ pid, cmd, par }) => {
+        const { getBackend, createApi } = await import("/src/lib/backend");
+        const backend = await getBackend();
+        const api = createApi(backend);
+        return await api.executePluginCommand(pid, cmd, par);
+      }, { pid: pluginId, cmd: command, par: params });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const executionContextLost = message.includes("Execution context was destroyed")
+        || message.includes("Cannot find context with specified id");
+
+      if (!executionContextLost || attempt === 2) {
+        throw error;
+      }
+
+      await page.waitForLoadState("domcontentloaded", { timeout: 45000 }).catch(() => undefined);
+      await waitForAppReady(page, 45000);
+      await waitForE2EBridge(page, 45000);
+    }
+  }
+
+  throw new Error(`Failed to execute ${pluginId}:${command}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,6 +1136,7 @@ export type SyncedPair = {
   contextB: import("@playwright/test").BrowserContext;
   pageA: import("@playwright/test").Page;
   pageB: import("@playwright/test").Page;
+  email: string;
   remoteId: string;
   localIdA: string;
   rootPathA: string;
@@ -1048,10 +1164,14 @@ export async function setupSyncedPair(
     contextA.addInitScript(() => {
       localStorage.setItem("diaryx-storage-type", "indexeddb");
       localStorage.setItem("diaryx_sync_enabled", "true");
+      localStorage.setItem("diaryx_e2e_skip_onboarding", "1");
+      (globalThis as { __diaryx_e2e_disable_auto_file_open?: boolean }).__diaryx_e2e_disable_auto_file_open = true;
     }),
     contextB.addInitScript(() => {
       localStorage.setItem("diaryx-storage-type", "indexeddb");
       localStorage.setItem("diaryx_sync_enabled", "true");
+      localStorage.setItem("diaryx_e2e_skip_onboarding", "1");
+      (globalThis as { __diaryx_e2e_disable_auto_file_open?: boolean }).__diaryx_e2e_disable_auto_file_open = true;
     }),
   ]);
 
@@ -1094,6 +1214,7 @@ export async function setupSyncedPair(
 
   const linked = await createSyncedWorkspaceViaUi(pageA, remoteWorkspaceName);
   await installSyncPluginInCurrentWorkspace(pageA, wasmBase64);
+  await waitForSyncSession(pageA);
 
   await expect
     .poll(async () => await rootEntryPath(pageA), { timeout: 15000 })
@@ -1104,7 +1225,7 @@ export async function setupSyncedPair(
   }
 
   await uploadWorkspaceSnapshot(pageA, linked.remoteId);
-  await downloadRemoteWorkspaceViaUi(pageB, remoteWorkspaceName);
+  await downloadRemoteWorkspaceViaUi(pageB, remoteWorkspaceName, linked.remoteId);
 
   await expect
     .poll(async () => await currentWorkspaceProviderLink(pageB), { timeout: 30000 })
@@ -1133,6 +1254,7 @@ export async function setupSyncedPair(
     contextB,
     pageA,
     pageB,
+    email,
     remoteId: linked.remoteId,
     localIdA: linked.localId,
     rootPathA,
@@ -1165,6 +1287,8 @@ export async function setupSingleSyncClient(
   await context.addInitScript(() => {
     localStorage.setItem("diaryx-storage-type", "indexeddb");
     localStorage.setItem("diaryx_sync_enabled", "true");
+    localStorage.setItem("diaryx_e2e_skip_onboarding", "1");
+    (globalThis as { __diaryx_e2e_disable_auto_file_open?: boolean }).__diaryx_e2e_disable_auto_file_open = true;
   });
 
   const page = await context.newPage();
@@ -1184,6 +1308,7 @@ export async function setupSingleSyncClient(
 
   const linked = await createSyncedWorkspaceViaUi(page, workspaceName);
   await installSyncPluginInCurrentWorkspace(page, wasmBase64);
+  await waitForSyncSession(page);
 
   await expect
     .poll(async () => await rootEntryPath(page), { timeout: 15000 })

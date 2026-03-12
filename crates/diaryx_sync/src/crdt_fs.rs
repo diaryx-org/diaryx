@@ -456,8 +456,8 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// This is skipped if:
     /// - CRDT updates are disabled globally
     /// - The path is marked as a sync write (to prevent feedback loops)
-    async fn update_crdt_for_file(&self, path: &Path, content: &str) {
-        self.update_crdt_for_file_internal(path, content, false)
+    async fn update_crdt_for_file(&self, path: &Path, content: &str, previous_body: Option<&str>) {
+        self.update_crdt_for_file_internal(path, content, false, previous_body)
             .await;
     }
 
@@ -466,7 +466,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// This clears any stale state from storage before creating the body doc,
     /// preventing concatenation with old content from deleted files.
     async fn update_crdt_for_new_file(&self, path: &Path, content: &str) {
-        self.update_crdt_for_file_internal(path, content, true)
+        self.update_crdt_for_file_internal(path, content, true, None)
             .await;
     }
 
@@ -474,7 +474,13 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     ///
     /// If `is_new_file` is true, any existing body doc storage is deleted first
     /// to prevent stale state from being merged with new content.
-    async fn update_crdt_for_file_internal(&self, path: &Path, content: &str, is_new_file: bool) {
+    async fn update_crdt_for_file_internal(
+        &self,
+        path: &Path,
+        content: &str,
+        is_new_file: bool,
+        previous_body: Option<&str>,
+    ) {
         if !self.is_enabled() {
             log::trace!(
                 "[CrdtFs] update_crdt_for_file_internal SKIPPED (disabled) path={:?}",
@@ -566,9 +572,17 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             log::trace!("[CrdtFs] set_file SUCCESS: doc_key={}", doc_key);
         }
 
-        // Update body doc using the same key
         let body = frontmatter::extract_body(content);
         log::trace!("[CrdtFs] body extracted, len={}", body.len(),);
+
+        // Frontmatter-only writes should not perturb the body CRDT.
+        if !is_new_file && previous_body == Some(body) {
+            log::trace!(
+                "[CrdtFs] body unchanged on write, skipping body doc update for {}",
+                doc_key
+            );
+            return;
+        }
 
         // For new files, delete any stale storage and create a fresh doc
         // to prevent concatenation with old content from deleted files
@@ -649,6 +663,13 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
 
     fn write_file<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            let previous_body = self
+                .inner
+                .read_to_string(path)
+                .await
+                .ok()
+                .map(|previous| frontmatter::extract_body(&previous).to_string());
+
             // Mark local write in progress
             self.mark_local_write_start(path);
 
@@ -657,7 +678,8 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
 
             // Update CRDT if write succeeded and enabled
             if result.is_ok() {
-                self.update_crdt_for_file(path, content).await;
+                self.update_crdt_for_file(path, content, previous_body.as_deref())
+                    .await;
             }
 
             // Clear local write marker
@@ -894,6 +916,13 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
 
     fn write_file<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            let previous_body = self
+                .inner
+                .read_to_string(path)
+                .await
+                .ok()
+                .map(|previous| frontmatter::extract_body(&previous).to_string());
+
             // Mark local write in progress
             self.mark_local_write_start(path);
 
@@ -902,7 +931,8 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
 
             // Update CRDT if write succeeded and enabled
             if result.is_ok() {
-                self.update_crdt_for_file(path, content).await;
+                self.update_crdt_for_file(path, content, previous_body.as_deref())
+                    .await;
             }
 
             // Clear local write marker

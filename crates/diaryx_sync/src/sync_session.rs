@@ -122,6 +122,7 @@ pub struct SyncSession<FS: AsyncFileSystem> {
     state: Mutex<SessionState>,
     metadata_ready: Mutex<bool>,
     pending_body_docs: Mutex<HashSet<String>>,
+    pending_handshake_updates: Mutex<Vec<(String, Vec<u8>)>>,
     synced_emitted: Mutex<bool>,
 }
 
@@ -134,6 +135,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             state: Mutex::new(SessionState::AwaitingConnect),
             metadata_ready: Mutex::new(false),
             pending_body_docs: Mutex::new(HashSet::new()),
+            pending_handshake_updates: Mutex::new(Vec::new()),
             synced_emitted: Mutex::new(false),
         }
     }
@@ -178,6 +180,21 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             }));
         }
         None
+    }
+
+    fn queue_handshake_update(&self, doc_id: &str, data: &[u8]) {
+        self.pending_handshake_updates
+            .lock()
+            .unwrap()
+            .push((doc_id.to_string(), data.to_vec()));
+    }
+
+    fn drain_handshake_updates(&self) -> Vec<SessionAction> {
+        let pending = std::mem::take(&mut *self.pending_handshake_updates.lock().unwrap());
+        pending
+            .into_iter()
+            .map(|(doc_id, data)| SessionAction::SendBinary(frame_message_v2(&doc_id, &data)))
+            .collect()
     }
 
     /// Queue body SyncStep1 messages for the given UUIDs.
@@ -283,12 +300,8 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             if !self.sync_manager.is_body_loaded(uuid) {
                 unloaded_uuids.push(uuid.clone());
             }
-            if self.config.write_to_disk {
-                if let Some(path) = self.sync_manager.resolve_path(uuid) {
-                    if !self.sync_manager.file_exists_for_sync(&path).await {
-                        missing_disk_uuids.push(uuid.clone());
-                    }
-                }
+            if self.config.write_to_disk && !self.focused_body_exists_on_disk(uuid).await {
+                missing_disk_uuids.push(uuid.clone());
             }
         }
 
@@ -317,6 +330,30 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         }
 
         actions
+    }
+
+    async fn focused_body_exists_on_disk(&self, uuid: &str) -> bool {
+        let uuid = normalize_sync_path(uuid);
+        let resolved_path = self
+            .sync_manager
+            .resolve_path(&uuid)
+            .map(|path| normalize_sync_path(&path));
+
+        if let Some(path) = resolved_path.as_ref()
+            && self.sync_manager.file_exists_for_sync(path).await
+        {
+            return true;
+        }
+
+        // Browser-backed workspaces can keep the actual file at the raw CRDT
+        // key even when the workspace tree derives a nested display path.
+        if resolved_path.as_deref() != Some(uuid.as_str())
+            && self.sync_manager.file_exists_for_sync(&uuid).await
+        {
+            return true;
+        }
+
+        false
     }
 
     /// Process an incoming event and return actions for the platform layer.
@@ -440,6 +477,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         }
         *self.metadata_ready.lock().unwrap() = false;
         self.pending_body_docs.lock().unwrap().clear();
+        self.pending_handshake_updates.lock().unwrap().clear();
         *self.synced_emitted.lock().unwrap() = false;
 
         // Reset sync manager state
@@ -456,13 +494,21 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             state.clone()
         };
 
-        if current_state != SessionState::Active {
-            log::debug!("[SyncSession] Dropping local update (not active)");
-            return Vec::new();
+        match current_state {
+            SessionState::Active => {
+                let framed = frame_message_v2(doc_id, data);
+                vec![SessionAction::SendBinary(framed)]
+            }
+            SessionState::WaitingForHandshake => {
+                log::debug!("[SyncSession] Buffering local update during handshake");
+                self.queue_handshake_update(doc_id, data);
+                Vec::new()
+            }
+            SessionState::AwaitingConnect => {
+                log::debug!("[SyncSession] Dropping local update (awaiting connect)");
+                Vec::new()
+            }
         }
-
-        let framed = frame_message_v2(doc_id, data);
-        vec![SessionAction::SendBinary(framed)]
     }
 
     async fn handle_sync_body_files(&self, file_paths: &[String]) -> Vec<SessionAction> {
@@ -476,7 +522,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             return Vec::new();
         }
 
-        self.sync_manager.add_focused_files(file_paths);
+        self.sync_manager.set_focused_files(file_paths);
 
         // Resolve paths to UUIDs for body sync.
         // file_paths can contain either UUIDs (already resolved) or filesystem paths.
@@ -636,23 +682,16 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                         if result.sync_complete {
                             self.set_metadata_ready();
                         }
+                        let changed_files = result.changed_files.clone();
                         if !result.changed_files.is_empty() {
                             log::debug!(
                                 "[SyncSession] Workspace files changed: {:?}",
                                 result.changed_files
                             );
                             actions.push(SessionAction::Emit(SyncEvent::FilesChanged {
-                                files: result.changed_files,
+                                files: changed_files.clone(),
                             }));
                         }
-
-                        // Keep body bootstrap aligned with the latest workspace metadata set.
-                        // This picks up newly created/renamed files without waiting for explicit
-                        // on-demand requests from the UI layer.
-                        let all_uuids = self.sync_manager.get_all_file_uuids();
-                        let mut body_bootstrap =
-                            self.queue_body_sync_step1(&all_uuids, false, false);
-                        actions.append(&mut body_bootstrap);
 
                         let mut heal_actions = self.audit_and_reconcile_integrity().await;
                         actions.append(&mut heal_actions);
@@ -670,6 +709,15 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                 }
             }
             Some(DocIdKind::Body { body_id, .. }) => {
+                let body_is_active = self.sync_manager.resolve_path(&body_id).is_some();
+                let body_is_focused = self.sync_manager.is_file_focused(&body_id);
+                if !body_is_active && !body_is_focused {
+                    log::debug!(
+                        "[SyncSession] Ignoring stale body message for inactive doc_id={}",
+                        body_id
+                    );
+                    return actions;
+                }
                 match self
                     .sync_manager
                     .handle_body_message(&body_id, &payload, self.config.write_to_disk)
@@ -823,6 +871,9 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             self.queue_body_sync_step1(&all_uuids, true, !all_uuids.is_empty());
         actions.append(&mut body_bootstrap);
 
+        let mut pending_updates = self.drain_handshake_updates();
+        actions.append(&mut pending_updates);
+
         log::info!(
             "[SyncSession] transition_to_active: {} files in workspace (body bootstrap queued)",
             all_uuids.len()
@@ -849,9 +900,9 @@ mod tests {
     use crate::{
         BodyDocManager, DocIdKind, MemoryStorage, SyncHandler, SyncMessage, WorkspaceCrdt,
     };
-    use diaryx_core::fs::InMemoryFileSystem;
-    use diaryx_core::fs::SyncToAsyncFs;
+    use diaryx_core::fs::{AsyncFileSystem, InMemoryFileSystem, SyncToAsyncFs};
     use futures_lite::future::block_on;
+    use std::path::Path;
 
     type TestFs = SyncToAsyncFs<InMemoryFileSystem>;
 
@@ -888,6 +939,36 @@ mod tests {
         (session, sync_manager, workspace_crdt)
     }
 
+    fn create_test_session_with_fs(
+        workspace_id: &str,
+        write_to_disk: bool,
+    ) -> (
+        SyncSession<TestFs>,
+        Arc<RustSyncManager<TestFs>>,
+        Arc<WorkspaceCrdt>,
+        TestFs,
+    ) {
+        let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let workspace_crdt = Arc::new(WorkspaceCrdt::new(Arc::clone(&storage)));
+        let body_manager = Arc::new(BodyDocManager::new(Arc::clone(&storage)));
+        let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+        let sync_handler = Arc::new(SyncHandler::new(fs.clone()));
+        let sync_manager = Arc::new(RustSyncManager::new(
+            Arc::clone(&workspace_crdt),
+            body_manager,
+            sync_handler,
+        ));
+        let session = SyncSession::new(
+            SyncSessionConfig {
+                workspace_id: workspace_id.to_string(),
+                write_to_disk,
+            },
+            Arc::clone(&sync_manager),
+        );
+
+        (session, sync_manager, workspace_crdt, fs)
+    }
+
     fn framed_workspace_message(workspace_id: &str, message: SyncMessage) -> Vec<u8> {
         let doc_id = format_workspace_doc_id(workspace_id);
         let payload = message.encode();
@@ -921,6 +1002,30 @@ mod tests {
         targets
     }
 
+    fn sent_payloads_for_doc(actions: &[SessionAction], expected_doc_id: &str) -> Vec<Vec<u8>> {
+        let mut payloads = Vec::new();
+
+        for action in actions {
+            let SessionAction::SendBinary(data) = action else {
+                continue;
+            };
+            let Some((doc_id, payload)) = unframe_message_v2(data) else {
+                continue;
+            };
+            if doc_id == expected_doc_id {
+                payloads.push(payload);
+            }
+        }
+
+        payloads
+    }
+
+    fn framed_body_message(workspace_id: &str, body_id: &str, message: SyncMessage) -> Vec<u8> {
+        let doc_id = format_body_doc_id(workspace_id, body_id);
+        let payload = message.encode();
+        frame_message_v2(&doc_id, &payload)
+    }
+
     #[test]
     fn test_transition_to_active_bootstraps_body_sync_for_workspace_files() {
         let (session, _manager, workspace) = create_test_session("ws-join", false);
@@ -943,6 +1048,34 @@ mod tests {
         let mut targets = body_sync_step1_targets(&actions);
         targets.sort();
         assert_eq!(targets, vec!["README.md", "notes/new-entry.md"]);
+    }
+
+    #[test]
+    fn test_local_updates_buffered_during_handshake_flush_on_activate() {
+        let (session, _manager, _workspace) = create_test_session("ws-buffer", false);
+
+        block_on(session.process(IncomingEvent::Connected));
+
+        let local_doc_id = format_workspace_doc_id("ws-buffer");
+        let local_payload = vec![1, 2, 3, 4];
+        let buffered = block_on(session.process(IncomingEvent::LocalUpdate {
+            doc_id: local_doc_id.clone(),
+            data: local_payload.clone(),
+        }));
+        assert!(buffered.is_empty());
+
+        let actions = block_on(session.process(IncomingEvent::BinaryMessage(
+            framed_workspace_message("ws-buffer", SyncMessage::SyncStep1(vec![])),
+        )));
+
+        let sent_payloads = sent_payloads_for_doc(&actions, &local_doc_id);
+        assert!(
+            sent_payloads
+                .iter()
+                .any(|payload| payload == &local_payload),
+            "expected buffered local payload to flush after activation, got {:?}",
+            sent_payloads
+        );
     }
 
     #[test]
@@ -1006,8 +1139,12 @@ mod tests {
     }
 
     #[test]
-    fn test_workspace_update_bootstraps_new_body_docs() {
-        let (session, _manager, _workspace) = create_test_session("ws-rename", false);
+    fn test_workspace_update_bootstraps_new_focused_body_docs_via_audit() {
+        let (session, manager, workspace) = create_test_session("ws-rename", false);
+
+        workspace
+            .set_file("existing.md", test_file_metadata("existing.md", "Existing"))
+            .unwrap();
 
         // Enter active sync state.
         block_on(session.process(IncomingEvent::Connected));
@@ -1025,6 +1162,9 @@ mod tests {
             .set_file("renamed.md", test_file_metadata("renamed.md", "Renamed"))
             .unwrap();
         let update = source_workspace.encode_state_as_update();
+
+        manager.add_focused_files(&["renamed.md".to_string()]);
+        manager.rebuild_uuid_maps();
 
         let actions = block_on(session.process(IncomingEvent::BinaryMessage(
             framed_workspace_message("ws-rename", SyncMessage::Update(update)),
@@ -1076,5 +1216,76 @@ mod tests {
         // No files focused — audit should return empty
         let actions = block_on(session.audit_and_reconcile_integrity());
         assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_integrity_audit_accepts_flat_storage_alias_for_focused_move() {
+        let (session, manager, workspace, fs) = create_test_session_with_fs("ws-flat", true);
+
+        workspace
+            .set_file("parent", test_file_metadata("parent", "Parent"))
+            .unwrap();
+        let mut child = test_file_metadata("child.md", "Child");
+        child.part_of = Some("parent".to_string());
+        workspace.set_file("child.md", child).unwrap();
+
+        manager.rebuild_uuid_maps();
+        manager.add_focused_files(&["parent/child.md".to_string()]);
+
+        block_on(fs.write_file(
+            Path::new("child.md"),
+            "---\ntitle: Child\npart_of: parent\n---\nBody",
+        ))
+        .unwrap();
+
+        let msg = SyncMessage::SyncStep1(vec![]).encode();
+        block_on(manager.handle_body_message("child.md", &msg, false)).unwrap();
+        assert!(manager.is_body_synced("child.md"));
+
+        let actions = block_on(session.audit_and_reconcile_integrity());
+        let targets = body_sync_step1_targets(&actions);
+        assert!(
+            targets.is_empty(),
+            "expected no body resubscribe when raw doc-id storage exists, got {:?}",
+            targets
+        );
+    }
+
+    #[test]
+    fn test_ignores_body_messages_for_inactive_doc_ids() {
+        let (session, manager, workspace) = create_test_session("ws-stale", false);
+        workspace
+            .set_file("active.md", test_file_metadata("active.md", "Active"))
+            .unwrap();
+        manager.rebuild_uuid_maps();
+
+        block_on(session.process(IncomingEvent::Connected));
+        block_on(
+            session.process(IncomingEvent::BinaryMessage(framed_workspace_message(
+                "ws-stale",
+                SyncMessage::SyncStep1(vec![]),
+            ))),
+        );
+
+        let actions = block_on(
+            session.process(IncomingEvent::BinaryMessage(framed_body_message(
+                "ws-stale",
+                "stale.md",
+                SyncMessage::SyncStep1(vec![]),
+            ))),
+        );
+
+        assert!(
+            body_sync_step1_targets(&actions).is_empty(),
+            "stale body messages should not trigger responses: {:?}",
+            body_sync_step1_targets(&actions)
+        );
+        assert!(
+            actions
+                .iter()
+                .all(|action| !matches!(action, SessionAction::SendBinary(_))),
+            "stale body messages should not emit binary responses: {:?}",
+            actions
+        );
     }
 }

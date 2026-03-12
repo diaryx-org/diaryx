@@ -485,8 +485,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     );
 
                     // Track for echo detection
-                    self.plugin_registry()
-                        .track_content_for_sync(&canonical_path, &content);
+                    self.plugin_registry().track_content_for_sync(
+                        &canonical_path,
+                        frontmatter::extract_body(&content),
+                    );
 
                     // Note: Body sync messages are now automatically emitted via the Yrs observer
                     // pattern when set_body() is called. No manual emit_body_update needed.

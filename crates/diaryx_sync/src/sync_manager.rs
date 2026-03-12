@@ -426,10 +426,10 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
     /// Migrate body document keys and sync-tracking maps for workspace renames.
     ///
-    /// Remote metadata updates can rename a file path while keeping the same logical
-    /// document. If body docs stay under the old key, clients can end up with old/new
-    /// body streams diverging and duplicated content.
-    fn migrate_body_docs_for_renames(&self, renames: &[(String, String)]) {
+    /// Local and remote metadata updates can rename a file path while keeping the
+    /// same logical document. If body docs stay under the old key, clients can end
+    /// up with old/new body streams diverging and duplicated content.
+    pub fn migrate_body_docs_for_renames(&self, renames: &[(String, String)]) {
         for (old_path, new_path) in renames {
             let old_path = normalize_sync_path(old_path);
             let new_path = normalize_sync_path(new_path);
@@ -1587,12 +1587,22 @@ mod tests {
     #[test]
     fn test_remote_workspace_rename_migrates_body_doc_key() {
         let manager = create_test_manager();
+        let mut metadata = FileMetadata::new(Some("Note".to_string()));
+        metadata.filename = "new-entry.md".to_string();
 
         manager
             .body_manager
             .get_or_create("new-entry.md")
             .set_body("# Note\n\nhello")
             .unwrap();
+        manager.track_content("new-entry.md", "# Note\n\nhello");
+        manager.track_metadata("new-entry.md", &metadata);
+        manager.add_focused_files(&["new-entry.md".to_string()]);
+        manager
+            .body_synced
+            .write()
+            .unwrap()
+            .insert("new-entry.md".to_string());
 
         manager
             .migrate_body_docs_for_renames(&[("new-entry.md".to_string(), "wow.md".to_string())]);
@@ -1606,5 +1616,11 @@ mod tests {
             manager.body_manager.get("new-entry.md").is_none(),
             "old body doc key should be removed after rename"
         );
+        assert!(manager.is_echo("wow.md", "# Note\n\nhello"));
+        assert!(!manager.is_echo("new-entry.md", "# Note\n\nhello"));
+        assert!(manager.is_file_focused("wow.md"));
+        assert!(!manager.is_file_focused("new-entry.md"));
+        assert!(!manager.is_body_synced("new-entry.md"));
+        assert!(!manager.is_body_synced("wow.md"));
     }
 }

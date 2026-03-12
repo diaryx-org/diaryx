@@ -4,7 +4,6 @@ import {
   getLocalWorkspace,
   getWorkspaceProviderLinks,
 } from "$lib/storage/localWorkspaceRegistry.svelte";
-import { getPlugin } from "$lib/plugins/browserPluginManager.svelte";
 
 type PluginCommandRunner = (
   pluginId: string,
@@ -67,26 +66,15 @@ export async function mirrorCurrentWorkspaceMutationToLinkedProviders(args: {
 
   await Promise.allSettled(
     providerLinks.map(async (link) => {
+      if (link.pluginId === "diaryx.sync") {
+        // The browser sync plugin already tracks local file events directly.
+        // Mirroring mutations back into the same plugin duplicates workspace
+        // updates and can re-trigger sync loops during rename/move flows.
+        return;
+      }
       try {
-        const browserPlugin = getPlugin(link.pluginId);
-        if (browserPlugin) {
-          const initResponse = await browserPlugin.callCommand("InitializeWorkspaceCrdt", {
-            provider_id: link.pluginId,
-            ...(workspaceRoot ? { workspace_path: workspaceRoot } : {}),
-          });
-          if (!initResponse.success) {
-            throw new Error(initResponse.error ?? `InitializeWorkspaceCrdt failed for ${link.pluginId}`);
-          }
-
-          const syncResponse = await browserPlugin.callCommand("TriggerWorkspaceSync", {
-            provider_id: link.pluginId,
-          });
-          if (!syncResponse.success) {
-            throw new Error(syncResponse.error ?? `TriggerWorkspaceSync failed for ${link.pluginId}`);
-          }
-          return;
-        }
-
+        // Route through the backend/plugin-command path so provider commands run
+        // with the same workspace-scoped runtime context as the rest of the app.
         await args.runPluginCommand(link.pluginId, "InitializeWorkspaceCrdt", {
           provider_id: link.pluginId,
           ...(workspaceRoot ? { workspace_path: workspaceRoot } : {}),

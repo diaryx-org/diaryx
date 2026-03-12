@@ -20,9 +20,9 @@
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "^0.4.2",
-    "@extism/extism": "^2.0.0-rc13",
     "@choochmeque/tauri-plugin-iap-api": "^0.8.0",
     "@diaryx/wasm": "^0.11.0-dev",
+    "@extism/extism": "^2.0.0-rc13",
     "@tauri-apps/api": "^2.9.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
@@ -90,6 +90,6 @@
     "vite-plugin-wasm": "^3.5.0",
     "vitest": "^3.2.4",
     "wasm-pack": "^0.14.0",
-    "wrangler": "^4.67.0"
+    "wrangler": "^4.72.0"
   }
 }

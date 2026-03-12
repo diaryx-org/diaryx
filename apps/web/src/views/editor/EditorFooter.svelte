@@ -229,6 +229,7 @@
           onclick={handleOpenCommandPaletteClick}
           class="size-8"
           aria-label="Open command palette"
+          data-spotlight="command-palette-button"
         >
           <Search class="size-4" />
         </Button>

@@ -10,10 +10,11 @@ import {
   clearPreservedPluginEditorExtensions,
   preservePluginEditorExtensions,
 } from "$lib/plugins/preservedEditorExtensions.svelte";
-import type {
-  PermissionType,
-  PluginConfig,
-  PluginPermissions,
+import {
+  permissionStore,
+  type PermissionType,
+  type PluginConfig,
+  type PluginPermissions,
 } from "@/models/stores/permissionStore.svelte";
 import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 import type { RegistryPlugin } from "$lib/plugins/pluginRegistry";
@@ -42,6 +43,11 @@ function formatRuleSummary(
   if (permissionType === "plugin_storage") return "all";
   if (!rule.include?.length) return "no includes";
   return rule.include.join(", ");
+}
+
+function hasConfiguredPermissions(config: PluginConfig | undefined): boolean {
+  if (!config?.permissions) return false;
+  return Object.values(config.permissions).some((rule) => rule != null);
 }
 
 async function refreshTauriPluginStore(backend: Backend): Promise<void> {
@@ -179,6 +185,43 @@ async function persistDefaultPermissions(
   );
 }
 
+/**
+ * Check whether a plugin already has permissions configured.
+ *
+ * Reads from the in-memory plugins config (set via permissionStore persistence
+ * handlers) rather than re-reading frontmatter from the backend, which avoids
+ * stale-cache issues during onboarding when permissions were just pre-persisted.
+ */
+function hasExistingPermissions(pluginId: string): boolean {
+  const pluginsConfig = permissionStore.getPluginsConfig();
+  if (!pluginsConfig) return false;
+
+  return hasConfiguredPermissions(pluginsConfig[pluginId]);
+}
+
+async function hasPersistedPermissions(pluginId: string): Promise<boolean> {
+  const rootIndexPath = workspaceStore.tree?.path;
+  if (!rootIndexPath) return false;
+
+  try {
+    const backend = await getBackend();
+    const api = createApi(backend);
+    const fm = await api.getFrontmatter(rootIndexPath);
+    const pluginsConfig = fm.plugins as Record<string, PluginConfig> | undefined;
+    return hasConfiguredPermissions(pluginsConfig?.[pluginId]);
+  } catch {
+    return false;
+  }
+}
+
+async function hasExistingOrPersistedPermissions(pluginId: string): Promise<boolean> {
+  if (hasExistingPermissions(pluginId)) {
+    return true;
+  }
+
+  return await hasPersistedPermissions(pluginId);
+}
+
 async function reviewAndInstall(
   bytes: ArrayBuffer,
   fallbackName?: string,
@@ -198,6 +241,14 @@ async function reviewAndInstall(
 
   const pluginName = inspected.pluginName || fallbackName || pluginId;
   const requested = inspected.requestedPermissions;
+
+  // Skip the review dialog if permissions are already configured (e.g. from
+  // a starter workspace with pre-set permissions during onboarding).
+  const alreadyConfigured = await hasExistingOrPersistedPermissions(pluginId);
+  if (alreadyConfigured) {
+    return await platformInstall(bytes, fallbackName ?? pluginName, expectedPluginId);
+  }
+
   const defaults = requested?.defaults ?? {};
   const reasons = requested?.reasons ?? {};
 

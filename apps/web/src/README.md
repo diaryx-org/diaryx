@@ -68,6 +68,9 @@ first-run flow.
 If a workspace root already exists (for example, pre-initialized by the Tauri
 backend), the "Get Started" flow upgrades that default scaffold to starter
 content instead of opening the add-workspace wizard.
+During onboarding bundle install, starter workspace frontmatter under
+`plugins.<plugin-id>.permissions` is treated as authoritative and can suppress
+the browser install review dialog before plugin bytes are installed.
 
 ## Mobile Swipe Behavior
 

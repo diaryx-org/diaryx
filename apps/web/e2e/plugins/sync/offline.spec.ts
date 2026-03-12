@@ -87,13 +87,13 @@ test.describe("Sync › Offline / Reconnect", () => {
 
       // Verify A has the changes locally.
       await expect
-        .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 10000 })
+        .poll(async () => await readEntryBody(pageA, entryPath, { sync: false }), { timeout: 10000 })
         .toContain(offlineMarkerA);
 
       // B should NOT see the offline changes yet.
       // Wait a few seconds to confirm no sync happens.
       await pageB.waitForTimeout(3000);
-      const bodyBWhileOffline = await readEntryBody(pageB, entryPath);
+      const bodyBWhileOffline = await readEntryBody(pageB, entryPath, { sync: false });
       expect(bodyBWhileOffline).not.toContain(offlineMarkerA);
 
       // Bring A back online.
@@ -105,7 +105,7 @@ test.describe("Sync › Offline / Reconnect", () => {
       // only then ask the remote client to re-open/resubscribe that entry.
       await waitForSyncSession(pageA);
       await expect
-        .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 10000 })
+        .poll(async () => await readEntryBody(pageA, entryPath, { sync: false }), { timeout: 10000 })
         .toContain(offlineMarkerA);
       await queueBodyUpdateForSync(pageA, entryPath);
       await openEntryForSync(pageB, entryPath);
@@ -184,10 +184,10 @@ test.describe("Sync › Offline / Reconnect", () => {
       // subscriptions that may have been lost during the offline period.
       await Promise.all([
         expect
-          .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 10000 })
+          .poll(async () => await readEntryBody(pageA, entryPath, { sync: false }), { timeout: 10000 })
           .toContain(offlineA),
         expect
-          .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 10000 })
+          .poll(async () => await readEntryBody(pageB, entryPath, { sync: false }), { timeout: 10000 })
           .toContain(offlineB),
       ]);
 
@@ -218,8 +218,8 @@ test.describe("Sync › Offline / Reconnect", () => {
         .toContain(offlineB);
 
       // Content should converge.
-      const bodyA = await readEntryBody(pageA, entryPath);
-      const bodyB = await readEntryBody(pageB, entryPath);
+      const bodyA = await readEntryBody(pageA, entryPath, { sync: false });
+      const bodyB = await readEntryBody(pageB, entryPath, { sync: false });
       expect(bodyA).toBe(bodyB);
     } finally {
       await contextA.setOffline(false).catch(() => undefined);

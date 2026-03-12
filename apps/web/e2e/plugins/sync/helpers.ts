@@ -1053,11 +1053,15 @@ export async function expectFrontmatterProperty(
 export async function readEntryBody(
   page: import("@playwright/test").Page,
   entryPath: string,
+  options?: { sync?: boolean },
 ): Promise<string | null> {
-  return page.evaluate((pathToRead) => {
+  return page.evaluate(({ pathToRead, readOptions }) => {
     const bridge = (globalThis as {
       __diaryx_e2e?: {
-        readEntryBody: (path: string) => Promise<string | null>;
+        readEntryBody: (
+          path: string,
+          options?: { sync?: boolean },
+        ) => Promise<string | null>;
       };
     }).__diaryx_e2e;
 
@@ -1065,8 +1069,11 @@ export async function readEntryBody(
       throw new Error("Diaryx E2E bridge is not available");
     }
 
-    return bridge.readEntryBody(pathToRead);
-  }, entryPath);
+    return bridge.readEntryBody(pathToRead, readOptions);
+  }, {
+    pathToRead: entryPath,
+    readOptions: options,
+  });
 }
 
 export async function entryExists(

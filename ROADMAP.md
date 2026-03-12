@@ -56,6 +56,7 @@ part_of: "[README](/README.md)"
   - UI/keyboard haptics packs
   - UI animations packs
   - Themes can adjust size/padding of UI components
+- Either trademark "Diaryx" so I can name my app that (taken on App Store) or take suggestions for different names. (Some have suggested "Diary-X" or "Diary X")
 
 ## Dreams (long term, high priority)
 

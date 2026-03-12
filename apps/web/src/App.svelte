@@ -601,7 +601,10 @@
     renameEntry: (path: string, newFilename: string) => Promise<string>;
     moveEntryToParent: (path: string, parentPath: string) => Promise<string>;
     createIndexEntry: (stem: string) => Promise<string>;
-    readEntryBody: (path: string) => Promise<string | null>;
+    readEntryBody: (
+      path: string,
+      options?: { sync?: boolean },
+    ) => Promise<string | null>;
     readFrontmatter: (path: string) => Promise<Record<string, unknown> | null>;
     entryExists: (path: string) => Promise<boolean>;
     setFrontmatterProperty: (
@@ -994,7 +997,6 @@
       data: update.data,
     }));
     await plugin.callBinary("queue_local_update", payload);
-    await requestBodySyncForE2E(backendInstance, resolvedPath);
   }
 
   async function hydrateSyncedEntryForE2E(
@@ -1175,7 +1177,10 @@
         }
         return toPortableE2EPath(backendInstance, convertedPath);
       },
-      async readEntryBody(path: string): Promise<string | null> {
+      async readEntryBody(
+        path: string,
+        options?: { sync?: boolean },
+      ): Promise<string | null> {
         try {
           const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
           const resolvedPath = resolveE2EPath(backendInstance, path);
@@ -1185,22 +1190,33 @@
             backendInstance,
             resolvedPath,
           );
+          const shouldSync = options?.sync !== false;
 
-          if (!fileExists) {
+          if (shouldSync && !fileExists) {
             await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
           }
 
-          const materializedContent = await syncMaterializedEntryContentForE2E(
-            apiInstance,
-            backendInstance,
-            resolvedPath,
-            {
-              allowEmpty: true,
-              attempts: fileExists ? 1 : 30,
-              syncWorkspace: true,
-              syncBody: true,
-            },
-          );
+          const materializedContent = shouldSync
+            ? await syncMaterializedEntryContentForE2E(
+              apiInstance,
+              backendInstance,
+              resolvedPath,
+              {
+                allowEmpty: true,
+                attempts: fileExists ? 1 : 30,
+                syncWorkspace: true,
+                syncBody: true,
+              },
+            )
+            : await pollMaterializedEntryContentForE2E(
+              apiInstance,
+              backendInstance,
+              resolvedPath,
+              {
+                allowEmpty: true,
+                attempts: 1,
+              },
+            );
           if (materializedContent !== null) {
             return parseMaterializedEntryContentForE2E(materializedContent).body;
           }

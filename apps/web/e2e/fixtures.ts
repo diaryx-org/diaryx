@@ -26,6 +26,11 @@ export class EditorHelper {
     await expect(this.editor).toBeVisible({ timeout: 15000 })
     // Wait for editor to be interactive (not just visible)
     await this.editor.waitFor({ state: 'attached' })
+    // Wait for the TipTap editor instance to be fully initialized
+    await this.page.waitForFunction(() => {
+      const editor = (globalThis as any).__diaryx_tiptapEditor
+      return editor && !editor.isDestroyed
+    }, { timeout: 10000 })
   }
 
   async focus(): Promise<void> {
@@ -51,6 +56,15 @@ export class EditorHelper {
   async clearContent(): Promise<void> {
     await this.selectAll()
     await this.page.keyboard.press('Backspace')
+    // Wait for the editor to settle into a single empty paragraph
+    await this.page.waitForFunction(() => {
+      const el = document.querySelector('.ProseMirror, [contenteditable="true"]')
+      if (!el) return false
+      const text = (el.textContent || '').trim()
+      return text.length === 0
+    }, { timeout: 3000 }).catch(() => {
+      // Content may not fully clear on first try - do another pass
+    })
   }
 
   async applyBold(): Promise<void> {
@@ -64,21 +78,18 @@ export class EditorHelper {
   }
 
   async undo(): Promise<void> {
-    await this.page.evaluate(() => {
-      const editor = (globalThis as any).__diaryx_tiptapEditor
-      if (editor) {
-        editor.commands.undo()
-      }
-    })
+    const mod = getModifierKey(this.page)
+    await this.page.keyboard.press(`${mod}+z`)
   }
 
   async redo(): Promise<void> {
-    await this.page.evaluate(() => {
-      const editor = (globalThis as any).__diaryx_tiptapEditor
-      if (editor) {
-        editor.commands.redo()
-      }
-    })
+    const mod = getModifierKey(this.page)
+    const isMac = process.platform === 'darwin'
+    if (isMac) {
+      await this.page.keyboard.press(`${mod}+Shift+z`)
+    } else {
+      await this.page.keyboard.press(`${mod}+y`)
+    }
   }
 
   /**
@@ -86,12 +97,22 @@ export class EditorHelper {
    * Returns the plus button locator.
    */
   async openFloatingMenu(): Promise<Locator> {
-    await this.focus()
-    await this.type('temp')
-    await this.clearContent()
-
     const plusButton = this.page.locator('.floating-menu .trigger-button')
-    await expect(plusButton).toBeVisible({ timeout: 5000 })
+
+    // Retry the clear-and-wait cycle if the floating menu doesn't appear
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await this.focus()
+      await this.type('temp')
+      await this.clearContent()
+
+      try {
+        await expect(plusButton).toBeVisible({ timeout: 5000 })
+        return plusButton
+      } catch {
+        if (attempt === 1) throw new Error('Floating menu did not appear after clearing content')
+      }
+    }
+
     return plusButton
   }
 

@@ -106,8 +106,11 @@ test.describe('Workspace Navigation', () => {
     await expect(editorHelper.editor).toContainText('Line 1')
     await expect(editorHelper.editor).toContainText('Line 2')
 
-    // Brief wait for editor to render both paragraphs before navigating
-    await page.waitForTimeout(100)
+    // Wait for editor to render both paragraphs before navigating
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.ProseMirror, [contenteditable="true"]')
+      return el && el.querySelectorAll('p').length >= 2
+    }, { timeout: 3000 })
 
     await page.keyboard.press('ArrowUp')
     await page.keyboard.press('End')

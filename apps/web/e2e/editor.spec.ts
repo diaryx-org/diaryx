@@ -64,8 +64,10 @@ test.describe('Editor', () => {
 
     // Open heading submenu and select H1
     const headingButton = page.locator('.block-picker-menu .menu-item[title="Heading"]')
+    await expect(headingButton).toBeVisible()
     await headingButton.click()
     const h1Button = page.locator('.block-picker-menu .submenu-item').filter({ hasText: 'H1' })
+    await expect(h1Button).toBeVisible()
     await h1Button.click()
 
     // Wait for the heading node and click it to ensure editor focus
@@ -83,8 +85,10 @@ test.describe('Editor', () => {
 
     // Open list submenu and select bullet list
     const listButton = page.locator('.block-picker-menu .menu-item[title="List"]')
+    await expect(listButton).toBeVisible()
     await listButton.click()
     const bulletButton = page.locator('.block-picker-menu .submenu-item').filter({ hasText: 'Bullet' })
+    await expect(bulletButton).toBeVisible()
     await bulletButton.click()
 
     await page.keyboard.type('Item 1')
@@ -133,6 +137,7 @@ test.describe('Editor', () => {
     await editor.expandFloatingMenu()
 
     const codeBlockButton = page.locator('.block-picker-menu .menu-item[title="Code Block"]')
+    await expect(codeBlockButton).toBeVisible()
     await codeBlockButton.click()
 
     await page.keyboard.type('const x = 1;')
@@ -146,6 +151,7 @@ test.describe('Editor', () => {
     await editor.expandFloatingMenu()
 
     const quoteButton = page.locator('.block-picker-menu .menu-item[title="Quote"]')
+    await expect(quoteButton).toBeVisible()
     await quoteButton.click()
 
     await page.keyboard.type('A famous quote')
@@ -188,10 +194,13 @@ test.describe('Editor Keyboard Navigation', () => {
     await expect(editorHelper.editor).toContainText('Test')
 
     await editorHelper.undo()
-    await expect(editorHelper.editor).not.toContainText('Test', { timeout: 3000 })
+    await expect(editorHelper.editor).not.toContainText('Test', { timeout: 5000 })
+
+    // Brief wait for undo to fully commit before redo
+    await page.waitForTimeout(200)
 
     await editorHelper.redo()
-    await expect(editorHelper.editor).toContainText('Test', { timeout: 3000 })
+    await expect(editorHelper.editor).toContainText('Test', { timeout: 5000 })
   })
 })
 

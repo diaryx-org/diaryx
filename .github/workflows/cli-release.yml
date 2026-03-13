@@ -39,13 +39,6 @@ jobs:
       - name: Wait for crates.io index update
         run: sleep 10
 
-      - name: Publish diaryx_publish
-        run: cargo publish -p diaryx_publish
-        continue-on-error: true # May already be published
-
-      - name: Wait for crates.io index update
-        run: sleep 10
-
       - name: Publish diaryx_sync
         run: cargo publish -p diaryx_sync
         continue-on-error: true # May already be published
@@ -63,7 +56,7 @@ jobs:
       - name: Wait for dependency crates to be indexed
         run: |
           VERSION=$(cargo pkgid -p diaryx_extism | sed 's/.*#//')
-          for crate in diaryx_core diaryx_publish diaryx_sync diaryx_extism; do
+          for crate in diaryx_core diaryx_sync diaryx_extism; do
             echo "Waiting for ${crate}@${VERSION} in crates.io index..."
             for i in {1..30}; do
               if cargo info "${crate}@${VERSION}" >/dev/null 2>&1; then

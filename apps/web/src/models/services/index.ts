@@ -37,6 +37,11 @@ export {
 } from './toastService';
 
 export {
+  checkForAppUpdatesInBackground,
+  installAvailableAppUpdate,
+} from './updaterService';
+
+export {
   getCommitHistory,
   commitWorkspace,
   restoreWorkspace,

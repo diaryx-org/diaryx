@@ -20,7 +20,7 @@ cd "$TAURI_DIR"
 APPLE_API_KEY="$API_KEY" \
 APPLE_API_ISSUER="$API_ISSUER" \
 APPLE_API_KEY_PATH="$API_KEY_PATH" \
-cargo tauri ios build --export-method app-store-connect -- --features iap
+cargo tauri ios build --export-method app-store-connect -- --features apple
 
 # ── Find the IPA ─────────────────────────────────────────────────────
 IPA=$(find "$REPO_ROOT/apps/tauri/src-tauri/gen/apple/build" -name "*.ipa" | head -1)

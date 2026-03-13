@@ -29,6 +29,11 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_opener::OpenerExt;
+#[cfg(all(
+    feature = "desktop-updater",
+    not(any(target_os = "android", target_os = "ios"))
+))]
+use tauri_plugin_updater::UpdaterExt;
 
 // ============================================================================
 // Types
@@ -47,6 +52,17 @@ pub struct AppPaths {
     pub config_path: PathBuf,
     /// Whether this is a mobile platform (iOS/Android)
     pub is_mobile: bool,
+    /// Whether this build targets Apple's App Store distribution path.
+    pub is_apple_build: bool,
+}
+
+/// Metadata for an available application update.
+#[derive(Debug, Serialize)]
+pub struct AppUpdateInfo {
+    /// The semver version advertised by the updater endpoint.
+    pub version: String,
+    /// Optional release notes/body text from the updater manifest.
+    pub body: Option<String>,
 }
 
 /// Base filesystem type for Tauri (real filesystem wrapped for async).
@@ -1034,6 +1050,7 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             default_workspace,
             config_path,
             is_mobile: true,
+            is_apple_build: cfg!(feature = "apple"),
         })
     } else {
         // On desktop, use standard locations
@@ -1075,6 +1092,7 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             default_workspace,
             config_path,
             is_mobile: false,
+            is_apple_build: cfg!(feature = "apple"),
         })
     }
 }
@@ -1151,6 +1169,115 @@ pub fn reveal_in_file_manager<R: Runtime>(
             })?;
 
         Ok(())
+    }
+}
+
+/// Check whether a direct-distribution desktop update is available.
+#[tauri::command]
+pub async fn check_for_app_update<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Option<AppUpdateInfo>, SerializableError> {
+    #[cfg(all(
+        feature = "desktop-updater",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
+    {
+        let updater = app.updater().map_err(|e| SerializableError {
+            kind: "UpdaterError".to_string(),
+            message: format!("Failed to initialize updater: {}", e),
+            path: None,
+        })?;
+
+        let update = updater.check().await.map_err(|e| SerializableError {
+            kind: "UpdaterError".to_string(),
+            message: format!("Failed to check for app updates: {}", e),
+            path: None,
+        })?;
+
+        Ok(update.map(|update| AppUpdateInfo {
+            version: update.version,
+            body: update.body,
+        }))
+    }
+
+    #[cfg(not(all(
+        feature = "desktop-updater",
+        not(any(target_os = "android", target_os = "ios"))
+    )))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+/// Download, install, and restart into the newest direct-distribution desktop build.
+#[tauri::command]
+pub async fn install_app_update<R: Runtime>(app: AppHandle<R>) -> Result<bool, SerializableError> {
+    #[cfg(all(
+        feature = "desktop-updater",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
+    {
+        let updater = app.updater().map_err(|e| SerializableError {
+            kind: "UpdaterError".to_string(),
+            message: format!("Failed to initialize updater: {}", e),
+            path: None,
+        })?;
+
+        let Some(update) = updater.check().await.map_err(|e| SerializableError {
+            kind: "UpdaterError".to_string(),
+            message: format!("Failed to check for app updates: {}", e),
+            path: None,
+        })?
+        else {
+            return Ok(false);
+        };
+
+        let target_version = update.version.clone();
+        log::info!(
+            "[install_app_update] Downloading and installing Diaryx {}",
+            target_version
+        );
+
+        update
+            .download_and_install(
+                |chunk_length, content_length| {
+                    log::debug!(
+                        "[install_app_update] Downloaded {} of {:?} bytes",
+                        chunk_length,
+                        content_length
+                    );
+                },
+                || {
+                    log::info!("[install_app_update] Update download finished");
+                },
+            )
+            .await
+            .map_err(|e| SerializableError {
+                kind: "UpdaterError".to_string(),
+                message: format!("Failed to install app update: {}", e),
+                path: None,
+            })?;
+
+        log::info!(
+            "[install_app_update] Restarting into Diaryx {}",
+            target_version
+        );
+        app.restart();
+
+        #[allow(unreachable_code)]
+        {
+            Ok(true)
+        }
+    }
+
+    #[cfg(not(all(
+        feature = "desktop-updater",
+        not(any(target_os = "android", target_os = "ios"))
+    )))]
+    {
+        let _ = app;
+        Ok(false)
     }
 }
 
@@ -1245,6 +1372,7 @@ pub async fn pick_workspace_folder<R: Runtime>(
             default_workspace: selected_path,
             config_path: paths.config_path,
             is_mobile: paths.is_mobile,
+            is_apple_build: paths.is_apple_build,
         }))
     }
 }
@@ -1396,6 +1524,7 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
         default_workspace: actual_workspace,
         config_path: paths.config_path,
         is_mobile: paths.is_mobile,
+        is_apple_build: paths.is_apple_build,
     })
 }
 
@@ -2679,6 +2808,7 @@ pub async fn reinitialize_workspace<R: Runtime>(
         default_workspace: ws_path,
         config_path: paths.config_path,
         is_mobile: paths.is_mobile,
+        is_apple_build: paths.is_apple_build,
     })
 }
 

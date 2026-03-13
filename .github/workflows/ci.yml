@@ -501,7 +501,7 @@ jobs:
           path: apps/web/dist/
 
       - name: Check Tauri compiles
-        run: cargo check -p diaryx_tauri
+        run: cargo check -p diaryx_tauri --features desktop-updater
 
   # Deploy web app to Cloudflare on push to master (after tests pass)
   deploy-web:

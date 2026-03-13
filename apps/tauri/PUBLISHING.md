@@ -49,7 +49,7 @@ Configuration (API keys, signing identities) is at the top of each script.
 APPLE_API_KEY=<KEY_ID> \
 APPLE_API_ISSUER=<ISSUER_ID> \
 APPLE_API_KEY_PATH=~/.private_keys/AuthKey_<KEY_ID>.p8 \
-cargo tauri ios build --export-method app-store-connect -- --features iap
+cargo tauri ios build --export-method app-store-connect -- --features apple
 ```
 
 The IPA is produced at `apps/tauri/src-tauri/gen/apple/build/`.
@@ -68,7 +68,7 @@ xcrun altool --upload-app --type ios \
 ### 1. Build
 
 ```bash
-cargo tauri build --bundles app -- --features iap
+cargo tauri build --bundles app -- --features apple
 ```
 
 The `.app` bundle is produced at `target/release/bundle/macos/Diaryx.app`.
@@ -111,7 +111,12 @@ xcrun altool --upload-app --type macos \
 
 Handled by CI in `.github/workflows/tauri-release.yml`. Push a tag matching `v*` to trigger a release build.
 
-For signing and notarization, set these GitHub Secrets:
+The release workflow renders `apps/tauri/src-tauri/tauri.updater.conf.json`
+with `apps/tauri/scripts/render-updater-config.mjs`, enables the
+`desktop-updater` feature, and signs the generated updater artifacts before
+uploading them to the GitHub Release draft.
+
+For signing, notarization, and updater metadata, set these GitHub Secrets:
 
 | Secret | Value |
 |---|---|
@@ -121,6 +126,9 @@ For signing and notarization, set these GitHub Secrets:
 | `APPLE_ID` | Apple ID email |
 | `APPLE_PASSWORD` | App-specific password (generate at [appleid.apple.com](https://appleid.apple.com)) |
 | `APPLE_TEAM_ID` | Your Apple Developer Team ID |
+| `TAURI_SIGNING_PRIVATE_KEY` | Minisign private key used by Tauri updater signing |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the updater private key (if set) |
+| `TAURI_UPDATER_PUBLIC_KEY` | Matching minisign public key embedded into the desktop updater config |
 
 ## TestFlight
 
@@ -134,6 +142,7 @@ After uploading a build (iOS or macOS), it appears in [App Store Connect](https:
 - iOS icons must not have alpha channels (transparency). If icons are regenerated, flatten them to RGB before building.
 - iOS Files app visibility for app `Documents` is enabled with `src-tauri/Info.ios.plist` (`UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace`) wired in `src-tauri/tauri.conf.json` under `bundle.iOS.infoPlist`.
 - If you update iOS plist overrides, recreate the iOS project so generated Xcode files pick up the change (`cargo tauri ios init`).
-- The `iap` feature flag is required for App Store builds to include the StoreKit 2 plugin.
+- The `apple` feature flag is required for App Store builds to include the StoreKit 2 plugin and keep the desktop updater disabled.
+- Direct GitHub-release builds should use `--features desktop-updater` and a rendered `src-tauri/tauri.updater.conf.json`.
 - Mac App Store builds require sandbox entitlements defined in `src-tauri/Entitlements.plist`.
 - The `bundle.category` in `tauri.conf.json` must be set (currently "Productivity") for Mac App Store submission.

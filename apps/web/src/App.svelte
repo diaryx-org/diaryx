@@ -111,6 +111,7 @@
   // Import services
   import {
     revokeBlobUrls,
+    checkForAppUpdatesInBackground,
   } from "./models/services";
   import {
     getMimeType,
@@ -1910,6 +1911,7 @@
       fsaReconnectWsName = wsName;
       const backendInstance = await getBackend(wsId, wsName, wsId ? getWorkspaceStorageType(wsId) : undefined);
       workspaceStore.setBackend(backendInstance);
+      void checkForAppUpdatesInBackground(backendInstance);
 
       const apiInstance = createApi(backendInstance);
 

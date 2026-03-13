@@ -3,6 +3,7 @@
 // when this module is bundled but running in a non-Tauri environment.
 
 import type {
+  AppUpdateInfo,
   Backend,
   BackendEventType,
   BackendEventListener,
@@ -30,6 +31,7 @@ interface AppPaths {
   default_workspace: string;
   config_path: string;
   is_mobile: boolean;
+  is_apple_build: boolean;
   /** Whether CRDT storage was successfully initialized */
   crdt_initialized: boolean;
   /** Error message if CRDT initialization failed */
@@ -580,6 +582,20 @@ export class TauriBackend implements Backend {
    */
   async revealInFileManager(path: string): Promise<void> {
     await this.getInvoke()("reveal_in_file_manager", { path });
+  }
+
+  /**
+   * Check for an available direct-distribution desktop update.
+   */
+  async checkForAppUpdate(): Promise<AppUpdateInfo | null> {
+    return await this.getInvoke()<AppUpdateInfo | null>("check_for_app_update");
+  }
+
+  /**
+   * Download and install the latest direct-distribution desktop update.
+   */
+  async installAppUpdate(): Promise<boolean> {
+    return await this.getInvoke()<boolean>("install_app_update");
   }
 
   // --------------------------------------------------------------------------

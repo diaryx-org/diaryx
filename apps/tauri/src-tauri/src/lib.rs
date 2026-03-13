@@ -3,6 +3,12 @@
 //! This is the library file for the Tauri backend.
 //!
 
+#[cfg(all(feature = "apple", feature = "desktop-updater"))]
+compile_error!(
+    "The `apple` and `desktop-updater` features are mutually exclusive. \
+Use `apple` for App Store builds and `desktop-updater` for direct desktop distribution."
+);
+
 /// Where all the Tauri `invoke` functions are defined.
 mod commands;
 
@@ -65,6 +71,15 @@ pub fn run() {
         // Native iOS keyboard toolbar for TipTap editor (no-op on desktop)
         .plugin(tauri_plugin_editor_toolbar::init());
 
+    // Tauri updater plugin — only for direct desktop distribution builds.
+    #[cfg(all(
+        feature = "desktop-updater",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
     // Apple IAP plugin — only included with `--features iap` (for App Store builds)
     #[cfg(feature = "iap")]
     {
@@ -106,6 +121,8 @@ pub fn run() {
             commands::get_app_paths,
             commands::pick_workspace_folder,
             commands::reveal_in_file_manager,
+            commands::check_for_app_update,
+            commands::install_app_update,
             // Export
             commands::export_to_zip,
             commands::export_to_format,

@@ -67,6 +67,16 @@ That helper skips interactive descendants such as buttons and form controls, so
 the macOS desktop window remains draggable without swallowing clicks on shell
 controls during welcome/onboarding flows or narrow desktop layouts.
 
+## Desktop Update Checks
+
+When the shared frontend is running inside a direct-distribution Tauri desktop
+build, `App.svelte` also kicks off a background updater probe after backend
+initialization. The probe runs through `models/services/updaterService.ts`,
+which uses the Tauri backend's optional updater helpers and only surfaces a
+toast when a newer GitHub Release build is actually available. App Store and
+web builds remain silent because their backends report updater support as
+unavailable.
+
 ## Starter Workspace Bootstrap
 
 `App.svelte` bootstraps starter content for first-run users.

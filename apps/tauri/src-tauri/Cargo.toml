@@ -48,10 +48,15 @@ diaryx_extism = { path = "../../../crates/diaryx_extism", optional = true }
 dirs = { version = "6.0", optional = true }
 futures-lite = { version = "2", optional = true }
 
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = { version = "2", optional = true }
+
 [features]
 default = ["custom-protocol", "extism-plugins"]
 custom-protocol = ["tauri/custom-protocol"]
+desktop-updater = ["dep:tauri-plugin-updater"]
 iap = ["dep:tauri-plugin-iap"]
+apple = ["iap"]
 extism-plugins = ["dep:diaryx_extism", "dep:dirs", "dep:futures-lite", "diaryx_extism/wasi-runner", "diaryx_extism/http", "diaryx_extism/ws-transport"]
 
 [dev-dependencies]

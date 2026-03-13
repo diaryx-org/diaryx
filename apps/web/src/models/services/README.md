@@ -8,6 +8,7 @@ attachments:
   - '[historyService.ts](/apps/web/src/models/services/historyService.ts)'
   - '[sitePublishingService.ts](/apps/web/src/models/services/sitePublishingService.ts)'
   - '[toastService.ts](/apps/web/src/models/services/toastService.ts)'
+  - '[updaterService.ts](/apps/web/src/models/services/updaterService.ts)'
 exclude:
   - '*.lock'
   - '*.test.ts'
@@ -25,6 +26,7 @@ Business logic services that coordinate between stores and backend.
 | `historyService.ts` | History lookup helpers used by UI history surfaces. |
 | `sitePublishingService.ts` | Sync-server client for workspace site lifecycle, publish triggers, and audience token CRUD (`/api/workspaces/{id}/site*`). |
 | `toastService.ts` | Toast notification wrappers with consistent error/status formatting. |
+| `updaterService.ts` | Tauri desktop updater check/install helpers that surface release availability through toasts without affecting web or App Store builds. |
 
 ## Migration Notes
 

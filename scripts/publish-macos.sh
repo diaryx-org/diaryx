@@ -32,7 +32,7 @@ fi
 # ── Step 1: Build ────────────────────────────────────────────────────
 echo "==> Building Diaryx.app..."
 cd "$TAURI_DIR"
-cargo tauri build --bundles app -- --features iap
+cargo tauri build --bundles app -- --features apple
 
 # ── Step 2: Set build number ─────────────────────────────────────────
 echo "==> Setting CFBundleVersion to $BUILD_NUMBER..."

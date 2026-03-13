@@ -117,6 +117,11 @@ export interface FixSummary {
   total_failed: number;
 }
 
+export interface AppUpdateInfo {
+  version: string;
+  body: string | null;
+}
+
 // Export types
 export interface ExportPlan {
   included: { path: string; relative_path: string }[];
@@ -335,7 +340,8 @@ export interface Backend {
 
   /**
    * Get app paths (Tauri-specific, returns null for WASM).
-   * Includes data_dir, document_dir, default_workspace, config_path, is_mobile, crdt_initialized, crdt_error.
+   * Includes data_dir, document_dir, default_workspace, config_path, is_mobile,
+   * and is_apple_build when available.
    */
   getAppPaths(): Record<string, string | boolean | null> | null;
 
@@ -436,6 +442,18 @@ export interface Backend {
    * Available in Tauri desktop builds.
    */
   revealInFileManager?(path: string): Promise<void>;
+
+  /**
+   * Check for a direct-distribution desktop app update when supported.
+   * Returns null when the updater is unavailable or no update is published.
+   */
+  checkForAppUpdate?(): Promise<AppUpdateInfo | null>;
+
+  /**
+   * Download and install the latest direct-distribution desktop app update.
+   * Returns false when the updater is unavailable or there is nothing to install.
+   */
+  installAppUpdate?(): Promise<boolean>;
 
   /**
    * Import workspace from a zip file.

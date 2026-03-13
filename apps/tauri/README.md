@@ -124,6 +124,22 @@ context plus generic HTTP/WebSocket bridges, and plugins own sync/share
 protocol details on top of those host capabilities. The Tauri backend should
 not hardcode `SyncClient`-style transport logic for a specific provider.
 
+## Desktop Updater
+
+Direct-distribution desktop builds can include `tauri-plugin-updater` so the
+installed app can download GitHub Release updates from inside Diaryx.
+
+- **Feature flag**: `desktop-updater` for Windows, Linux, and non-App-Store macOS builds
+- **Config source**: `apps/tauri/scripts/render-updater-config.mjs` writes the merged
+  `src-tauri/tauri.updater.conf.json` file from `TAURI_UPDATER_PUBLIC_KEY`
+- **Release endpoint**: `https://github.com/diaryx-org/diaryx/releases/latest/download/latest.json`
+- **Frontend behavior**: `App.svelte` kicks off a background update check through
+  `updaterService.ts` once the Tauri backend is ready and shows an install toast only when a new build is available
+
+Mac App Store builds must not include the updater. That split now lives in the
+Cargo features: direct desktop releases enable `desktop-updater`, while App
+Store builds use `apple`.
+
 ## Apple IAP (In-App Purchases)
 
 The Tauri app includes `tauri-plugin-iap` for StoreKit 2 integration on iOS and macOS (Mac App Store). This enables native subscription purchasing through the App Store.
@@ -131,21 +147,24 @@ The Tauri app includes `tauri-plugin-iap` for StoreKit 2 integration on iOS and 
 - **Plugin**: `tauri-plugin-iap` v0.8 (StoreKit 2, iOS 15+/macOS 13+)
 - **Product ID**: `diaryx_plus_monthly` (configured in App Store Connect)
 - **Capabilities**: `iap:default` in both `mobile.json` and `default.json`
-- **Feature flag**: `iap` — the plugin is behind `--features iap` to avoid Swift bridge linker issues during dev
+- **Feature flag**: `apple` — App Store build umbrella feature that currently enables `iap` and excludes the desktop updater
 - **iOS handler model**: IAP plugin commands use native async handlers (not ad-hoc `Task {}` wrappers) to reduce Swift concurrency allocator crashes seen during simulator testing
 - **Simulator behavior**: by default, iOS simulator uses a crash-safe mock purchase/restore/status path in the plugin; set `DIARYX_IAP_SIMULATOR_REAL=1` in the Xcode scheme environment to force real StoreKit calls
 - **Device packaging**: iOS target sets `SWIFT_STDLIB_TOOL_FLAGS=--source-libraries $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)` so `libswiftCore.dylib` and related Swift runtime libraries are embedded correctly for phone builds
 
 The frontend detects the billing provider at runtime (`$lib/billing/platform.ts`):
-- iOS/macOS Tauri → Apple IAP (native StoreKit sheet)
-- Web/Desktop (non-MAS) → Stripe checkout
+- iOS Tauri and App Store macOS builds → Apple IAP (native StoreKit sheet)
+- Web and direct desktop builds → Stripe checkout
 
 ```bash
 # Normal dev (no IAP)
 bun run tauri dev
 
-# App Store release build with IAP
-bun run tauri:iap
+# iOS dev with Apple/App Store feature flags
+bun run tauri:ios
+
+# App Store release build
+cargo tauri build -- --features apple
 ```
 
 Testing requires a StoreKit configuration file (`.storekit`) in Xcode for sandbox testing. For local sync-server testing with simulator mock transactions, set `APPLE_IAP_SKIP_SIGNATURE_VERIFY=1` on the server so mock JWS payloads can be decoded.

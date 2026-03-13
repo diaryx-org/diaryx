@@ -85,6 +85,13 @@ jobs:
           cd apps/web
           bun install
 
+      - name: Render updater config
+        run: |
+          cd apps/tauri
+          bun run tauri:render-updater-config
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+
       - name: Create WASM stub for Tauri build
         shell: bash
         run: |
@@ -119,7 +126,7 @@ jobs:
         with:
           projectPath: apps/tauri
           tauriScript: ../web/node_modules/.bin/tauri
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --features desktop-updater --config src-tauri/tauri.updater.conf.json
           tagName: ${{ steps.tag.outputs.tag }}
           releaseName: "Diaryx ${{ steps.tag.outputs.tag }}"
           releaseBody: "See the assets below to download and install Diaryx."

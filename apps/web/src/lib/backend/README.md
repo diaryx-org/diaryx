@@ -151,3 +151,11 @@ invokes a Tauri desktop command backed by `tauri-plugin-opener`'s
 "Show in Finder" / "Show in Explorer" / "Show in File Manager" action for tree
 entries. The control is hidden on iOS and Android because Tauri does not expose
 reveal support there.
+
+## Desktop App Updates
+
+`TauriBackend` now also exposes optional `checkForAppUpdate()` and
+`installAppUpdate()` helpers. Those commands are backed by the Tauri updater
+plugin only in direct desktop distribution builds (`desktop-updater` feature),
+and they return `null`/`false` in App Store or mobile builds so shared frontend
+code can probe update support without branching on target-specific imports.

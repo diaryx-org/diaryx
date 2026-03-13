@@ -23,7 +23,7 @@ Marketplace UI for theme/style presets and plugin discovery/management.
 
 | File | Purpose |
 |------|---------|
-| `MarketplaceSidebar.svelte` | Shared marketplace shell with section tabs |
+| `MarketplaceSidebar.svelte` | Shared marketplace shell with section tabs and an internal scroll region that fits the viewport-clamped marketplace dialog |
 | `MarketplaceThemes.svelte` | Theme catalog browsing with install/apply/uninstall and local import/export |
 | `MarketplaceTypography.svelte` | Typography catalog browsing with install/apply/uninstall, local import/export, and per-field overrides |
 | `MarketplacePlugins.svelte` | Plugin registry browsing and install/uninstall flows, including live plugin activation without a page reload and immediate local-vs-registry source reclassification after installs |

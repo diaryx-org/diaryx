@@ -6,6 +6,7 @@
  */
 
 import type { TreeNode, ValidationResultWithMeta, Backend } from '$lib/backend';
+import type { WorkspaceConfig } from '$lib/backend/generated/WorkspaceConfig';
 
 // ============================================================================
 // State
@@ -29,17 +30,11 @@ let workspaceId = $state<string | null>(null);
 // Backend reference
 let backend = $state<Backend | null>(null);
 
-// Display settings
-let showUnlinkedFiles = $state(
-  typeof window !== 'undefined'
-    ? localStorage.getItem('diaryx-show-unlinked-files') === 'true'
-    : false
-);
-let showHiddenFiles = $state(
-  typeof window !== 'undefined'
-    ? localStorage.getItem('diaryx-show-hidden-files') === 'true'
-    : false
-);
+// Display settings — initialized with defaults, then hydrated from workspace config
+let showUnlinkedFiles = $state(false);
+let showHiddenFiles = $state(false);
+// Callback to persist a config field to the root index; wired up after backend init
+let persistField: ((field: string, value: string) => Promise<void>) | null = null;
 
 // Focus mode setting (default to true on desktop, false on mobile)
 // When enabled and both sidebars are closed, editor chrome fades out
@@ -402,19 +397,17 @@ export function getWorkspaceStore() {
       backend = newBackend;
     },
 
-    // Display settings
+    // Display settings — persisted to workspace root index frontmatter.
+    // `persistField` is wired up by `hydrateDisplaySettings()` once the
+    // backend is ready.
     setShowUnlinkedFiles(show: boolean) {
       showUnlinkedFiles = show;
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('diaryx-show-unlinked-files', String(show));
-      }
+      persistField?.('show_unlinked_files', String(show));
     },
 
     setShowHiddenFiles(show: boolean) {
       showHiddenFiles = show;
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('diaryx-show-hidden-files', String(show));
-      }
+      persistField?.('show_hidden_files', String(show));
     },
 
     setFocusMode(enabled: boolean) {
@@ -424,12 +417,18 @@ export function getWorkspaceStore() {
       }
     },
 
-    // Persist display settings
-    persistDisplaySettings() {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('diaryx-show-unlinked-files', String(showUnlinkedFiles));
-        localStorage.setItem('diaryx-show-hidden-files', String(showHiddenFiles));
+    /**
+     * Hydrate display settings from workspace config after the backend
+     * is initialized. Call this once after the first tree load.
+     */
+    hydrateDisplaySettings(config: WorkspaceConfig, setFieldFn: (field: string, value: string) => Promise<void>) {
+      if (config.show_unlinked_files !== undefined) {
+        showUnlinkedFiles = config.show_unlinked_files;
       }
+      if (config.show_hidden_files !== undefined) {
+        showHiddenFiles = config.show_hidden_files;
+      }
+      persistField = setFieldFn;
     },
 
     // Session state management (for guest sessions)

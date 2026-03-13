@@ -42,8 +42,8 @@
   </Drawer.Root>
 {:else}
   <Dialog.Root bind:open>
-    <Dialog.Content class="sm:max-w-[780px] h-[680px] overflow-hidden">
-      <Dialog.Header>
+    <Dialog.Content class="flex h-[680px] max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-[780px] flex-col overflow-hidden">
+      <Dialog.Header class="shrink-0 pr-8">
         <Dialog.Title class="flex items-center gap-2">
           <Store class="size-5" />
           Marketplace
@@ -52,7 +52,7 @@
           Browse themes, typography, plugins, and bundles.
         </Dialog.Description>
       </Dialog.Header>
-      <div class="h-[560px] min-h-0">
+      <div class="flex-1 min-h-0">
         <MarketplaceSidebar />
       </div>
     </Dialog.Content>

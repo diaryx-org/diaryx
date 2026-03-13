@@ -51,5 +51,6 @@ This directory contains the source code for the Diaryx sync server.
   and raw HTML `src`/`href` attributes (with percent-decoding), which improves
   publish-time attachment URL rewriting for HTML-embedded media.
 - Published site creation enforces `get_effective_published_site_limit(...)`.
-  Free-tier defaults can be `0`, so tests/seeds that create sites should set a
-  per-user override (or tier) first.
+  Free-tier defaults now include one published site, while per-user overrides
+  can still raise or lower that limit for tests, seeds, or grandfathered
+  accounts.

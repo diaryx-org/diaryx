@@ -104,6 +104,32 @@ pub struct WorkspaceConfig {
     #[cfg_attr(feature = "typescript", ts(optional))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_entry_folder: Option<String>,
+
+    /// When true, show files not linked in the workspace hierarchy.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_unlinked_files: Option<bool>,
+
+    /// When true, show hidden (dot-prefixed) files in the tree.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_hidden_files: Option<bool>,
+
+    /// Theme mode preference for this workspace: "light", "dark", or "system".
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_mode: Option<String>,
+
+    /// Map of audience name → Tailwind color class (e.g., "family" → "bg-indigo-500").
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience_colors: Option<std::collections::HashMap<String, String>>,
+
+    /// List of plugin IDs that are explicitly disabled in this workspace.
+    /// Plugins not listed here are enabled by default.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_plugins: Option<Vec<String>>,
 }
 
 /// Workspace operations (async-first).
@@ -741,12 +767,86 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     ///
     /// Reads `link_format` and other workspace-level settings from the root index.
     /// Returns default values if the properties aren't present.
-    pub async fn get_workspace_config(&self, root_index_path: &Path) -> Result<WorkspaceConfig> {
+    /// Known workspace config field names, used for migration from top-level
+    /// frontmatter to the nested `workspace_config` section.
+    const WORKSPACE_CONFIG_FIELDS: &'static [&'static str] = &[
+        "link_format",
+        "default_template",
+        "sync_title_to_heading",
+        "auto_update_timestamp",
+        "auto_rename_to_title",
+        "filename_style",
+        "default_audience",
+        "public_audience",
+        "daily_entry_folder",
+        "show_unlinked_files",
+        "show_hidden_files",
+        "theme_mode",
+        "audience_colors",
+        "disabled_plugins",
+    ];
+
+    /// Resolve the `workspace_config` value from the root index.
+    ///
+    /// Returns the config source (a HashMap of field→Value) and, if the config
+    /// lives in an external file, the resolved path to that file.
+    ///
+    /// The config source is determined by:
+    /// 1. If `workspace_config` is a string → parse as a link, read that file's
+    ///    frontmatter extra as the config source.
+    /// 2. If `workspace_config` is a mapping → use it inline (nested section).
+    /// 3. Otherwise → use the root index's own extra (flat/legacy format).
+    async fn resolve_config_source(
+        &self,
+        root_index_path: &Path,
+    ) -> Result<(std::collections::HashMap<String, Value>, Option<PathBuf>)> {
         let index = self.parse_index(root_index_path).await?;
         let extra = &index.frontmatter.extra;
 
-        let link_format = extra
-            .get("link_format")
+        match extra.get("workspace_config") {
+            // File link: workspace_config points to an external file
+            Some(Value::String(link_str)) => {
+                let config_path = index.resolve_path(link_str);
+                let config_index = self.parse_index(&config_path).await?;
+                Ok((config_index.frontmatter.extra, Some(config_path)))
+            }
+            // Inline nested section: workspace_config is a YAML mapping
+            Some(Value::Mapping(map)) => {
+                // Convert serde_yaml::Mapping to HashMap for uniform access
+                let mut config: std::collections::HashMap<String, Value> =
+                    std::collections::HashMap::new();
+                for (k, v) in map {
+                    if let Some(key) = k.as_str() {
+                        config.insert(key.to_string(), v.clone());
+                    }
+                }
+                Ok((config, None))
+            }
+            // No workspace_config key, or unexpected type → legacy flat format
+            _ => Ok((extra.clone(), None)),
+        }
+    }
+
+    /// Read workspace configuration from the root index file.
+    ///
+    /// Supports three storage modes (checked in order):
+    /// 1. **File link** — `workspace_config: "[Config](/Meta/Config.md)"`
+    /// 2. **Nested section** — `workspace_config:` mapping in frontmatter
+    /// 3. **Legacy flat** — config fields at the top level of frontmatter
+    pub async fn get_workspace_config(&self, root_index_path: &Path) -> Result<WorkspaceConfig> {
+        let (config_extra, _config_path) = self.resolve_config_source(root_index_path).await?;
+
+        // Also load the root index extra for backward-compat fallback
+        // (fields that haven't been migrated yet may still be at the top level).
+        let index = self.parse_index(root_index_path).await?;
+        let root_extra = &index.frontmatter.extra;
+
+        // config_get with nested=None since config_extra IS the resolved source.
+        // We look in config_extra first, then fall back to root_extra.
+        let get =
+            |key: &str| -> Option<&Value> { config_extra.get(key).or_else(|| root_extra.get(key)) };
+
+        let link_format = get("link_format")
             .and_then(|v| v.as_str())
             .and_then(|s| match s {
                 "markdown_root" => Some(LinkFormat::MarkdownRoot),
@@ -757,28 +857,23 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             })
             .unwrap_or_default();
 
-        let default_template = extra
-            .get("default_template")
+        let default_template = get("default_template")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let sync_title_to_heading = extra
-            .get("sync_title_to_heading")
+        let sync_title_to_heading = get("sync_title_to_heading")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let auto_update_timestamp = extra
-            .get("auto_update_timestamp")
+        let auto_update_timestamp = get("auto_update_timestamp")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        let auto_rename_to_title = extra
-            .get("auto_rename_to_title")
+        let auto_rename_to_title = get("auto_rename_to_title")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        let filename_style = extra
-            .get("filename_style")
+        let filename_style = get("filename_style")
             .and_then(|v| v.as_str())
             .and_then(|s| match s {
                 "preserve" => Some(FilenameStyle::Preserve),
@@ -789,16 +884,38 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             })
             .unwrap_or_default();
 
-        let default_audience = extra
-            .get("default_audience")
-            .or_else(|| extra.get("public_audience"))
+        let default_audience = get("default_audience")
+            .or_else(|| get("public_audience"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let daily_entry_folder = extra
-            .get("daily_entry_folder")
+        let daily_entry_folder = get("daily_entry_folder")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+
+        let show_unlinked_files = get("show_unlinked_files").and_then(|v| v.as_bool());
+
+        let show_hidden_files = get("show_hidden_files").and_then(|v| v.as_bool());
+
+        let theme_mode = get("theme_mode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let audience_colors = get("audience_colors")
+            .and_then(|v| v.as_mapping())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| Some((k.as_str()?.to_string(), v.as_str()?.to_string())))
+                    .collect()
+            });
+
+        let disabled_plugins = get("disabled_plugins")
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            });
 
         Ok(WorkspaceConfig {
             link_format,
@@ -809,29 +926,138 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             filename_style,
             default_audience,
             daily_entry_folder,
+            show_unlinked_files,
+            show_hidden_files,
+            theme_mode,
+            audience_colors,
+            disabled_plugins,
         })
     }
 
-    /// Set a workspace configuration field in the root index file's frontmatter.
+    /// Convert a string value to a YAML Value, handling booleans and JSON.
+    fn parse_config_value(value: &str) -> Value {
+        match value {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            _ => {
+                // Try parsing as JSON for complex types (maps, arrays).
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(value) {
+                    match &json {
+                        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                            serde_yaml::to_value(&json).unwrap_or(Value::String(value.to_string()))
+                        }
+                        _ => Value::String(value.to_string()),
+                    }
+                } else {
+                    Value::String(value.to_string())
+                }
+            }
+        }
+    }
+
+    /// Set a workspace configuration field.
     ///
-    /// # Arguments
-    /// * `root_index_path` - Path to the root index file
-    /// * `field` - Field name to set (e.g., "link_format", "default_template")
-    /// * `value` - Value to set as a string; boolean strings ("true"/"false") are
-    ///   stored as YAML booleans so that `as_bool()` works when reading back.
+    /// The config destination is determined by `workspace_config` in the root
+    /// index frontmatter:
+    /// - **String (file link):** resolves to a file; writes the field there.
+    /// - **Mapping (inline):** writes into the nested `workspace_config` section.
+    /// - **Absent:** creates an inline `workspace_config` section and writes there.
+    ///
+    /// On the first inline write, any known config fields found at the top level
+    /// are migrated into the nested section (opportunistic migration).
     pub async fn set_workspace_config_field(
         &self,
         root_index_path: &Path,
         field: &str,
         value: &str,
     ) -> Result<()> {
-        let yaml_value = match value {
-            "true" => Value::Bool(true),
-            "false" => Value::Bool(false),
-            _ => Value::String(value.to_string()),
+        let yaml_value = Self::parse_config_value(value);
+
+        // Check if workspace_config is a file link
+        let index = self.parse_index(root_index_path).await?;
+        if let Some(Value::String(link_str)) = index.frontmatter.extra.get("workspace_config") {
+            // Resolve the link to a file path and write the field there
+            let config_path = index.resolve_path(link_str);
+            return self
+                .set_frontmatter_property(&config_path, field, yaml_value)
+                .await;
+        }
+
+        // Inline mode: write into the nested workspace_config section
+        let content =
+            self.fs
+                .read_to_string(root_index_path)
+                .await
+                .map_err(|e| DiaryxError::FileRead {
+                    path: root_index_path.to_path_buf(),
+                    source: e,
+                })?;
+
+        let (mut frontmatter, body) = if content.starts_with("---\n")
+            || content.starts_with("---\r\n")
+        {
+            let rest = &content[4..];
+            if let Some(idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
+                let frontmatter_str = &rest[..idx];
+                let body = &rest[idx + 5..];
+                let fm: indexmap::IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
+                (fm, body.to_string())
+            } else {
+                (indexmap::IndexMap::new(), content)
+            }
+        } else {
+            (indexmap::IndexMap::new(), content)
         };
-        self.set_frontmatter_property(root_index_path, field, yaml_value)
+
+        // Opportunistic migration: collect top-level config fields and their
+        // values so we can move them into the nested workspace_config section.
+        let migrated: Vec<(String, Value)> = frontmatter
+            .iter()
+            .filter(|(k, _)| {
+                *k != "workspace_config" && Self::WORKSPACE_CONFIG_FIELDS.contains(&k.as_str())
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        // Remove migrated keys from top level
+        for (key, _) in &migrated {
+            frontmatter.shift_remove(key);
+        }
+
+        // Get or create the workspace_config sub-map
+        let config_section = frontmatter
+            .entry("workspace_config".to_string())
+            .or_insert_with(|| Value::Mapping(serde_yaml::Mapping::new()));
+
+        let config_map = match config_section {
+            Value::Mapping(m) => m,
+            _ => {
+                *config_section = Value::Mapping(serde_yaml::Mapping::new());
+                config_section.as_mapping_mut().unwrap()
+            }
+        };
+
+        // Insert migrated values (only if not already present in nested section)
+        for (key, val) in migrated {
+            let yaml_key = Value::String(key);
+            if !config_map.contains_key(&yaml_key) {
+                config_map.insert(yaml_key, val);
+            }
+        }
+
+        // Set the new field value
+        config_map.insert(Value::String(field.to_string()), yaml_value);
+
+        let yaml_str = serde_yaml::to_string(&frontmatter)?;
+        let new_content = format!("---\n{}---\n{}", yaml_str, body);
+
+        self.fs
+            .write_file(root_index_path, &new_content)
             .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: root_index_path.to_path_buf(),
+                source: e,
+            })
     }
 
     /// Get the link format configuration from a workspace root index.
@@ -2576,6 +2802,37 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
             // Check if target already exists
             if self.fs.exists(&new_path).await {
+                if !self.fs.exists(path).await {
+                    // File was already renamed on disk (e.g. by OS or sync tool)
+                    // but parent's contents still references the old name.
+                    // Just update the parent's contents reference.
+                    if let Some(parent_index) =
+                        self.resolve_part_of_to_path(&new_path, parent).await
+                    {
+                        let new_path_canonical = self.get_canonical_path(&new_path);
+                        let old_canonical = self.get_canonical_path(path);
+                        let title = self.resolve_title(&new_path_canonical).await;
+                        self.add_to_index_contents_canonical(
+                            &parent_index,
+                            &new_path_canonical,
+                            &title,
+                        )
+                        .await?;
+
+                        if let Err(e) = self
+                            .remove_from_index_contents_canonical(&parent_index, &old_canonical)
+                            .await
+                        {
+                            log::warn!(
+                                "rename_entry: failed to remove old parent contents reference '{}' from '{}': {}",
+                                old_canonical,
+                                parent_index.display(),
+                                e
+                            );
+                        }
+                    }
+                    return Ok(new_path);
+                }
                 return Err(DiaryxError::InvalidPath {
                     path: new_path,
                     message: "Target file already exists".to_string(),

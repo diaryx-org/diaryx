@@ -17,7 +17,7 @@ use diaryx_core::{
     Command,
     config::Config,
     diaryx::Diaryx,
-    error::SerializableError,
+    error::{DiaryxError, SerializableError},
     frontmatter,
     fs::{FileSystem, InMemoryFileSystem, RealFileSystem, SyncToAsyncFs},
     plugin::permissions::{PermissionRule, PluginConfig, PluginPermissions},
@@ -28,6 +28,7 @@ use diaryx_extism::protocol::GuestRequestedPermissions;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri_plugin_opener::OpenerExt;
 
 // ============================================================================
 // Types
@@ -143,6 +144,25 @@ fn acquire_lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, Ser
         message: format!("Failed to acquire lock: mutex is poisoned - {}", e),
         path: None,
     })
+}
+
+/// Log command execution errors at the appropriate level.
+///
+/// `FileRead` with `NotFound` and `WorkspaceNotFound` are expected during
+/// workspace initialization (e.g. theme settings not yet written, workspace
+/// directory not fully set up) and are logged at `warn` to reduce noise.
+fn log_execute_error(e: &DiaryxError) {
+    match e {
+        DiaryxError::FileRead { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+            log::warn!("[execute] Command returned expected error: {:?}", e);
+        }
+        DiaryxError::WorkspaceNotFound(_) => {
+            log::warn!("[execute] Command returned expected error: {:?}", e);
+        }
+        _ => {
+            log::error!("[execute] Command execution failed: {:?}", e);
+        }
+    }
 }
 
 #[cfg(feature = "extism-plugins")]
@@ -888,7 +908,7 @@ pub async fn execute<R: Runtime>(
         };
         log::trace!("[execute] Using cached guest Diaryx instance");
         diaryx.execute(cmd).await.map_err(|e| {
-            log::error!("[execute] Command execution failed: {:?}", e);
+            log_execute_error(&e);
             e.to_serializable()
         })?
     } else {
@@ -951,7 +971,7 @@ pub async fn execute<R: Runtime>(
         };
 
         diaryx.execute(cmd).await.map_err(|e| {
-            log::error!("[execute] Command execution failed: {:?}", e);
+            log_execute_error(&e);
             e.to_serializable()
         })?
     };
@@ -1059,10 +1079,79 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
     }
 }
 
+fn resolve_workspace_item_path<R: Runtime>(
+    app: &AppHandle<R>,
+    path: &str,
+) -> Result<PathBuf, SerializableError> {
+    let candidate = PathBuf::from(path);
+    if candidate.is_absolute() {
+        return Ok(candidate);
+    }
+
+    let workspace_root = app
+        .state::<AppState>()
+        .workspace_path
+        .lock()
+        .map_err(|e| SerializableError {
+            kind: "LockError".to_string(),
+            message: format!("Failed to acquire lock: mutex is poisoned - {}", e),
+            path: None,
+        })?
+        .clone()
+        .ok_or_else(|| SerializableError {
+            kind: "WorkspaceNotFound".to_string(),
+            message: "No workspace is currently open".to_string(),
+            path: None,
+        })?;
+
+    Ok(workspace_root.join(path.trim_start_matches('/')))
+}
+
 /// Get the app paths for the current platform
 #[tauri::command]
 pub fn get_app_paths<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, SerializableError> {
     get_platform_paths(&app)
+}
+
+#[tauri::command]
+pub fn reveal_in_file_manager<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+) -> Result<(), SerializableError> {
+    let _ = (&app, &path);
+
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        return Err(SerializableError {
+            kind: "UnsupportedPlatform".to_string(),
+            message: "Revealing files in the system file manager is not supported on mobile"
+                .to_string(),
+            path: None,
+        });
+    }
+
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        let resolved = resolve_workspace_item_path(&app, &path)?;
+        if !resolved.exists() {
+            return Err(SerializableError {
+                kind: "NotFound".to_string(),
+                message: format!("Path not found: {}", resolved.display()),
+                path: Some(resolved),
+            });
+        }
+
+        let resolved = resolved.canonicalize().unwrap_or(resolved);
+        app.opener()
+            .reveal_item_in_dir(&resolved)
+            .map_err(|e| SerializableError {
+                kind: "OpenError".to_string(),
+                message: format!("Failed to reveal item in file manager: {}", e),
+                path: Some(resolved.clone()),
+            })?;
+
+        Ok(())
+    }
 }
 
 /// Pick a folder using native dialog and set it as workspace
@@ -2535,7 +2624,7 @@ pub async fn reinitialize_workspace<R: Runtime>(
         *acquire_lock(&state.diaryx)? = None;
     }
 
-    // 2. Ensure workspace directory exists
+    // 2. Resolve and validate workspace directory
     let ws_path = PathBuf::from(&workspace_path);
 
     // On iOS, the sandbox container UUID changes between launches, so stored
@@ -2555,6 +2644,22 @@ pub async fn reinitialize_workspace<R: Runtime>(
         }
     };
 
+    // Check that the workspace directory actually exists. If it was moved or
+    // deleted externally we must NOT silently recreate an empty directory —
+    // the frontend should surface an error so the user can relocate or remove
+    // the stale workspace entry.
+    if !ws_path.exists() {
+        return Err(SerializableError {
+            kind: "WorkspaceDirectoryMissing".to_string(),
+            message: format!(
+                "Workspace directory not found: {}. It may have been moved or deleted.",
+                ws_path.display()
+            ),
+            path: Some(ws_path),
+        });
+    }
+
+    // Ensure subdirectories exist (e.g. .diaryx metadata folder)
     std::fs::create_dir_all(&ws_path).map_err(|e| SerializableError {
         kind: "IoError".to_string(),
         message: format!("Failed to create workspace directory: {}", e),

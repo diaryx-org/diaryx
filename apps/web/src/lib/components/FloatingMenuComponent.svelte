@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { Editor } from "@tiptap/core";
   import { Plus } from "@lucide/svelte";
 
@@ -8,31 +9,73 @@
   }
 
   let { editor, element = $bindable() }: Props = $props();
+  const triggerId = `floating-menu-${Math.random().toString(36).slice(2)}`;
+  let expandTimeout: number | undefined;
 
-  function handleClick(event: MouseEvent | TouchEvent) {
+  function expandPicker() {
+    if (!editor || editor.isDestroyed) return;
+
+    editor.commands.focus();
+
+    if (expandTimeout) {
+      clearTimeout(expandTimeout);
+    }
+
+    // Let the focus transaction settle before inserting the inline picker.
+    // Without this, the first click can restore editor focus while the second
+    // click is the one that actually inserts the picker.
+    expandTimeout = window.setTimeout(() => {
+      expandTimeout = undefined;
+      if (!editor || editor.isDestroyed) return;
+      editor.commands.insertBlockPicker();
+    }, 0);
+  }
+
+  function handleExpand(event: MouseEvent | TouchEvent | KeyboardEvent) {
     event.stopPropagation();
     event.preventDefault();
-    editor?.commands.insertBlockPicker();
+    expandPicker();
+  }
+
+  function handleDocumentClick(event: MouseEvent) {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const trigger = target.closest(`.trigger-button[data-floating-menu-id="${triggerId}"]`);
+    if (!trigger) return;
+    handleExpand(event);
   }
 
   // Expose expand function for external triggering (e.g., Right Arrow keyboard shortcut)
   export function expand() {
-    editor?.commands.insertBlockPicker();
+    expandPicker();
   }
 
   function handleTriggerKeydown(event: KeyboardEvent) {
     if (event.key === "Enter" || event.key === " ") {
-      event.stopPropagation();
-      event.preventDefault();
-      editor?.commands.insertBlockPicker();
+      handleExpand(event);
     }
   }
+
+  onMount(() => {
+    const controller = new AbortController();
+    document.addEventListener("click", handleDocumentClick, {
+      signal: controller.signal,
+    });
+
+    return () => {
+      if (expandTimeout) {
+        clearTimeout(expandTimeout);
+      }
+      controller.abort();
+    };
+  });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={element}
   class="floating-menu"
+  data-floating-menu-id={triggerId}
   role="toolbar"
   aria-label="Block formatting"
   tabindex="-1"
@@ -46,11 +89,7 @@
   <button
     type="button"
     class="trigger-button"
-    onmousedown={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    }}
-    onclick={handleClick}
+    data-floating-menu-id={triggerId}
     onkeydown={handleTriggerKeydown}
     title="Add block"
   >

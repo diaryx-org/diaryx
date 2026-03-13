@@ -2,6 +2,8 @@
   import { onMount, onDestroy, tick } from "svelte";
   import { getBackend, isTauri, replaceBackend, resetBackend } from "./lib/backend";
   import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
+  import { BackendError } from "./lib/backend/interface";
+  import { maybeStartWindowDrag } from "$lib/windowDrag";
   import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
   import { addFilesToZip } from "./lib/settings/zipUtils";
   import {
@@ -53,6 +55,7 @@
     getThemeStore,
   } from "./models/stores";
   import { getPluginStore } from "./models/stores/pluginStore.svelte";
+  import { getAudienceColorStore } from "./lib/stores/audienceColorStore.svelte";
   import type {
     PluginConfig,
     PluginPermissions,
@@ -73,7 +76,7 @@
 
   // Import auth
   import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState, getWorkspaces, isSyncEnabled } from "./lib/auth";
-  import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, getWorkspaceStorageType, discoverOpfsWorkspaces, createLocalWorkspace, setCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry.svelte";
+  import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, getWorkspaceStorageType, discoverOpfsWorkspaces, createLocalWorkspace, setCurrentWorkspaceId, removeLocalWorkspace } from "$lib/storage/localWorkspaceRegistry.svelte";
 
   // Initialize theme store immediately
   const themeStore = getThemeStore();
@@ -248,6 +251,43 @@
   let showNewEntryModal = $derived(uiStore.showNewEntryModal);
   let exportPath = $derived(uiStore.exportPath);
   let editorRef = $derived(uiStore.editorRef);
+
+  // Workspace missing state — set when the workspace directory was moved/deleted externally
+  let workspaceMissing = $state<{ id: string; name: string } | null>(null);
+
+  /** Relocate a missing workspace by picking a new folder (Tauri only). */
+  async function handleRelocateWorkspace() {
+    if (!workspaceMissing) return;
+    const { id, name } = workspaceMissing;
+    try {
+      const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
+      const folder = await openDialog({
+        directory: true,
+        title: `Locate "${name}"`,
+      });
+      if (!folder) return;
+      const { addLocalWorkspace } = await import("$lib/storage/localWorkspaceRegistry.svelte");
+      addLocalWorkspace({ id, name, path: folder as string });
+      workspaceMissing = null;
+      // Re-initialize with the corrected path
+      entryStore.setLoading(true);
+      const { switchWorkspace } = await import("$lib/workspace/switchWorkspace");
+      await switchWorkspace(id, name);
+      await handleWorkspaceSwitchComplete();
+    } catch (e: any) {
+      if (e?.name !== "AbortError") {
+        console.error("[App] Relocate workspace failed:", e);
+      }
+    }
+  }
+
+  /** Remove a missing workspace from the registry and show the welcome screen. */
+  function handleRemoveWorkspace() {
+    if (!workspaceMissing) return;
+    removeLocalWorkspace(workspaceMissing.id);
+    workspaceMissing = null;
+    showWelcomeScreen = true;
+  }
 
   // Sidebar resize state
   let resizingSidebar = $state<'left' | 'right' | null>(null);
@@ -1656,16 +1696,8 @@
 
   // Note: Blob URL management is now in attachmentService.ts
 
-  // Persist display setting to localStorage when changed
-  $effect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(
-        "diaryx-show-unlinked-files",
-        String(showUnlinkedFiles),
-      );
-      localStorage.setItem("diaryx-show-hidden-files", String(showHiddenFiles));
-    }
-  });
+  // Display settings are now persisted to workspace root index frontmatter
+  // via workspaceStore.hydrateDisplaySettings() — no localStorage needed.
 
   $effect(() => {
     void pluginManifestCount;
@@ -1739,6 +1771,12 @@
     if (window.innerWidth >= 768) {
       uiStore.setLeftSidebarCollapsed(false);
       uiStore.setRightSidebarCollapsed(false);
+    }
+
+    // On macOS Tauri with overlay titlebar, set titlebar area height for traffic light clearance
+    if (isTauri() && (navigator.platform === "MacIntel" || navigator.platform.startsWith("Mac"))) {
+      document.documentElement.style.setProperty("--titlebar-area-height", "28px");
+      document.documentElement.classList.add("tauri-macos-overlay");
     }
 
     // Load saved collaboration settings (server URL is read by the sync plugin)
@@ -1890,6 +1928,56 @@
       workspaceStore.setWorkspaceId(sharedWorkspaceId);
 
       await refreshTree();
+
+      // Hydrate view preferences from workspace config (stored in root index
+      // frontmatter) so they travel with the workspace instead of localStorage.
+      if (tree) {
+        try {
+          const wsConfig = await apiInstance.getWorkspaceConfig(tree.path);
+          workspaceStore.hydrateDisplaySettings(wsConfig, async (field, value) => {
+            try {
+              await apiInstance.setWorkspaceConfig(tree!.path, field, value);
+            } catch (e) {
+              console.warn('[App] Failed to persist display setting:', field, e);
+            }
+          });
+
+          // Hydrate theme mode
+          themeStore.hydrateThemeMode(wsConfig.theme_mode, async (mode) => {
+            try {
+              await apiInstance.setWorkspaceConfig(tree!.path, 'theme_mode', mode);
+            } catch (e) {
+              console.warn('[App] Failed to persist theme_mode:', e);
+            }
+          });
+
+          // Hydrate audience colors
+          getAudienceColorStore().hydrate(wsConfig.audience_colors as Record<string, string> | undefined, async (colors) => {
+            try {
+              await apiInstance.setWorkspaceConfig(tree!.path, 'audience_colors', JSON.stringify(colors));
+            } catch (e) {
+              console.warn('[App] Failed to persist audience_colors:', e);
+            }
+          });
+
+          // Hydrate disabled plugins
+          getPluginStore().hydrateDisabledPlugins(wsConfig.disabled_plugins, async (disabledIds) => {
+            try {
+              await apiInstance.setWorkspaceConfig(tree!.path, 'disabled_plugins', JSON.stringify(disabledIds));
+            } catch (e) {
+              console.warn('[App] Failed to persist disabled_plugins:', e);
+            }
+          });
+
+          // Re-fetch tree if view prefs changed from defaults
+          if (wsConfig.show_unlinked_files || wsConfig.show_hidden_files) {
+            await refreshTree();
+          }
+        } catch (e) {
+          console.warn('[App] Failed to load workspace config:', e);
+        }
+      }
+
       const bootstrappedIosStarter = await maybeBootstrapIosStarterWorkspace(
         apiInstance,
         backendInstance,
@@ -1939,6 +2027,14 @@
       if (e instanceof FsaGestureRequiredError) {
         console.warn("[App] FSA needs user gesture to reconnect:", e);
         fsaNeedsReconnect = true;
+        return;
+      }
+      if (e instanceof BackendError && e.kind === "WorkspaceDirectoryMissing") {
+        console.warn("[App] Workspace directory missing on startup:", e.message);
+        workspaceMissing = {
+          id: fsaReconnectWsId ?? "",
+          name: fsaReconnectWsName ?? "Unknown",
+        };
         return;
       }
       console.error("[App] Initialization error:", e);
@@ -2014,6 +2110,54 @@
     rustApi = null;
     // Refresh tree and validation from new workspace
     await refreshTree();
+
+    // Hydrate view preferences from the new workspace's config
+    if (tree && api) {
+      try {
+        const wsConfig = await api.getWorkspaceConfig(tree.path);
+        workspaceStore.hydrateDisplaySettings(wsConfig, async (field, value) => {
+          try {
+            await api!.setWorkspaceConfig(tree!.path, field, value);
+          } catch (e) {
+            console.warn('[App] Failed to persist display setting:', field, e);
+          }
+        });
+
+        // Hydrate theme mode
+        themeStore.hydrateThemeMode(wsConfig.theme_mode, async (mode) => {
+          try {
+            await api!.setWorkspaceConfig(tree!.path, 'theme_mode', mode);
+          } catch (e) {
+            console.warn('[App] Failed to persist theme_mode:', e);
+          }
+        });
+
+        // Hydrate audience colors
+        getAudienceColorStore().hydrate(wsConfig.audience_colors as Record<string, string> | undefined, async (colors) => {
+          try {
+            await api!.setWorkspaceConfig(tree!.path, 'audience_colors', JSON.stringify(colors));
+          } catch (e) {
+            console.warn('[App] Failed to persist audience_colors:', e);
+          }
+        });
+
+        // Hydrate disabled plugins
+        getPluginStore().hydrateDisabledPlugins(wsConfig.disabled_plugins, async (disabledIds) => {
+          try {
+            await api!.setWorkspaceConfig(tree!.path, 'disabled_plugins', JSON.stringify(disabledIds));
+          } catch (e) {
+            console.warn('[App] Failed to persist disabled_plugins:', e);
+          }
+        });
+
+        if (wsConfig.show_unlinked_files || wsConfig.show_hidden_files) {
+          await refreshTree();
+        }
+      } catch (e) {
+        console.warn('[App] Failed to load workspace config:', e);
+      }
+    }
+
     await reloadWorkspaceScopedBrowserState();
     // Navigate to the root entry of the new workspace
     if (tree && !currentEntry) {
@@ -3752,6 +3896,15 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 <!-- Tooltip Provider for keyboard shortcut hints -->
 <Tooltip.Provider>
 
+<!-- Shared Tauri overlay titlebar drag region (macOS desktop). Keep it outside
+     the app-state branches so welcome/onboarding and narrow windows stay draggable. -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="fixed top-0 left-0 right-0 z-[5]"
+  style="height: var(--titlebar-area-height);"
+  onmousedown={maybeStartWindowDrag}
+></div>
+
 {#if fsaNeedsReconnect}
   <div class="flex h-full items-center justify-center bg-background">
     <div class="flex flex-col items-center gap-4 text-center max-w-sm px-4">
@@ -3805,13 +3958,14 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     }}
   />
 {:else}
-<div class="flex h-full bg-background overflow-hidden {resizingSidebar ? 'select-none cursor-col-resize' : ''}">
+<div class="relative flex h-full bg-background overflow-hidden {resizingSidebar ? 'select-none cursor-col-resize' : ''}">
   <!-- Left Sidebar -->
   <LeftSidebar
     {tree}
     {currentEntry}
     {activeEntryPath}
     {isLoading}
+    {workspaceMissing}
     {expandedNodes}
     {validationResult}
     {showUnlinkedFiles}
@@ -3859,6 +4013,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onDuplicateEntry={handleDuplicateEntry}
     onWorkspaceSwitchStart={handleWorkspaceSwitchStart}
     onWorkspaceSwitchComplete={handleWorkspaceSwitchComplete}
+    onWorkspaceMissing={(ws) => { workspaceMissing = ws; entryStore.setLoading(false); }}
     onInitializeWorkspace={handleInitializeWorkspace}
     onShowWelcome={() => {
       const wsId = getCurrentWorkspaceId();
@@ -3895,7 +4050,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   />
 
   <!-- Main Content Area -->
-  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative pt-[env(safe-area-inset-top)]" data-spotlight="editor-area">
+  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]" data-spotlight="editor-area">
     <!-- Sidebar open buttons (visible when collapsed, fade in focus mode, reveal on hover via edge strip) -->
     {#if leftSidebarCollapsed}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -3906,7 +4061,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       >
         <button
           type="button"
-          class="mt-[calc(env(safe-area-inset-top)+0.5rem)] ml-2 p-2 transition-opacity duration-200
+          class="mt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.5rem)] ml-2 p-2 transition-opacity duration-200
             {focusMode && leftSidebarCollapsed && rightSidebarCollapsed && !leftEdgeHovered ? 'opacity-0' : 'opacity-100'}"
           onclick={toggleLeftSidebar}
           aria-label="Open navigation sidebar"
@@ -3924,7 +4079,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       >
         <button
           type="button"
-          class="mt-[calc(env(safe-area-inset-top)+0.5rem)] mr-2 p-2 transition-opacity duration-200
+          class="mt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.5rem)] mr-2 p-2 transition-opacity duration-200
             {focusMode && leftSidebarCollapsed && rightSidebarCollapsed && !rightEdgeHovered ? 'opacity-0' : 'opacity-100'}"
           onclick={toggleRightSidebar}
           aria-label="Open properties panel"
@@ -4015,10 +4170,13 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       <EditorEmptyState
         {leftSidebarCollapsed}
         {isLoading}
+        {workspaceMissing}
         onToggleLeftSidebar={toggleLeftSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
         hasWorkspaceTree={!!tree && tree.path !== '.'}
         onInitializeWorkspace={handleInitializeEmptyWorkspace}
+        onRelocateWorkspace={isTauri() ? handleRelocateWorkspace : undefined}
+        onRemoveWorkspace={handleRemoveWorkspace}
       />
     {/if}
   </main>

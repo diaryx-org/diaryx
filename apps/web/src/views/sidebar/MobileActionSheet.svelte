@@ -9,6 +9,7 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import {
     FolderInput,
+    FolderOpen,
     Settings,
     Plus,
     Download,
@@ -31,6 +32,8 @@
     onRename?: (path: string, name: string) => void;
     onDuplicate?: (path: string) => void;
     onMoveTo?: (path: string) => void;
+    onRevealInFileManager?: (path: string) => void;
+    revealInFileManagerLabel?: string;
     onSetAudience?: (path: string) => void;
     onOpenBackupImport?: () => void;
     onImportMarkdownFile?: () => void;
@@ -49,6 +52,8 @@
     onRename,
     onDuplicate,
     onMoveTo,
+    onRevealInFileManager,
+    revealInFileManagerLabel = 'Show in File Manager',
     onSetAudience,
     onOpenBackupImport,
     onImportMarkdownFile,
@@ -142,6 +147,17 @@
           >
             <FolderInput class="size-5 text-muted-foreground" />
             <span class="text-base">Move to...</span>
+          </button>
+        {/if}
+
+        {#if onRevealInFileManager}
+          <button
+            type="button"
+            class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left"
+            onclick={() => handleAction(() => onRevealInFileManager(nodePath))}
+          >
+            <FolderOpen class="size-5 text-muted-foreground" />
+            <span class="text-base">{revealInFileManagerLabel}</span>
           </button>
         {/if}
 

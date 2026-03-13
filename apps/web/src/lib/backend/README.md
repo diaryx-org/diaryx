@@ -142,3 +142,12 @@ Tauri. The bridge now maps null-body HTTP statuses (`204`, `205`, `304`, and
 other fetch null-body statuses) to `Response` objects with `null` bodies so
 no-content endpoints (for example, `DELETE /api/workspaces/{id}`) do not throw
 `Response cannot have a body with the given status`.
+
+## Reveal In File Manager
+
+`TauriBackend` also exposes an optional `revealInFileManager(path)` helper that
+invokes a Tauri desktop command backed by `tauri-plugin-opener`'s
+`reveal_item_in_dir`. `LeftSidebar.svelte` uses that to offer a desktop-only
+"Show in Finder" / "Show in Explorer" / "Show in File Manager" action for tree
+entries. The control is hidden on iOS and Android because Tauri does not expose
+reveal support there.

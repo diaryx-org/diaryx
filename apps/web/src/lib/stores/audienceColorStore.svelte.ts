@@ -2,10 +2,8 @@
  * Persistent audience color store.
  *
  * Maps audience name strings → Tailwind background class strings
- * (e.g., "family" → "bg-indigo-500"). Persisted to localStorage.
- *
- * Follows the singleton pattern of templateContextStore.svelte.ts and
- * the localStorage persistence pattern of appearance.svelte.ts.
+ * (e.g., "family" → "bg-indigo-500"). Persisted to workspace root index
+ * frontmatter so colors travel with the workspace.
  *
  * IMPORTANT: Display code must always read colors through getAudienceColor()
  * from audienceDotColor.ts — never call hashAudienceColor() for display.
@@ -13,30 +11,31 @@
 
 import { hashAudienceColor } from "$lib/utils/audienceDotColor";
 
-const STORAGE_KEY = "diaryx-audience-colors";
-
-function load(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as Record<string, string>;
-  } catch {}
-  return {};
-}
-
 function createAudienceColorStore() {
-  let audienceColors = $state<Record<string, string>>(
-    typeof window !== "undefined" ? load() : {},
-  );
+  let audienceColors = $state<Record<string, string>>({});
+  // Callback to persist the full map to workspace config; wired up by hydrate().
+  let persistColors: ((colors: Record<string, string>) => Promise<void>) | null = null;
 
   function save() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(audienceColors));
-    } catch {}
+    persistColors?.({ ...audienceColors });
   }
 
   return {
     get audienceColors(): Record<string, string> {
       return audienceColors;
+    },
+
+    /**
+     * Hydrate from workspace config after backend init.
+     */
+    hydrate(
+      colors: Record<string, string> | undefined,
+      persistFn: (colors: Record<string, string>) => Promise<void>,
+    ): void {
+      if (colors) {
+        audienceColors = { ...colors };
+      }
+      persistColors = persistFn;
     },
 
     /**
@@ -84,6 +83,7 @@ export function getAudienceColorStore() {
       get audienceColors(): Record<string, string> {
         return {};
       },
+      hydrate: (_colors: Record<string, string> | undefined, _persistFn: (colors: Record<string, string>) => Promise<void>) => {},
       assignColor: (_name: string) => {},
       renameColor: (_oldName: string, _newName: string) => {},
       deleteColor: (_name: string) => {},

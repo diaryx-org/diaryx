@@ -20,6 +20,7 @@ contents:
   - "[README](/apps/web/src/lib/wasm/README.md)"
 attachments:
   - "[utils.ts](/apps/web/src/lib/utils.ts)"
+  - "[windowDrag.ts](/apps/web/src/lib/windowDrag.ts)"
   - "[credentials.ts](/apps/web/src/lib/credentials.ts)"
   - "[mobileSwipe.ts](/apps/web/src/lib/mobileSwipe.ts)"
   - "[leftSidebarSelection.ts](/apps/web/src/lib/leftSidebarSelection.ts)"
@@ -156,6 +157,8 @@ keeps typing latency down in long notes.
 - Right sidebar: built-in `Properties` tab plus plugin-contributed tabs.
 - Marketplace: opened from a dedicated modal surface
   (`MarketplaceDialog.svelte`): desktop `Dialog`, mobile `Drawer`.
+  The desktop dialog now clamps to the available viewport height and keeps the
+  marketplace body scrollable so small Tauri windows do not clip the surface.
 - Marketplace tabs now own appearance customization (`Themes`, `Typography`, `Bundles`) in addition to plugin browsing, with curated + local registries for themes and typography presets.
 - `mobileSwipe.ts` centralizes app-shell gesture gating so sidebar-open swipes are edge-triggered and modal/drawer or text-selection gestures do not leak through to the shell.
 - Plugin sidebars are host-rendered with `components/PluginSidebarPanel.svelte`.
@@ -195,6 +198,14 @@ keeps typing latency down in long notes.
   expanded to selected descendants and executed child-first so index entries
   with non-empty `contents` can be removed from the UI without manual
   leaf-by-leaf deletion.
+- On Tauri desktop, `LeftSidebar.svelte` also exposes a context-menu action to
+  reveal the selected entry in Finder/Explorer/the system file manager via the
+  backend's opener-backed `revealInFileManager()` helper. The action is hidden
+  on mobile because Tauri does not support reveal flows there.
+- `windowDrag.ts` centralizes Tauri desktop window dragging for shared chrome
+  surfaces. Sidebar/header/footer drag handlers use it and automatically skip
+  interactive descendants such as buttons, links, inputs, and elements marked
+  with `data-window-drag-exclude`.
 
 ## Plugin-Contributed Surfaces
 

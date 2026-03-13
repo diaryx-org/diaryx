@@ -25,7 +25,7 @@ The schema includes attachment usage tracking tables:
 - `users.tier` (user tier: `free` or `plus`; controls default limits)
 - `users.attachment_limit_bytes` (per-user attachment quota override; NULL falls back to tier default)
 - `users.workspace_limit` (per-user workspace count limit override; NULL falls back to tier default)
-- `users.published_site_limit` (per-user published site limit override; NULL falls back to tier default)
+- `users.published_site_limit` (per-user published site limit override; NULL falls back to tier default, currently one site on Free and one on Plus)
 - `user_attachment_blobs` (per-user deduplicated blob metadata + ref counts)
 - `workspace_attachment_refs` (workspace path refs to blob hashes)
 - `attachment_uploads` (resumable multipart upload sessions)

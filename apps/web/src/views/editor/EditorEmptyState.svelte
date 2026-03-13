@@ -9,7 +9,7 @@
    */
 
   import { Button } from "$lib/components/ui/button";
-  import { PanelLeft, Menu, Search, FolderPlus, Loader2 } from "@lucide/svelte";
+  import { PanelLeft, Menu, Search, FolderPlus, Loader2, FolderSearch, Trash2 } from "@lucide/svelte";
 
   interface Props {
     leftSidebarCollapsed: boolean;
@@ -18,6 +18,9 @@
     hasWorkspaceTree?: boolean;
     onInitializeWorkspace?: () => void;
     isLoading?: boolean;
+    workspaceMissing?: { id: string; name: string } | null;
+    onRelocateWorkspace?: () => void;
+    onRemoveWorkspace?: () => void;
   }
 
   let {
@@ -27,6 +30,9 @@
     hasWorkspaceTree = true,
     onInitializeWorkspace,
     isLoading = false,
+    workspaceMissing = null,
+    onRelocateWorkspace,
+    onRemoveWorkspace,
   }: Props = $props();
 </script>
 
@@ -72,7 +78,28 @@
         </Button>
       {/if}
     </div>
-    {#if isLoading}
+    {#if workspaceMissing}
+      <h2 class="text-2xl font-semibold text-foreground mb-2">
+        Workspace not found
+      </h2>
+      <p class="text-muted-foreground mb-4">
+        "{workspaceMissing.name}" could not be found. It may have been moved or deleted.
+      </p>
+      <div class="flex gap-2 justify-center">
+        {#if onRelocateWorkspace}
+          <Button variant="outline" onclick={onRelocateWorkspace} class="gap-2">
+            <FolderSearch class="size-4" />
+            Locate folder
+          </Button>
+        {/if}
+        {#if onRemoveWorkspace}
+          <Button variant="ghost" onclick={onRemoveWorkspace} class="gap-2 text-muted-foreground">
+            <Trash2 class="size-4" />
+            Remove workspace
+          </Button>
+        {/if}
+      </div>
+    {:else if isLoading}
       <Loader2 class="size-8 text-muted-foreground animate-spin mb-4" />
       <p class="text-muted-foreground">Loading workspace…</p>
     {:else if !hasWorkspaceTree && onInitializeWorkspace}

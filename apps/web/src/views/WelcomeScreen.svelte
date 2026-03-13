@@ -361,8 +361,8 @@
   .view-content {
     max-height: 100vh;
     overflow-y: auto;
-    padding-top: 2rem;
-    padding-bottom: 2rem;
+    padding-top: calc(env(safe-area-inset-top) + var(--titlebar-area-height) + 2rem);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 2rem);
   }
 
   .slide-in-right {

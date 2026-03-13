@@ -40,7 +40,7 @@ impl UserTier {
                 device_limit: 2,
                 attachment_limit_bytes: 200 * 1024 * 1024, // 200 MiB
                 workspace_limit: 1,
-                published_site_limit: 0,
+                published_site_limit: 1,
             },
             UserTier::Plus => TierDefaults {
                 device_limit: 2,

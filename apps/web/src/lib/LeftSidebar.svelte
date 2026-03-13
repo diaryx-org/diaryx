@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { isTauri, type TreeNode, type EntryData, type ValidationResultWithMeta, type ValidationErrorWithMeta, type ValidationWarningWithMeta, type Api } from "./backend";
+  import { maybeStartWindowDrag } from "./windowDrag";
   import type { ComponentRef, PluginId } from "$lib/backend/generated";
   import type { FixResult } from "./backend/generated";
   import { Button } from "$lib/components/ui/button";
@@ -33,12 +34,14 @@
     X,
     MoreVertical,
     FolderInput,
+    FolderOpen,
     CircleUser,
     Download,
     SearchCheck,
     Trash2,
     Pencil,
     Copy,
+    CircleHelp,
   } from "@lucide/svelte";
   import { getAuthState } from "./auth";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
@@ -58,6 +61,7 @@
     currentEntry: EntryData | null;
     activeEntryPath?: string | null;
     isLoading: boolean;
+    workspaceMissing?: { id: string; name: string } | null;
     expandedNodes: Set<string>;
     validationResult: ValidationResultWithMeta | null;
     collapsed: boolean;
@@ -93,6 +97,7 @@
     onDuplicateEntry?: (path: string) => Promise<string>;
     onWorkspaceSwitchStart?: () => void;
     onWorkspaceSwitchComplete?: () => void;
+    onWorkspaceMissing?: (ws: { id: string; name: string }) => void;
     onInitializeWorkspace?: () => void;
     onShowWelcome?: () => void;
     onSetAudience?: (path: string) => void;
@@ -106,6 +111,7 @@
     currentEntry,
     activeEntryPath = null,
     isLoading,
+    workspaceMissing = null,
     expandedNodes,
     validationResult,
     collapsed,
@@ -141,6 +147,7 @@
     onDuplicateEntry,
     onWorkspaceSwitchStart,
     onWorkspaceSwitchComplete,
+    onWorkspaceMissing,
     onInitializeWorkspace,
     onShowWelcome,
     onSetAudience,
@@ -167,6 +174,20 @@
 
   // Auth state for profile icon
   const authState = $derived(getAuthState());
+  const canRevealInFileManager = $derived.by(() => {
+    const backend = workspaceStore.backend;
+    if (!backend || !isTauri() || typeof backend.revealInFileManager !== 'function') {
+      return false;
+    }
+    return backend.getAppPaths()?.is_mobile !== true;
+  });
+  const revealInFileManagerLabel = $derived.by(() => {
+    if (typeof navigator === 'undefined') return 'Show in File Manager';
+    const platform = navigator.platform.toUpperCase();
+    if (platform.includes('MAC')) return 'Show in Finder';
+    if (platform.includes('WIN')) return 'Show in Explorer';
+    return 'Show in File Manager';
+  });
 
   type LeftSidebarTabDescriptor = {
     id: string;
@@ -742,6 +763,16 @@
     }
   }
 
+  async function handleRevealInFileManager(path: string) {
+    if (!api) return;
+
+    try {
+      await api.revealInFileManager(path);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to reveal item in the file manager');
+    }
+  }
+
   // Count total problems
   let totalProblems = $derived.by(() => {
     if (!validationResult) return 0;
@@ -1270,12 +1301,15 @@
   style="width: {collapsed ? 0 : sidebarWidth}px; {resizing ? '' : 'transition: width 0.3s ease-in-out, opacity 0.3s ease-in-out;'}"
 >
   <!-- Header -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="flex items-center justify-between px-4 py-4 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+1rem)]"
+    class="relative flex items-center justify-between px-4 py-4 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+1rem)]"
+    onmousedown={maybeStartWindowDrag}
   >
     <button
       type="button"
       onclick={onShowWelcome}
+      data-window-drag-exclude
       class="text-xl font-semibold text-sidebar-foreground hover:text-sidebar-foreground/80 transition-colors flex items-baseline gap-1.5"
     >
       Diaryx
@@ -1287,6 +1321,7 @@
           variant="ghost"
           size="icon"
           onclick={onToggleCollapse}
+          data-window-drag-exclude
           class="size-8"
           aria-label="Collapse sidebar"
         >
@@ -1311,7 +1346,16 @@
   <!-- Content Area -->
   <div class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''}" bind:this={scrollContainer}>
     {#if leftTab === "files"}
-      {#if !tree && isLoading}
+      {#if workspaceMissing}
+        <!-- Workspace Missing State -->
+        <div class="flex flex-col items-center justify-center py-8 text-center gap-2">
+          <CircleHelp class="size-8 text-muted-foreground" />
+          <p class="text-sm font-medium text-foreground">Not found</p>
+          <p class="text-xs text-muted-foreground px-4">
+            "{workspaceMissing.name}" may have been moved or deleted.
+          </p>
+        </div>
+      {:else if !tree && isLoading}
         <!-- Loading State - only shown during initial tree load -->
         <div class="flex items-center justify-center py-8">
           <Loader2 class="size-6 animate-spin text-muted-foreground" />
@@ -1562,16 +1606,22 @@
       onSwitchStart={onWorkspaceSwitchStart}
       onSwitchComplete={onWorkspaceSwitchComplete}
       onAddWorkspace={onAddWorkspace}
+      {onWorkspaceMissing}
     />
   </div>
 
   <!-- Profile Footer -->
   <div class="border-t border-sidebar-border shrink-0 pb-[env(safe-area-inset-bottom)]">
-    <div class="flex items-center gap-1 px-4 py-2">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="relative flex items-center gap-1 px-4 py-2"
+      onmousedown={maybeStartWindowDrag}
+    >
       <Popover.Root bind:open={profilePopoverOpen}>
         <Popover.Trigger
           class="flex items-center gap-2.5 flex-1 min-w-0 py-1 hover:bg-sidebar-accent active:bg-sidebar-accent rounded-md px-2 transition-colors text-left"
           aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
+          data-window-drag-exclude
         >
           <span class="relative shrink-0">
             <CircleUser class="size-5 text-muted-foreground" />
@@ -1600,6 +1650,7 @@
               variant="ghost"
               size="icon"
               onclick={handleOpenMarketplaceClick}
+              data-window-drag-exclude
               class="size-8"
               aria-label="Open marketplace"
               data-spotlight="marketplace-button"
@@ -1619,6 +1670,7 @@
               variant="ghost"
               size="icon"
               onclick={handleOpenSettingsClick}
+              data-window-drag-exclude
               class="size-8"
               aria-label="Open settings"
             >
@@ -1657,6 +1709,8 @@
   onRename={onRenameEntry ? handleRenameClick : undefined}
   onDuplicate={onDuplicateEntry ? handleDuplicate : undefined}
   onMoveTo={api ? handleMoveToClick : undefined}
+  onRevealInFileManager={canRevealInFileManager ? handleRevealInFileManager : undefined}
+  revealInFileManagerLabel={revealInFileManagerLabel}
   onSetAudience={onSetAudience}
   onOpenBackupImport={onOpenBackupImport}
   onImportMarkdownFile={onImportMarkdownFile}
@@ -2195,6 +2249,13 @@
             <ContextMenu.Item onclick={() => handleMoveToClick(node.path)}>
               <FolderInput class="size-4 mr-2" />
               Move to...
+            </ContextMenu.Item>
+          {/if}
+
+          {#if canRevealInFileManager}
+            <ContextMenu.Item onclick={() => handleRevealInFileManager(node.path)}>
+              <FolderOpen class="size-4 mr-2" />
+              {revealInFileManagerLabel}
             </ContextMenu.Item>
           {/if}
 

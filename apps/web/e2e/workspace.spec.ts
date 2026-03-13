@@ -112,10 +112,9 @@ test.describe('Workspace Navigation', () => {
       return el && el.querySelectorAll('p').length >= 2
     }, { timeout: 3000 })
 
-    // Click at the end of the first paragraph to position cursor reliably
+    // Use keyboard movement instead of platform-specific End-key behavior.
     const firstParagraph = editorHelper.editor.locator('p').first()
-    await firstParagraph.click()
-    await page.keyboard.press('End')
+    await page.keyboard.press('ArrowUp')
     await editorHelper.type(' more')
 
     await expect(firstParagraph).toContainText('Line 1 more')

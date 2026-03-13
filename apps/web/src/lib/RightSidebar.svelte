@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { EntryData } from "./backend";
+  import { maybeStartWindowDrag } from "./windowDrag";
   import type { Api } from "$lib/backend/api";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -735,8 +736,10 @@
   data-spotlight="properties-panel"
 >
   <!-- Header with collapse button -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="flex items-center justify-between px-4 py-3 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+0.75rem)]"
+    class="relative flex items-center justify-between px-4 py-3 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.75rem)]"
+    onmousedown={maybeStartWindowDrag}
   >
     <Tooltip.Root bind:open={collapseTooltipOpen}>
       <Tooltip.Trigger>
@@ -744,6 +747,7 @@
           variant="ghost"
           size="icon"
           onclick={handleCollapseClick}
+          data-window-drag-exclude
           class="size-8"
           aria-label="Collapse panel"
         >

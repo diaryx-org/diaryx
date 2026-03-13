@@ -20,6 +20,19 @@ blob/binary path when a file is outside scope or native loading is unavailable.
 The Rust app enables the matching Tauri `protocol-asset` feature in
 `src-tauri/Cargo.toml`.
 
+Desktop builds also register `tauri-plugin-opener` so the shared left sidebar
+can reveal the selected entry in Finder/Explorer/the system file manager.
+Tauri's reveal API is desktop-only, so the menu item stays hidden on iOS and
+Android.
+
+On macOS desktop, the shared frontend shell reserves a top drag strip via
+`--titlebar-area-height` and starts dragging through Tauri's window API from
+that strip. The desktop capability file grants
+`core:window:allow-start-dragging` so the overlay titlebar remains draggable
+even on the welcome screen and in narrow windows. Shared chrome surfaces route
+through a frontend helper that skips interactive controls so buttons remain
+clickable while empty shell areas still drag the window.
+
 ## Architecture
 
 The Tauri app shares the same Svelte frontend as the web app (`apps/web`), but instead of using WebAssembly with an in-memory filesystem, it uses Tauri IPC to communicate with a Rust backend that accesses the real filesystem.
@@ -93,7 +106,7 @@ The validation system checks workspace link integrity and can automatically fix 
 
 | Category       | Commands                                                                          |
 | -------------- | --------------------------------------------------------------------------------- |
-| Workspace      | `get_workspace_tree`, `get_filesystem_tree`, `create_workspace`                   |
+| Workspace      | `get_workspace_tree`, `get_filesystem_tree`, `create_workspace`, `reveal_in_file_manager` |
 | Entries        | `get_entry`, `save_entry`, `create_entry`, `delete_entry`, `move_entry`           |
 | Entries (cont) | `attach_entry_to_parent`, `convert_to_index`, `convert_to_leaf`                   |
 | Entries (cont) | `create_child_entry`, `rename_entry`, `ensure_daily_entry`                        |

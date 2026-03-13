@@ -145,6 +145,79 @@ async fn create_site_and_prevent_global_slug_conflict() {
 }
 
 #[tokio::test]
+async fn free_tier_defaults_to_one_published_site() {
+    let conn = Connection::open_in_memory().expect("in-memory sqlite");
+    init_database(&conn).expect("init db");
+    let repo = Arc::new(AuthRepo::new(conn));
+
+    let user = repo.get_or_create_user("free-sites@example.com").unwrap();
+    repo.set_user_workspace_limit(&user, Some(2))
+        .expect("raise workspace limit for test");
+
+    let device = repo.create_device(&user, Some("free"), None).unwrap();
+    let token = repo
+        .create_session(
+            &user,
+            &device,
+            chrono::Utc::now() + chrono::Duration::days(1),
+        )
+        .unwrap();
+
+    let workspace_a = repo.get_or_create_workspace(&user, "default").unwrap();
+    let workspace_b = repo.get_or_create_workspace(&user, "second").unwrap();
+
+    let workspaces_dir =
+        std::env::temp_dir().join(format!("diaryx-sites-test-free-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&workspaces_dir).expect("create workspace temp dir");
+    let sync_v2_server = SyncV2Server::new(repo.clone(), workspaces_dir);
+
+    let sites_state = SitesState {
+        repo: repo.clone(),
+        sync_v2: Arc::new(sync_v2_server.state()),
+        sites_store: Arc::new(InMemoryBlobStore::new("diaryx-sync")),
+        attachments_store: Arc::new(InMemoryBlobStore::new("diaryx-sync")),
+        token_signing_key: vec![7; 32],
+        sites_base_url: "https://sites.example.com".to_string(),
+        publish_lock: new_publish_lock(),
+        kv_client: None,
+        rate_limiter: RateLimiter::new(),
+    };
+
+    let app = Router::new()
+        .nest("/api", site_routes(sites_state))
+        .layer(Extension(AuthExtractor::new(repo.clone())));
+
+    let create_first = Request::builder()
+        .method("POST")
+        .uri(format!("/api/workspaces/{}/site", workspace_a))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", token))
+        .body(Body::from(
+            serde_json::json!({"slug":"free-default-site","enabled":true,"auto_publish":true})
+                .to_string(),
+        ))
+        .expect("first create request");
+    let create_first_response = app.clone().oneshot(create_first).await.unwrap();
+    assert_eq!(create_first_response.status(), StatusCode::CREATED);
+
+    let create_second = Request::builder()
+        .method("POST")
+        .uri(format!("/api/workspaces/{}/site", workspace_b))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", token))
+        .body(Body::from(
+            serde_json::json!({"slug":"free-second-site","enabled":true,"auto_publish":true})
+                .to_string(),
+        ))
+        .expect("second create request");
+    let create_second_response = app.clone().oneshot(create_second).await.unwrap();
+    assert_eq!(create_second_response.status(), StatusCode::FORBIDDEN);
+
+    let payload = read_json(create_second_response).await;
+    assert_eq!(payload["error"], "site_limit_reached");
+}
+
+#[tokio::test]
 async fn legacy_publish_route_is_deprecated_but_still_respects_audience_filtering() {
     let (app, _repo, sync_state, workspace_a, token_a, _workspace_b, _token_b) = setup();
 

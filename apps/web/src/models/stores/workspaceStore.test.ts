@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { getWorkspaceStore } from './workspaceStore.svelte'
 
 describe('workspaceStore', () => {
@@ -181,13 +181,15 @@ describe('workspaceStore', () => {
       expect(store.focusMode).toBe(false)
     })
 
-    it('should persist display settings to localStorage', () => {
-      store.setShowUnlinkedFiles(true)
-      store.setShowHiddenFiles(true)
-      store.persistDisplaySettings()
+    it('should hydrate display settings from workspace config', () => {
+      const mockSetField = vi.fn().mockResolvedValue(undefined)
+      store.hydrateDisplaySettings(
+        { show_unlinked_files: true, show_hidden_files: true } as any,
+        mockSetField,
+      )
 
-      expect(localStorage.setItem).toHaveBeenCalledWith('diaryx-show-unlinked-files', 'true')
-      expect(localStorage.setItem).toHaveBeenCalledWith('diaryx-show-hidden-files', 'true')
+      expect(store.showUnlinkedFiles).toBe(true)
+      expect(store.showHiddenFiles).toBe(true)
     })
   })
 

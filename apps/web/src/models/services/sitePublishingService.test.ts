@@ -114,6 +114,21 @@ describe('sitePublishingService', () => {
     });
   });
 
+  it('maps site limit errors to deterministic message', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse(403, {
+        error: 'site_limit_reached',
+        message: 'Published site limit reached for this account',
+      }),
+    );
+
+    await expect(createSite('workspace-1', { slug: 'my-site' })).rejects.toMatchObject({
+      status: 403,
+      code: 'site_limit_reached',
+      message: 'Published site limit reached for this account.',
+    });
+  });
+
   it('posts publish requests to the combined fallback endpoint', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse(200, {

@@ -24,6 +24,10 @@
     />
     <style>
       /* Minimal styles for loading state only - main styles are in app.css */
+      html.dark, html.dark body {
+        background: oklch(0.129 0.042 264.695);
+        color-scheme: dark;
+      }
       .app-loading {
         display: flex;
         align-items: center;
@@ -40,10 +44,20 @@
         font-size: 1.125rem;
         color: #64748b;
       }
+      .dark .app-loading {
+        color: #94a3b8;
+      }
     </style>
-    <!-- FOUC prevention: apply cached appearance CSS vars before first paint -->
+    <!-- FOUC prevention: apply dark class and cached appearance CSS vars before first paint -->
     <script>
       try {
+        // Apply dark mode class immediately to prevent white flash
+        var theme = localStorage.getItem('diaryx-theme');
+        var isDark = theme === 'dark' ||
+          (theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (isDark) document.documentElement.classList.add('dark');
+
+        // Apply cached appearance CSS vars
         var v = localStorage.getItem('diaryx-appearance-vars');
         if (v) {
           var vars = JSON.parse(v);

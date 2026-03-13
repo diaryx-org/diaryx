@@ -59,6 +59,7 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         // Native iOS keyboard toolbar for TipTap editor (no-op on desktop)
@@ -104,6 +105,7 @@ pub fn run() {
             commands::initialize_app,
             commands::get_app_paths,
             commands::pick_workspace_folder,
+            commands::reveal_in_file_manager,
             // Export
             commands::export_to_zip,
             commands::export_to_format,

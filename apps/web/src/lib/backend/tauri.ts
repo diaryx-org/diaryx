@@ -198,6 +198,16 @@ export class TauriBackend implements Backend {
       console.log("[TauriBackend] Step 2 complete: workspace initialized");
     } catch (e) {
       console.error("[TauriBackend] Step 2 failed: initialization error:", e);
+      // Propagate workspace-missing errors with their specific kind so the
+      // UI can offer to relocate or remove the stale workspace entry.
+      const err = e as { kind?: string; message?: string; path?: string } | null;
+      if (err?.kind === "WorkspaceDirectoryMissing") {
+        throw new BackendError(
+          err.message ?? "Workspace directory not found",
+          "WorkspaceDirectoryMissing",
+          err.path,
+        );
+      }
       throw new BackendError(
         `Failed to initialize app: ${this.formatError(e)}`,
         "InitializeAppError",
@@ -562,6 +572,14 @@ export class TauriBackend implements Backend {
   async writeBinary(path: string, data: Uint8Array): Promise<void> {
     const invoke = this.getInvoke();
     await invoke("write_binary_file", { path, data: Array.from(data) });
+  }
+
+  /**
+   * Reveal a workspace item in the platform file manager.
+   * Uses the Tauri opener plugin on desktop.
+   */
+  async revealInFileManager(path: string): Promise<void> {
+    await this.getInvoke()("reveal_in_file_manager", { path });
   }
 
   // --------------------------------------------------------------------------

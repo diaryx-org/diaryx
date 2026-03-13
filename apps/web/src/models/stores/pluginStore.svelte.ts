@@ -37,6 +37,9 @@ export interface PluginInsertCommand {
 }
 
 const PLUGIN_ENABLED_KEY = "diaryx-plugin-enabled";
+
+/** Callback to persist disabled_plugins to workspace config; wired up by hydrateDisabledPlugins(). */
+let persistDisabledPlugins: ((disabledIds: string[]) => Promise<void>) | null = null;
 const WORKSPACE_PROVIDER_COMMANDS = [
   "GetProviderStatus",
   "ListRemoteWorkspaces",
@@ -172,6 +175,31 @@ function persistPluginEnabledState(next: Record<string, boolean>): void {
     localStorage.setItem(PLUGIN_ENABLED_KEY, JSON.stringify(next));
   } catch {
     // Ignore storage write errors.
+  }
+
+  // Also persist to workspace config as disabled_plugins list
+  const disabledIds = Object.entries(next)
+    .filter(([, enabled]) => enabled === false)
+    .map(([id]) => id);
+  persistDisabledPlugins?.(disabledIds);
+}
+
+/**
+ * Hydrate disabled plugins from workspace config after backend init.
+ * Converts the `disabled_plugins` array from workspace config into the
+ * internal `{ pluginId: boolean }` map format.
+ */
+function hydrateDisabledPlugins(
+  disabledPlugins: string[] | undefined,
+  persistFn: (disabledIds: string[]) => Promise<void>,
+): void {
+  persistDisabledPlugins = persistFn;
+  if (disabledPlugins && disabledPlugins.length > 0) {
+    const state: Record<string, boolean> = {};
+    for (const id of disabledPlugins) {
+      state[id] = false;
+    }
+    pluginEnabledState = state;
   }
 }
 
@@ -613,6 +641,7 @@ export function getPluginStore() {
     isPluginEnabled,
     setPluginEnabled,
     clearPluginEnabled,
+    hydrateDisabledPlugins,
     init,
     setRuntimeManifestOverride,
     clearRuntimeManifestOverride,

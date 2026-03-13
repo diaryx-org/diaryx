@@ -432,6 +432,12 @@ export interface Backend {
   writeBinary(path: string, data: Uint8Array): Promise<void>;
 
   /**
+   * Reveal a workspace item in the system file manager when supported.
+   * Available in Tauri desktop builds.
+   */
+  revealInFileManager?(path: string): Promise<void>;
+
+  /**
    * Import workspace from a zip file.
    * Handles large files by streaming in chunks.
    * @param file The File object from a file input.

@@ -70,6 +70,7 @@ export function createThemeStore() {
     }
     if (persistWorkspace) {
       void persistWorkspaceMode(newMode);
+      persistThemeMode?.(newMode);
     }
 
     applyResolvedTheme(newMode);
@@ -136,6 +137,9 @@ export function createThemeStore() {
     }
   }
 
+  // Callback to persist theme_mode to workspace config; wired up by hydrateThemeMode().
+  let persistThemeMode: ((mode: ThemeMode) => Promise<void>) | null = null;
+
   return {
     get mode() {
       return mode;
@@ -149,6 +153,19 @@ export function createThemeStore() {
     setMode,
     toggle,
     reloadFromWorkspace,
+    /**
+     * Hydrate theme mode from workspace config after backend init.
+     * Replaces localStorage as the source of truth for theme_mode.
+     */
+    hydrateThemeMode(
+      themeMode: string | undefined,
+      persistFn: (mode: ThemeMode) => Promise<void>,
+    ): void {
+      persistThemeMode = persistFn;
+      if (isThemeMode(themeMode)) {
+        setModeInternal(themeMode, { persistLegacy: true, persistWorkspace: false });
+      }
+    },
     /** Register a callback invoked after light/dark mode changes. */
     onModeChange(fn: () => void) {
       modeChangeListeners.push(fn);
@@ -181,6 +198,7 @@ export function getThemeStore() {
       setMode: () => {},
       toggle: () => {},
       reloadFromWorkspace: async () => {},
+      hydrateThemeMode: () => {},
       onModeChange: () => () => {},
     };
   }

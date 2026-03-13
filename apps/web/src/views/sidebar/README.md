@@ -16,4 +16,4 @@ Sidebar and mobile navigation components.
 
 | File | Purpose |
 |------|---------|
-| `MobileActionSheet.svelte` | Mobile action sheet for sidebar actions |
+| `MobileActionSheet.svelte` | Mobile action sheet for sidebar actions, including the desktop-only file-manager reveal action when Tauri exposes it |

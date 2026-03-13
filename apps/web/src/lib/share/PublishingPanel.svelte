@@ -111,13 +111,17 @@
     Object.values(audienceStates).filter(c => c.state !== 'unpublished').length
   );
 
+  let hasPublishingAccess = $derived(
+    isConfigured || authState.publishedSiteLimit > 0
+  );
+
   let canPublish = $derived(
     hasDefaultWorkspace
     && !isPublishing
     && !isLoading
     && !isCreatingSite
     && isAuthenticated
-    && authState.tier === 'plus'
+    && hasPublishingAccess
     && publishedAudienceCount > 0
   );
 
@@ -344,10 +348,10 @@
         Open Account Setup
       </Button>
     </div>
-  {:else if authState.tier !== "plus" && !isConfigured}
+  {:else if authState.publishedSiteLimit === 0 && !isConfigured}
     <UpgradeBanner
       feature="Publishing"
-      description="Upgrade to publish your workspace as a website."
+      description="This account does not include website publishing."
       icon={Globe}
     />
   {:else}

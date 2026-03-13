@@ -34,6 +34,7 @@ describe('api', () => {
       persist: vi.fn().mockResolvedValue(undefined),
       readBinary: vi.fn().mockResolvedValue(new Uint8Array()),
       writeBinary: vi.fn().mockResolvedValue(undefined),
+      revealInFileManager: vi.fn().mockResolvedValue(undefined),
       importFromZip: vi.fn().mockResolvedValue({ success: true, files_imported: 0 }),
     }
     api = createApi(mockBackend)
@@ -596,6 +597,12 @@ describe('api', () => {
       await api.writeBinary('image.png', data)
 
       expect(mockBackend.writeBinary).toHaveBeenCalledWith('image.png', data)
+    })
+
+    it('should reveal a workspace item in the file manager', async () => {
+      await api.revealInFileManager('notes/today.md')
+
+      expect(mockBackend.revealInFileManager).toHaveBeenCalledWith('notes/today.md')
     })
   })
 

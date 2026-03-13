@@ -43,6 +43,7 @@ body {
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  --titlebar-area-height: 0px;
   --radius: 0.625rem;
   --editor-font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --editor-font-size: 16px;
@@ -151,6 +152,30 @@ body {
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/* Themed scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted-foreground) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--muted-foreground);
+  border-radius: var(--radius);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--foreground);
 }
 
 @layer base {

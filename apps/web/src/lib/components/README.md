@@ -32,10 +32,11 @@ Reusable Svelte components for the editor and UI.
 |------|---------|
 | `AttachmentPicker.svelte` | Attachment selection dialog (normalizes ancestor/upload refs via backend link parser, classifies attachments by media kind, and lazy-loads cached thumbnails only as image tiles approach the viewport). |
 | `AttachmentPickerNodeView.svelte` | Inline attachment node (same normalized attachment lookup path and media-kind classification as the dialog picker, with the same viewport-gated thumbnail loading). |
+| `BlockPickerNodeView.svelte` | Inline block picker node view; delays outside-click listeners until the opening interaction finishes so the picker stays open on the first click. |
 | `BubbleMenuComponent.svelte` | TipTap bubble menu |
 | `DrawingBlockNodeView.svelte` | Drawing block node view (view mode + edit overlay) |
 | `DrawingCanvas.svelte` | Freehand drawing editor with perfect-freehand |
-| `FloatingMenuComponent.svelte` | TipTap floating menu |
+| `FloatingMenuComponent.svelte` | TipTap floating menu; the add-block trigger is delegated through `document` clicks and defers insertion until focus settles so Playwright and manual clicks both open the inline block picker on the first press. |
 | `HighlightColorPicker.svelte` | Text highlight color picker |
 | `MoreStylesPicker.svelte` | Overflow formatting menu (strikethrough, inline code, spoiler) |
 | `PluginStatusItems.svelte` | Footer status-bar renderer for plugin-contributed items; the host displays plugin-reported status but does not hardcode sync-specific actions. |

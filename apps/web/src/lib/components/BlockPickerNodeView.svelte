@@ -86,6 +86,7 @@
   }
 
   function toggleSubmenu(menu: "heading" | "list" | "more", event: MouseEvent | TouchEvent) {
+    event.preventDefault();
     event.stopPropagation();
     openSubmenu = openSubmenu === menu ? null : menu;
     showAudienceSelector = false;
@@ -172,19 +173,35 @@
     event: MouseEvent | TouchEvent,
     action: () => void,
   ) {
+    event.preventDefault();
     event.stopPropagation();
     action();
   }
 
-  function handleClickOutside(event: MouseEvent | TouchEvent) {
+  function handlePointerDownOutside(event: MouseEvent | TouchEvent) {
     if (!menuElement) return;
     const target = event.target as Node;
     if (menuElement.contains(target)) return;
     onCancel();
   }
-</script>
 
-<svelte:window onclick={handleClickOutside} ontouchend={handleClickOutside} />
+  $effect(() => {
+    if (!menuElement) return;
+
+    // Wait until the next task before listening for outside clicks so the
+    // click that opens the picker does not immediately close it again.
+    const timeoutId = window.setTimeout(() => {
+      document.addEventListener("mousedown", handlePointerDownOutside);
+      document.addEventListener("touchend", handlePointerDownOutside);
+    }, 0);
+
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener("mousedown", handlePointerDownOutside);
+      document.removeEventListener("touchend", handlePointerDownOutside);
+    };
+  });
+</script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -194,6 +211,7 @@
   role="toolbar"
   aria-label="Block formatting"
   tabindex="-1"
+  onmousedown={(e) => e.preventDefault()}
   onclick={(e) => e.stopPropagation()}
   onkeydown={handleKeydown}
 >
@@ -203,7 +221,7 @@
         type="button"
         class="menu-item"
         title="Heading"
-        onclick={(e) => toggleSubmenu("heading", e)}
+        onmousedown={(e) => toggleSubmenu("heading", e)}
         aria-expanded={openSubmenu === "heading"}
       >
         <Heading class="size-4" />
@@ -211,9 +229,9 @@
       </button>
       {#if openSubmenu === "heading"}
         <div class="submenu-dropdown">
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHeading(1); }}>H1</button>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHeading(2); }}>H2</button>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHeading(3); }}>H3</button>
+          <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, () => handleHeading(1))}>H1</button>
+          <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, () => handleHeading(2))}>H2</button>
+          <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, () => handleHeading(3))}>H3</button>
         </div>
       {/if}
     </div>
@@ -227,7 +245,7 @@
         type="button"
         class="menu-item"
         title="List"
-        onclick={(e) => toggleSubmenu("list", e)}
+        onmousedown={(e) => toggleSubmenu("list", e)}
         aria-expanded={openSubmenu === "list"}
       >
         <List class="size-4" />
@@ -235,13 +253,13 @@
       </button>
       {#if openSubmenu === "list"}
         <div class="submenu-dropdown">
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleList("bullet"); }}>
+          <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, () => handleList("bullet"))}>
             <List class="size-3.5" /> Bullet
           </button>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleList("ordered"); }}>
+          <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, () => handleList("ordered"))}>
             <ListOrdered class="size-3.5" /> Numbered
           </button>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleList("task"); }}>
+          <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, () => handleList("task"))}>
             <ListTodo class="size-3.5" /> Task
           </button>
         </div>
@@ -254,7 +272,7 @@
   <div class="menu-section">
     <button
       type="button"
-      onclick={(e) => handleMenuItemClick(e, handleBlockquote)}
+      onmousedown={(e) => handleMenuItemClick(e, handleBlockquote)}
       class="menu-item"
       title="Quote"
     >
@@ -263,7 +281,7 @@
     </button>
     <button
       type="button"
-      onclick={(e) => handleMenuItemClick(e, handleCodeBlock)}
+      onmousedown={(e) => handleMenuItemClick(e, handleCodeBlock)}
       class="menu-item"
       title="Code Block"
     >
@@ -272,7 +290,7 @@
     </button>
     <button
       type="button"
-      onclick={(e) => handleMenuItemClick(e, handleHorizontalRule)}
+      onmousedown={(e) => handleMenuItemClick(e, handleHorizontalRule)}
       class="menu-item"
       title="Horizontal Rule"
     >
@@ -281,7 +299,7 @@
     </button>
     <button
       type="button"
-      onclick={(e) => handleMenuItemClick(e, handleTable)}
+      onmousedown={(e) => handleMenuItemClick(e, handleTable)}
       class="menu-item"
       title="Table"
     >
@@ -298,7 +316,7 @@
         type="button"
         class="menu-item"
         title="More blocks"
-        onclick={(e) => toggleSubmenu("more", e)}
+        onmousedown={(e) => toggleSubmenu("more", e)}
         aria-expanded={openSubmenu === "more"}
       >
         <Ellipsis class="size-4" />
@@ -306,17 +324,17 @@
       </button>
       {#if openSubmenu === "more"}
         <div class="submenu-dropdown">
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHtmlBlock(); }}>
+          <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, handleHtmlBlock)}>
             <Code class="size-3.5" /> HTML
           </button>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleDrawing(); }}>
+          <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, handleDrawing)}>
             <Pencil class="size-3.5" /> Drawing
           </button>
           {#if pluginBlockPickerItems.length > 0}
             <div class="submenu-divider"></div>
             {#each pluginBlockPickerItems as item (item.contribution.id)}
               {@const Icon = getCachedPluginIcon(item.contribution.icon)}
-              <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleBlockPickerItem(item); }}>
+              <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, () => handleBlockPickerItem(item))}>
                 <Icon class="size-3.5" /> {item.contribution.label}
               </button>
             {/each}
@@ -324,13 +342,12 @@
           {#if pluginBlockCommands.length > 0}
             <div class="submenu-divider"></div>
             {#each pluginBlockCommands as cmd (cmd.extensionId)}
-              <button type="button" class="submenu-item" onclick={(e) => {
-                e.stopPropagation();
+              <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, () => {
                 onSelect(() => editor.chain().focus().insertContent({
                   type: cmd.extensionId,
                   attrs: { source: '' },
                 }).run());
-              }}>
+              })}>
                 <cmd.icon class="size-3.5" /> {cmd.label}
               </button>
             {/each}
@@ -346,7 +363,7 @@
     <div class="menu-section">
       <button
         type="button"
-        onclick={(e) => handleMenuItemClick(e, handleAttachment)}
+        onmousedown={(e) => handleMenuItemClick(e, handleAttachment)}
         class="menu-item"
         title="Insert Attachment"
       >

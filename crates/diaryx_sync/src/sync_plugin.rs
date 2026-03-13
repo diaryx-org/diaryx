@@ -211,7 +211,7 @@ fn sync_plugin_manifest() -> PluginManifest {
                         SettingsField::Section {
                             label: "Plus Unlocks".into(),
                             description: Some(
-                                "Upgrade to Plus for up to ten synced workspaces, one published website, and higher storage limits."
+                                "Upgrade to Plus for up to ten synced workspaces and higher storage limits."
                                     .into(),
                             ),
                         },
@@ -220,7 +220,7 @@ fn sync_plugin_manifest() -> PluginManifest {
                 SettingsField::UpgradeBanner {
                     feature: "More Sync".into(),
                     description: Some(
-                        "Free includes one synced workspace on up to two devices. Upgrade for more synced workspaces and publishing."
+                        "Free includes one synced workspace on up to two devices. Upgrade for more synced workspaces and storage."
                             .into(),
                     ),
                 },

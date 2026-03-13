@@ -822,6 +822,15 @@ export function createApi(backend: Backend) {
       return backend.writeBinary(path, data);
     },
 
+    /** Reveal a workspace item in the system file manager when supported. */
+    async revealInFileManager(path: string): Promise<void> {
+      const reveal = backend.revealInFileManager;
+      if (typeof reveal !== 'function') {
+        throw new Error('This backend does not support revealing items in the file manager');
+      }
+      await reveal.call(backend, path);
+    },
+
     // =========================================================================
     // Naming / URL Validation
     // =========================================================================

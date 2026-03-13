@@ -57,6 +57,16 @@ generic host without importing duplicate app modules through Vite.
 - Updates `entryStore` with the new path/frontmatter
 - Remaps active collaboration path tracking to the renamed file
 
+## Desktop Window Chrome
+
+`App.svelte` renders the Tauri overlay-titlebar drag strip at the root of the
+shell rather than only inside the main editor layout.
+The shared shell uses Tauri's `window.startDragging()` API on `mousedown`, with
+sidebar/header/footer drag surfaces delegating through `lib/windowDrag.ts`.
+That helper skips interactive descendants such as buttons and form controls, so
+the macOS desktop window remains draggable without swallowing clicks on shell
+controls during welcome/onboarding flows or narrow desktop layouts.
+
 ## Starter Workspace Bootstrap
 
 `App.svelte` bootstraps starter content for first-run users.

@@ -106,6 +106,10 @@ attachment limits. Over-limit requests return `413` with
 - `GET /api/workspaces/{id}/site/tokens` — list token metadata for the workspace site.
 - `DELETE /api/workspaces/{id}/site/tokens/{token_id}` — revoke a token and refresh `_meta.json` revocation list.
 
+Published site creation uses `get_effective_published_site_limit(...)`. The
+current tier defaults allow one published site on Free and one on Plus unless a
+per-user override is set on `users.published_site_limit`.
+
 ### Stripe Billing Endpoints
 
 Only available when `STRIPE_SECRET_KEY` is configured.

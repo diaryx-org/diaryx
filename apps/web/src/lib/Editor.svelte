@@ -946,15 +946,43 @@
     if (!editor) return;
     if (content === undefined) return;
 
-    if (content === lastAppliedContentProp) return;
+    const currentMarkdown = appendFootnoteDefinitions(editor);
+    if (content === lastAppliedContentProp || content === currentMarkdown) {
+      lastAppliedContentProp = content;
+      return;
+    }
 
-    // Content prop changed - sync it to the editor
+    // Content prop changed independently from the live editor state,
+    // so replace the document with the external source of truth.
     lastAppliedContentProp = content;
     isUpdatingContent = true;
     editor.commands.setContent(preprocessFootnotes(content), { contentType: "markdown" });
     setTimeout(() => {
       isUpdatingContent = false;
     }, 0);
+  });
+
+  // Toggle overscroll padding when content exceeds 50% of viewport height
+  $effect(() => {
+    if (!editor) return;
+    const editorEl = editor.view.dom;
+
+    function updateOverscroll() {
+      // Temporarily remove overscroll class to measure natural content height
+      const hadClass = editorEl.classList.contains("overscroll");
+      if (hadClass) editorEl.classList.remove("overscroll");
+      const contentHeight = editorEl.scrollHeight;
+      if (hadClass) editorEl.classList.add("overscroll");
+
+      const threshold = window.innerHeight * 0.5;
+      editorEl.classList.toggle("overscroll", contentHeight > threshold);
+    }
+
+    const ro = new ResizeObserver(updateOverscroll);
+    ro.observe(editorEl);
+    updateOverscroll();
+
+    return () => ro.disconnect();
   });
 
   // Refresh conditional block decorations when template context changes
@@ -1017,10 +1045,14 @@
   :global(.editor-content) {
     outline: none;
     min-height: 100%;
-    padding-bottom: 50vh;
+    padding-bottom: 0;
     font-family: var(--editor-font-family);
     font-size: var(--editor-font-size);
     line-height: var(--editor-line-height);
+  }
+
+  :global(.editor-content.overscroll) {
+    padding-bottom: 50vh;
   }
 
   :global(.editor-content > * + *) {

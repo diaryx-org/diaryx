@@ -426,7 +426,7 @@
 
 <div class="fixed inset-0 z-50 bg-background overflow-hidden {closing ? 'animate-marketplace-out' : 'animate-marketplace-in'}">
   <div class="h-full flex flex-col">
-    <header class="border-b px-4 py-3 flex items-center justify-between gap-3 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
+    <header class="border-b px-4 py-3 flex items-center justify-between gap-3 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.75rem)] shrink-0">
       <div class="flex items-center gap-2 min-w-0">
         <Store class="size-5 shrink-0" />
         <div>
@@ -459,14 +459,14 @@
     </header>
 
     {#if !pluginsSupported}
-      <div class="px-4 pt-3">
+      <div class="px-4 pt-3 shrink-0">
         <div class="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
           {browserPluginSupportError ?? browserPluginSupport.reason ?? "Browser plugins are unavailable in this browser."}
         </div>
       </div>
     {/if}
 
-    <div class="px-4 pt-3 pb-2 flex flex-wrap items-center gap-2 border-b">
+    <div class="px-4 pt-3 pb-2 flex flex-nowrap items-center gap-2 border-b shrink-0 overflow-x-auto">
       <div class="relative flex-1 min-w-0">
         <Search class="size-4 absolute left-2.5 top-2.5 text-muted-foreground" />
         <Input class="pl-8" placeholder="Search plugins" bind:value={search} />
@@ -487,24 +487,24 @@
 
       {#if !mobileState.isMobile || filtersOpen}
         <div class="{mobileState.isMobile ? 'w-full flex flex-col gap-2 pt-2' : 'contents'}">
-          <select class="h-9 rounded-md border bg-background px-2 text-sm" bind:value={categoryFilter}>
+          <select class="h-9 rounded-md border bg-background px-2 text-sm shrink-0" bind:value={categoryFilter}>
             {#each categories as category}
               <option value={category}>{category === "all" ? "All categories" : category}</option>
             {/each}
           </select>
 
-          <select class="h-9 rounded-md border bg-background px-2 text-sm" bind:value={capabilityFilter}>
+          <select class="h-9 rounded-md border bg-background px-2 text-sm shrink-0" bind:value={capabilityFilter}>
             {#each capabilities as capability}
               <option value={capability}>{capability === "all" ? "All capabilities" : capability}</option>
             {/each}
           </select>
 
-          <select class="h-9 rounded-md border bg-background px-2 text-sm" bind:value={sourceFilter}>
+          <select class="h-9 rounded-md border bg-background px-2 text-sm shrink-0" bind:value={sourceFilter}>
             <option value="all">All plugins</option>
             <option value="installed">Installed</option>
           </select>
 
-          <select class="h-9 rounded-md border bg-background px-2 text-sm" bind:value={sortBy}>
+          <select class="h-9 rounded-md border bg-background px-2 text-sm shrink-0" bind:value={sortBy}>
             <option value="name">Sort: Name</option>
             <option value="recent">Sort: Recent</option>
             <option value="version">Sort: Version</option>
@@ -513,7 +513,7 @@
       {/if}
     </div>
 
-    <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_420px]">
+    <div class="flex-1 min-h-0 grid grid-rows-[minmax(0,1fr)] grid-cols-1 lg:grid-cols-[minmax(0,1fr)_420px]">
       <section class="min-h-0 overflow-auto {mobileState.isMobile ? '' : 'border-r'} pb-[env(safe-area-inset-bottom)]">
         {#if registryLoading}
           <div class="h-full flex items-center justify-center text-muted-foreground gap-2">
@@ -632,7 +632,7 @@
     <!-- Mobile slide-over detail panel -->
     {#if mobileState.isMobile && showDetail && selectedPlugin}
       <div class="fixed inset-0 z-[60] bg-background animate-detail-in flex flex-col">
-        <header class="border-b px-4 py-3 flex items-center gap-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] shrink-0">
+        <header class="border-b px-4 py-3 flex items-center gap-3 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.75rem)] shrink-0">
           <Button variant="ghost" size="icon" onclick={() => (showDetail = false)} aria-label="Back">
             <ArrowLeft class="size-4" />
           </Button>

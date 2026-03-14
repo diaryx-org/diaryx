@@ -33,7 +33,7 @@ Settings panel components for `SettingsDialog.svelte`.
 | `DisplaySettings.svelte` | Display mode and focus-mode preferences. |
 | `WorkspaceSettings.svelte` / `WorkspaceManagement.svelte` | Workspace config and provider link/unlink management. |
 | `StorageSettings.svelte` | Local storage backend settings. |
-| `DebugInfo.svelte` | Runtime app/config path diagnostics. On Tauri desktop it can reveal the active log file in the system file manager. |
+| `DebugInfo.svelte` | Runtime app/config path diagnostics. On Tauri it can read the active log file into the panel and, on desktop, reveal that file in the system file manager. |
 | `ImportSettings.svelte` | ZIP import flow for importing a Diaryx workspace export. |
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
 | `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified, and local installs review requested permissions on both browser and Tauri paths before install. |
@@ -67,9 +67,12 @@ The shared settings content scroller is also reused by `WorkspaceManagement.svel
 to preserve scroll position when inline workspace actions swap a row into
 confirmation controls (for example, delete confirmations in the Account tab).
 
-`DebugInfo.svelte` now reflects the backend-provided log path (`log_file`) so
-desktop sandbox builds can surface file-backed logs from inside the app without
-requiring a separate terminal session.
+`DebugInfo.svelte` now reflects the backend-provided log path (`log_file`) and
+can read the native log file directly through the Tauri backend. That lets the
+Debug tab show the current log contents in-app while still offering a desktop
+"Reveal Log File" action when the platform supports opening Finder/Explorer.
+Plugin install failures on Tauri now emit stage-specific diagnostics into that
+same log so mobile/TestFlight issues can be debugged without attaching Xcode.
 
 ## Marketplace Integration
 

@@ -588,6 +588,13 @@ export class TauriBackend implements Backend {
   }
 
   /**
+   * Read the active native log file.
+   */
+  async readLogFile(): Promise<string> {
+    return await this.getInvoke()<string>("read_log_file");
+  }
+
+  /**
    * Check for an available direct-distribution desktop update.
    */
   async checkForAppUpdate(): Promise<AppUpdateInfo | null> {
@@ -886,16 +893,49 @@ export class TauriBackend implements Backend {
 
   async installPlugin(wasmBytes: Uint8Array): Promise<string> {
     const invoke = this.getInvoke();
-    return invoke<string>("install_user_plugin", {
-      wasmBytes: Array.from(wasmBytes),
+    console.info("[TauriBackend] install_user_plugin invoked", {
+      bytes: wasmBytes.byteLength,
     });
+    try {
+      const manifestJson = await invoke<string>("install_user_plugin", {
+        wasmBytes: Array.from(wasmBytes),
+      });
+      console.info("[TauriBackend] install_user_plugin completed", {
+        bytes: wasmBytes.byteLength,
+      });
+      return manifestJson;
+    } catch (e) {
+      console.error("[TauriBackend] install_user_plugin failed", {
+        bytes: wasmBytes.byteLength,
+        error: e,
+        errorMessage: this.formatError(e),
+      });
+      handleError(e);
+    }
   }
 
   async inspectPlugin(wasmBytes: Uint8Array): Promise<PluginInspection> {
     const invoke = this.getInvoke();
-    return invoke<PluginInspection>("inspect_user_plugin", {
-      wasmBytes: Array.from(wasmBytes),
+    console.info("[TauriBackend] inspect_user_plugin invoked", {
+      bytes: wasmBytes.byteLength,
     });
+    try {
+      const inspection = await invoke<PluginInspection>("inspect_user_plugin", {
+        wasmBytes: Array.from(wasmBytes),
+      });
+      console.info("[TauriBackend] inspect_user_plugin completed", {
+        bytes: wasmBytes.byteLength,
+        pluginId: inspection.pluginId,
+      });
+      return inspection;
+    } catch (e) {
+      console.error("[TauriBackend] inspect_user_plugin failed", {
+        bytes: wasmBytes.byteLength,
+        error: e,
+        errorMessage: this.formatError(e),
+      });
+      handleError(e);
+    }
   }
 
   async uninstallPlugin(pluginId: string): Promise<void> {

@@ -9,6 +9,7 @@ attachments:
   - "[interface.ts](/apps/web/src/lib/backend/interface.ts)"
   - "[storageType.ts](/apps/web/src/lib/backend/storageType.ts)"
   - "[tauri.ts](/apps/web/src/lib/backend/tauri.ts)"
+  - "[workspaceAccess.ts](/apps/web/src/lib/backend/workspaceAccess.ts)"
   - "[wasmWorkerNew.ts](/apps/web/src/lib/backend/wasmWorkerNew.ts)"
   - "[workerBackendNew.ts](/apps/web/src/lib/backend/workerBackendNew.ts)"
 exclude:
@@ -31,6 +32,7 @@ Backend abstraction layer supporting both WASM and Tauri environments.
 | `interface.ts`        | Backend interface definition    |
 | `storageType.ts`      | Storage type detection          |
 | `tauri.ts`            | Tauri IPC implementation        |
+| `workspaceAccess.ts`  | Tauri workspace-access bridge   |
 | `wasmWorkerNew.ts`    | WASM worker implementation      |
 | `workerBackendNew.ts` | Worker-based backend            |
 
@@ -38,6 +40,13 @@ The `generated/` directory contains TypeScript types generated from Rust.
 Plugin manifest/editor-extension bindings are generated from `diaryx_core`, so
 after Rust-side manifest changes the repo should refresh them via
 `cargo test -p diaryx_core` followed by `scripts/sync-bindings.sh`.
+
+## Tauri Runtime Detection
+
+`interface.ts` treats Tauri v2 as present when either `globalThis.isTauri` or
+`window.__TAURI_INTERNALS__` exists. That matches the real runtime markers used
+by `@tauri-apps/api` and avoids iOS builds silently falling back to browser
+code paths just because `window.__TAURI__` is absent.
 
 ## Attachment Upload Path
 
@@ -146,6 +155,10 @@ other fetch null-body statuses) to `Response` objects with `null` bodies so
 no-content endpoints (for example, `DELETE /api/workspaces/{id}`) do not throw
 `Response cannot have a body with the given status`.
 
+Marketplace plugin registry fetches and `.wasm` artifact downloads now also go
+through `proxyFetch` on Tauri, which keeps TestFlight iOS plugin installs off
+the WKWebView network path and routes them through native `reqwest` instead.
+
 ## Plugin Host Parity
 
 The shared frontend now uses the same plugin inspection and permission-review
@@ -157,6 +170,20 @@ flow for browser and Tauri installs.
   errors like the browser host does: it normalizes the requested target,
   triggers the shared permission banner UI, and retries the plugin command or
   component render once after the user allows it.
+- `api.ts` also exposes `resolveWorkspaceRootIndexPath(...)`, which normalizes
+  workspace-directory vs root-index-file inputs before frontmatter or workspace
+  config flows read `README.md` / `index.md`. Shared frontend callers use that
+  helper to avoid attempting `GetFrontmatter`/`GetWorkspaceConfig` directly on
+  a directory path in Tauri/App Store/TestFlight builds.
+- `workspaceAccess.ts` now does the same kind of app-wide bridging for
+  sandboxed workspace picks: shared folder-picker flows call the native
+  `authorize_workspace_path` command immediately after selection so TestFlight
+  and App Store builds persist security-scoped bookmarks before those paths are
+  stored in the local workspace registry.
+- Tauri plugin install/inspect calls now also log stage-specific failures on
+  both the JS and Rust sides, so mobile/TestFlight install issues show up in
+  the Debug log panel with enough context to tell whether the failure happened
+  during inspection, native install, or workspace file writes.
 - `TauriBackend` and browser Extism runtimes now also expose direct
   `get_component_html` loading for plugin iframe surfaces, with a
   `PluginCommand("get_component_html")` fallback for older guests.

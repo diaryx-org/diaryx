@@ -130,7 +130,9 @@ pub fn run() {
             // App initialization (iOS-compatible)
             commands::initialize_app,
             commands::get_app_paths,
+            commands::read_log_file,
             commands::pick_workspace_folder,
+            commands::authorize_workspace_path,
             commands::reveal_in_file_manager,
             commands::check_for_app_update,
             commands::install_app_update,

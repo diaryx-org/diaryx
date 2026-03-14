@@ -3,9 +3,9 @@ title: tauri
 description: Web app + native backend
 author: adammharris
 audience:
-- public
-- developers
-part_of: '[README](/apps/README.md)'
+  - public
+  - developers
+part_of: "[README](/apps/README.md)"
 ---
 
 # Diaryx Tauri
@@ -25,12 +25,22 @@ folders by persisting security-scoped bookmarks for any folder chosen through
 the native picker. On the next launch or workspace switch, the app resolves the
 bookmark and re-opens access before reading the workspace-local `.diaryx`
 metadata directory, which keeps plugin installation working for externally
-chosen folders in sandboxed releases.
+chosen folders in sandboxed releases. The App Store entitlements therefore need
+both `com.apple.security.files.user-selected.read-write` and
+`com.apple.security.files.bookmarks.app-scope` so the sandboxed build can
+persist and reopen those bookmarks across launches.
+
+Shared web-side folder picks now bridge back into Rust through
+`authorize_workspace_path` as well. That command lets flows like "open existing
+folder" and "relocate workspace" turn a JS-selected path into a persisted
+security-scoped bookmark immediately, instead of relying only on
+`pick_workspace_folder`.
 
 The Tauri backend also writes file-backed logs under the app data directory
 (`logs/diaryx.log`). The shared Debug Info panel exposes the resolved log file
-path and can reveal it in Finder on desktop builds, which makes TestFlight/App
-Store debugging much easier than relying on transient console output.
+path, can read the current log contents directly in-app, and can reveal the
+file in Finder on desktop builds, which makes TestFlight/App Store debugging
+much easier than relying on transient console output.
 
 For plugin parity with the browser host, Tauri now also exposes native plugin
 inspection before install (so the shared frontend can review requested
@@ -121,18 +131,18 @@ The validation system checks workspace link integrity and can automatically fix 
 
 ### Other Commands
 
-| Category       | Commands                                                                          |
-| -------------- | --------------------------------------------------------------------------------- |
+| Category       | Commands                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------- |
 | Workspace      | `get_workspace_tree`, `get_filesystem_tree`, `create_workspace`, `reveal_in_file_manager` |
-| Entries        | `get_entry`, `save_entry`, `create_entry`, `delete_entry`, `move_entry`           |
-| Entries (cont) | `attach_entry_to_parent`, `convert_to_index`, `convert_to_leaf`                   |
-| Entries (cont) | `create_child_entry`, `rename_entry`, `ensure_daily_entry`                        |
-| Frontmatter    | `get_frontmatter`, `set_frontmatter_property`, `remove_frontmatter_property`      |
-| Attachments    | `get_attachments`, `upload_attachment`, `delete_attachment`                       |
-| Search         | `search_workspace`                                                                |
-| Export         | `get_available_audiences`, `plan_export`, `export_to_memory`, `export_to_html`    |
-| Backup         | `backup_workspace`, `restore_workspace`, `backup_to_s3`, `backup_to_google_drive` |
-| Import         | `import_from_zip`, `pick_and_import_zip`                                          |
+| Entries        | `get_entry`, `save_entry`, `create_entry`, `delete_entry`, `move_entry`                   |
+| Entries (cont) | `attach_entry_to_parent`, `convert_to_index`, `convert_to_leaf`                           |
+| Entries (cont) | `create_child_entry`, `rename_entry`, `ensure_daily_entry`                                |
+| Frontmatter    | `get_frontmatter`, `set_frontmatter_property`, `remove_frontmatter_property`              |
+| Attachments    | `get_attachments`, `upload_attachment`, `delete_attachment`                               |
+| Search         | `search_workspace`                                                                        |
+| Export         | `get_available_audiences`, `plan_export`, `export_to_memory`, `export_to_html`            |
+| Backup         | `backup_workspace`, `restore_workspace`, `backup_to_s3`, `backup_to_google_drive`         |
+| Import         | `import_from_zip`, `pick_and_import_zip`                                                  |
 
 ## Plugin Host Transport
 
@@ -152,7 +162,12 @@ plugins that have not added the dedicated export. Local `.wasm` installs now
 also persist any manifest-declared default permissions immediately on install,
 and runtime "Permission not configured" plugin errors are surfaced through the
 shared permission banner flow instead of failing the command outright on the
-first attempt.
+first attempt. Native plugin install commands also log explicit stage failures
+to the file-backed Tauri log (`inspect`, manifest load, workspace write, cache
+reset), which makes iOS/TestFlight install issues debuggable from the shared
+Debug Info panel. iOS builds also reduce Wasmtime's linear-memory reservation
+before plugin instantiation so native inspection/install does not trip over the
+default 4 GiB virtual-memory reservation inside the mobile sandbox.
 
 ## Desktop Updater
 
@@ -183,6 +198,7 @@ The Tauri app includes `tauri-plugin-iap` for StoreKit 2 integration on iOS and 
 - **Device packaging**: iOS target sets `SWIFT_STDLIB_TOOL_FLAGS=--source-libraries $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)` so `libswiftCore.dylib` and related Swift runtime libraries are embedded correctly for phone builds
 
 The frontend detects the billing provider at runtime (`$lib/billing/platform.ts`):
+
 - iOS Tauri and App Store macOS builds → Apple IAP (native StoreKit sheet)
 - Web and direct desktop builds → Stripe checkout
 
@@ -217,6 +233,10 @@ On sandboxed macOS App Store builds, the default workspace now lives inside the
 app container until the user explicitly picks an external folder. External
 workspace picks are backed by security-scoped bookmarks so the app can keep
 access across relaunches without requiring broad filesystem entitlements.
+`reinitialize_workspace` and `initialize_app` also try to backfill a bookmark
+when a workspace path is still accessible but missing from config, which helps
+heal paths chosen by older builds once they are re-selected in the current
+session.
 
 On iOS, workspace files are stored in the app `Documents` directory and surfaced in the Files app under "On My iPhone" by enabling:
 

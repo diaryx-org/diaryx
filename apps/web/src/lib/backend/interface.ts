@@ -450,6 +450,12 @@ export interface Backend {
   revealInFileManager?(path: string): Promise<void>;
 
   /**
+   * Read the active application log file when supported.
+   * Available in Tauri builds that expose a native log file.
+   */
+  readLogFile?(): Promise<string>;
+
+  /**
    * Check for a direct-distribution desktop app update when supported.
    * Returns null when the updater is unavailable or no update is published.
    */
@@ -670,12 +676,21 @@ export class BackendError extends Error {
  * Check if running in a Tauri environment.
  */
 export function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI__" in window;
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const runtime = globalThis as typeof globalThis & {
+    isTauri?: boolean;
+    __TAURI_INTERNALS__?: unknown;
+  };
+
+  return runtime.isTauri === true || typeof runtime.__TAURI_INTERNALS__ === "object";
 }
 
 /**
  * Check if running in a browser (non-Tauri) environment.
  */
 export function isBrowser(): boolean {
-  return typeof window !== "undefined" && !("__TAURI__" in window);
+  return typeof window !== "undefined" && !isTauri();
 }

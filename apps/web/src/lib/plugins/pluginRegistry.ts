@@ -7,6 +7,7 @@
  */
 
 import yaml from "js-yaml";
+import { proxyFetch } from "$lib/backend/proxyFetch";
 
 export interface PluginArtifact {
   url: string;
@@ -166,7 +167,7 @@ export async function fetchPluginRegistry(
     throw new Error(`Untrusted plugin registry URL: ${registryUrl}`);
   }
 
-  const resp = await fetch(registryUrl);
+  const resp = await proxyFetch(registryUrl);
   if (!resp.ok) {
     throw new Error(`Registry fetch failed: ${resp.status}`);
   }

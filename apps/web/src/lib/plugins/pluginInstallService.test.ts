@@ -4,6 +4,7 @@ type MockBackend = {
   installPlugin: ReturnType<typeof vi.fn>;
   inspectPlugin: ReturnType<typeof vi.fn>;
   uninstallPlugin: ReturnType<typeof vi.fn>;
+  getWorkspacePath: ReturnType<typeof vi.fn>;
 };
 
 type MockPluginStore = {
@@ -13,7 +14,12 @@ type MockPluginStore = {
   clearPluginEnabled: ReturnType<typeof vi.fn>;
 };
 
-async function loadPluginInstallService() {
+async function loadPluginInstallService(options?: {
+  backendWorkspacePath?: string;
+  frontmatterPlugins?: Record<string, { permissions: Record<string, unknown> }>;
+  resolvedRootIndexPath?: string;
+  workspaceTreePath?: string | null;
+}) {
   vi.resetModules();
 
   const backend: MockBackend = {
@@ -35,6 +41,9 @@ async function loadPluginInstallService() {
       },
     }),
     uninstallPlugin: vi.fn().mockResolvedValue(undefined),
+    getWorkspacePath: vi
+      .fn()
+      .mockReturnValue(options?.backendWorkspacePath ?? "workspace/index.md"),
   };
   const pluginStore: MockPluginStore = {
     allManifests: [
@@ -48,12 +57,26 @@ async function loadPluginInstallService() {
     preloadInsertCommandIcons: vi.fn().mockResolvedValue(undefined),
     clearPluginEnabled: vi.fn(),
   };
-  const api = { kind: "mock-api" };
+  const api = {
+    kind: "mock-api",
+    resolveWorkspaceRootIndexPath: vi
+      .fn()
+      .mockResolvedValue(
+        options?.resolvedRootIndexPath ?? options?.backendWorkspacePath ?? "workspace/index.md",
+      ),
+    getFrontmatter: vi.fn().mockResolvedValue({
+      plugins: options?.frontmatterPlugins ?? {},
+    }),
+    setFrontmatterProperty: vi.fn().mockResolvedValue(null),
+  };
   const createApi = vi.fn(() => api);
   const getBackend = vi.fn().mockResolvedValue(backend);
   const clearPreservedPluginEditorExtensions = vi.fn();
   const preservePluginEditorExtensions = vi.fn();
   const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const proxyFetch = vi
+    .fn()
+    .mockResolvedValue(new Response(new TextEncoder().encode("test"), { status: 200 }));
 
   vi.doMock("$lib/backend", () => ({
     getBackend,
@@ -71,11 +94,21 @@ async function loadPluginInstallService() {
     clearPreservedPluginEditorExtensions,
     preservePluginEditorExtensions,
   }));
+  vi.doMock("$lib/backend/proxyFetch", () => ({
+    proxyFetch,
+  }));
   vi.doMock("@/models/stores/pluginStore.svelte", () => ({
     getPluginStore: () => pluginStore,
   }));
   vi.doMock("@/models/stores/workspaceStore.svelte", () => ({
-    workspaceStore: { tree: null },
+    workspaceStore: {
+      tree:
+        options?.workspaceTreePath === undefined
+          ? null
+          : options.workspaceTreePath === null
+            ? null
+            : { path: options.workspaceTreePath },
+    },
   }));
   vi.doMock("@/models/stores/permissionStore.svelte", () => ({
     permissionStore: {
@@ -96,7 +129,9 @@ async function loadPluginInstallService() {
     createApi,
     getBackend,
     installSource,
+    api,
     pluginStore,
+    proxyFetch,
     preservePluginEditorExtensions,
     service,
   };
@@ -123,6 +158,7 @@ async function loadBrowserPluginInstallService(options?: {
   const installPlugin = vi.fn().mockResolvedValue({ id: "diaryx.sync" });
   const backend = { getWorkspacePath: vi.fn().mockReturnValue(".") };
   const api = {
+    resolveWorkspaceRootIndexPath: vi.fn().mockResolvedValue("index.md"),
     getFrontmatter: vi.fn().mockResolvedValue({
       plugins: options?.frontmatterPlugins ?? {},
     }),
@@ -131,6 +167,7 @@ async function loadBrowserPluginInstallService(options?: {
   const createApi = vi.fn(() => api);
   const getBackend = vi.fn().mockResolvedValue(backend);
   const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const proxyFetch = vi.fn();
 
   vi.doMock("$lib/backend", () => ({
     getBackend,
@@ -147,6 +184,9 @@ async function loadBrowserPluginInstallService(options?: {
   vi.doMock("$lib/plugins/preservedEditorExtensions.svelte", () => ({
     clearPreservedPluginEditorExtensions: vi.fn(),
     preservePluginEditorExtensions: vi.fn(),
+  }));
+  vi.doMock("$lib/backend/proxyFetch", () => ({
+    proxyFetch,
   }));
   vi.doMock("@/models/stores/pluginStore.svelte", () => ({
     getPluginStore: () => ({
@@ -177,6 +217,7 @@ async function loadBrowserPluginInstallService(options?: {
     getBackend,
     inspectPluginWasm,
     installPlugin,
+    proxyFetch,
     service,
   };
 }
@@ -200,7 +241,7 @@ describe("pluginInstallService", () => {
 
     await service.installLocalPlugin(new ArrayBuffer(4), "Spoiler");
 
-    expect(getBackend).toHaveBeenCalledTimes(2);
+    expect(getBackend).toHaveBeenCalled();
     expect(backend.inspectPlugin).toHaveBeenCalledTimes(1);
     expect(backend.installPlugin).toHaveBeenCalledTimes(1);
     expect(backend.installPlugin.mock.calls[0]?.[0]).toBeInstanceOf(Uint8Array);
@@ -209,7 +250,9 @@ describe("pluginInstallService", () => {
       "diaryx.spoiler",
     );
     expect(createApi).toHaveBeenCalledWith(backend);
-    expect(pluginStore.init).toHaveBeenCalledWith({ kind: "mock-api" });
+    expect(pluginStore.init).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "mock-api" }),
+    );
     expect(pluginStore.preloadInsertCommandIcons).toHaveBeenCalledTimes(1);
     expect(installSource.getInstalledPluginSource("diaryx.spoiler")).toBe("local");
   });
@@ -230,7 +273,9 @@ describe("pluginInstallService", () => {
       pluginStore.allManifests[0],
     );
     expect(createApi).toHaveBeenCalledWith(backend);
-    expect(pluginStore.init).toHaveBeenCalledWith({ kind: "mock-api" });
+    expect(pluginStore.init).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "mock-api" }),
+    );
     expect(pluginStore.preloadInsertCommandIcons).toHaveBeenCalledTimes(1);
     expect(installSource.getInstalledPluginSource("diaryx.spoiler")).toBeNull();
   });
@@ -267,5 +312,107 @@ describe("pluginInstallService", () => {
     expect(createApi).toHaveBeenCalled();
     expect(api.getFrontmatter).toHaveBeenCalledWith("index.md");
     expect(installPlugin).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a directory workspace root before reading or writing plugin permissions", async () => {
+    const workspaceDir = "/Users/test/Documents/ppppppp/";
+    const rootIndexPath = "/Users/test/Documents/ppppppp/README.md";
+    const { api, service } = await loadPluginInstallService({
+      backendWorkspacePath: workspaceDir,
+      resolvedRootIndexPath: rootIndexPath,
+      workspaceTreePath: workspaceDir,
+    });
+
+    await service.installLocalPlugin(new ArrayBuffer(4), "Spoiler");
+
+    expect(api.resolveWorkspaceRootIndexPath).toHaveBeenCalledWith(workspaceDir);
+    expect(api.getFrontmatter.mock.calls.every(([path]) => path === rootIndexPath)).toBe(true);
+    expect(api.setFrontmatterProperty).toHaveBeenCalledWith(
+      rootIndexPath,
+      "plugins",
+      expect.any(Object),
+      rootIndexPath,
+    );
+  });
+
+  it("downloads registry plugin bytes through proxyFetch on Tauri", async () => {
+    const { backend, proxyFetch, service } = await loadPluginInstallService();
+
+    await service.installRegistryPlugin({
+      id: "diaryx.spoiler",
+      name: "Spoiler",
+      version: "1.0.0",
+      summary: "Spoilers",
+      description: "Spoilers",
+      author: "Diaryx",
+      license: "MIT",
+      repository: null,
+      categories: [],
+      tags: [],
+      icon: null,
+      screenshots: [],
+      capabilities: [],
+      requested_permissions: null,
+      artifact: {
+        url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.spoiler/1.0.0/plugin.wasm",
+        sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        size: 4,
+        published_at: "2026-03-14T00:00:00Z",
+      },
+    });
+
+    expect(proxyFetch).toHaveBeenCalledWith(
+      "https://cdn.diaryx.org/plugins/artifacts/diaryx.spoiler/1.0.0/plugin.wasm",
+    );
+    expect(backend.installPlugin).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the failing Tauri install stage for registry plugins", async () => {
+    const { backend, service } = await loadPluginInstallService();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    backend.installPlugin.mockRejectedValue({
+      message: "Failed to write plugin WASM into workspace: Operation not permitted",
+      kind: "IoError",
+      path: "/workspace/.diaryx/plugins/diaryx.spoiler/plugin.wasm",
+    });
+
+    await expect(
+      service.installRegistryPlugin({
+        id: "diaryx.spoiler",
+        name: "Spoiler",
+        version: "1.0.0",
+        summary: "Spoilers",
+        description: "Spoilers",
+        author: "Diaryx",
+        license: "MIT",
+        repository: null,
+        categories: [],
+        tags: [],
+        icon: null,
+        screenshots: [],
+        capabilities: [],
+        requested_permissions: null,
+        artifact: {
+          url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.spoiler/1.0.0/plugin.wasm",
+          sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          size: 4,
+          published_at: "2026-03-14T00:00:00Z",
+        },
+      }),
+    ).rejects.toThrow(
+      "install plugin through Tauri backend failed: Failed to write plugin WASM into workspace: Operation not permitted (IoError: /workspace/.diaryx/plugins/diaryx.spoiler/plugin.wasm)",
+    );
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "[pluginInstallService] install plugin through Tauri backend failed",
+      expect.objectContaining({
+        expectedPluginId: "diaryx.spoiler",
+        fallbackName: "Spoiler",
+        bytes: 4,
+        formattedError:
+          "Failed to write plugin WASM into workspace: Operation not permitted (IoError: /workspace/.diaryx/plugins/diaryx.spoiler/plugin.wasm)",
+      }),
+    );
   });
 });

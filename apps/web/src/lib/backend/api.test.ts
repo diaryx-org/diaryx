@@ -367,6 +367,40 @@ describe('api', () => {
     })
   })
 
+  describe('resolveWorkspaceRootIndexPath', () => {
+    it('returns a preferred root index file path without calling FindRootIndex', async () => {
+      const result = await api.resolveWorkspaceRootIndexPath('/Users/test/journal/README.md')
+
+      expect(mockBackend.execute).not.toHaveBeenCalled()
+      expect(result).toBe('/Users/test/journal/README.md')
+    })
+
+    it('resolves a workspace directory through FindRootIndex', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({
+        type: 'String',
+        data: '/Users/test/journal/README.md',
+      })
+
+      const result = await api.resolveWorkspaceRootIndexPath('/Users/test/journal/')
+
+      expect(mockBackend.execute).toHaveBeenCalledWith({
+        type: 'FindRootIndex',
+        params: { directory: '/Users/test/journal' },
+      })
+      expect(result).toBe('/Users/test/journal/README.md')
+    })
+
+    it('falls back to the backend workspace path when the preferred directory lookup fails', async () => {
+      mockBackend.getWorkspacePath = vi.fn().mockReturnValue('/Users/test/journal/README.md')
+      vi.mocked(mockBackend.execute).mockRejectedValueOnce(new Error('workspace root not found'))
+
+      const result = await api.resolveWorkspaceRootIndexPath('/Users/test/journal/')
+
+      expect(result).toBe('/Users/test/journal/README.md')
+      expect(mockBackend.execute).toHaveBeenCalledTimes(1)
+    })
+  })
+
   describe('validateWorkspace', () => {
     it('should validate workspace', async () => {
       const mockResult = {

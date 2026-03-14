@@ -3,6 +3,7 @@
   import { getBackend, isTauri, replaceBackend, resetBackend } from "./lib/backend";
   import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
   import { BackendError } from "./lib/backend/interface";
+  import { pickAuthorizedWorkspaceFolder } from "./lib/backend/workspaceAccess";
   import { maybeStartWindowDrag } from "$lib/windowDrag";
   import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
   import { addFilesToZip } from "./lib/settings/zipUtils";
@@ -261,14 +262,10 @@
     if (!workspaceMissing) return;
     const { id, name } = workspaceMissing;
     try {
-      const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
-      const folder = await openDialog({
-        directory: true,
-        title: `Locate "${name}"`,
-      });
+      const folder = await pickAuthorizedWorkspaceFolder(`Locate "${name}"`);
       if (!folder) return;
       const { addLocalWorkspace } = await import("$lib/storage/localWorkspaceRegistry.svelte");
-      addLocalWorkspace({ id, name, path: folder as string });
+      addLocalWorkspace({ id, name, path: folder });
       workspaceMissing = null;
       // Re-initialize with the corrected path
       entryStore.setLoading(true);
@@ -489,20 +486,35 @@
     return frontmatter;
   }
 
+  async function resolveWorkspaceRootIndexPath(): Promise<string | null> {
+    if (!api) {
+      return null;
+    }
+
+    return await api.resolveWorkspaceRootIndexPath(tree?.path ?? null);
+  }
+
   async function reloadPluginPermissionsConfig(): Promise<void> {
-    if (!api || !tree?.path) {
+    if (!api) {
       pluginPermissionsConfig = undefined;
       pluginPermissionsRootPath = null;
       return;
     }
 
-    if (pluginPermissionsRootPath !== tree.path) {
+    const rootIndexPath = await resolveWorkspaceRootIndexPath();
+    if (!rootIndexPath) {
+      pluginPermissionsConfig = {};
+      pluginPermissionsRootPath = null;
+      return;
+    }
+
+    if (pluginPermissionsRootPath !== rootIndexPath) {
       permissionStore.clearSessionCache();
-      pluginPermissionsRootPath = tree.path;
+      pluginPermissionsRootPath = rootIndexPath;
     }
 
     try {
-      const fm = await api.getFrontmatter(tree.path);
+      const fm = await api.getFrontmatter(rootIndexPath);
       const raw = fm.plugins as unknown;
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
         pluginPermissionsConfig = {};
@@ -517,15 +529,21 @@
   async function persistPluginPermissionsConfig(
     nextConfig: Record<string, PluginConfig>,
   ): Promise<void> {
-    if (!api || !tree?.path) {
+    if (!api) {
+      throw new Error("Workspace root is not available");
+    }
+
+    const rootIndexPath = await resolveWorkspaceRootIndexPath();
+    if (!rootIndexPath) {
       throw new Error("Workspace root is not available");
     }
     await api.setFrontmatterProperty(
-      tree.path,
+      rootIndexPath,
       "plugins",
       nextConfig as unknown as JsonValue,
-      tree.path,
+      rootIndexPath,
     );
+    pluginPermissionsRootPath = rootIndexPath;
     pluginPermissionsConfig = nextConfig;
   }
 
@@ -599,6 +617,10 @@
       themeStore.reloadFromWorkspace?.(),
       appearanceStore.reloadFromWorkspace?.(),
     ]);
+
+    if (isTauri()) {
+      return;
+    }
 
     const pluginSupport = browserPlugins.getBrowserPluginSupport();
     if (!pluginSupport.supported) {
@@ -1933,12 +1955,19 @@
 
       // Hydrate view preferences from workspace config (stored in root index
       // frontmatter) so they travel with the workspace instead of localStorage.
-      if (tree) {
+      const workspaceRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+        tree?.path ?? null,
+      );
+      if (workspaceRootIndexPath) {
         try {
-          const wsConfig = await apiInstance.getWorkspaceConfig(tree.path);
+          const wsConfig = await apiInstance.getWorkspaceConfig(workspaceRootIndexPath);
           workspaceStore.hydrateDisplaySettings(wsConfig, async (field, value) => {
             try {
-              await apiInstance.setWorkspaceConfig(tree!.path, field, value);
+              const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+                tree?.path ?? null,
+              );
+              if (!nextRootIndexPath) return;
+              await apiInstance.setWorkspaceConfig(nextRootIndexPath, field, value);
             } catch (e) {
               console.warn('[App] Failed to persist display setting:', field, e);
             }
@@ -1947,7 +1976,11 @@
           // Hydrate theme mode
           themeStore.hydrateThemeMode(wsConfig.theme_mode, async (mode) => {
             try {
-              await apiInstance.setWorkspaceConfig(tree!.path, 'theme_mode', mode);
+              const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+                tree?.path ?? null,
+              );
+              if (!nextRootIndexPath) return;
+              await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'theme_mode', mode);
             } catch (e) {
               console.warn('[App] Failed to persist theme_mode:', e);
             }
@@ -1956,7 +1989,11 @@
           // Hydrate audience colors
           getAudienceColorStore().hydrate(wsConfig.audience_colors as Record<string, string> | undefined, async (colors) => {
             try {
-              await apiInstance.setWorkspaceConfig(tree!.path, 'audience_colors', JSON.stringify(colors));
+              const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+                tree?.path ?? null,
+              );
+              if (!nextRootIndexPath) return;
+              await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'audience_colors', JSON.stringify(colors));
             } catch (e) {
               console.warn('[App] Failed to persist audience_colors:', e);
             }
@@ -1965,7 +2002,11 @@
           // Hydrate disabled plugins
           getPluginStore().hydrateDisabledPlugins(wsConfig.disabled_plugins, async (disabledIds) => {
             try {
-              await apiInstance.setWorkspaceConfig(tree!.path, 'disabled_plugins', JSON.stringify(disabledIds));
+              const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+                tree?.path ?? null,
+              );
+              if (!nextRootIndexPath) return;
+              await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'disabled_plugins', JSON.stringify(disabledIds));
             } catch (e) {
               console.warn('[App] Failed to persist disabled_plugins:', e);
             }
@@ -2114,12 +2155,19 @@
     await refreshTree();
 
     // Hydrate view preferences from the new workspace's config
-    if (tree && api) {
+    const workspaceRootIndexPath = await api?.resolveWorkspaceRootIndexPath(
+      tree?.path ?? null,
+    );
+    if (workspaceRootIndexPath && api) {
       try {
-        const wsConfig = await api.getWorkspaceConfig(tree.path);
+        const wsConfig = await api.getWorkspaceConfig(workspaceRootIndexPath);
         workspaceStore.hydrateDisplaySettings(wsConfig, async (field, value) => {
           try {
-            await api!.setWorkspaceConfig(tree!.path, field, value);
+            const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
+              tree?.path ?? null,
+            );
+            if (!nextRootIndexPath) return;
+            await api!.setWorkspaceConfig(nextRootIndexPath, field, value);
           } catch (e) {
             console.warn('[App] Failed to persist display setting:', field, e);
           }
@@ -2128,7 +2176,11 @@
         // Hydrate theme mode
         themeStore.hydrateThemeMode(wsConfig.theme_mode, async (mode) => {
           try {
-            await api!.setWorkspaceConfig(tree!.path, 'theme_mode', mode);
+            const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
+              tree?.path ?? null,
+            );
+            if (!nextRootIndexPath) return;
+            await api!.setWorkspaceConfig(nextRootIndexPath, 'theme_mode', mode);
           } catch (e) {
             console.warn('[App] Failed to persist theme_mode:', e);
           }
@@ -2137,7 +2189,11 @@
         // Hydrate audience colors
         getAudienceColorStore().hydrate(wsConfig.audience_colors as Record<string, string> | undefined, async (colors) => {
           try {
-            await api!.setWorkspaceConfig(tree!.path, 'audience_colors', JSON.stringify(colors));
+            const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
+              tree?.path ?? null,
+            );
+            if (!nextRootIndexPath) return;
+            await api!.setWorkspaceConfig(nextRootIndexPath, 'audience_colors', JSON.stringify(colors));
           } catch (e) {
             console.warn('[App] Failed to persist audience_colors:', e);
           }
@@ -2146,7 +2202,11 @@
         // Hydrate disabled plugins
         getPluginStore().hydrateDisabledPlugins(wsConfig.disabled_plugins, async (disabledIds) => {
           try {
-            await api!.setWorkspaceConfig(tree!.path, 'disabled_plugins', JSON.stringify(disabledIds));
+            const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
+              tree?.path ?? null,
+            );
+            if (!nextRootIndexPath) return;
+            await api!.setWorkspaceConfig(nextRootIndexPath, 'disabled_plugins', JSON.stringify(disabledIds));
           } catch (e) {
             console.warn('[App] Failed to persist disabled_plugins:', e);
           }

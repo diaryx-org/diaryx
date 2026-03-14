@@ -126,8 +126,14 @@ async function initializeBackend(workspaceId?: string, workspaceName?: string, s
   console.log("[Backend] isTauri():", isTauri());
   console.log("[Backend] isBrowser():", isBrowser());
   console.log(
-    "[Backend] window.__TAURI__:",
-    typeof window !== "undefined" ? (window as any).__TAURI__ : "N/A",
+    "[Backend] runtime markers:",
+    typeof window !== "undefined"
+      ? {
+          isTauri: (globalThis as any).isTauri ?? null,
+          __TAURI_INTERNALS__: typeof (window as any).__TAURI_INTERNALS__,
+          __TAURI__: typeof (window as any).__TAURI__,
+        }
+      : "N/A",
   );
 
   try {

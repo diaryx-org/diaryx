@@ -32,6 +32,7 @@
   import { getBackend, isTauri } from "$lib/backend";
   import { createApi } from "$lib/backend/api";
   import type { Backend } from "$lib/backend/interface";
+  import { proxyFetch } from "$lib/backend/proxyFetch";
   import type {
     PermissionType,
     PluginConfig,
@@ -276,11 +277,13 @@
   }
 
   async function persistDefaultPermissions(pluginId: string, defaults: PluginPermissions): Promise<void> {
-    const rootIndexPath = workspaceStore.tree?.path;
-    if (!rootIndexPath) return;
-
     const backend = await getBackend();
     const api = createApi(backend);
+    const rootIndexPath = await api.resolveWorkspaceRootIndexPath(
+      workspaceStore.tree?.path,
+    );
+    if (!rootIndexPath) return;
+
     const fm = await api.getFrontmatter(rootIndexPath);
     const existingPlugins = (fm.plugins as Record<string, PluginConfig> | undefined) ?? {};
     const existingPluginConfig = existingPlugins[pluginId] ?? { permissions: {} };
@@ -365,7 +368,7 @@
   async function installFromRegistry(plugin: RegistryPlugin): Promise<void> {
     installingIds = new Set([...installingIds, plugin.id]);
     try {
-      const response = await fetch(plugin.artifact.url);
+      const response = await proxyFetch(plugin.artifact.url);
       if (!response.ok) {
         throw new Error(`Download failed: ${response.status}`);
       }

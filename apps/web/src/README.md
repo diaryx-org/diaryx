@@ -23,15 +23,15 @@ Source tree for the Diaryx web frontend.
 
 ## Structure
 
-| File/Directory | Purpose |
-| --- | --- |
-| `App.svelte` | Main application shell |
-| `main.ts` | Application entrypoint |
-| `app.css` | Global styles |
-| `controllers/` | UI action controllers |
-| `lib/` | Shared libraries and components |
-| `models/` | Stores and services |
-| `views/` | View components |
+| File/Directory | Purpose                         |
+| -------------- | ------------------------------- |
+| `App.svelte`   | Main application shell          |
+| `main.ts`      | Application entrypoint          |
+| `app.css`      | Global styles                   |
+| `controllers/` | UI action controllers           |
+| `lib/`         | Shared libraries and components |
+| `models/`      | Stores and services             |
+| `views/`       | View components                 |
 
 ## Sync/Share Architecture
 
@@ -91,6 +91,21 @@ content instead of opening the add-workspace wizard.
 During onboarding bundle install, starter workspace frontmatter under
 `plugins.<plugin-id>.permissions` is treated as authoritative and can suppress
 the browser install review dialog before plugin bytes are installed.
+
+When the current tree is rooted at a filesystem directory instead of
+`README.md` / `index.md` (for example, fallback tree mode on Tauri), shared
+workspace-scoped frontend flows first resolve the actual root index before
+reading frontmatter or workspace config. This avoids directory `FileRead`
+errors in marketplace/plugin-permission startup flows on sandboxed macOS
+builds.
+
+Shared Tauri folder-picking flows now also run through the app-wide
+`workspaceAccess.ts` helper before a selected path is stored in the local
+workspace registry. That helper calls the native `authorize_workspace_path`
+command so sandboxed macOS builds persist a security-scoped bookmark for
+"create here", "open existing folder", and "relocate workspace" selections
+instead of saving a raw path that cannot be reopened on the next workspace
+switch.
 
 ## Mobile Swipe Behavior
 

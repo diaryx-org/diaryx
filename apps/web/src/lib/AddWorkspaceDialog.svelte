@@ -27,6 +27,7 @@
   import { untrack } from "svelte";
   import { getBackend, createApi } from "./backend";
   import { isTauri } from "$lib/backend/interface";
+  import { authorizeWorkspacePath, pickAuthorizedWorkspaceFolder } from "$lib/backend/workspaceAccess";
   import { isTierLimitError } from "$lib/billing";
   import {
     getLocalWorkspaces,
@@ -110,6 +111,7 @@
 
   // Tauri workspace path
   let workspacePath = $state('');
+  let workspacePathWasPicked = $state(false);
 
   // Loading / progress state
   let isInitializing = $state(false);
@@ -179,6 +181,7 @@
     importProgress = 0;
     progressMessage = null;
     workspacePath = '';
+    workspacePathWasPicked = false;
     importZipFile = null;
     selectedFolderPath = null;
     selectedFolderHandle = null;
@@ -257,9 +260,11 @@
   /** Open a native folder picker for workspace location (Tauri only). */
   async function browseFolder() {
     try {
-      const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
-      const folder = await openDialog({ directory: true, title: 'Select Workspace Location' });
-      if (folder) workspacePath = folder as string;
+      const folder = await pickAuthorizedWorkspaceFolder('Select Workspace Location');
+      if (folder) {
+        workspacePath = folder;
+        workspacePathWasPicked = true;
+      }
     } catch (e) {
       console.warn('[AddWorkspaceDialog] Browse folder error:', e);
     }
@@ -269,11 +274,10 @@
   async function openFolderPicker() {
     try {
       if (isTauri()) {
-        const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
-        const folder = await openDialog({ directory: true, title: 'Open Existing Folder' });
+        const folder = await pickAuthorizedWorkspaceFolder('Open Existing Folder');
         if (folder) {
-          selectedFolderPath = folder as string;
-          const segments = (folder as string).replace(/[/\\]+$/, '').split(/[/\\]/);
+          selectedFolderPath = folder;
+          const segments = folder.replace(/[/\\]+$/, '').split(/[/\\]/);
           selectedFolderName = segments[segments.length - 1] || 'Folder';
           newWorkspaceName = selectedFolderName;
           contentSource = 'open_folder';
@@ -433,7 +437,10 @@
   }
 
   async function handleCreateFresh(wsName: string) {
-    const wsPath = await resolveWorkspaceDirectoryForCreate(wsName);
+    let wsPath = await resolveWorkspaceDirectoryForCreate(wsName);
+    if (isTauri() && workspacePathWasPicked && wsPath) {
+      wsPath = await authorizeWorkspacePath(wsPath);
+    }
     const localWs = createLocalWorkspace(wsName, undefined, wsPath);
     await switchWorkspace(localWs.id, localWs.name);
 
@@ -494,7 +501,10 @@
     if (!importZipFile) throw new Error("No ZIP file selected");
     const zipFile = importZipFile;
 
-    const wsPath = await resolveWorkspaceDirectoryForCreate(wsName);
+    let wsPath = await resolveWorkspaceDirectoryForCreate(wsName);
+    if (isTauri() && workspacePathWasPicked && wsPath) {
+      wsPath = await authorizeWorkspacePath(wsPath);
+    }
     const localWs = createLocalWorkspace(wsName, undefined, wsPath);
     await switchWorkspace(localWs.id, localWs.name);
 

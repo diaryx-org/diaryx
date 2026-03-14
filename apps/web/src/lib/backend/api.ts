@@ -136,6 +136,17 @@ function normalizeWorkspaceRootPath(workspacePath: string | null | undefined): s
   return normalized;
 }
 
+function normalizeWorkspacePathCandidate(path: string | null | undefined): string | null {
+  if (!path) return null;
+
+  const normalized = normalizeSlashes(path).replace(/\/+$/, '');
+  return normalized || null;
+}
+
+function isRootIndexPath(path: string): boolean {
+  return /(^|\/)(README|index)\.md$/.test(path);
+}
+
 function normalizePluginPermissionTarget(
   backend: Backend,
   permissionType: PermissionType,
@@ -483,6 +494,33 @@ export function createApi(backend: Backend) {
     // =========================================================================
     // Workspace Operations
     // =========================================================================
+
+    /** Resolve a workspace root index file from either a root file path or workspace directory path. */
+    async resolveWorkspaceRootIndexPath(preferredPath?: string | null): Promise<string | null> {
+      const candidates = [preferredPath, backend.getWorkspacePath?.()];
+      const seenCandidates = new Set<string>();
+
+      for (const candidate of candidates) {
+        const normalizedCandidate = normalizeWorkspacePathCandidate(candidate);
+        if (!normalizedCandidate || seenCandidates.has(normalizedCandidate)) {
+          continue;
+        }
+
+        seenCandidates.add(normalizedCandidate);
+
+        if (isRootIndexPath(normalizedCandidate)) {
+          return normalizedCandidate;
+        }
+
+        try {
+          return await this.findRootIndex(normalizedCandidate);
+        } catch {
+          continue;
+        }
+      }
+
+      return null;
+    },
 
     /** Find the root index file in a directory. */
     async findRootIndex(directory: string): Promise<string> {

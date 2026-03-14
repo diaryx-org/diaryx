@@ -20,12 +20,30 @@
 //! }
 //! ```
 
-/// Returns a `wasmtime::Config` configured for the Pulley interpreter on
-/// platforms that don't support JIT (e.g. App Store / TestFlight builds),
-/// or `None` to use the default Cranelift JIT.
+/// Returns a `wasmtime::Config` configured for the Pulley interpreter plus
+/// iOS-safe linear-memory reservations on mobile Apple builds.
 ///
-/// Enabled by the `pulley` feature or automatically on iOS.
-#[cfg(any(feature = "pulley", target_os = "ios"))]
+/// App Store / TestFlight iOS builds reject Wasmtime's default 4 GiB virtual
+/// address reservation for 32-bit Wasm linear memories. Lowering the
+/// reservation trades a few bounds-check optimizations for successful plugin
+/// instantiation inside the sandbox.
+#[cfg(target_os = "ios")]
+pub(crate) fn platform_wasmtime_config() -> Option<wasmtime::Config> {
+    let mut config = wasmtime::Config::new();
+    if let Err(e) = config.target("pulley64") {
+        log::warn!("Failed to set Pulley target for wasmtime: {e}");
+        return None;
+    }
+    config.memory_reservation(10 * (1 << 20));
+    config.memory_guard_size(0x1_0000);
+    config.memory_reservation_for_growth(1 << 20);
+    Some(config)
+}
+
+/// Returns a `wasmtime::Config` configured for the Pulley interpreter on
+/// platforms that don't support JIT (for example App Store macOS builds),
+/// or `None` to use the default Cranelift JIT elsewhere.
+#[cfg(all(not(target_os = "ios"), feature = "pulley"))]
 pub(crate) fn platform_wasmtime_config() -> Option<wasmtime::Config> {
     let mut config = wasmtime::Config::new();
     if let Err(e) = config.target("pulley64") {

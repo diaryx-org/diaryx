@@ -75,3 +75,8 @@ Native and browser hosts now both support temporary `host_request_file`
 payloads for plugin commands initiated from UI file-picking flows, so guest
 plugins can rely on the same `{ file_key } -> raw bytes` contract on both
 platform families.
+
+On iOS, the host also lowers Wasmtime's linear-memory reservation from the
+default 4 GiB to a mobile-safe size before instantiating plugins. That avoids
+`mmap failed to reserve 0x100000000 bytes` failures in TestFlight/App Store
+builds while still using Pulley's non-JIT execution path.

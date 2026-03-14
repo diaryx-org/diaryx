@@ -261,6 +261,26 @@ async fn save_config_file(config: &Config, config_path: &Path) -> Result<(), Ser
         .map_err(|e| e.to_serializable())
 }
 
+fn log_serializable_error(context: &str, err: &SerializableError) {
+    if let Some(path) = err.path.as_ref() {
+        log::error!(
+            "[{}] {} (kind={}, path={})",
+            context,
+            err.message,
+            err.kind,
+            path.display()
+        );
+    } else {
+        log::error!("[{}] {} (kind={})", context, err.message, err.kind);
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+fn log_plugin_install_error(err: SerializableError) -> SerializableError {
+    log_serializable_error("install_user_plugin", &err);
+    err
+}
+
 #[cfg(target_os = "macos")]
 fn workspace_access_error(path: &Path, message: impl Into<String>) -> SerializableError {
     SerializableError {
@@ -313,6 +333,46 @@ fn activate_workspace_access_from_config(
     }
 
     Ok(Some((access, changed)))
+}
+
+#[cfg(target_os = "macos")]
+async fn load_workspace_config(config_path: &Path, default_workspace: &Path) -> Config {
+    if config_path.exists() {
+        Config::load_from(&SyncToAsyncFs::new(RealFileSystem), config_path)
+            .await
+            .unwrap_or_else(|_| Config::new(default_workspace.to_path_buf()))
+    } else {
+        Config::new(default_workspace.to_path_buf())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn try_backfill_workspace_bookmark(
+    config: &mut Config,
+    workspace_path: &Path,
+    log_context: &str,
+) -> bool {
+    match store_workspace_bookmark_in_config(config, workspace_path) {
+        Ok(changed) => {
+            if changed {
+                log::info!(
+                    "[{}] Stored new security-scoped workspace bookmark for {:?}",
+                    log_context,
+                    workspace_path
+                );
+            }
+            changed
+        }
+        Err(error) => {
+            log::warn!(
+                "[{}] Failed to create security-scoped workspace bookmark for {:?}: {}",
+                log_context,
+                workspace_path,
+                error.message
+            );
+            false
+        }
+    }
 }
 
 /// Log command execution errors at the appropriate level.
@@ -835,20 +895,36 @@ pub async fn install_user_plugin<R: Runtime>(
 
     // Write to a temp location first so we can call load_plugin_from_wasm (file-based).
     let tmp_dir = std::env::temp_dir().join("diaryx-plugin-install");
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| SerializableError {
-        kind: "IoError".to_string(),
-        message: format!("Failed to create temp directory: {e}"),
-        path: None,
-    })?;
     let tmp_wasm = tmp_dir.join("plugin.wasm");
-    std::fs::write(&tmp_wasm, &wasm_bytes).map_err(|e| SerializableError {
-        kind: "IoError".to_string(),
-        message: format!("Failed to write temp WASM: {e}"),
-        path: None,
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| {
+        log_plugin_install_error(SerializableError {
+            kind: "IoError".to_string(),
+            message: format!("Failed to create temp plugin install directory: {e}"),
+            path: Some(tmp_dir.clone()),
+        })
     })?;
-    let requested_permissions = diaryx_extism::inspect_plugin_wasm_manifest(&tmp_wasm)
-        .ok()
-        .and_then(|manifest| manifest.requested_permissions);
+    log::info!(
+        "[install_user_plugin] Writing temp plugin WASM to {}",
+        tmp_wasm.display()
+    );
+    std::fs::write(&tmp_wasm, &wasm_bytes).map_err(|e| {
+        log_plugin_install_error(SerializableError {
+            kind: "IoError".to_string(),
+            message: format!("Failed to write temp plugin WASM: {e}"),
+            path: Some(tmp_wasm.clone()),
+        })
+    })?;
+    let requested_permissions = match diaryx_extism::inspect_plugin_wasm_manifest(&tmp_wasm) {
+        Ok(manifest) => manifest.requested_permissions,
+        Err(err) => {
+            log::warn!(
+                "[install_user_plugin] Failed to inspect requested permissions from {}: {}",
+                tmp_wasm.display(),
+                err
+            );
+            None
+        }
+    };
 
     // Load to extract the manifest.
     let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
@@ -866,58 +942,95 @@ pub async fn install_user_plugin<R: Runtime>(
         runtime_context_provider: Arc::new(diaryx_extism::NoopRuntimeContextProvider),
     });
 
+    log::info!(
+        "[install_user_plugin] Loading plugin manifest from {}",
+        tmp_wasm.display()
+    );
     let adapter = diaryx_extism::load_plugin_from_wasm(&tmp_wasm, host_ctx, None).map_err(|e| {
         let _ = std::fs::remove_dir_all(&tmp_dir);
-        SerializableError {
+        log_plugin_install_error(SerializableError {
             kind: "PluginError".to_string(),
-            message: format!("Invalid WASM plugin: {e}"),
-            path: None,
-        }
+            message: format!("Invalid WASM plugin while loading manifest: {e}"),
+            path: Some(tmp_wasm.clone()),
+        })
     })?;
 
     let manifest = adapter.manifest();
     let plugin_id = manifest.id.0.clone();
-    let manifest_json = serde_json::to_string(&manifest).map_err(|e| SerializableError {
-        kind: "SerializationError".to_string(),
-        message: format!("Failed to serialize manifest: {e}"),
-        path: None,
+    log::info!(
+        "[install_user_plugin] Parsed plugin manifest: {} ({})",
+        manifest.name,
+        plugin_id
+    );
+    let manifest_json = serde_json::to_string(&manifest).map_err(|e| {
+        log_plugin_install_error(SerializableError {
+            kind: "SerializationError".to_string(),
+            message: format!("Failed to serialize plugin manifest: {e}"),
+            path: Some(tmp_wasm.clone()),
+        })
     })?;
 
     // Persist WASM to {workspace_root}/.diaryx/plugins/{plugin_id}/plugin.wasm
-    let base_dir = workspace_plugins_dir(&app).ok_or_else(|| SerializableError {
-        kind: "NotFound".to_string(),
-        message: "No workspace is open — cannot install plugin".to_string(),
-        path: None,
+    let base_dir = workspace_plugins_dir(&app).ok_or_else(|| {
+        log_plugin_install_error(SerializableError {
+            kind: "NotFound".to_string(),
+            message: "No workspace is open — cannot install plugin".to_string(),
+            path: None,
+        })
     })?;
+    log::info!(
+        "[install_user_plugin] Installing '{}' into {}",
+        plugin_id,
+        base_dir.display()
+    );
     let plugins_dir = base_dir.join(&plugin_id);
-    std::fs::create_dir_all(&plugins_dir).map_err(|e| SerializableError {
-        kind: "IoError".to_string(),
-        message: format!("Failed to create plugin directory: {e}"),
-        path: Some(plugins_dir.clone()),
+    std::fs::create_dir_all(&plugins_dir).map_err(|e| {
+        log_plugin_install_error(SerializableError {
+            kind: "IoError".to_string(),
+            message: format!("Failed to create plugin directory: {e}"),
+            path: Some(plugins_dir.clone()),
+        })
     })?;
 
     let wasm_path = plugins_dir.join("plugin.wasm");
+    log::info!(
+        "[install_user_plugin] Writing installed plugin WASM to {}",
+        wasm_path.display()
+    );
     std::fs::rename(&tmp_wasm, &wasm_path)
-        .or_else(|_| {
+        .or_else(|rename_err| {
             // rename fails across filesystems; fall back to copy+delete
+            log::warn!(
+                "[install_user_plugin] Failed to move temp WASM into place ({}); falling back to copy",
+                rename_err
+            );
             std::fs::copy(&tmp_wasm, &wasm_path).map(|_| ())
         })
-        .map_err(|e| SerializableError {
-            kind: "IoError".to_string(),
-            message: format!("Failed to write plugin WASM: {e}"),
-            path: Some(wasm_path.clone()),
+        .map_err(|e| {
+            log_plugin_install_error(SerializableError {
+                kind: "IoError".to_string(),
+                message: format!("Failed to write plugin WASM into workspace: {e}"),
+                path: Some(wasm_path.clone()),
+            })
         })?;
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
     if let Some(requested) = requested_permissions.as_ref()
         && has_requested_permission_defaults(&requested.defaults)
     {
+        if let Some(workspace_root) = base_dir.parent().and_then(|path| path.parent()) {
+            log::info!(
+                "[install_user_plugin] Persisting requested permission defaults for '{}' into {}",
+                plugin_id,
+                workspace_root.display()
+            );
+        }
         if let Some(workspace_root) = base_dir.parent().and_then(|path| path.parent())
             && let Err(e) =
                 persist_requested_permission_default(workspace_root, &plugin_id, requested)
         {
             log::warn!(
-                "Failed to persist requested plugin permissions for '{}' during install: {}",
+                "[install_user_plugin] Failed to persist requested plugin permissions for '{}' during install: {}",
                 plugin_id,
                 e.message
             );
@@ -928,6 +1041,10 @@ pub async fn install_user_plugin<R: Runtime>(
     let app_state = app.state::<AppState>();
     {
         let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
+        log::info!(
+            "[install_user_plugin] Clearing cached Diaryx instance after installing {}",
+            plugin_id
+        );
         *diaryx_guard = None;
     }
 
@@ -1596,6 +1713,17 @@ pub fn get_app_paths<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, Serializ
     get_platform_paths(&app)
 }
 
+/// Read the current native log file so the debug UI can display it inline.
+#[tauri::command]
+pub fn read_log_file<R: Runtime>(app: AppHandle<R>) -> Result<String, SerializableError> {
+    let paths = get_platform_paths(&app)?;
+    std::fs::read_to_string(&paths.log_file).map_err(|e| SerializableError {
+        kind: "FileRead".to_string(),
+        message: format!("Failed to read log file: {}", e),
+        path: Some(paths.log_file.clone()),
+    })
+}
+
 #[tauri::command]
 pub fn reveal_in_file_manager<R: Runtime>(
     app: AppHandle<R>,
@@ -1870,6 +1998,50 @@ pub async fn pick_workspace_folder<R: Runtime>(
     }
 }
 
+/// Persist security-scoped access for a workspace path selected by the frontend.
+///
+/// Shared Tauri UI flows such as "open existing folder" and "relocate
+/// workspace" use JS-native folder pickers, so they need an explicit native
+/// step to convert the selected path into a persistent bookmark on sandboxed
+/// macOS builds.
+#[tauri::command]
+pub async fn authorize_workspace_path<R: Runtime>(
+    app: AppHandle<R>,
+    workspace_path: String,
+) -> Result<String, SerializableError> {
+    let requested_path = PathBuf::from(workspace_path);
+
+    #[cfg(target_os = "macos")]
+    {
+        let paths = get_platform_paths(&app)?;
+        let mut config = load_workspace_config(&paths.config_path, &paths.default_workspace).await;
+        let mut config_changed = !paths.config_path.exists()
+            || store_workspace_bookmark_in_config(&mut config, &requested_path)?;
+
+        let access = activate_workspace_access_from_config(&mut config, &requested_path)?
+            .ok_or_else(|| workspace_access_error(&requested_path, "Missing workspace bookmark"))?;
+        config_changed |= access.1;
+
+        if config_changed {
+            save_config_file(&config, &paths.config_path).await?;
+        }
+
+        let resolved_path = access.0.resolved_path().to_path_buf();
+        log::info!(
+            "[authorize_workspace_path] Authorized security-scoped workspace access: configured={:?} resolved={:?}",
+            requested_path,
+            resolved_path
+        );
+        return Ok(resolved_path.to_string_lossy().into_owned());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(requested_path.to_string_lossy().into_owned())
+    }
+}
+
 /// Initialize the app - creates necessary directories and default workspace if needed
 #[tauri::command]
 pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, SerializableError> {
@@ -1947,6 +2119,11 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
     let active_access = match activate_workspace_access_from_config(&mut config, &actual_workspace)?
     {
         Some((access, bookmark_changed)) => {
+            log::info!(
+                "[initialize_app] Restored security-scoped workspace access: configured={:?} resolved={:?}",
+                actual_workspace,
+                access.resolved_path()
+            );
             config_changed |= bookmark_changed;
             actual_workspace = access.resolved_path().to_path_buf();
             if config.default_workspace != actual_workspace {
@@ -1955,7 +2132,33 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
             }
             Some(access)
         }
-        None => None,
+        None => {
+            config_changed |=
+                try_backfill_workspace_bookmark(&mut config, &actual_workspace, "initialize_app");
+            match activate_workspace_access_from_config(&mut config, &actual_workspace)? {
+                Some((access, bookmark_changed)) => {
+                    log::info!(
+                        "[initialize_app] Backfilled security-scoped workspace access: configured={:?} resolved={:?}",
+                        actual_workspace,
+                        access.resolved_path()
+                    );
+                    config_changed |= bookmark_changed;
+                    actual_workspace = access.resolved_path().to_path_buf();
+                    if config.default_workspace != actual_workspace {
+                        config.default_workspace = actual_workspace.clone();
+                        config_changed = true;
+                    }
+                    Some(access)
+                }
+                None => {
+                    log::info!(
+                        "[initialize_app] No stored security-scoped workspace bookmark for {:?}",
+                        actual_workspace
+                    );
+                    None
+                }
+            }
+        }
     };
 
     if config_changed && !paths.is_mobile {
@@ -3301,16 +3504,16 @@ pub async fn reinitialize_workspace<R: Runtime>(
     #[cfg(target_os = "macos")]
     let active_access = {
         let mut config_changed = false;
-        let mut loaded_config = if paths.config_path.exists() {
-            Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
-                .await
-                .unwrap_or_else(|_| Config::new(paths.default_workspace.clone()))
-        } else {
-            Config::new(paths.default_workspace.clone())
-        };
+        let mut loaded_config =
+            load_workspace_config(&paths.config_path, &paths.default_workspace).await;
 
         let access = activate_workspace_access_from_config(&mut loaded_config, &ws_path)?;
         if let Some((access, bookmark_changed)) = access {
+            log::info!(
+                "[reinitialize_workspace] Restored security-scoped workspace access: configured={:?} resolved={:?}",
+                ws_path,
+                access.resolved_path()
+            );
             config_changed |= bookmark_changed;
             ws_path = access.resolved_path().to_path_buf();
             if loaded_config.default_workspace == PathBuf::from(&workspace_path)
@@ -3324,7 +3527,39 @@ pub async fn reinitialize_workspace<R: Runtime>(
             }
             Some(access)
         } else {
-            None
+            config_changed |= try_backfill_workspace_bookmark(
+                &mut loaded_config,
+                &ws_path,
+                "reinitialize_workspace",
+            );
+            match activate_workspace_access_from_config(&mut loaded_config, &ws_path)? {
+                Some((access, bookmark_changed)) => {
+                    log::info!(
+                        "[reinitialize_workspace] Backfilled security-scoped workspace access: configured={:?} resolved={:?}",
+                        ws_path,
+                        access.resolved_path()
+                    );
+                    config_changed |= bookmark_changed;
+                    ws_path = access.resolved_path().to_path_buf();
+                    if loaded_config.default_workspace == PathBuf::from(&workspace_path)
+                        && loaded_config.default_workspace != ws_path
+                    {
+                        loaded_config.default_workspace = ws_path.clone();
+                        config_changed = true;
+                    }
+                    if config_changed {
+                        save_config_file(&loaded_config, &paths.config_path).await?;
+                    }
+                    Some(access)
+                }
+                None => {
+                    log::info!(
+                        "[reinitialize_workspace] No stored security-scoped workspace bookmark for {:?}",
+                        ws_path
+                    );
+                    None
+                }
+            }
         }
     };
 

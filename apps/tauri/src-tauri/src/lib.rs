@@ -11,10 +11,14 @@ Use `apple` for App Store builds and `desktop-updater` for direct desktop distri
 
 /// Where all the Tauri `invoke` functions are defined.
 mod commands;
+mod logging;
+#[cfg(target_os = "macos")]
+mod macos_security_scoped;
 
 use commands::{AppState, GuestModeState};
 #[cfg(feature = "extism-plugins")]
 use commands::{PluginAdapters, RuntimeContextState};
+use tauri::Manager;
 
 /// Configure the iOS WKWebView to render edge-to-edge, extending content into
 /// safe areas. Without this, the webview stops at the bottom safe area boundary,
@@ -56,13 +60,6 @@ fn setup_ios_edge_to_edge(app: &tauri::App) {
 /// Run function used by Tauri clients. Builds Tauri plugins and invokable commands.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize logging
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_millis()
-        .init();
-
-    log::info!("Starting Diaryx application...");
-
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -100,9 +97,23 @@ pub fn run() {
     }
 
     builder
-        .setup(|_app| {
+        .setup(|app| {
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                let (_, log_file) = crate::logging::log_paths(&data_dir);
+                if let Err(err) = crate::logging::init(&log_file) {
+                    eprintln!("[Diaryx] Failed to initialize file-backed logging: {err}");
+                } else {
+                    log::info!(
+                        "Starting Diaryx application (log file: {})",
+                        log_file.display()
+                    );
+                }
+            } else {
+                eprintln!("[Diaryx] Failed to resolve app data directory for logging");
+            }
+
             #[cfg(target_os = "ios")]
-            setup_ios_edge_to_edge(_app);
+            setup_ios_edge_to_edge(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -144,8 +155,11 @@ pub fn run() {
             // HTTP Proxy (iOS CORS bypass)
             commands::proxy_fetch,
             // Extism User Plugin Management
+            commands::inspect_user_plugin,
             commands::install_user_plugin,
             commands::uninstall_user_plugin,
+            commands::execute_plugin_command_with_files,
+            commands::get_plugin_component_html,
             // Extism Plugin Render (IPC for Tauri/iOS when browser Extism unavailable)
             commands::call_plugin_render,
             // OAuth Webview (native popup for OAuth sign-in)

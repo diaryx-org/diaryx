@@ -20,6 +20,23 @@ blob/binary path when a file is outside scope or native loading is unavailable.
 The Rust app enables the matching Tauri `protocol-asset` feature in
 `src-tauri/Cargo.toml`.
 
+Mac App Store / TestFlight builds now keep sandbox-safe behavior for workspace
+folders by persisting security-scoped bookmarks for any folder chosen through
+the native picker. On the next launch or workspace switch, the app resolves the
+bookmark and re-opens access before reading the workspace-local `.diaryx`
+metadata directory, which keeps plugin installation working for externally
+chosen folders in sandboxed releases.
+
+The Tauri backend also writes file-backed logs under the app data directory
+(`logs/diaryx.log`). The shared Debug Info panel exposes the resolved log file
+path and can reveal it in Finder on desktop builds, which makes TestFlight/App
+Store debugging much easier than relying on transient console output.
+
+For plugin parity with the browser host, Tauri now also exposes native plugin
+inspection before install (so the shared frontend can review requested
+permissions on both paths) and temporary file-byte bridging for
+`host_request_file` during plugin command execution.
+
 Desktop builds also register `tauri-plugin-opener` so the shared left sidebar
 can reveal the selected entry in Finder/Explorer/the system file manager.
 Tauri's reveal API is desktop-only, so the menu item stays hidden on iOS and
@@ -124,6 +141,19 @@ context plus generic HTTP/WebSocket bridges, and plugins own sync/share
 protocol details on top of those host capabilities. The Tauri backend should
 not hardcode `SyncClient`-style transport logic for a specific provider.
 
+The shared frontend now uses the same requested-permission review flow for
+local plugin installs on both browser and Tauri paths. Tauri provides
+`inspect_user_plugin` for pre-install manifest inspection and
+`execute_plugin_command_with_files` so plugin settings actions that rely on
+`host_request_file` work the same way as browser-loaded plugins. Iframe-backed
+plugin surfaces also use the guest `get_component_html` export directly via
+`get_plugin_component_html`, falling back to `handle_command` only for older
+plugins that have not added the dedicated export. Local `.wasm` installs now
+also persist any manifest-declared default permissions immediately on install,
+and runtime "Permission not configured" plugin errors are surfaced through the
+shared permission banner flow instead of failing the command outright on the
+first attempt.
+
 ## Desktop Updater
 
 Direct-distribution desktop builds can include `tauri-plugin-updater` so the
@@ -182,6 +212,11 @@ See [PUBLISHING.md](PUBLISHING.md) for the full guide to publishing to the App S
 - Android (via Tauri mobile)
 
 Mobile platforms use platform-appropriate paths within app sandboxes.
+
+On sandboxed macOS App Store builds, the default workspace now lives inside the
+app container until the user explicitly picks an external folder. External
+workspace picks are backed by security-scoped bookmarks so the app can keep
+access across relaunches without requiring broad filesystem entitlements.
 
 On iOS, workspace files are stored in the app `Documents` directory and surfaced in the Files app under "On My iPhone" by enabling:
 

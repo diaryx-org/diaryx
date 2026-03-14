@@ -33,10 +33,11 @@ Settings panel components for `SettingsDialog.svelte`.
 | `DisplaySettings.svelte` | Display mode and focus-mode preferences. |
 | `WorkspaceSettings.svelte` / `WorkspaceManagement.svelte` | Workspace config and provider link/unlink management. |
 | `StorageSettings.svelte` | Local storage backend settings. |
+| `DebugInfo.svelte` | Runtime app/config path diagnostics. On Tauri desktop it can reveal the active log file in the system file manager. |
 | `ImportSettings.svelte` | ZIP import flow for importing a Diaryx workspace export. |
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
-| `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified. |
-| `PluginSettingsTab.svelte` | Declarative plugin field renderer, including generic host actions, follow-up commands, and workspace metadata patch handling. |
+| `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified, and local installs review requested permissions on both browser and Tauri paths before install. |
+| `PluginSettingsTab.svelte` | Declarative plugin field renderer, including generic host actions, follow-up commands, workspace metadata patch handling, and temporary file-byte bridging for plugin commands that call `host_request_file`. |
 | `syncSettingsLogic.ts` | Shared sync/storage usage helpers used by settings UIs. |
 
 ## Plugin Settings Tabs
@@ -46,7 +47,7 @@ Settings panel components for `SettingsDialog.svelte`.
 - `ComponentRef::Iframe` contributions render via `PluginIframe` (still used by sync snapshots/history and templating plugin panels)
 - `ComponentRef::Builtin` contributions can resolve through `pluginBuiltinCompat` for host-backed compatibility fields when needed
 - Declarative field contributions render via `PluginSettingsTab`
-- `PluginSettingsTab` can invoke arbitrary host-managed actions, apply config patches, write plugin-scoped workspace metadata patches from command results, and gate nested field groups with conditions like `authenticated` or `config:import_format=markdown`
+- `PluginSettingsTab` can invoke arbitrary host-managed actions, apply config patches, write plugin-scoped workspace metadata patches from command results, gate nested field groups with conditions like `authenticated` or `config:import_format=markdown`, and pass selected file bytes through both browser and native plugin command paths
 
 Google Drive storage uses declarative settings plus a host-managed OAuth action. `diaryx.sync` and `diaryx.share` both use declarative settings surfaces, while snapshots/history and templating remain iframe-backed.
 
@@ -65,6 +66,10 @@ so long tabs (for example Workspace) do not push the bottom tab bar off-screen.
 The shared settings content scroller is also reused by `WorkspaceManagement.svelte`
 to preserve scroll position when inline workspace actions swap a row into
 confirmation controls (for example, delete confirmations in the Account tab).
+
+`DebugInfo.svelte` now reflects the backend-provided log path (`log_file`) so
+desktop sandbox builds can surface file-backed logs from inside the app without
+requiring a separate terminal session.
 
 ## Marketplace Integration
 

@@ -179,14 +179,14 @@ impl PluginSecretStore for FilePluginSecretStore {
 /// Plugins request files by key name (e.g. "source_file", "dayone_export").
 pub trait FileProvider: Send + Sync {
     /// Get file bytes by key name. Returns `None` if no file is available for that key.
-    fn get_file(&self, key: &str) -> Option<Vec<u8>>;
+    fn get_file(&self, plugin_id: &str, key: &str) -> Option<Vec<u8>>;
 }
 
 /// No-op implementation of [`FileProvider`] — always returns `None`.
 pub struct NoopFileProvider;
 
 impl FileProvider for NoopFileProvider {
-    fn get_file(&self, _key: &str) -> Option<Vec<u8>> {
+    fn get_file(&self, _plugin_id: &str, _key: &str) -> Option<Vec<u8>> {
         None
     }
 }
@@ -205,7 +205,7 @@ impl MapFileProvider {
 }
 
 impl FileProvider for MapFileProvider {
-    fn get_file(&self, key: &str) -> Option<Vec<u8>> {
+    fn get_file(&self, _plugin_id: &str, key: &str) -> Option<Vec<u8>> {
         self.files.get(key).cloned()
     }
 }
@@ -1115,7 +1115,10 @@ fn host_request_file(
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
 
-    let result = ctx.file_provider.get_file(&parsed.key).unwrap_or_default();
+    let result = ctx
+        .file_provider
+        .get_file(&ctx.plugin_id, &parsed.key)
+        .unwrap_or_default();
 
     plugin.memory_set_val(&mut outputs[0], result.as_slice())?;
     Ok(())

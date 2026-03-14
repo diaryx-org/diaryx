@@ -9,6 +9,11 @@
 //! Platform-specific commands (import) are handled separately as they
 //! require Tauri plugins or system APIs.
 
+use crate::logging;
+#[cfg(target_os = "macos")]
+use crate::macos_security_scoped::{
+    ActiveSecurityScopedAccess, activate_security_scoped_bookmark, create_security_scoped_bookmark,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -24,7 +29,9 @@ use diaryx_core::{
     workspace::Workspace,
 };
 #[cfg(feature = "extism-plugins")]
-use diaryx_extism::protocol::GuestRequestedPermissions;
+use diaryx_extism::protocol::{
+    CommandResponse as ExtismCommandResponse, GuestRequestedPermissions,
+};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -50,6 +57,10 @@ pub struct AppPaths {
     pub default_workspace: PathBuf,
     /// Config file path
     pub config_path: PathBuf,
+    /// Directory containing rolling application logs.
+    pub log_dir: PathBuf,
+    /// Active application log file.
+    pub log_file: PathBuf,
     /// Whether this is a mobile platform (iOS/Android)
     pub is_mobile: bool,
     /// Whether this build targets Apple's App Store distribution path.
@@ -80,6 +91,9 @@ pub struct AppState {
     pub workspace_path: Mutex<Option<PathBuf>>,
     /// Cached Diaryx instance.
     pub diaryx: Mutex<Option<Arc<Diaryx<TauriBaseFs>>>>,
+    /// Active macOS security-scoped workspace access, when needed.
+    #[cfg(target_os = "macos")]
+    pub workspace_access: Mutex<Option<ActiveSecurityScopedAccess>>,
 }
 
 impl AppState {
@@ -87,6 +101,8 @@ impl AppState {
         Self {
             workspace_path: Mutex::new(None),
             diaryx: Mutex::new(None),
+            #[cfg(target_os = "macos")]
+            workspace_access: Mutex::new(None),
         }
     }
 }
@@ -151,6 +167,82 @@ impl Default for RuntimeContextState {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInspection {
+    pub plugin_id: String,
+    pub plugin_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_permissions: Option<JsonValue>,
+}
+
+#[cfg(feature = "extism-plugins")]
+struct TauriRequestFileProvider {
+    pending: Mutex<HashMap<String, Vec<HashMap<String, Vec<u8>>>>>,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl TauriRequestFileProvider {
+    fn new() -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn push(
+        self: &Arc<Self>,
+        plugin_id: &str,
+        files: HashMap<String, Vec<u8>>,
+    ) -> Result<TauriRequestFileScope, SerializableError> {
+        let mut guard = self.pending.lock().map_err(|e| SerializableError {
+            kind: "PluginError".to_string(),
+            message: format!("Failed to lock plugin request files: {e}"),
+            path: None,
+        })?;
+        guard.entry(plugin_id.to_string()).or_default().push(files);
+        Ok(TauriRequestFileScope {
+            provider: Arc::clone(self),
+            plugin_id: plugin_id.to_string(),
+        })
+    }
+
+    fn pop(&self, plugin_id: &str) {
+        if let Ok(mut guard) = self.pending.lock()
+            && let Some(stack) = guard.get_mut(plugin_id)
+        {
+            stack.pop();
+            if stack.is_empty() {
+                guard.remove(plugin_id);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+impl diaryx_extism::FileProvider for TauriRequestFileProvider {
+    fn get_file(&self, plugin_id: &str, key: &str) -> Option<Vec<u8>> {
+        let guard = self.pending.lock().ok()?;
+        guard
+            .get(plugin_id)
+            .and_then(|stack| stack.last())
+            .and_then(|files| files.get(key))
+            .cloned()
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+struct TauriRequestFileScope {
+    provider: Arc<TauriRequestFileProvider>,
+    plugin_id: String,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl Drop for TauriRequestFileScope {
+    fn drop(&mut self) {
+        self.provider.pop(&self.plugin_id);
+    }
+}
+
 /// Helper function to safely acquire a mutex lock without panicking.
 ///
 /// Returns a SerializableError if the mutex is poisoned, instead of panicking.
@@ -160,6 +252,67 @@ fn acquire_lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, Ser
         message: format!("Failed to acquire lock: mutex is poisoned - {}", e),
         path: None,
     })
+}
+
+async fn save_config_file(config: &Config, config_path: &Path) -> Result<(), SerializableError> {
+    config
+        .save_to(&SyncToAsyncFs::new(RealFileSystem), config_path)
+        .await
+        .map_err(|e| e.to_serializable())
+}
+
+#[cfg(target_os = "macos")]
+fn workspace_access_error(path: &Path, message: impl Into<String>) -> SerializableError {
+    SerializableError {
+        kind: "WorkspaceAccessError".to_string(),
+        message: message.into(),
+        path: Some(path.to_path_buf()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn store_workspace_bookmark_in_config(
+    config: &mut Config,
+    workspace_path: &Path,
+) -> Result<bool, SerializableError> {
+    let bookmark = create_security_scoped_bookmark(workspace_path)
+        .map_err(|e| workspace_access_error(workspace_path, e))?;
+    if config.workspace_bookmark(workspace_path) == Some(bookmark.as_str()) {
+        return Ok(false);
+    }
+
+    config.set_workspace_bookmark(workspace_path.to_path_buf(), bookmark);
+    Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn activate_workspace_access_from_config(
+    config: &mut Config,
+    workspace_path: &Path,
+) -> Result<Option<(ActiveSecurityScopedAccess, bool)>, SerializableError> {
+    let Some(stored_bookmark) = config.workspace_bookmark(workspace_path).map(str::to_owned) else {
+        return Ok(None);
+    };
+
+    let access = activate_security_scoped_bookmark(&stored_bookmark)
+        .map_err(|e| workspace_access_error(workspace_path, e))?;
+    let resolved_path = access.resolved_path().to_path_buf();
+    let bookmark_to_store = access
+        .refreshed_bookmark()
+        .unwrap_or(stored_bookmark.as_str())
+        .to_string();
+
+    let mut changed = false;
+    if config.workspace_bookmark(workspace_path) != Some(bookmark_to_store.as_str()) {
+        config.set_workspace_bookmark(workspace_path.to_path_buf(), bookmark_to_store.clone());
+        changed = true;
+    }
+    if config.workspace_bookmark(&resolved_path) != Some(bookmark_to_store.as_str()) {
+        config.set_workspace_bookmark(resolved_path.clone(), bookmark_to_store);
+        changed = true;
+    }
+
+    Ok(Some((access, changed)))
 }
 
 /// Log command execution errors at the appropriate level.
@@ -368,6 +521,17 @@ fn persist_requested_permission_defaults(
     .map_err(|e: diaryx_core::error::DiaryxError| e.to_serializable())
 }
 
+#[cfg(feature = "extism-plugins")]
+fn persist_requested_permission_default(
+    workspace_root: &Path,
+    plugin_id: &str,
+    requested: &GuestRequestedPermissions,
+) -> Result<(), SerializableError> {
+    let mut requested_permissions = HashMap::new();
+    requested_permissions.insert(plugin_id.to_string(), requested.clone());
+    persist_requested_permission_defaults(workspace_root, &requested_permissions)
+}
+
 // ============================================================================
 // Extism Third-Party Plugin Loading
 // ============================================================================
@@ -432,6 +596,8 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
     let workspace_root_opt = diaryx.workspace_root();
     let event_emitter: Arc<dyn diaryx_extism::EventEmitter> =
         Arc::new(TauriEventEmitter { app: app.clone() });
+    let file_provider: Arc<dyn diaryx_extism::FileProvider> =
+        app.state::<PluginAdapters>().file_provider.clone();
     let ws_bridge = Arc::new(diaryx_extism::TokioWebSocketBridge::new());
     let host_ctx = Arc::new(diaryx_extism::HostContext {
         fs,
@@ -440,7 +606,7 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
         event_emitter,
         plugin_id: String::new(),
         permission_checker: Some(make_permission_checker(workspace_root_opt)),
-        file_provider: Arc::new(diaryx_extism::NoopFileProvider),
+        file_provider,
         ws_bridge: ws_bridge.clone(),
         plugin_command_bridge: Arc::new(TauriPluginCommandBridge { app: app.clone() }),
         runtime_context_provider: Arc::new(TauriRuntimeContextProvider { app: app.clone() }),
@@ -585,6 +751,7 @@ impl<R: Runtime> diaryx_extism::RuntimeContextProvider for TauriRuntimeContextPr
 #[cfg(feature = "extism-plugins")]
 pub struct PluginAdapters {
     pub adapters: Mutex<HashMap<String, Arc<diaryx_extism::ExtismPluginAdapter>>>,
+    file_provider: Arc<TauriRequestFileProvider>,
 }
 
 #[cfg(feature = "extism-plugins")]
@@ -592,6 +759,7 @@ impl PluginAdapters {
     pub fn new() -> Self {
         Self {
             adapters: Mutex::new(HashMap::new()),
+            file_provider: Arc::new(TauriRequestFileProvider::new()),
         }
     }
 }
@@ -606,6 +774,44 @@ impl Default for PluginAdapters {
 // ============================================================================
 // User Plugin Install/Uninstall
 // ============================================================================
+
+/// Inspect a user plugin from raw WASM bytes without installing it.
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn inspect_user_plugin<R: Runtime>(
+    _app: AppHandle<R>,
+    wasm_bytes: Vec<u8>,
+) -> Result<PluginInspection, SerializableError> {
+    let tmp_dir = std::env::temp_dir().join("diaryx-plugin-inspect");
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| SerializableError {
+        kind: "IoError".to_string(),
+        message: format!("Failed to create temp directory: {e}"),
+        path: None,
+    })?;
+    let tmp_wasm = tmp_dir.join("plugin.wasm");
+    std::fs::write(&tmp_wasm, &wasm_bytes).map_err(|e| SerializableError {
+        kind: "IoError".to_string(),
+        message: format!("Failed to write temp WASM: {e}"),
+        path: None,
+    })?;
+
+    let result = diaryx_extism::inspect_plugin_wasm_manifest(&tmp_wasm)
+        .map(|manifest| PluginInspection {
+            plugin_id: manifest.id,
+            plugin_name: manifest.name,
+            requested_permissions: manifest
+                .requested_permissions
+                .and_then(|value| serde_json::to_value(value).ok()),
+        })
+        .map_err(|e| SerializableError {
+            kind: "PluginError".to_string(),
+            message: format!("Invalid WASM plugin: {e}"),
+            path: None,
+        });
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    result
+}
 
 /// Install a user plugin from raw WASM bytes.
 ///
@@ -640,6 +846,9 @@ pub async fn install_user_plugin<R: Runtime>(
         message: format!("Failed to write temp WASM: {e}"),
         path: None,
     })?;
+    let requested_permissions = diaryx_extism::inspect_plugin_wasm_manifest(&tmp_wasm)
+        .ok()
+        .and_then(|manifest| manifest.requested_permissions);
 
     // Load to extract the manifest.
     let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
@@ -700,6 +909,21 @@ pub async fn install_user_plugin<R: Runtime>(
         })?;
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
+    if let Some(requested) = requested_permissions.as_ref()
+        && has_requested_permission_defaults(&requested.defaults)
+    {
+        if let Some(workspace_root) = base_dir.parent().and_then(|path| path.parent())
+            && let Err(e) =
+                persist_requested_permission_default(workspace_root, &plugin_id, requested)
+        {
+            log::warn!(
+                "Failed to persist requested plugin permissions for '{}' during install: {}",
+                plugin_id,
+                e.message
+            );
+        }
+    }
+
     // Clear cached Diaryx so next execute() picks up the new plugin.
     let app_state = app.state::<AppState>();
     {
@@ -752,6 +976,179 @@ pub async fn uninstall_user_plugin<R: Runtime>(
     Ok(())
 }
 
+/// Execute a plugin command with temporary host-provided file bytes.
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn execute_plugin_command_with_files<R: Runtime>(
+    app: AppHandle<R>,
+    plugin_id: String,
+    command: String,
+    params: JsonValue,
+    request_files: HashMap<String, Vec<u8>>,
+) -> Result<JsonValue, SerializableError> {
+    let adapters = app.state::<PluginAdapters>();
+    let adapter = {
+        let guard = adapters.adapters.lock().map_err(|e| SerializableError {
+            kind: "PluginError".to_string(),
+            message: format!("Failed to lock plugin adapters: {e}"),
+            path: None,
+        })?;
+        guard
+            .get(&plugin_id)
+            .cloned()
+            .ok_or_else(|| SerializableError {
+                kind: "PluginError".to_string(),
+                message: format!("Plugin '{plugin_id}' is not loaded"),
+                path: None,
+            })?
+    };
+
+    let _request_scope = adapters.file_provider.push(&plugin_id, request_files)?;
+    let input = serde_json::json!({
+        "command": command,
+        "params": params,
+    })
+    .to_string();
+    let output = adapter
+        .call_guest("handle_command", &input)
+        .map_err(|e| SerializableError {
+            kind: "PluginError".to_string(),
+            message: e.to_string(),
+            path: None,
+        })?;
+    let response =
+        serde_json::from_str::<ExtismCommandResponse>(&output).map_err(|e| SerializableError {
+            kind: "PluginError".to_string(),
+            message: format!("Invalid plugin response: {e}"),
+            path: None,
+        })?;
+
+    if response.success {
+        Ok(response.data.unwrap_or(JsonValue::Null))
+    } else {
+        Err(SerializableError {
+            kind: "PluginError".to_string(),
+            message: response
+                .error
+                .unwrap_or_else(|| "Unknown plugin error".to_string()),
+            path: None,
+        })
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+fn extract_component_html_value(value: JsonValue) -> Option<String> {
+    match value {
+        JsonValue::String(html) => Some(html),
+        JsonValue::Object(mut obj) => {
+            if let Some(html) = obj
+                .get("response")
+                .and_then(|value| value.as_str())
+                .or_else(|| obj.get("html").and_then(|value| value.as_str()))
+                .or_else(|| obj.get("data").and_then(|value| value.as_str()))
+            {
+                return Some(html.to_string());
+            }
+
+            if obj.get("type").and_then(|value| value.as_str()) == Some("PluginResult") {
+                return obj.remove("data").and_then(extract_component_html_value);
+            }
+
+            if obj.get("success").and_then(|value| value.as_bool()) == Some(true) {
+                return obj.remove("data").and_then(extract_component_html_value);
+            }
+
+            None
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn get_plugin_component_html<R: Runtime>(
+    app: AppHandle<R>,
+    plugin_id: String,
+    component_id: String,
+) -> Result<String, SerializableError> {
+    let guest_state = app.state::<GuestModeState>();
+    if *acquire_lock(&guest_state.active)? {
+        return Err(SerializableError {
+            kind: "GuestModeError".to_string(),
+            message: "Native plugin components are unavailable in guest mode".to_string(),
+            path: None,
+        });
+    }
+
+    let _ = get_or_init_tauri_diaryx(&app).await?;
+
+    let adapters = app.state::<PluginAdapters>();
+    let adapter = {
+        let guard = adapters.adapters.lock().map_err(|e| SerializableError {
+            kind: "PluginError".to_string(),
+            message: format!("Failed to lock plugin adapters: {e}"),
+            path: None,
+        })?;
+        guard
+            .get(&plugin_id)
+            .cloned()
+            .ok_or_else(|| SerializableError {
+                kind: "PluginError".to_string(),
+                message: format!("Plugin '{plugin_id}' is not loaded"),
+                path: None,
+            })?
+    };
+
+    let direct_input = serde_json::json!({
+        "component_id": component_id,
+    })
+    .to_string();
+    if let Ok(output) = adapter.call_guest("get_component_html", &direct_input) {
+        return Ok(output);
+    }
+
+    let fallback_input = serde_json::json!({
+        "command": "get_component_html",
+        "params": {
+            "component_id": component_id,
+        },
+    })
+    .to_string();
+    let output = adapter
+        .call_guest("handle_command", &fallback_input)
+        .map_err(|e| SerializableError {
+            kind: "PluginError".to_string(),
+            message: e.to_string(),
+            path: None,
+        })?;
+    let response =
+        serde_json::from_str::<ExtismCommandResponse>(&output).map_err(|e| SerializableError {
+            kind: "PluginError".to_string(),
+            message: format!("Invalid plugin response: {e}"),
+            path: None,
+        })?;
+
+    if response.success {
+        if let Some(html) = response.data.and_then(extract_component_html_value) {
+            Ok(html)
+        } else {
+            Err(SerializableError {
+                kind: "PluginError".to_string(),
+                message: format!("Plugin '{plugin_id}' returned invalid component HTML"),
+                path: None,
+            })
+        }
+    } else {
+        Err(SerializableError {
+            kind: "PluginError".to_string(),
+            message: response
+                .error
+                .unwrap_or_else(|| "Unknown plugin error".to_string()),
+            path: None,
+        })
+    }
+}
+
 /// Stub: install_user_plugin when extism-plugins feature is disabled.
 #[cfg(not(feature = "extism-plugins"))]
 #[tauri::command]
@@ -767,6 +1164,21 @@ pub async fn install_user_plugin<R: Runtime>(
     })
 }
 
+/// Stub: inspect_user_plugin when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn inspect_user_plugin<R: Runtime>(
+    _app: AppHandle<R>,
+    _wasm_bytes: Vec<u8>,
+) -> Result<PluginInspection, SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
+        path: None,
+    })
+}
+
 /// Stub: uninstall_user_plugin when extism-plugins feature is disabled.
 #[cfg(not(feature = "extism-plugins"))]
 #[tauri::command]
@@ -774,6 +1186,40 @@ pub async fn uninstall_user_plugin<R: Runtime>(
     _app: AppHandle<R>,
     _plugin_id: String,
 ) -> Result<(), SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
+        path: None,
+    })
+}
+
+/// Stub: execute_plugin_command_with_files when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn execute_plugin_command_with_files<R: Runtime>(
+    _app: AppHandle<R>,
+    _plugin_id: String,
+    _command: String,
+    _params: JsonValue,
+    _request_files: HashMap<String, Vec<u8>>,
+) -> Result<JsonValue, SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
+        path: None,
+    })
+}
+
+/// Stub: get_plugin_component_html when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn get_plugin_component_html<R: Runtime>(
+    _app: AppHandle<R>,
+    _plugin_id: String,
+    _component_id: String,
+) -> Result<String, SerializableError> {
     Err(SerializableError {
         kind: "Unsupported".to_string(),
         message: "Extism plugin support is not enabled. Build with --features extism-plugins."
@@ -864,6 +1310,70 @@ pub fn set_runtime_context<R: Runtime>(
     Ok(())
 }
 
+#[cfg(feature = "extism-plugins")]
+fn sync_loaded_plugin_adapters<R: Runtime>(
+    app: &AppHandle<R>,
+    adapters: Vec<Arc<diaryx_extism::ExtismPluginAdapter>>,
+) {
+    if let Some(plugin_adapters) = app.try_state::<PluginAdapters>()
+        && let Ok(mut guard) = plugin_adapters.adapters.lock()
+    {
+        guard.clear();
+        for adapter in adapters {
+            use diaryx_core::plugin::Plugin;
+            guard.insert(adapter.manifest().id.0.clone(), adapter);
+        }
+    }
+}
+
+async fn get_or_init_tauri_diaryx<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Arc<Diaryx<TauriBaseFs>>, SerializableError> {
+    let app_state = app.state::<AppState>();
+
+    let cached_diaryx = {
+        let diaryx_guard = acquire_lock(&app_state.diaryx)?;
+        diaryx_guard.as_ref().map(Arc::clone)
+    };
+
+    if let Some(cached) = cached_diaryx {
+        log::trace!("[execute] Using cached Diaryx instance");
+        return Ok(cached);
+    }
+
+    log::debug!("[execute] No cached Diaryx, creating new instance");
+    let workspace_path = {
+        let ws_guard = acquire_lock(&app_state.workspace_path)?;
+        ws_guard.clone()
+    };
+
+    let base_fs = SyncToAsyncFs::new(RealFileSystem);
+    let mut d = Diaryx::new(base_fs);
+    if let Some(ref ws_path) = workspace_path {
+        log::debug!("[execute] Setting workspace root: {:?}", ws_path);
+        d.set_workspace_root(ws_path.clone());
+    }
+    #[cfg(feature = "extism-plugins")]
+    {
+        let adapters = register_extism_plugins(app, &mut d);
+        sync_loaded_plugin_adapters(app, adapters);
+    }
+    let new_diaryx = Arc::new(d);
+
+    let init_failures = new_diaryx.init_plugins().await;
+    for (id, err) in &init_failures {
+        log::error!("Plugin {} failed to init: {}", id, err);
+    }
+
+    {
+        let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
+        *diaryx_guard = Some(Arc::clone(&new_diaryx));
+        log::debug!("[execute] Cached Diaryx instance for future commands");
+    }
+
+    Ok(new_diaryx)
+}
+
 // ============================================================================
 // Unified Command API
 // ============================================================================
@@ -929,62 +1439,7 @@ pub async fn execute<R: Runtime>(
         })?
     } else {
         // Normal mode: use real filesystem
-        // Try to use cached Diaryx instance for performance
-        let app_state = app.state::<AppState>();
-
-        // First, try to get cached diaryx (fast path)
-        let cached_diaryx = {
-            let diaryx_guard = acquire_lock(&app_state.diaryx)?;
-            diaryx_guard.as_ref().map(Arc::clone)
-        };
-
-        let diaryx = if let Some(cached) = cached_diaryx {
-            log::trace!("[execute] Using cached Diaryx instance");
-            cached
-        } else {
-            // No cached instance - need to create one (slow path, only happens once)
-            log::debug!("[execute] No cached Diaryx, creating new instance");
-            let workspace_path = {
-                let ws_guard = acquire_lock(&app_state.workspace_path)?;
-                ws_guard.clone()
-            };
-
-            let base_fs = SyncToAsyncFs::new(RealFileSystem);
-            let mut d = Diaryx::new(base_fs);
-            if let Some(ref ws_path) = workspace_path {
-                log::debug!("[execute] Setting workspace root: {:?}", ws_path);
-                d.set_workspace_root(ws_path.clone());
-            }
-            #[cfg(feature = "extism-plugins")]
-            {
-                let adapters = register_extism_plugins(&app, &mut d);
-                if let Some(plugin_adapters) = app.try_state::<PluginAdapters>() {
-                    if let Ok(mut guard) = plugin_adapters.adapters.lock() {
-                        guard.clear();
-                        for adapter in adapters {
-                            use diaryx_core::plugin::Plugin;
-                            guard.insert(adapter.manifest().id.0.clone(), adapter);
-                        }
-                    }
-                }
-            }
-            let new_diaryx = Arc::new(d);
-
-            // Initialize plugins (seeds workspace root and link format)
-            let init_failures = new_diaryx.init_plugins().await;
-            for (id, err) in &init_failures {
-                log::error!("Plugin {} failed to init: {}", id, err);
-            }
-
-            // Cache the new instance for future commands
-            {
-                let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
-                *diaryx_guard = Some(Arc::clone(&new_diaryx));
-                log::debug!("[execute] Cached Diaryx instance for future commands");
-            }
-
-            new_diaryx
-        };
+        let diaryx = get_or_init_tauri_diaryx(&app).await?;
 
         diaryx.execute(cmd).await.map_err(|e| {
             log_execute_error(&e);
@@ -1038,6 +1493,7 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
                 message: format!("Failed to get app data directory: {}", e),
                 path: None,
             })?;
+        let (log_dir, log_file) = logging::log_paths(&data_dir);
 
         // Workspace goes in Documents so users can access via Files app
         let default_workspace = document_dir.join("Diaryx");
@@ -1049,6 +1505,8 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             document_dir,
             default_workspace,
             config_path,
+            log_dir,
+            log_file,
             is_mobile: true,
             is_apple_build: cfg!(feature = "apple"),
         })
@@ -1069,6 +1527,7 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
                 message: format!("Failed to get document directory: {}", e),
                 path: None,
             })?;
+        let (log_dir, log_file) = logging::log_paths(&data_dir);
 
         // Use the standard config location
         let config_path = path_resolver
@@ -1081,16 +1540,22 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             .join("config.toml");
 
         // Default workspace in home directory for desktop
-        let default_workspace = path_resolver
-            .home_dir()
-            .unwrap_or_else(|_| document_dir.clone())
-            .join("diaryx");
+        let default_workspace = if cfg!(all(target_os = "macos", feature = "apple")) {
+            data_dir.join("workspace")
+        } else {
+            path_resolver
+                .home_dir()
+                .unwrap_or_else(|_| document_dir.clone())
+                .join("diaryx")
+        };
 
         Ok(AppPaths {
             data_dir,
             document_dir,
             default_workspace,
             config_path,
+            log_dir,
+            log_file,
             is_mobile: false,
             is_apple_build: cfg!(feature = "apple"),
         })
@@ -1328,11 +1793,9 @@ pub async fn pick_workspace_folder<R: Runtime>(
             selected_path
         );
 
-        let fs = SyncToAsyncFs::new(RealFileSystem);
-
         // Load existing config or create new one
         let mut config = if paths.config_path.exists() {
-            Config::load_from(&fs, &paths.config_path)
+            Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
                 .await
                 .unwrap_or_else(|_| Config::new(paths.default_workspace.clone()))
         } else {
@@ -1340,17 +1803,35 @@ pub async fn pick_workspace_folder<R: Runtime>(
         };
 
         // Update workspace path
+        let mut config_changed = config.default_workspace != selected_path;
         config.default_workspace = selected_path.clone();
 
-        // Save config
-        config
-            .save_to(&fs, &paths.config_path)
-            .await
-            .map_err(|e| e.to_serializable())?;
+        #[cfg(target_os = "macos")]
+        let (actual_workspace, active_access) = {
+            config_changed |= store_workspace_bookmark_in_config(&mut config, &selected_path)?;
+            let access = activate_workspace_access_from_config(&mut config, &selected_path)?
+                .ok_or_else(|| {
+                    workspace_access_error(&selected_path, "Missing workspace bookmark")
+                })?;
+            config_changed |= access.1;
+            let actual_workspace = access.0.resolved_path().to_path_buf();
+            if config.default_workspace != actual_workspace {
+                config.default_workspace = actual_workspace.clone();
+                config_changed = true;
+            }
+            (actual_workspace, Some(access.0))
+        };
+
+        #[cfg(not(target_os = "macos"))]
+        let actual_workspace = selected_path.clone();
+
+        if config_changed || !paths.config_path.exists() {
+            save_config_file(&config, &paths.config_path).await?;
+        }
 
         // Initialize workspace if it doesn't exist
         let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
-        let workspace_initialized = match ws.find_root_index_in_dir(&selected_path).await {
+        let workspace_initialized = match ws.find_root_index_in_dir(&actual_workspace).await {
             Ok(Some(_)) => true,
             Ok(None) => false,
             Err(_) => false,
@@ -1359,18 +1840,30 @@ pub async fn pick_workspace_folder<R: Runtime>(
         if !workspace_initialized {
             log::info!(
                 "[pick_workspace_folder] Initializing workspace at {:?}",
-                selected_path
+                actual_workspace
             );
-            ws.init_workspace(&selected_path, Some("My Workspace"), None)
+            ws.init_workspace(&actual_workspace, Some("My Workspace"), None)
                 .await
                 .map_err(|e| e.to_serializable())?;
+        }
+
+        {
+            let app_state = app.state::<AppState>();
+            *acquire_lock(&app_state.workspace_path)? = Some(actual_workspace.clone());
+            *acquire_lock(&app_state.diaryx)? = None;
+            #[cfg(target_os = "macos")]
+            {
+                *acquire_lock(&app_state.workspace_access)? = active_access;
+            }
         }
 
         Ok(Some(AppPaths {
             data_dir: paths.data_dir,
             document_dir: paths.document_dir,
-            default_workspace: selected_path,
+            default_workspace: actual_workspace,
             config_path: paths.config_path,
+            log_dir: paths.log_dir,
+            log_file: paths.log_file,
             is_mobile: paths.is_mobile,
             is_apple_build: paths.is_apple_build,
         }))
@@ -1392,6 +1885,8 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
     log::info!("  document_dir: {:?}", paths.document_dir);
     log::info!("  default_workspace: {:?}", paths.default_workspace);
     log::info!("  config_path: {:?}", paths.config_path);
+    log::info!("  log_dir: {:?}", paths.log_dir);
+    log::info!("  log_file: {:?}", paths.log_file);
     log::info!("  is_mobile: {}", paths.is_mobile);
 
     // Create data directory if it doesn't exist
@@ -1409,7 +1904,8 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
 
     // Load or create config file FIRST to get the actual workspace path
     log::info!("[initialize_app] Loading/creating config...");
-    let config = if paths.is_mobile {
+    let config_exists = paths.config_path.exists();
+    let mut config = if paths.is_mobile {
         // On mobile, use the platform-specific Documents/Diaryx path
         log::info!(
             "[initialize_app] Mobile: using platform workspace path: {:?}",
@@ -1443,9 +1939,29 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
             })?;
         new_config
     };
+    let mut config_changed = !paths.is_mobile && !config_exists;
 
     // Use the workspace path from config (may differ from platform default)
-    let actual_workspace = config.default_workspace.clone();
+    let mut actual_workspace = config.default_workspace.clone();
+    #[cfg(target_os = "macos")]
+    let active_access = match activate_workspace_access_from_config(&mut config, &actual_workspace)?
+    {
+        Some((access, bookmark_changed)) => {
+            config_changed |= bookmark_changed;
+            actual_workspace = access.resolved_path().to_path_buf();
+            if config.default_workspace != actual_workspace {
+                config.default_workspace = actual_workspace.clone();
+                config_changed = true;
+            }
+            Some(access)
+        }
+        None => None,
+    };
+
+    if config_changed && !paths.is_mobile {
+        save_config_file(&config, &paths.config_path).await?;
+    }
+
     log::info!(
         "[initialize_app] Using workspace from config: {:?}",
         actual_workspace
@@ -1515,6 +2031,10 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
         // Force re-creation of Diaryx on next execute()
         let mut diaryx_lock = acquire_lock(&app_state.diaryx)?;
         *diaryx_lock = None;
+        #[cfg(target_os = "macos")]
+        {
+            *acquire_lock(&app_state.workspace_access)? = active_access;
+        }
     }
 
     // Return paths with the actual workspace from config
@@ -1523,6 +2043,8 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
         document_dir: paths.document_dir,
         default_workspace: actual_workspace,
         config_path: paths.config_path,
+        log_dir: paths.log_dir,
+        log_file: paths.log_file,
         is_mobile: paths.is_mobile,
         is_apple_build: paths.is_apple_build,
     })
@@ -2754,6 +3276,7 @@ pub async fn reinitialize_workspace<R: Runtime>(
     }
 
     // 2. Resolve and validate workspace directory
+    let paths = get_platform_paths(&app)?;
     let ws_path = PathBuf::from(&workspace_path);
 
     // On iOS, the sandbox container UUID changes between launches, so stored
@@ -2761,15 +3284,47 @@ pub async fn reinitialize_workspace<R: Runtime>(
     // folder name and joining it to the current document_dir.
     #[cfg(target_os = "ios")]
     let ws_path = {
-        let paths = get_platform_paths(&app)?;
         if ws_path.is_absolute() {
             if let Some(name) = ws_path.file_name() {
                 paths.document_dir.join(name)
             } else {
-                paths.default_workspace
+                paths.default_workspace.clone()
             }
         } else {
             paths.document_dir.join(&ws_path)
+        }
+    };
+
+    #[cfg(not(target_os = "ios"))]
+    let mut ws_path = ws_path;
+
+    #[cfg(target_os = "macos")]
+    let active_access = {
+        let mut config_changed = false;
+        let mut loaded_config = if paths.config_path.exists() {
+            Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+                .await
+                .unwrap_or_else(|_| Config::new(paths.default_workspace.clone()))
+        } else {
+            Config::new(paths.default_workspace.clone())
+        };
+
+        let access = activate_workspace_access_from_config(&mut loaded_config, &ws_path)?;
+        if let Some((access, bookmark_changed)) = access {
+            config_changed |= bookmark_changed;
+            ws_path = access.resolved_path().to_path_buf();
+            if loaded_config.default_workspace == PathBuf::from(&workspace_path)
+                && loaded_config.default_workspace != ws_path
+            {
+                loaded_config.default_workspace = ws_path.clone();
+                config_changed = true;
+            }
+            if config_changed {
+                save_config_file(&loaded_config, &paths.config_path).await?;
+            }
+            Some(access)
+        } else {
+            None
         }
     };
 
@@ -2798,15 +3353,20 @@ pub async fn reinitialize_workspace<R: Runtime>(
     // 3. Update AppState
     {
         *acquire_lock(&state.workspace_path)? = Some(ws_path.clone());
+        #[cfg(target_os = "macos")]
+        {
+            *acquire_lock(&state.workspace_access)? = active_access;
+        }
     }
 
     // 4. Return AppPaths
-    let paths = get_platform_paths(&app)?;
     Ok(AppPaths {
         data_dir: paths.data_dir,
         document_dir: paths.document_dir,
         default_workspace: ws_path,
         config_path: paths.config_path,
+        log_dir: paths.log_dir,
+        log_file: paths.log_file,
         is_mobile: paths.is_mobile,
         is_apple_build: paths.is_apple_build,
     })

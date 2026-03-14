@@ -13,6 +13,10 @@ import {
   dispatchFileSavedEvent,
 } from '$lib/plugins/browserPluginManager.svelte';
 import { mirrorCurrentWorkspaceMutationToLinkedProviders } from '$lib/sync/browserWorkspaceMutationMirror';
+import {
+  permissionStore,
+  type PermissionType,
+} from '@/models/stores/permissionStore.svelte';
 import type {
   Response,
   EntryData,
@@ -88,21 +92,228 @@ function expectResponse<T extends Response['type']>(
   return response as Extract<Response, { type: T }>;
 }
 
+const TAURI_PLUGIN_PERMISSION_TYPES = new Set<PermissionType>([
+  'read_files',
+  'edit_files',
+  'create_files',
+  'delete_files',
+  'move_files',
+  'http_requests',
+  'execute_commands',
+  'plugin_storage',
+]);
+
+const FILE_PLUGIN_PERMISSION_TYPES = new Set<PermissionType>([
+  'read_files',
+  'edit_files',
+  'create_files',
+  'delete_files',
+  'move_files',
+]);
+
+type TauriPluginPermissionError = {
+  kind: 'not_configured' | 'denied';
+  pluginId: string;
+  permissionType: PermissionType;
+  target: string;
+};
+
+function normalizeSlashes(value: string): string {
+  return value.replace(/\\/g, '/');
+}
+
+function normalizeWorkspaceRootPath(workspacePath: string | null | undefined): string | null {
+  if (!workspacePath) return null;
+
+  const normalized = normalizeSlashes(workspacePath).replace(/\/+$/, '');
+  if (!normalized) return null;
+
+  if (normalized.endsWith('/README.md') || normalized.endsWith('/index.md')) {
+    const slash = normalized.lastIndexOf('/');
+    return slash > 0 ? normalized.slice(0, slash) : null;
+  }
+
+  return normalized;
+}
+
+function normalizePluginPermissionTarget(
+  backend: Backend,
+  permissionType: PermissionType,
+  target: string,
+): string {
+  if (!FILE_PLUGIN_PERMISSION_TYPES.has(permissionType)) {
+    return target;
+  }
+
+  const normalizedTarget = normalizeSlashes(target);
+  const workspacePath = normalizeSlashes(backend.getWorkspacePath?.() ?? '').replace(/\/+$/, '');
+  const workspaceRoot = normalizeWorkspaceRootPath(workspacePath);
+
+  if (workspacePath && normalizedTarget === workspacePath) {
+    return workspacePath.slice(workspacePath.lastIndexOf('/') + 1);
+  }
+
+  if (workspaceRoot && normalizedTarget.startsWith(`${workspaceRoot}/`)) {
+    return normalizedTarget.slice(workspaceRoot.length + 1);
+  }
+
+  return normalizedTarget;
+}
+
+function parseTauriPluginPermissionError(error: unknown): TauriPluginPermissionError | null {
+  const message =
+    error instanceof Error ? error.message : typeof error === 'string' ? error : null;
+  if (!message) {
+    return null;
+  }
+
+  const match = message.match(
+    /Permission (not configured|denied) for plugin '([^']+)': ([a-z_]+) on '([^']+)'/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  const [, status, pluginId, permissionType, target] = match;
+  if (!TAURI_PLUGIN_PERMISSION_TYPES.has(permissionType as PermissionType)) {
+    return null;
+  }
+
+  return {
+    kind: status === 'denied' ? 'denied' : 'not_configured',
+    pluginId,
+    permissionType: permissionType as PermissionType,
+    target,
+  };
+}
+
+function permissionDeniedError(
+  pluginId: string,
+  permissionType: PermissionType,
+  target: string,
+): Error {
+  return new Error(
+    JSON.stringify({
+      error: 'permission_denied',
+      permission: permissionType,
+      target,
+      plugin: pluginId,
+    }),
+  );
+}
+
+async function withPluginPermissionRetry<T>(
+  backend: Backend,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const permissionError = parseTauriPluginPermissionError(error);
+    if (!permissionError || permissionError.kind !== 'not_configured') {
+      throw error;
+    }
+
+    const normalizedTarget = normalizePluginPermissionTarget(
+      backend,
+      permissionError.permissionType,
+      permissionError.target,
+    );
+    const allowed = await permissionStore.requestPermission(
+      permissionError.pluginId,
+      permissionError.pluginId,
+      permissionError.permissionType,
+      normalizedTarget,
+    );
+
+    if (!allowed) {
+      throw permissionDeniedError(
+        permissionError.pluginId,
+        permissionError.permissionType,
+        normalizedTarget,
+      );
+    }
+
+    return await run();
+  }
+}
+
 /**
  * Create a typed API wrapper around a Backend instance.
  */
 export function createApi(backend: Backend) {
+  function extractPluginComponentHtml(value: JsonValue): string | null {
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const obj = value as Record<string, JsonValue>;
+    if (typeof obj.response === 'string') return obj.response;
+    if (typeof obj.html === 'string') return obj.html;
+    if (typeof obj.data === 'string') return obj.data;
+    if (obj.type === 'PluginResult' && obj.data != null) {
+      return extractPluginComponentHtml(obj.data);
+    }
+    if (obj.success === true && obj.data != null) {
+      return extractPluginComponentHtml(obj.data);
+    }
+
+    return null;
+  }
+
   // Helper to execute a plugin command and extract the result
   async function pluginCommand(
     plugin: string,
     command: string,
-    params: JsonValue = null
+    params: JsonValue = null,
+    requestFiles?: Record<string, Uint8Array>,
   ): Promise<JsonValue> {
-    const response = await backend.execute({
-      type: 'PluginCommand',
-      params: { plugin, command, params },
-    } as any);
-    return expectResponse(response, 'PluginResult').data;
+    return await withPluginPermissionRetry(backend, async () => {
+      if (
+        requestFiles &&
+        Object.keys(requestFiles).length > 0 &&
+        typeof backend.executePluginCommandWithFiles === "function"
+      ) {
+        return await backend.executePluginCommandWithFiles(
+          plugin,
+          command,
+          params,
+          requestFiles,
+        ) as JsonValue;
+      }
+
+      const response = await backend.execute({
+        type: 'PluginCommand',
+        params: { plugin, command, params },
+      } as any);
+      return expectResponse(response, 'PluginResult').data;
+    });
+  }
+
+  async function getPluginComponentHtml(
+    pluginId: string,
+    componentId: string,
+  ): Promise<string> {
+    if (typeof backend.getPluginComponentHtml === 'function') {
+      return await withPluginPermissionRetry(
+        backend,
+        async () => await backend.getPluginComponentHtml!(pluginId, componentId),
+      );
+    }
+
+    const result = await pluginCommand(pluginId, 'get_component_html', {
+      component_id: componentId,
+    });
+    const html = extractPluginComponentHtml(result);
+    if (html) {
+      return html;
+    }
+
+    throw new Error(`Plugin ${pluginId} returned invalid component HTML`);
   }
 
   async function resolveAttachmentStoragePath(
@@ -920,6 +1131,7 @@ export function createApi(backend: Backend) {
 
     /** Execute a plugin-specific command. */
     executePluginCommand: pluginCommand,
+    getPluginComponentHtml,
   };
 }
 

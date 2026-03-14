@@ -61,7 +61,17 @@ Provided checkers:
 
 - `DenyAllPermissionChecker` — denies every request
 - `FrontmatterPermissionChecker` — reads root frontmatter `plugins` config and
-  delegates to `diaryx_core::plugin::permissions::check_permission`
+  normalizes workspace file targets to workspace-relative paths before
+  delegating to `diaryx_core::plugin::permissions::check_permission`
 
 Storage keys are plugin-scoped in host functions (`{plugin_id}:{key}`), so one
 plugin cannot read another plugin's storage by key collision.
+
+`plugin_storage` is treated as sandbox-safe and defaults to allowed when no
+explicit rule exists. File, HTTP, and cross-plugin command permissions still
+flow through the configured checker.
+
+Native and browser hosts now both support temporary `host_request_file`
+payloads for plugin commands initiated from UI file-picking flows, so guest
+plugins can rely on the same `{ file_key } -> raw bytes` contract on both
+platform families.

@@ -35,6 +35,9 @@ Backend abstraction layer supporting both WASM and Tauri environments.
 | `workerBackendNew.ts` | Worker-based backend            |
 
 The `generated/` directory contains TypeScript types generated from Rust.
+Plugin manifest/editor-extension bindings are generated from `diaryx_core`, so
+after Rust-side manifest changes the repo should refresh them via
+`cargo test -p diaryx_core` followed by `scripts/sync-bindings.sh`.
 
 ## Attachment Upload Path
 
@@ -142,6 +145,27 @@ Tauri. The bridge now maps null-body HTTP statuses (`204`, `205`, `304`, and
 other fetch null-body statuses) to `Response` objects with `null` bodies so
 no-content endpoints (for example, `DELETE /api/workspaces/{id}`) do not throw
 `Response cannot have a body with the given status`.
+
+## Plugin Host Parity
+
+The shared frontend now uses the same plugin inspection and permission-review
+flow for browser and Tauri installs.
+
+- `TauriBackend` exposes `inspectPlugin()` so local `.wasm` installs can read
+  requested permissions before installation, matching browser plugin review.
+- `api.ts` now also treats Tauri Extism "Permission not configured" plugin
+  errors like the browser host does: it normalizes the requested target,
+  triggers the shared permission banner UI, and retries the plugin command or
+  component render once after the user allows it.
+- `TauriBackend` and browser Extism runtimes now also expose direct
+  `get_component_html` loading for plugin iframe surfaces, with a
+  `PluginCommand("get_component_html")` fallback for older guests.
+- `TauriBackend` also exposes `executePluginCommandWithFiles(...)` so settings
+  commands that rely on temporary `host_request_file` payloads can pass raw
+  bytes to native Extism plugins just like browser-loaded plugins.
+- Browser plugin loading now enforces the same protocol-version compatibility
+  range as the native Extism loader and preserves guest CLI declarations in the
+  normalized manifest.
 
 ## Reveal In File Manager
 

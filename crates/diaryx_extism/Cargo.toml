@@ -12,8 +12,9 @@ publish = true
 [features]
 default = []
 http = ["ureq"]
+pulley = ["wasmtime/pulley"]
 testing = []
-wasi-runner = ["dep:wasmtime", "dep:wasi-common", "dep:tempfile"]
+wasi-runner = ["dep:wasi-common", "dep:tempfile"]
 ws-transport = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:url"]
 
 [dependencies]
@@ -34,7 +35,8 @@ tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"], 
 futures-util = { version = "0.3", optional = true }
 url = { version = "2", optional = true }
 
-# WASI module runner (for host_run_wasi_module)
-wasmtime = { version = "37", optional = true }
+# Used directly to configure the wasmtime engine (e.g. Pulley interpreter on iOS)
+# and by the WASI module runner.
+wasmtime = "37"
 wasi-common = { version = "37", optional = true, features = ["sync"] }
 tempfile = { version = "3", optional = true }

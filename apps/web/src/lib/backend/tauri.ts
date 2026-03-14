@@ -15,6 +15,7 @@ import type {
   SyncStatus,
   SyncEvent,
   SyncEventCallback,
+  PluginInspection,
 } from "./interface";
 
 import { BackendError } from "./interface";
@@ -30,6 +31,8 @@ interface AppPaths {
   document_dir: string;
   default_workspace: string;
   config_path: string;
+  log_dir: string;
+  log_file: string;
   is_mobile: boolean;
   is_apple_build: boolean;
   /** Whether CRDT storage was successfully initialized */
@@ -888,8 +891,43 @@ export class TauriBackend implements Backend {
     });
   }
 
+  async inspectPlugin(wasmBytes: Uint8Array): Promise<PluginInspection> {
+    const invoke = this.getInvoke();
+    return invoke<PluginInspection>("inspect_user_plugin", {
+      wasmBytes: Array.from(wasmBytes),
+    });
+  }
+
   async uninstallPlugin(pluginId: string): Promise<void> {
     const invoke = this.getInvoke();
     await invoke("uninstall_user_plugin", { pluginId });
+  }
+
+  async getPluginComponentHtml(pluginId: string, componentId: string): Promise<string> {
+    await this.syncRuntimeContext();
+    const invoke = this.getInvoke();
+    return await invoke<string>("get_plugin_component_html", {
+      pluginId,
+      componentId,
+    });
+  }
+
+  async executePluginCommandWithFiles(
+    pluginId: string,
+    command: string,
+    params: unknown,
+    requestFiles: Record<string, Uint8Array>,
+  ): Promise<unknown> {
+    await this.syncRuntimeContext();
+    const invoke = this.getInvoke();
+    const encodedFiles = Object.fromEntries(
+      Object.entries(requestFiles).map(([key, bytes]) => [key, Array.from(bytes)]),
+    );
+    return await invoke("execute_plugin_command_with_files", {
+      pluginId,
+      command,
+      params,
+      requestFiles: encodedFiles,
+    });
   }
 }

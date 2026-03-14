@@ -9,6 +9,7 @@ export type { BinaryRef } from './BinaryRef';
 export type { CliArg } from './CliArg';
 export type { CliArgType } from './CliArgType';
 export type { CliCommand } from './CliCommand';
+export type { ClickBehavior } from './ClickBehavior';
 export type { Command } from './Command';
 export type { ComponentRef } from './ComponentRef';
 export type { ContextMenuTarget } from './ContextMenuTarget';

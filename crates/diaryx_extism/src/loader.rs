@@ -19,6 +19,7 @@ use thiserror::Error;
 
 use crate::adapter::ExtismPluginAdapter;
 use crate::host_fns::{self, HostContext};
+use crate::platform_wasmtime_config;
 use crate::protocol::{CURRENT_PROTOCOL_VERSION, GuestManifest, MIN_SUPPORTED_PROTOCOL_VERSION};
 
 /// Errors that can occur during plugin loading.
@@ -116,7 +117,10 @@ pub fn inspect_plugin_wasm_manifest(wasm_path: &Path) -> Result<GuestManifest, E
         plugin_id: plugin_name.clone(),
         ..HostContext::with_fs(fs)
     });
-    let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
+    let mut builder = PluginBuilder::new(extism_manifest).with_wasi(true);
+    if let Some(config) = platform_wasmtime_config() {
+        builder = builder.with_wasmtime_config(config);
+    }
     let builder = host_fns::register_host_functions(builder, user_data);
     let mut plugin = builder.build().map_err(|e| ExtismLoadError::PluginCreate {
         plugin_name: plugin_name.clone(),
@@ -222,7 +226,10 @@ pub fn load_plugin_from_wasm(
         runtime_context_provider: host_context.runtime_context_provider.clone(),
     });
 
-    let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
+    let mut builder = PluginBuilder::new(extism_manifest).with_wasi(true);
+    if let Some(config) = platform_wasmtime_config() {
+        builder = builder.with_wasmtime_config(config);
+    }
     let builder = host_fns::register_host_functions(builder, user_data.clone());
     let mut plugin = builder.build().map_err(|e| ExtismLoadError::PluginCreate {
         plugin_name: plugin_name.clone(),
@@ -290,7 +297,10 @@ fn load_single_plugin(
         runtime_context_provider: host_context.runtime_context_provider.clone(),
     });
 
-    let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
+    let mut builder = PluginBuilder::new(extism_manifest).with_wasi(true);
+    if let Some(config) = platform_wasmtime_config() {
+        builder = builder.with_wasmtime_config(config);
+    }
     let builder = host_fns::register_host_functions(builder, user_data.clone());
     let mut plugin = builder.build().map_err(|e| ExtismLoadError::PluginCreate {
         plugin_name: plugin_name.into(),

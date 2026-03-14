@@ -186,6 +186,12 @@ export interface ImportResult {
   error?: string;
 }
 
+export interface PluginInspection {
+  pluginId: string;
+  pluginName: string;
+  requestedPermissions?: unknown;
+}
+
 // ============================================================================
 // Backend Events
 // ============================================================================
@@ -584,8 +590,19 @@ export interface Backend {
 
   /** Install a user plugin from WASM bytes. Returns the manifest JSON string. */
   installPlugin?(wasmBytes: Uint8Array): Promise<string>;
+  /** Inspect a user plugin from WASM bytes without installing it. */
+  inspectPlugin?(wasmBytes: Uint8Array): Promise<PluginInspection>;
   /** Uninstall a user plugin by ID. */
   uninstallPlugin?(pluginId: string): Promise<void>;
+  /** Fetch raw HTML for a plugin-owned iframe component. */
+  getPluginComponentHtml?(pluginId: string, componentId: string): Promise<string>;
+  /** Execute a plugin command with temporary host-provided files. */
+  executePluginCommandWithFiles?(
+    pluginId: string,
+    command: string,
+    params: unknown,
+    requestFiles: Record<string, Uint8Array>,
+  ): Promise<unknown>;
 
 }
 

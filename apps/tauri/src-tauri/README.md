@@ -1,7 +1,8 @@
 ---
 title: My Journal
 description: A diaryx workspace
-contents: []
+contents:
+- Daily/daily_index.md
 ---
 
 # My Journal

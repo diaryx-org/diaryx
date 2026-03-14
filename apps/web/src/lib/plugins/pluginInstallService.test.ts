@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockBackend = {
   installPlugin: ReturnType<typeof vi.fn>;
+  inspectPlugin: ReturnType<typeof vi.fn>;
   uninstallPlugin: ReturnType<typeof vi.fn>;
 };
 
@@ -21,6 +22,18 @@ async function loadPluginInstallService() {
       .mockResolvedValue(
         JSON.stringify({ id: "diaryx.spoiler", name: "Spoiler" }),
       ),
+    inspectPlugin: vi.fn().mockResolvedValue({
+      pluginId: "diaryx.spoiler",
+      pluginName: "Spoiler",
+      requestedPermissions: {
+        defaults: {
+          read_files: {
+            include: ["all"],
+            exclude: [],
+          },
+        },
+      },
+    }),
     uninstallPlugin: vi.fn().mockResolvedValue(undefined),
   };
   const pluginStore: MockPluginStore = {
@@ -40,6 +53,7 @@ async function loadPluginInstallService() {
   const getBackend = vi.fn().mockResolvedValue(backend);
   const clearPreservedPluginEditorExtensions = vi.fn();
   const preservePluginEditorExtensions = vi.fn();
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
 
   vi.doMock("$lib/backend", () => ({
     getBackend,
@@ -63,6 +77,14 @@ async function loadPluginInstallService() {
   vi.doMock("@/models/stores/workspaceStore.svelte", () => ({
     workspaceStore: { tree: null },
   }));
+  vi.doMock("@/models/stores/permissionStore.svelte", () => ({
+    permissionStore: {
+      getPluginsConfig: vi.fn(() => undefined),
+    },
+  }));
+  vi.doMock("$lib/sync/browserWorkspaceMutationMirror", () => ({
+    mirrorCurrentWorkspaceMutationToLinkedProviders: vi.fn().mockResolvedValue(undefined),
+  }));
 
   const service = await import("./pluginInstallService");
   const installSource = await import("./pluginInstallSource.svelte");
@@ -70,6 +92,7 @@ async function loadPluginInstallService() {
   return {
     backend,
     clearPreservedPluginEditorExtensions,
+    confirmSpy,
     createApi,
     getBackend,
     installSource,
@@ -177,7 +200,8 @@ describe("pluginInstallService", () => {
 
     await service.installLocalPlugin(new ArrayBuffer(4), "Spoiler");
 
-    expect(getBackend).toHaveBeenCalledTimes(1);
+    expect(getBackend).toHaveBeenCalledTimes(2);
+    expect(backend.inspectPlugin).toHaveBeenCalledTimes(1);
     expect(backend.installPlugin).toHaveBeenCalledTimes(1);
     expect(backend.installPlugin.mock.calls[0]?.[0]).toBeInstanceOf(Uint8Array);
     expect(backend.installPlugin.mock.calls[0]?.[0].byteLength).toBe(4);
@@ -209,6 +233,16 @@ describe("pluginInstallService", () => {
     expect(pluginStore.init).toHaveBeenCalledWith({ kind: "mock-api" });
     expect(pluginStore.preloadInsertCommandIcons).toHaveBeenCalledTimes(1);
     expect(installSource.getInstalledPluginSource("diaryx.spoiler")).toBeNull();
+  });
+
+  it("reviews requested permissions before a Tauri install", async () => {
+    const { backend, confirmSpy, service } = await loadPluginInstallService();
+
+    await service.installLocalPlugin(new ArrayBuffer(4), "Spoiler");
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(backend.inspectPlugin).toHaveBeenCalledTimes(1);
+    expect(backend.installPlugin).toHaveBeenCalledTimes(1);
   });
 
   it("skips browser install confirm when workspace frontmatter already grants permissions", async () => {

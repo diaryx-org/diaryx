@@ -34,6 +34,16 @@ echo "==> Building Diaryx.app..."
 cd "$TAURI_DIR"
 cargo tauri build --bundles app -- --features apple
 
+# ── Step 1b: Fix Nix dylib paths ─────────────────────────────────────
+BINARY="$APP_BUNDLE/Contents/MacOS/diaryx_tauri"
+echo "==> Rewriting Nix dylib paths to system libraries..."
+otool -L "$BINARY" | grep '/nix/store\|/Volumes/VOLUME' | awk '{print $1}' | while read -r nix_path; do
+  lib_name="$(basename "$nix_path")"
+  system_path="/usr/lib/$lib_name"
+  echo "    $nix_path -> $system_path"
+  install_name_tool -change "$nix_path" "$system_path" "$BINARY"
+done
+
 # ── Step 2: Set build number ─────────────────────────────────────────
 echo "==> Setting CFBundleVersion to $BUILD_NUMBER..."
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" \
@@ -47,22 +57,29 @@ if [ ! -f "$PROVISIONING_PROFILE" ]; then
   exit 1
 fi
 cp "$PROVISIONING_PROFILE" "$APP_BUNDLE/Contents/embedded.provisionprofile"
+xattr -cr "$APP_BUNDLE"
 
-# ── Step 4: Sign the .app ───────────────────────────────────────────
+# ── Step 4: Build entitlements with application identifier ─────────
+ENTITLEMENTS_RESOLVED="$(mktemp)"
+trap 'rm -f "$ENTITLEMENTS_RESOLVED"' EXIT
+sed "s|</dict>|    <key>com.apple.application-identifier</key>\n    <string>${APPLE_TEAM_ID}.org.diaryx.desktop</string>\n</dict>|" \
+  "$ENTITLEMENTS" > "$ENTITLEMENTS_RESOLVED"
+
+# ── Step 5: Sign the .app ───────────────────────────────────────────
 echo "==> Signing Diaryx.app..."
 codesign --deep --force --options runtime \
   --sign "$APP_SIGN_IDENTITY" \
-  --entitlements "$ENTITLEMENTS" \
+  --entitlements "$ENTITLEMENTS_RESOLVED" \
   "$APP_BUNDLE"
 
-# ── Step 5: Package as .pkg ──────────────────────────────────────────
+# ── Step 6: Package as .pkg ──────────────────────────────────────────
 echo "==> Creating Diaryx.pkg..."
 productbuild \
   --component "$APP_BUNDLE" /Applications \
   --sign "$PKG_SIGN_IDENTITY" \
   "$PKG_OUTPUT"
 
-# ── Step 6: Upload ───────────────────────────────────────────────────
+# ── Step 7: Upload ───────────────────────────────────────────────────
 echo "==> Uploading to App Store Connect..."
 xcrun altool --upload-app --type macos \
   --file "$PKG_OUTPUT" \

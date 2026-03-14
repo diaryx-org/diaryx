@@ -42,6 +42,7 @@ import { normalizeExtismHostPath } from "./extismHostPaths";
 // ============================================================================
 
 export interface GuestManifest {
+  protocol_version?: number;
   id: string;
   name: string;
   version: string;
@@ -102,6 +103,8 @@ export interface BrowserExtismPlugin {
     params: unknown,
     options?: BrowserPluginCallOptions,
   ): Promise<CommandResponse>;
+  /** Fetch raw HTML for a plugin-owned iframe component. */
+  getComponentHtml(componentId: string): Promise<string>;
   /**
    * Execute a typed Command (same format as backend.execute).
    * Calls the guest's `execute_typed_command` export.
@@ -142,6 +145,8 @@ export interface HostFunctionOptions {
 
 const MIN_HTTP_TIMEOUT_MS = 1_000;
 const MAX_HTTP_TIMEOUT_MS = 300_000;
+const MIN_SUPPORTED_PROTOCOL_VERSION = 1;
+const CURRENT_PROTOCOL_VERSION = 1;
 
 function resolveHttpTimeoutMs(timeoutMs: unknown): number | null {
   if (timeoutMs == null) return null;
@@ -1321,8 +1326,23 @@ function convertGuestManifest(guest: GuestManifest): PluginManifest {
     description: guest.description,
     capabilities,
     ui: guest.ui ?? [],
-    cli: [],
+    cli: Array.isArray(guest.cli)
+      ? (guest.cli as PluginManifest["cli"])
+      : [],
   };
+}
+
+function validateProtocolVersion(guest: GuestManifest): void {
+  const version = guest.protocol_version ?? 1;
+  if (
+    version < MIN_SUPPORTED_PROTOCOL_VERSION ||
+    version > CURRENT_PROTOCOL_VERSION
+  ) {
+    throw new Error(
+      `Plugin protocol version ${version} is not supported by this browser host ` +
+        `(supported: ${MIN_SUPPORTED_PROTOCOL_VERSION}-${CURRENT_PROTOCOL_VERSION})`,
+    );
+  }
 }
 
 // ============================================================================
@@ -1501,11 +1521,30 @@ export async function loadBrowserPlugin(
     throw new Error("Plugin manifest() returned null");
   }
   const guestManifest: GuestManifest = manifestOutput.json();
+  validateProtocolVersion(guestManifest);
   const manifest = convertGuestManifest(guestManifest);
+
+  function extractComponentHtml(value: unknown): string | null {
+    if (typeof value === "string") return value;
+    if (!value || typeof value !== "object") return null;
+
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.response === "string") return obj.response;
+    if (typeof obj.html === "string") return obj.html;
+    if (typeof obj.data === "string") return obj.data;
+    if (obj.type === "PluginResult") {
+      return extractComponentHtml(obj.data);
+    }
+    if (obj.success === true) {
+      return extractComponentHtml(obj.data);
+    }
+
+    return null;
+  }
 
   function isOptionalExportMissing(
     error: unknown,
-    exportName: "init" | "shutdown",
+    exportName: string,
   ): boolean {
     const message = (
       error instanceof Error
@@ -1651,6 +1690,40 @@ export async function loadBrowserPlugin(
             };
           }
         });
+      });
+    },
+
+    async getComponentHtml(componentId: string): Promise<string> {
+      return enqueue("getComponentHtml:get_component_html", async () => {
+        const input = JSON.stringify({ component_id: componentId });
+        try {
+          const output = await plugin.call("get_component_html", input);
+          if (!output) {
+            throw new Error("No response from plugin");
+          }
+          const html = output.text();
+          if (!html) {
+            throw new Error("Plugin returned empty component HTML");
+          }
+          return html;
+        } catch (e) {
+          if (!isOptionalExportMissing(e, "get_component_html")) {
+            throw e;
+          }
+
+          const fallback = await browserPlugin.callCommand("get_component_html", {
+            component_id: componentId,
+          });
+          if (!fallback.success) {
+            throw new Error(fallback.error ?? "Failed to load component HTML");
+          }
+
+          const html = extractComponentHtml(fallback.data);
+          if (!html) {
+            throw new Error("Plugin returned invalid component HTML");
+          }
+          return html;
+        }
       });
     },
 

@@ -96,6 +96,36 @@ async function platformInstall(
   return String(manifest.id);
 }
 
+type PluginInstallInspection = {
+  pluginId: string;
+  pluginName: string;
+  requestedPermissions?: PluginPermissionsManifest;
+};
+
+type PluginPermissionsManifest = {
+  defaults?: PluginPermissions;
+  reasons?: Partial<Record<PermissionType, string>>;
+};
+
+async function inspectPluginForInstall(
+  bytes: ArrayBuffer,
+): Promise<PluginInstallInspection> {
+  if (isTauri()) {
+    const backend: Backend = await getBackend();
+    if (backend.inspectPlugin) {
+      const inspected = await backend.inspectPlugin(new Uint8Array(bytes));
+      return {
+        pluginId: inspected.pluginId,
+        pluginName: inspected.pluginName,
+        requestedPermissions:
+          inspected.requestedPermissions as PluginPermissionsManifest | undefined,
+      };
+    }
+  }
+
+  return await inspectPluginWasm(bytes);
+}
+
 export async function uninstallPlugin(pluginId: string): Promise<void> {
   if (isTauri()) {
     const backend: Backend = await getBackend();
@@ -227,11 +257,7 @@ async function reviewAndInstall(
   fallbackName?: string,
   expectedPluginId?: string,
 ): Promise<string | null> {
-  if (isTauri()) {
-    return await platformInstall(bytes, fallbackName, expectedPluginId);
-  }
-
-  const inspected = await inspectPluginWasm(bytes);
+  const inspected = await inspectPluginForInstall(bytes);
   const pluginId = inspected.pluginId;
   if (expectedPluginId && pluginId !== expectedPluginId) {
     throw new Error(
@@ -283,7 +309,11 @@ async function reviewAndInstall(
     await persistDefaultPermissions(pluginId, requested.defaults);
   }
 
-  return await platformInstall(bytes, fallbackName ?? pluginName, expectedPluginId);
+  return await platformInstall(
+    bytes,
+    fallbackName ?? pluginName,
+    expectedPluginId,
+  );
 }
 
 async function bootstrapLinkedWorkspaceSyncState(): Promise<void> {

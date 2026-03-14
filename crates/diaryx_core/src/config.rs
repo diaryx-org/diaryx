@@ -34,6 +34,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[cfg(feature = "toml-config")]
@@ -94,6 +95,13 @@ pub struct Config {
     /// Registered workspaces. Each entry has a stable `local-<uuid>` ID.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<WorkspaceEntry>,
+
+    /// Optional native bookmark data keyed by workspace path.
+    ///
+    /// macOS sandboxed builds use this to persist security-scoped bookmarks for
+    /// workspace folders selected by the user. Other platforms ignore it.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub workspace_bookmarks: HashMap<String, String>,
 }
 
 /// Configuration for git-backed version history.
@@ -149,6 +157,7 @@ impl Config {
             sync_workspace_id: None,
             git: GitConfig::default(),
             workspaces: Vec::new(),
+            workspace_bookmarks: HashMap::new(),
         }
     }
 
@@ -168,7 +177,21 @@ impl Config {
             sync_workspace_id: None,
             git: GitConfig::default(),
             workspaces: Vec::new(),
+            workspace_bookmarks: HashMap::new(),
         }
+    }
+
+    /// Return the stored bookmark for a workspace path, if present.
+    pub fn workspace_bookmark(&self, path: &std::path::Path) -> Option<&str> {
+        self.workspace_bookmarks
+            .get(&path.to_string_lossy().into_owned())
+            .map(String::as_str)
+    }
+
+    /// Store or replace the bookmark associated with a workspace path.
+    pub fn set_workspace_bookmark(&mut self, path: PathBuf, bookmark: String) {
+        self.workspace_bookmarks
+            .insert(path.to_string_lossy().into_owned(), bookmark);
     }
 
     /// Build a [`WorkspaceRegistry`] from the config's workspace list.
@@ -307,6 +330,7 @@ impl Default for Config {
             sync_workspace_id: None,
             git: GitConfig::default(),
             workspaces: Vec::new(),
+            workspace_bookmarks: HashMap::new(),
         }
     }
 }
@@ -369,6 +393,7 @@ impl Config {
             sync_workspace_id: None,
             git: GitConfig::default(),
             workspaces: Vec::new(),
+            workspace_bookmarks: HashMap::new(),
         };
 
         config.save()?;
@@ -395,6 +420,7 @@ impl Default for Config {
             sync_workspace_id: None,
             git: GitConfig::default(),
             workspaces: Vec::new(),
+            workspace_bookmarks: HashMap::new(),
         }
     }
 }
@@ -445,11 +471,16 @@ mod tests {
             name: "personal".into(),
             path: Some(PathBuf::from("/ws")),
         });
+        config.set_workspace_bookmark(PathBuf::from("/ws"), "bookmark-data".into());
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.workspaces.len(), 1);
         assert_eq!(parsed.workspaces[0].id, "local-123");
         assert_eq!(parsed.workspaces[0].name, "personal");
+        assert_eq!(
+            parsed.workspace_bookmark(PathBuf::from("/ws").as_path()),
+            Some("bookmark-data")
+        );
     }
 
     #[test]
@@ -458,7 +489,9 @@ mod tests {
         let toml_str = toml::to_string_pretty(&config).unwrap();
         // workspaces should be omitted when empty
         assert!(!toml_str.contains("workspaces"));
+        assert!(!toml_str.contains("workspace_bookmarks"));
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert!(parsed.workspaces.is_empty());
+        assert!(parsed.workspace_bookmarks.is_empty());
     }
 }

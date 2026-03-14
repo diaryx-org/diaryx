@@ -167,8 +167,9 @@ pub enum UiContribution {
     },
     /// An editor extension (TipTap node/mark) contributed by a plugin.
     ///
-    /// The host generates a TipTap extension from this declaration and calls
-    /// the plugin's `render_export` function to render content.
+    /// The host generates a TipTap extension from this declaration. Atom nodes
+    /// can call a guest `render_export`; inline marks and host-builtins do not
+    /// require guest rendering.
     EditorExtension {
         /// Unique extension ID (becomes the TipTap node name).
         extension_id: String,
@@ -177,18 +178,28 @@ pub enum UiContribution {
         /// Markdown syntax delimiters for parsing and serialization.
         markdown: MarkdownSyntax,
         /// Name of the plugin's WASM export to call for rendering.
-        render_export: String,
+        ///
+        /// Only required for atom nodes rendered by guest code.
+        render_export: Option<String>,
         /// How the user edits the source content.
-        edit_mode: EditMode,
+        ///
+        /// Only required for atom nodes that expose source editing.
+        edit_mode: Option<EditMode>,
         /// Optional CSS to inject for rendered output.
         css: Option<String>,
         /// Optional insert command for editor menu integration.
         ///
         /// When present, the host adds a button in the appropriate editor menu
-        /// (MoreStylesPicker for inline atoms, BlockPicker for block atoms)
-        /// to insert an empty node of this type.
+        /// (MoreStylesPicker for inline atoms/marks, BlockPicker for block
+        /// atoms) to insert an empty node of this type.
         #[serde(default)]
         insert_command: Option<InsertCommand>,
+        /// Optional keyboard shortcut string (e.g., `"Mod-Shift-s"`).
+        #[serde(default)]
+        keyboard_shortcut: Option<String>,
+        /// Optional click behavior for marks (e.g., spoiler reveal/hide).
+        #[serde(default)]
+        click_behavior: Option<ClickBehavior>,
     },
 }
 
@@ -234,6 +245,13 @@ pub enum EditorNodeType {
     InlineAtom,
     /// Block atom node (like an HTML block).
     BlockAtom,
+    /// Inline mark wrapping rich text (like spoiler formatting).
+    InlineMark,
+    /// A host-registered builtin extension too complex for declarative guest rendering.
+    Builtin {
+        /// Host-managed extension identifier.
+        host_extension_id: String,
+    },
 }
 
 /// Markdown syntax delimiters for an editor extension.
@@ -275,7 +293,7 @@ pub enum EditMode {
 ///
 /// When present on an [`EditorExtension`](UiContribution::EditorExtension),
 /// the host renders a button in the appropriate menu (MoreStylesPicker for
-/// inline atoms, BlockPicker/BlockStylePicker for block atoms).
+/// inline atoms/marks, BlockPicker/BlockStylePicker for block atoms).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
@@ -287,6 +305,23 @@ pub struct InsertCommand {
     pub icon: Option<String>,
     /// Tooltip / description for the button.
     pub description: Option<String>,
+}
+
+/// Click behavior for inline mark extensions.
+///
+/// When present, the host registers a ProseMirror plugin that toggles CSS
+/// classes on click (e.g., spoiler reveal/hide).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub enum ClickBehavior {
+    /// Toggle between a hidden and revealed CSS class on click.
+    ToggleClass {
+        /// CSS class applied when the mark content is hidden.
+        hidden_class: String,
+        /// CSS class applied when the mark content is revealed.
+        revealed_class: String,
+    },
 }
 
 /// How to render a plugin-contributed UI panel.
@@ -1058,5 +1093,77 @@ plugins:
         let json = serde_json::to_string(&entry).unwrap();
         let deserialized: MarketplaceEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn parse_inline_mark_editor_extension_contribution() {
+        let contribution: UiContribution = serde_json::from_value(serde_json::json!({
+            "slot": "EditorExtension",
+            "extension_id": "spoiler",
+            "node_type": "InlineMark",
+            "markdown": {
+                "level": "Inline",
+                "open": "||",
+                "close": "||"
+            },
+            "render_export": null,
+            "edit_mode": null,
+            "css": ".spoiler { color: transparent; }",
+            "keyboard_shortcut": "Mod-Shift-s",
+            "click_behavior": {
+                "ToggleClass": {
+                    "hidden_class": "spoiler-hidden",
+                    "revealed_class": "spoiler-revealed"
+                }
+            },
+            "insert_command": {
+                "label": "Spoiler",
+                "icon": "eye-off",
+                "description": "Hide text behind a spoiler"
+            }
+        }))
+        .unwrap();
+
+        match contribution {
+            UiContribution::EditorExtension {
+                extension_id,
+                node_type,
+                render_export,
+                edit_mode,
+                insert_command,
+                keyboard_shortcut,
+                click_behavior,
+                ..
+            } => {
+                assert_eq!(extension_id, "spoiler");
+                assert!(matches!(node_type, EditorNodeType::InlineMark));
+                assert_eq!(render_export, None);
+                assert!(edit_mode.is_none());
+                assert_eq!(insert_command.unwrap().label, "Spoiler");
+                assert_eq!(keyboard_shortcut.as_deref(), Some("Mod-Shift-s"));
+                assert!(matches!(
+                    click_behavior,
+                    Some(ClickBehavior::ToggleClass { .. })
+                ));
+            }
+            other => panic!("expected editor extension, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_builtin_editor_node_type() {
+        let node_type: EditorNodeType = serde_json::from_value(serde_json::json!({
+            "Builtin": {
+                "host_extension_id": "templateVariable"
+            }
+        }))
+        .unwrap();
+
+        match node_type {
+            EditorNodeType::Builtin { host_extension_id } => {
+                assert_eq!(host_extension_id, "templateVariable");
+            }
+            other => panic!("expected builtin node type, got {other:?}"),
+        }
     }
 }

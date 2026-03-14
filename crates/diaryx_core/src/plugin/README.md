@@ -16,6 +16,7 @@ Plugins can also declare host UI surface ownership in their manifest via
 - `CommandPalette` — plugin-owned command palette surface UI
 - `ContextMenu` — plugin-owned context menu UI (currently `LeftSidebarTree` target)
 - `WorkspaceProvider` — provider entry surfaced in workspace link/download UI
+- `EditorExtension` — declarative TipTap atoms, inline marks, or host-builtins
 
 Plugins are registered in the `PluginRegistry`, which is stored on the `Diaryx<FS>` struct and wired into the command handler.
 
@@ -105,3 +106,9 @@ surface component.
 When a plugin contributes `UiContribution::WorkspaceProvider`, hosts can show it
 as an explicit remote-workspace provider instead of inferring provider support
 from command names alone.
+
+When a plugin contributes `UiContribution::EditorExtension`, hosts can generate
+TipTap extensions directly from manifest data. Atom nodes can use a guest
+`render_export` plus `edit_mode`; inline marks can omit both and rely on the
+declarative mark behavior, CSS, shortcuts, and click handling described in the
+manifest.

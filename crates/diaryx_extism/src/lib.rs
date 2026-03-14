@@ -20,6 +20,26 @@
 //! }
 //! ```
 
+/// Returns a `wasmtime::Config` configured for the Pulley interpreter on
+/// platforms that don't support JIT (e.g. App Store / TestFlight builds),
+/// or `None` to use the default Cranelift JIT.
+///
+/// Enabled by the `pulley` feature or automatically on iOS.
+#[cfg(any(feature = "pulley", target_os = "ios"))]
+pub(crate) fn platform_wasmtime_config() -> Option<wasmtime::Config> {
+    let mut config = wasmtime::Config::new();
+    if let Err(e) = config.target("pulley64") {
+        log::warn!("Failed to set Pulley target for wasmtime: {e}");
+        return None;
+    }
+    Some(config)
+}
+
+#[cfg(not(any(feature = "pulley", target_os = "ios")))]
+pub(crate) fn platform_wasmtime_config() -> Option<wasmtime::Config> {
+    None
+}
+
 pub mod adapter;
 pub mod binary_protocol;
 pub mod host_fns;
@@ -46,6 +66,26 @@ pub use loader::{
     ExtismLoadError, inspect_plugin_wasm_manifest, load_plugin_from_wasm, load_plugins_from_dir,
 };
 pub use permission_checker::{DenyAllPermissionChecker, FrontmatterPermissionChecker};
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[cfg(feature = "pulley")]
+    fn pulley_config_creates_plugin() {
+        let config =
+            super::platform_wasmtime_config().expect("pulley feature should produce config");
+
+        let manifest = extism::Manifest::new([extism::Wasm::data(b"\x00asm\x01\x00\x00\x00")]);
+        let result = extism::PluginBuilder::new(manifest)
+            .with_wasmtime_config(config)
+            .build();
+        assert!(
+            result.is_ok(),
+            "Pulley plugin build failed: {:?}",
+            result.err()
+        );
+    }
+}
 pub use plugin_fs::PluginFileSystem;
 #[cfg(feature = "ws-transport")]
 pub use ws_transport::{SyncGuestBridge, TokioWebSocketBridge};

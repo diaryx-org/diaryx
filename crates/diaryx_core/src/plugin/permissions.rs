@@ -11,8 +11,8 @@
 //! - Audience tags = allow all files with that audience tag
 //! - File links = allow that specific file
 //! - Exclude wins over include (deny takes priority)
-//! - Missing permission type = deny
-//! - Missing plugin entry = deny all
+//! - Missing permission type = deny, except `plugin_storage` which is sandboxed per plugin and allowed by default
+//! - Missing plugin entry = deny all, except `plugin_storage` which is sandboxed per plugin and allowed by default
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -312,12 +312,25 @@ pub fn get_permission_rule(
 ///
 /// Returns `NotConfigured` if the plugin has no entry in the workspace config,
 /// or if the specific permission type has no rule.
+///
+/// `PluginStorage` is a special case: it is sandboxed per plugin keyspace and
+/// defaults to `Allowed` when no explicit rule is configured.
 pub fn check_permission(
     plugins_config: &HashMap<String, PluginConfig>,
     plugin_id: &str,
     permission_type: PermissionType,
     target: &str,
 ) -> PermissionCheck {
+    if permission_type == PermissionType::PluginStorage {
+        let rule = plugins_config
+            .get(plugin_id)
+            .and_then(|config| config.permissions.plugin_storage.as_ref());
+        return match rule {
+            Some(rule) => check_storage_permission(rule),
+            None => PermissionCheck::Allowed,
+        };
+    }
+
     let config = match plugins_config.get(plugin_id) {
         Some(c) => c,
         None => return PermissionCheck::NotConfigured,
@@ -651,6 +664,16 @@ mod tests {
         assert!(domain_matches("api.openrouter.ai", "openrouter.ai"));
         assert!(!domain_matches("notopenrouter.ai", "openrouter.ai"));
         assert!(domain_matches("openrouter.ai", "openrouter.ai"));
+    }
+
+    #[test]
+    fn plugin_storage_defaults_to_allowed_when_not_configured() {
+        let config = HashMap::new();
+
+        assert_eq!(
+            check_permission(&config, "diaryx.test", PermissionType::PluginStorage, ""),
+            PermissionCheck::Allowed
+        );
     }
 
     #[test]

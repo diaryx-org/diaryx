@@ -88,6 +88,14 @@ export const CustomMark = Mark.create({
 });
 ```
 
+### Interactive Marks
+
+If a mark has click-to-toggle behavior (like spoilers), prefer handling it from
+`handleDOMEvents.mousedown` and call `event.preventDefault()` for clicks on the
+mark itself. That keeps ProseMirror from immediately moving the selection and
+repainting the DOM back to its default classes before the user sees the state
+change.
+
 ### Adding Markdown Support
 
 #### 1. Tokenizer (Parsing)

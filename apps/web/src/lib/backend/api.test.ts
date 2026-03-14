@@ -11,11 +11,18 @@ const workspaceMirrorMocks = vi.hoisted(() => ({
   mirrorCurrentWorkspaceMutationToLinkedProviders: vi.fn().mockResolvedValue(undefined),
 }))
 
+const permissionStoreMocks = vi.hoisted(() => ({
+  permissionStore: {
+    requestPermission: vi.fn().mockResolvedValue(true),
+  },
+}))
+
 vi.mock('$lib/plugins/browserPluginManager.svelte', () => browserPluginEventMocks)
 vi.mock('$lib/sync/browserWorkspaceMutationMirror', () => workspaceMirrorMocks)
+vi.mock('@/models/stores/permissionStore.svelte', () => permissionStoreMocks)
 
 import { createApi } from './api'
-import type { Backend } from './interface'
+import { BackendError, type Backend } from './interface'
 
 describe('api', () => {
   let mockBackend: Backend
@@ -39,6 +46,7 @@ describe('api', () => {
     }
     api = createApi(mockBackend)
     vi.clearAllMocks()
+    permissionStoreMocks.permissionStore.requestPermission.mockResolvedValue(true)
   })
 
   describe('getEntry', () => {
@@ -71,6 +79,94 @@ describe('api', () => {
       await expect(api.getEntry('test.md')).rejects.toThrow(
         "Expected response type 'Entry', got 'Ok'"
       )
+    })
+  })
+
+  describe('getPluginComponentHtml', () => {
+    it('prefers the backend direct component-html path when available', async () => {
+      mockBackend.getPluginComponentHtml = vi
+        .fn()
+        .mockResolvedValue('<section>Daily</section>')
+
+      const result = await api.getPluginComponentHtml('diaryx.daily', 'daily.panel')
+
+      expect(mockBackend.getPluginComponentHtml).toHaveBeenCalledWith(
+        'diaryx.daily',
+        'daily.panel',
+      )
+      expect(mockBackend.execute).not.toHaveBeenCalled()
+      expect(result).toBe('<section>Daily</section>')
+    })
+
+    it('falls back to PluginCommand when the backend direct path is unavailable', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({
+        type: 'PluginResult',
+        data: '<section>Daily</section>',
+      } as any)
+
+      const result = await api.getPluginComponentHtml('diaryx.daily', 'daily.panel')
+
+      expect(mockBackend.execute).toHaveBeenCalledWith({
+        type: 'PluginCommand',
+        params: {
+          plugin: 'diaryx.daily',
+          command: 'get_component_html',
+          params: { component_id: 'daily.panel' },
+        },
+      })
+      expect(result).toBe('<section>Daily</section>')
+    })
+
+    it('retries native component rendering after approving a Tauri permission request', async () => {
+      mockBackend.getWorkspacePath = vi.fn().mockReturnValue('/Users/test/journal/README.md')
+      mockBackend.getPluginComponentHtml = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new BackendError(
+            "Permission not configured for plugin 'diaryx.daily': read_files on '/Users/test/journal/Daily/daily_index.md'",
+            'PluginError',
+          ),
+        )
+        .mockResolvedValueOnce('<section>Daily</section>')
+
+      const result = await api.getPluginComponentHtml('diaryx.daily', 'daily.panel')
+
+      expect(permissionStoreMocks.permissionStore.requestPermission).toHaveBeenCalledWith(
+        'diaryx.daily',
+        'diaryx.daily',
+        'read_files',
+        'Daily/daily_index.md',
+      )
+      expect(mockBackend.getPluginComponentHtml).toHaveBeenCalledTimes(2)
+      expect(result).toBe('<section>Daily</section>')
+    })
+  })
+
+  describe('executePluginCommand', () => {
+    it('retries a Tauri plugin command after the permission banner allows it', async () => {
+      mockBackend.getWorkspacePath = vi.fn().mockReturnValue('/Users/test/journal/README.md')
+      vi.mocked(mockBackend.execute)
+        .mockRejectedValueOnce(
+          new BackendError(
+            "Permission not configured for plugin 'diaryx.daily': read_files on '/Users/test/journal/README.md'",
+            'PluginError',
+          ),
+        )
+        .mockResolvedValueOnce({
+          type: 'PluginResult',
+          data: { ok: true },
+        } as any)
+
+      const result = await api.executePluginCommand('diaryx.daily', 'OpenToday', {})
+
+      expect(permissionStoreMocks.permissionStore.requestPermission).toHaveBeenCalledWith(
+        'diaryx.daily',
+        'diaryx.daily',
+        'read_files',
+        'README.md',
+      )
+      expect(mockBackend.execute).toHaveBeenCalledTimes(2)
+      expect(result).toEqual({ ok: true })
     })
   })
 

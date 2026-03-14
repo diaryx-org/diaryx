@@ -288,6 +288,45 @@
     return result;
   }
 
+  async function loadComponentHtml(): Promise<PluginCommandResult> {
+    const browserPlugin = getBrowserPlugin(pluginId);
+    if (browserPlugin?.getComponentHtml) {
+      try {
+        const html = await browserPlugin.getComponentHtml(componentId);
+        return { success: true, data: html };
+      } catch (e) {
+        console.error("[PluginIframe] direct browser component load failed", {
+          pluginId,
+          componentId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        if (!api) {
+          return {
+            success: false,
+            error: e instanceof Error ? e.message : String(e),
+          };
+        }
+      }
+    }
+
+    if (api?.getPluginComponentHtml) {
+      try {
+        const html = await api.getPluginComponentHtml(pluginId, componentId);
+        return { success: true, data: html };
+      } catch (e) {
+        console.error("[PluginIframe] direct backend component load failed", {
+          pluginId,
+          componentId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    return executePluginCommand("get_component_html", {
+      component_id: componentId,
+    });
+  }
+
   function extractComponentHtml(value: unknown): string | null {
     if (typeof value === "string") return value;
     if (!value || typeof value !== "object") return null;
@@ -342,9 +381,7 @@
       const startedAt = performance.now();
       console.debug("[PluginIframe] load start", { pluginId, componentId });
       const result: PluginCommandResult = await Promise.race([
-        executePluginCommand("get_component_html", {
-          component_id: componentId,
-        }),
+        loadComponentHtml(),
         new Promise<PluginCommandResult>((resolve) =>
           setTimeout(() => {
             resolve({

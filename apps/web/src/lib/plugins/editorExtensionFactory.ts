@@ -356,31 +356,36 @@ export function createMarkFromManifest(
         new ProseMirrorPlugin({
           key: new PluginKey(`${ext.extension_id}Click`),
           props: {
-            handleClick: (view, _pos, event) => {
-              const target = event.target as HTMLElement;
-              const markEl = target.closest(`[${dataAttr}]`) as HTMLElement | null;
+            handleDOMEvents: {
+              mousedown: (view, event) => {
+                const markEl = findClosestElement(
+                  event.target,
+                  `[${dataAttr}]`,
+                );
 
-              if (markEl) {
-                // Toggle reveal state
-                if (markEl.classList.contains(hiddenClass)) {
-                  markEl.classList.remove(hiddenClass);
-                  markEl.classList.add(revealedClass);
-                } else {
-                  markEl.classList.remove(revealedClass);
-                  markEl.classList.add(hiddenClass);
+                if (markEl) {
+                  // Prevent the editor selection update from clobbering the
+                  // temporary reveal state on interactive marks like spoilers.
+                  event.preventDefault();
+                  if (markEl.classList.contains(hiddenClass)) {
+                    markEl.classList.remove(hiddenClass);
+                    markEl.classList.add(revealedClass);
+                  } else {
+                    markEl.classList.remove(revealedClass);
+                    markEl.classList.add(hiddenClass);
+                  }
+                  return true;
                 }
-                return true;
-              }
 
-              // Click elsewhere: hide all revealed marks of this type
-              const editorDom = view.dom;
-              const revealed = editorDom.querySelectorAll(`.${revealedClass}`);
-              revealed.forEach((el) => {
-                el.classList.remove(revealedClass);
-                el.classList.add(hiddenClass);
-              });
+                const editorDom = view.dom;
+                const revealed = editorDom.querySelectorAll(`.${revealedClass}`);
+                revealed.forEach((el) => {
+                  el.classList.remove(revealedClass);
+                  el.classList.add(hiddenClass);
+                });
 
-              return false;
+                return false;
+              },
             },
           },
         }),
@@ -428,6 +433,21 @@ export function createMarkFromManifest(
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findClosestElement(
+  target: EventTarget | null,
+  selector: string,
+): HTMLElement | null {
+  if (target instanceof HTMLElement) {
+    return target.closest(selector) as HTMLElement | null;
+  }
+
+  if (target instanceof Text) {
+    return target.parentElement?.closest(selector) as HTMLElement | null;
+  }
+
+  return null;
 }
 
 const injectedCss = new Set<string>();

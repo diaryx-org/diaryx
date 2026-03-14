@@ -92,6 +92,22 @@
     };
   }
 
+  async function buildNativeRequestFiles(
+    params: Record<string, JsonValue>,
+  ): Promise<Record<string, Uint8Array> | undefined> {
+    const fileKey = typeof params.file_key === "string" ? params.file_key : null;
+    if (!fileKey) {
+      return undefined;
+    }
+
+    const bytes = await readPluginLocalSelectionFile(fileKey);
+    if (!bytes) {
+      return undefined;
+    }
+
+    return { [fileKey]: bytes };
+  }
+
   function readResultMessage(result: PluginCommandResult): string {
     const message =
       result.data &&
@@ -194,7 +210,13 @@
     }
 
     try {
-      const data = await api.executePluginCommand(pluginId, command, params as JsonValue);
+      const requestFiles = await buildNativeRequestFiles(params);
+      const data = await api.executePluginCommand(
+        pluginId,
+        command,
+        params as JsonValue,
+        requestFiles,
+      );
       return { success: true, data };
     } catch (error) {
       return {

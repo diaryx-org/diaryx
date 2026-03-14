@@ -115,7 +115,11 @@ pub fn run_wasi_module(
     let wasi_ctx = ctx_builder.build();
 
     // Compile and instantiate
-    let engine = WasmEngine::default();
+    let engine = if let Some(config) = crate::platform_wasmtime_config() {
+        WasmEngine::new(&config).map_err(|e| format!("Failed to create wasmtime engine: {e}"))?
+    } else {
+        WasmEngine::default()
+    };
     let module = Module::new(&engine, wasm_bytes)
         .map_err(|e| format!("Failed to compile WASI module: {e}"))?;
 

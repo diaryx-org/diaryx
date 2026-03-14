@@ -56,7 +56,7 @@ default = ["custom-protocol", "extism-plugins"]
 custom-protocol = ["tauri/custom-protocol"]
 desktop-updater = ["dep:tauri-plugin-updater"]
 iap = ["dep:tauri-plugin-iap"]
-apple = ["iap"]
+apple = ["iap", "diaryx_extism/pulley"]
 extism-plugins = ["dep:diaryx_extism", "dep:dirs", "dep:futures-lite", "diaryx_extism/wasi-runner", "diaryx_extism/http", "diaryx_extism/ws-transport"]
 
 [dev-dependencies]

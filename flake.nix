@@ -99,6 +99,7 @@
               prek
               llvmPackages.lld
               openssl.dev
+              binaryen
             ];
 
             # Add libiconv for macOS host build scripts

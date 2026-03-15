@@ -33,6 +33,7 @@ pub mod export;
 pub mod fs;
 
 /// Publish (exports as HTML)
+#[cfg(feature = "publish")]
 pub mod publish;
 
 /// Search (query frontmatter or search content)

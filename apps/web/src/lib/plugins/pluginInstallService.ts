@@ -233,7 +233,7 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
     throw new Error("SHA-256 verification is unavailable in this runtime.");
   }
 
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes));
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");

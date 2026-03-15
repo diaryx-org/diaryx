@@ -10,7 +10,6 @@ pub mod naming;
 pub mod path;
 
 // Re-export commonly used items for convenience
-pub use date::parse_date;
 pub use path::{relative_path_from_dir_to_target, relative_path_from_file_to_target};
 
 /// Simple glob pattern matching for exclude patterns.

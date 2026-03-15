@@ -674,22 +674,18 @@ Configure how `part_of`, `contents`, and `attachments` links are formatted:
 - `LinkFormat::Relative` - `../parent.md` (simple relative paths)
 - `LinkFormat::Absolute` - `/workspace/parent.md` (absolute from workspace root)
 
-## Date parsing
+## Date utilities
 
-The `date` module provides natural language date parsing:
+The `date` module provides timestamp formatting helpers:
 
 ```rust,ignore
-use diaryx_core::date::parse_date;
+use diaryx_core::date::{current_local_timestamp_rfc3339, timestamp_millis_to_local_rfc3339};
 
-// Natural language parsing
-let today = parse_date("today")?;
-let yesterday = parse_date("yesterday")?;
-let last_friday = parse_date("last friday")?;
-let three_days_ago = parse_date("3 days ago")?;
-
-// ISO format
-let specific = parse_date("2024-01-15")?;
+let now = current_local_timestamp_rfc3339();
+let from_millis = timestamp_millis_to_local_rfc3339(1_700_000_000_000);
 ```
+
+Natural language date parsing ("today", "3 days ago", etc.) is provided by the `diaryx_daily` crate / `plugin-daily` Extism plugin.
 
 ## Shared errors
 

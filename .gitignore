@@ -21,3 +21,4 @@ crates/tauri-plugin-*/permissions/schemas
 apps/web/marketplace-dist
 apps/web/upload.sh
 apps/web/test.sh
+.claude

@@ -2258,7 +2258,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "chrono-english",
  "comrak",
  "dirs 6.0.0",
  "futures-lite 2.6.1",

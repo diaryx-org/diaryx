@@ -5,7 +5,6 @@ import {
   getWorkspaceStorageType,
 } from '$lib/storage/localWorkspaceRegistry.svelte';
 import { addFilesToZip } from '$lib/settings/zipUtils';
-import JSZip from 'jszip';
 
 function getWorkspaceDirectoryPath(workspacePath: string): string {
   return workspacePath
@@ -29,6 +28,7 @@ export async function createLocalWorkspaceSnapshot(localWorkspaceId: string): Pr
   const workspaceDir = getWorkspaceDirectoryPath(backend.getWorkspacePath());
   const tree = await api.getFilesystemTree(workspaceDir, false);
 
+  const JSZip = (await import('jszip')).default;
   const zip = new JSZip();
   const reader = {
     readText: (path: string) => api.readFile(path),

@@ -11,6 +11,7 @@ import createPlugin, {
   type CallContext,
 } from "@extism/extism";
 import { handleHostRunWasiModule, type WasiRunRequest } from "./wasiRunner";
+import { dispatchCommand } from "$lib/plugins/browserPluginManager.svelte";
 import {
   deletePluginSecret,
   getPluginSecret,
@@ -1217,9 +1218,6 @@ function buildHostFunctions(
             `${targetPluginId}:${command}`,
           );
 
-          const { dispatchCommand } = await import(
-            "$lib/plugins/browserPluginManager.svelte"
-          );
           const result = await dispatchCommand(
             targetPluginId,
             command,

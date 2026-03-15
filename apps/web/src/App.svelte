@@ -6,6 +6,8 @@
   import { pickAuthorizedWorkspaceFolder } from "./lib/backend/workspaceAccess";
   import { maybeStartWindowDrag } from "$lib/windowDrag";
   import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
+  import { switchWorkspace } from "$lib/workspace/switchWorkspace";
+  import { installLocalPlugin } from "$lib/plugins/pluginInstallService";
   import { addFilesToZip } from "./lib/settings/zipUtils";
   import {
     getMobileSwipeStartContext,
@@ -273,7 +275,6 @@
       workspaceMissing = null;
       // Re-initialize with the corrected path
       entryStore.setLoading(true);
-      const { switchWorkspace } = await import("$lib/workspace/switchWorkspace");
       await switchWorkspace(id, name);
       await handleWorkspaceSwitchComplete();
     } catch (e: any) {
@@ -1657,7 +1658,6 @@
         return { loaded, enabled };
       },
       async installPluginInCurrentWorkspace(wasmBase64: string): Promise<void> {
-        const { installLocalPlugin } = await import("$lib/plugins/pluginInstallService");
         const binary = atob(wasmBase64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i += 1) {

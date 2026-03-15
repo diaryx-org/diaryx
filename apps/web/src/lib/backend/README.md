@@ -98,7 +98,7 @@ local workspace flows can still proceed without plugins/worker-only features.
 ## Main-Thread WASM Fallback Loading
 
 `wasmWorkerNew.ts` now prefers an explicit WASM asset URL
-(`$lib/wasm/diaryx_wasm_bg.wasm`) when initializing `@diaryx/wasm` outside the
+(`$lib/wasm/diaryx_wasm_bg.wasm`) when initializing `$wasm` outside the
 worker path. This avoids WebKit/dev fallback failures where wasm-pack's implicit
 `import.meta.url` resolution can fail to fetch the `.wasm` binary.
 

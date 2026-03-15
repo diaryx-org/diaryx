@@ -43,7 +43,18 @@ fi
 
 # Change to workspace root first to ensure cargo can find workspace
 cd "$WORKSPACE_ROOT"
+# Build with wasm-pack, then run wasm-opt with aggressive size optimization.
+# wasm-pack runs wasm-opt internally but only with default flags; re-running
+# with -Oz squeezes out additional bytes.
 $WEB_DIR/node_modules/.bin/wasm-pack build crates/diaryx_wasm --target web --out-dir "$WEB_DIR/src/lib/wasm"
+
+WASM_FILE="$WEB_DIR/src/lib/wasm/diaryx_wasm_bg.wasm"
+if command -v wasm-opt >/dev/null 2>&1; then
+    echo "Running wasm-opt -Oz on $WASM_FILE"
+    wasm-opt -Oz -o "$WASM_FILE" "$WASM_FILE"
+else
+    echo "wasm-opt not found, skipping additional size optimization"
+fi
 
 # Clean up trailing whitespace in ts-rs generated bindings
 # (ts-rs emits trailing spaces on struct field lines)

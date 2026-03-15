@@ -141,7 +141,7 @@ async function loadWasmModule(): Promise<any> {
       return wasm;
     }
 
-    const wasm = await import("@diaryx/wasm");
+    const wasm = await import("$wasm");
 
     try {
       const wasmUrlModule = await import("$lib/wasm/diaryx_wasm_bg.wasm?url");

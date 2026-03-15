@@ -5,6 +5,7 @@
     "paths": {
       "$lib": ["./src/lib"],
       "$lib/*": ["./src/lib/*"],
+      "$wasm": ["./src/lib/wasm/diaryx_wasm"],
       "@": ["./src"],
       "@/*": ["./src/*"]
     },

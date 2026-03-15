@@ -79,6 +79,9 @@ export default defineConfig({
         ? "chrome105"
         : "safari13"
       : "es2020",
+    // heic2any (~1.4 MB) is already lazy-loaded; tiptap (~500 KB) is the
+    // editor core and unavoidable.  Raise the limit so these don't warn.
+    chunkSizeWarningLimit: 1500,
     // Don't minify for debug builds
     minify: isTauri && process.env.TAURI_ENV_DEBUG ? false : "esbuild",
     // Produce sourcemaps for debug builds
@@ -121,7 +124,7 @@ export default defineConfig({
       "@tauri-apps/api/core": "@tauri-apps/api/core",
       // In Tauri builds, stub out WASM (Tauri uses native Rust backend, not WASM).
       // When using CDN, also stub it out — the worker loads from CDN via dynamic import.
-      "@diaryx/wasm": path.resolve(
+      "$wasm": path.resolve(
         isTauri || useWasmCdn
           ? "./src/lib/wasm-stub.js"
           : "./src/lib/wasm/diaryx_wasm.js",
@@ -132,7 +135,7 @@ export default defineConfig({
   },
   optimizeDeps: {
     // Exclude Tauri API from optimization since it's optional
-    exclude: ["@tauri-apps/api", "@diaryx/wasm"],
+    exclude: ["@tauri-apps/api", "$wasm"],
     include: ["@bjorn3/browser_wasi_shim"],
   },
   // Env variables starting with the item of `envPrefix` will be exposed in tauri's source code through `import.meta.env`.

@@ -49,6 +49,7 @@
   import { TableControls } from "./extensions/TableControls";
   // Custom extension for markdown footnotes
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
+  import { SearchHighlight } from "./extensions/SearchHighlight";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
   import { getEditorExtensions, getPluginExtensionsVersion } from "$lib/plugins/browserPluginManager.svelte";
   import { getPreservedEditorExtensions } from "$lib/plugins/preservedEditorExtensions.svelte";
@@ -455,6 +456,8 @@
       TableHeader,
       TableCell,
       TableControls,
+      // Search highlighting for find-in-file
+      SearchHighlight,
       // Footnote extension
       FootnoteRef,
       // Raw HTML block extension
@@ -763,6 +766,7 @@
               extensionId: c.extensionId,
               label: c.label,
               iconName: c.iconName,
+              placement: c.placement,
             })),
             blockPickerItems: store.blockPickerItems.map(item => ({
               id: item.contribution.id,
@@ -840,6 +844,13 @@
       .focus()
       .setImage({ src, alt: alt || "" })
       .run();
+  }
+
+  /**
+   * Get the underlying TipTap Editor instance (for extensions like search)
+   */
+  export function getEditor(): Editor | null {
+    return editor;
   }
 
   export function reorderFootnotes(): void {
@@ -1042,6 +1053,23 @@
 {/if}
 
 <style global>
+  /* Search highlighting */
+  :global(.search-highlight) {
+    background: oklch(0.9 0.15 90);
+    border-radius: 2px;
+  }
+  :global(.search-highlight--current) {
+    background: oklch(0.8 0.18 60);
+    outline: 2px solid oklch(0.7 0.2 60);
+  }
+  :global(.dark .search-highlight) {
+    background: oklch(0.45 0.12 90);
+  }
+  :global(.dark .search-highlight--current) {
+    background: oklch(0.55 0.15 60);
+    outline: 2px solid oklch(0.65 0.18 60);
+  }
+
   :global(.editor-content) {
     outline: none;
     min-height: 100%;
@@ -1253,6 +1281,7 @@
   :global(.editor-content table) {
     border-collapse: collapse;
     width: 100%;
+    min-width: max-content;
   }
 
   :global(.editor-content th),
@@ -1295,6 +1324,16 @@
     z-index: 10;
   }
 
+  /* On mobile, always show controls (no hover) and keep them inside the table bounds */
+  @media (max-width: 767px) {
+    :global(.table-grip),
+    :global(.table-add-btn) {
+      opacity: 0.7;
+      width: 20px;
+      height: 20px;
+    }
+  }
+
   :global(.table-grip),
   :global(.table-add-btn),
   :global(.table-grip-popover) {
@@ -1333,6 +1372,14 @@
     background: color-mix(in oklch, var(--primary) 15%, var(--popover));
     color: var(--primary);
     border-color: var(--primary);
+  }
+
+  :global(.table-grip.dragging) {
+    opacity: 1;
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+    cursor: grabbing;
   }
 
   :global(.table-add-btn) {

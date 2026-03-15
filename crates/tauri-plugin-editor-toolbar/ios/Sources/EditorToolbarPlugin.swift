@@ -92,9 +92,23 @@ class EditorToolbarPlugin: Plugin, WKScriptMessageHandler {
         case "pluginCommands":
             guard let commands = body["commands"] as? [String: Any] else { return }
             toolbar?.updatePluginCommands(commands)
+        case "imagePreview":
+            guard let base64 = body["base64"] as? String,
+                  let data = Data(base64Encoded: base64),
+                  let image = UIImage(data: data) else { return }
+            let name = body["name"] as? String ?? "Image"
+            presentImagePreview(image: image, name: name)
         default:
             break
         }
+    }
+
+    private func presentImagePreview(image: UIImage, name: String) {
+        guard let vc = toolbar?.findViewController() else { return }
+        let previewVC = ImagePreviewViewController(image: image, name: name)
+        previewVC.modalPresentationStyle = .fullScreen
+        previewVC.modalTransitionStyle = .crossDissolve
+        vc.present(previewVC, animated: true)
     }
 }
 
@@ -179,7 +193,8 @@ extension EditorToolbarPlugin {
                     taskList: editor.isActive('taskList'),
                     blockquote: editor.isActive('blockquote'),
                     codeBlock: editor.isActive('codeBlock'),
-                    link: editor.isActive('link')
+                    link: editor.isActive('link'),
+                    coloredHighlight: editor.isActive('coloredHighlight')
                 };
 
                 for (var i = 0; i < pluginMarkIds.length; i++) {
@@ -430,6 +445,7 @@ class EditorToolbar: UIView {
             makeButton(systemName: "italic", action: #selector(doItalic), id: "italic"),
             makeButton(systemName: "strikethrough", action: #selector(doStrike), id: "strike"),
             makeButton(systemName: "chevron.left.forwardslash.chevron.right", action: #selector(doCode), id: "code"),
+            makeHighlightButton(),
             makeButton(systemName: "link", action: #selector(doLink), id: "link"),
         ])
     }
@@ -509,6 +525,13 @@ class EditorToolbar: UIView {
                     completionHandler: nil
                 )
             },
+            UIAction(title: "Attachment", image: UIImage(systemName: "paperclip")) { [weak self] _ in
+                self?.haptics.impactOccurred()
+                self?.webView?.evaluateJavaScript(
+                    "globalThis.__diaryx_tiptapEditor?.commands.insertAttachmentPicker();",
+                    completionHandler: nil
+                )
+            },
         ]
 
         var pluginItems: [UIMenuElement] = []
@@ -537,6 +560,69 @@ class EditorToolbar: UIView {
     /// Rebuild the block picker menu to include updated plugin commands
     private func refreshBlockPickerMenu() {
         blockPickerButton?.menu = buildBlockPickerMenu()
+    }
+
+    // MARK: - Highlight Button
+
+    private var highlightButton: UIButton?
+
+    private func makeHighlightButton() -> UIButton {
+        let button = UIButton(type: .system)
+        let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+        button.setImage(UIImage(systemName: "highlighter", withConfiguration: config), for: .normal)
+        button.tintColor = .secondaryLabel
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 36),
+            button.heightAnchor.constraint(equalToConstant: 36),
+        ])
+
+        // Tap toggles yellow highlight
+        button.addAction(UIAction { [weak self] _ in
+            self?.haptics.impactOccurred()
+            self?.execHighlight("yellow")
+        }, for: .touchUpInside)
+
+        // Long-press shows color picker menu
+        button.showsMenuAsPrimaryAction = false
+        button.menu = buildHighlightMenu()
+
+        buttonMap["coloredHighlight"] = button
+        highlightButton = button
+        return button
+    }
+
+    private static let highlightColors: [(name: String, color: String)] = [
+        ("Red", "red"), ("Orange", "orange"), ("Yellow", "yellow"),
+        ("Green", "green"), ("Cyan", "cyan"), ("Blue", "blue"),
+        ("Violet", "violet"), ("Pink", "pink"), ("Brown", "brown"),
+        ("Grey", "grey"),
+    ]
+
+    private func buildHighlightMenu() -> UIMenu {
+        let colorActions = Self.highlightColors.map { entry in
+            UIAction(title: entry.name) { [weak self] _ in
+                self?.haptics.impactOccurred()
+                self?.execHighlight(entry.color)
+            }
+        }
+        let colorsMenu = UIMenu(title: "", options: .displayInline, children: colorActions)
+
+        let remove = UIAction(title: "Remove Highlight", image: UIImage(systemName: "xmark"), attributes: .destructive) { [weak self] _ in
+            self?.haptics.impactOccurred()
+            self?.webView?.evaluateJavaScript(
+                "globalThis.__diaryx_tiptapEditor?.chain().focus().unsetColoredHighlight().run();",
+                completionHandler: nil
+            )
+        }
+        let removeMenu = UIMenu(title: "", options: .displayInline, children: [remove])
+
+        return UIMenu(title: "Highlight", children: [colorsMenu, removeMenu])
+    }
+
+    private func execHighlight(_ color: String) {
+        let js = "globalThis.__diaryx_tiptapEditor?.chain().focus().toggleColoredHighlight('\(color)').run();"
+        webView?.evaluateJavaScript(js, completionHandler: nil)
     }
 
     // MARK: - Button Factories
@@ -732,7 +818,7 @@ class EditorToolbar: UIView {
         }
     }
 
-    private func findViewController() -> UIViewController? {
+    func findViewController() -> UIViewController? {
         var responder: UIResponder? = webView
         while let r = responder {
             if let vc = r as? UIViewController { return vc }
@@ -772,7 +858,8 @@ class EditorToolbar: UIView {
                       let label = item["label"] as? String else { continue }
                 newCommands.append(PluginCommand(
                     extensionId: extId, label: label,
-                    iconName: item["iconName"] as? String, nodeType: "blockAtom"
+                    iconName: item["iconName"] as? String, nodeType: "blockAtom",
+                    placement: item["placement"] as? String ?? "Picker"
                 ))
             }
         }
@@ -814,7 +901,22 @@ class EditorToolbar: UIView {
         }
         pluginButtonKeys.removeAll()
 
-        guard !pluginCommands.isEmpty else { return }
+        // Only show standalone toolbar buttons for marks, inline atoms, and
+        // blockAtom/blockPickerItem commands that explicitly request it via
+        // placement == "All". Block atoms and block picker items already appear
+        // in the block picker menu.
+        let toolbarCommands = pluginCommands.filter { cmd in
+            switch cmd.nodeType {
+            case "blockAtom":
+                return cmd.placement == "All"
+            case "blockPickerItem":
+                return false
+            default:
+                return true
+            }
+        }
+
+        guard !toolbarCommands.isEmpty else { return }
 
         // Add separator before plugin buttons
         let sep = UIView()
@@ -831,7 +933,7 @@ class EditorToolbar: UIView {
         stackView.setCustomSpacing(8, after: sep)
         pluginButtonViews.append(sep)
 
-        for cmd in pluginCommands {
+        for cmd in toolbarCommands {
             let button: UIButton
             if let sfName = Self.lucideToSFSymbol[cmd.iconName ?? ""] {
                 button = UIButton(type: .system)
@@ -938,6 +1040,7 @@ struct PluginCommand: Equatable {
     let label: String
     let iconName: String?
     let nodeType: String  // "mark", "inlineAtom", "blockAtom", "blockPickerItem"
+    var placement: String? = nil  // "Picker", "PickerAndStylePicker", "All"
     var editorCommand: String? = nil
     var params: [String: Any]? = nil
     var promptMessage: String? = nil
@@ -949,6 +1052,7 @@ struct PluginCommand: Equatable {
         lhs.label == rhs.label &&
         lhs.iconName == rhs.iconName &&
         lhs.nodeType == rhs.nodeType &&
+        lhs.placement == rhs.placement &&
         lhs.editorCommand == rhs.editorCommand &&
         lhs.promptMessage == rhs.promptMessage &&
         lhs.promptDefault == rhs.promptDefault &&
@@ -1235,5 +1339,224 @@ class LinkPickerViewController: UIViewController, UITableViewDataSource, UITable
         webView?.evaluateJavaScript(js, completionHandler: nil)
 
         dismiss(animated: true)
+    }
+}
+
+// MARK: - Native Image Preview
+
+/// Full-screen image preview with native pinch-to-zoom, double-tap zoom, and pan.
+/// Uses UIScrollView for smooth, native-feeling gesture handling.
+class ImagePreviewViewController: UIViewController, UIScrollViewDelegate {
+    private let image: UIImage
+    private let imageName: String
+
+    private let scrollView = UIScrollView()
+    private let imageView = UIImageView()
+    private let closeButton = UIButton(type: .system)
+    private let titleLabel = UILabel()
+    private let headerGradient = CAGradientLayer()
+
+    init(image: UIImage, name: String) {
+        self.image = image
+        self.imageName = name
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        setupScrollView()
+        setupImageView()
+        setupHeader()
+        setupGestures()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        headerGradient.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: view.safeAreaInsets.top + 56)
+        updateZoomScale()
+    }
+
+    override var prefersStatusBarHidden: Bool { true }
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+
+    // MARK: - Scroll View
+
+    private func setupScrollView() {
+        scrollView.delegate = self
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.bouncesZoom = true
+        scrollView.decelerationRate = .fast
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        view.addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+    }
+
+    // MARK: - Image View
+
+    private func setupImageView() {
+        imageView.image = image
+        imageView.contentMode = .scaleAspectFit
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+
+        scrollView.addSubview(imageView)
+    }
+
+    private func updateZoomScale() {
+        let boundsSize = scrollView.bounds.size
+        guard boundsSize.width > 0, boundsSize.height > 0 else { return }
+
+        let imageSize = image.size
+        guard imageSize.width > 0, imageSize.height > 0 else { return }
+
+        let widthScale = boundsSize.width / imageSize.width
+        let heightScale = boundsSize.height / imageSize.height
+        let minScale = min(widthScale, heightScale)
+
+        scrollView.minimumZoomScale = minScale
+        scrollView.maximumZoomScale = max(minScale * 5, 3.0)
+
+        // Only reset zoom if not already zoomed by user
+        if scrollView.zoomScale < minScale || scrollView.zoomScale == 1.0 {
+            scrollView.zoomScale = minScale
+        }
+
+        // Size the image view to the image's natural size
+        imageView.frame = CGRect(origin: .zero, size: imageSize)
+        scrollView.contentSize = imageSize
+
+        centerImageView()
+    }
+
+    private func centerImageView() {
+        let boundsSize = scrollView.bounds.size
+        let contentSize = scrollView.contentSize
+
+        let offsetX = max(0, (boundsSize.width - contentSize.width * scrollView.zoomScale) / 2)
+        let offsetY = max(0, (boundsSize.height - contentSize.height * scrollView.zoomScale) / 2)
+
+        scrollView.contentInset = UIEdgeInsets(top: offsetY, left: offsetX, bottom: offsetY, right: offsetX)
+    }
+
+    // MARK: - UIScrollViewDelegate
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+        imageView
+    }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        centerImageView()
+    }
+
+    // MARK: - Header
+
+    private func setupHeader() {
+        // Gradient background for header
+        headerGradient.colors = [UIColor.black.withAlphaComponent(0.6).cgColor, UIColor.clear.cgColor]
+        headerGradient.locations = [0, 1]
+        let headerView = UIView()
+        headerView.layer.addSublayer(headerGradient)
+        headerView.translatesAutoresizingMaskIntoConstraints = false
+        headerView.isUserInteractionEnabled = true
+        view.addSubview(headerView)
+        NSLayoutConstraint.activate([
+            headerView.topAnchor.constraint(equalTo: view.topAnchor),
+            headerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            headerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            headerView.heightAnchor.constraint(equalToConstant: 120),
+        ])
+
+        // Title
+        titleLabel.text = imageName
+        titleLabel.textColor = .white.withAlphaComponent(0.8)
+        titleLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        headerView.addSubview(titleLabel)
+
+        // Close button
+        let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+        closeButton.setImage(UIImage(systemName: "xmark", withConfiguration: config), for: .normal)
+        closeButton.tintColor = .white.withAlphaComponent(0.8)
+        closeButton.backgroundColor = UIColor.white.withAlphaComponent(0.15)
+        closeButton.layer.cornerRadius = 16
+        closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        headerView.addSubview(closeButton)
+
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(equalTo: headerView.leadingAnchor, constant: 16),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -12),
+            titleLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+
+            closeButton.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -16),
+            closeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 32),
+            closeButton.heightAnchor.constraint(equalToConstant: 32),
+        ])
+    }
+
+    @objc private func closeTapped() {
+        dismiss(animated: true)
+    }
+
+    // MARK: - Gestures
+
+    private func setupGestures() {
+        // Double-tap to toggle zoom
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        scrollView.addGestureRecognizer(doubleTap)
+
+        // Single-tap to toggle header visibility
+        let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap))
+        singleTap.numberOfTapsRequired = 1
+        singleTap.require(toFail: doubleTap)
+        scrollView.addGestureRecognizer(singleTap)
+    }
+
+    @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        if scrollView.zoomScale > scrollView.minimumZoomScale {
+            scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+        } else {
+            // Zoom to 2x centered on the tap point
+            let tapPoint = gesture.location(in: imageView)
+            let targetScale = min(scrollView.minimumZoomScale * 3, scrollView.maximumZoomScale)
+            let zoomRect = zoomRectForScale(targetScale, center: tapPoint)
+            scrollView.zoom(to: zoomRect, animated: true)
+        }
+    }
+
+    private func zoomRectForScale(_ scale: CGFloat, center: CGPoint) -> CGRect {
+        let size = CGSize(
+            width: scrollView.bounds.width / scale,
+            height: scrollView.bounds.height / scale
+        )
+        return CGRect(
+            x: center.x - size.width / 2,
+            y: center.y - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    @objc private func handleSingleTap() {
+        let isHidden = closeButton.alpha < 0.5
+        UIView.animate(withDuration: 0.25) {
+            let alpha: CGFloat = isHidden ? 1.0 : 0.0
+            self.closeButton.alpha = alpha
+            self.titleLabel.alpha = alpha
+        }
     }
 }

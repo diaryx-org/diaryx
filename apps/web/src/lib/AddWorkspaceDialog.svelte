@@ -696,7 +696,7 @@
             />
             <button
               type="button"
-              class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'import_zip' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+              class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'import_zip' ? 'border-primary bg-secondary' : 'border-border hover:border-muted-foreground/50'}"
               onclick={() => {
                 if (importZipFile) {
                   contentSource = 'import_zip';
@@ -739,7 +739,7 @@
             {#if showOpenFolder}
               <button
                 type="button"
-                class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'open_folder' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'open_folder' ? 'border-primary bg-secondary' : 'border-border hover:border-muted-foreground/50'}"
                 onclick={() => {
                   if (selectedFolderName) {
                     contentSource = 'open_folder';
@@ -783,7 +783,7 @@
             {#if workspaceProviders.length > 0}
               <button
                 type="button"
-                class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'download_cloud' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'download_cloud' ? 'border-primary bg-secondary' : 'border-border hover:border-muted-foreground/50'}"
                 onclick={() => {
                   contentSource = 'download_cloud';
                   if (cloudWorkspaces.length === 0) loadCloudWorkspaces();
@@ -817,7 +817,7 @@
                     {#each cloudWorkspaces as remote (remote.id)}
                       <button
                         type="button"
-                        class="w-full text-left p-2 rounded-md border transition-colors {selectedRemoteWorkspace?.id === remote.id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                        class="w-full text-left p-2 rounded-md border transition-colors {selectedRemoteWorkspace?.id === remote.id ? 'border-primary bg-secondary' : 'border-border hover:border-muted-foreground/50'}"
                         onclick={() => {
                           selectedRemoteWorkspace = remote;
                           newWorkspaceName = remote.name;
@@ -837,7 +837,7 @@
             <!-- Start fresh (with starter workspace selector) -->
             <button
               type="button"
-              class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'start_fresh' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+              class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'start_fresh' ? 'border-primary bg-secondary' : 'border-border hover:border-muted-foreground/50'}"
               onclick={() => {
                 contentSource = 'start_fresh';
                 newWorkspaceName = getNextLocalWorkspaceName();
@@ -878,7 +878,7 @@
                   <!-- Empty / fresh option -->
                   <button
                     type="button"
-                    class="w-full text-left p-2 rounded-md border transition-colors {selectedStarterId === null ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                    class="w-full text-left p-2 rounded-md border transition-colors {selectedStarterId === null ? 'border-primary bg-secondary' : 'border-border hover:border-muted-foreground/50'}"
                     onclick={() => { selectedStarterId = null; }}
                   >
                     <div class="flex items-center gap-2">
@@ -894,7 +894,7 @@
                   {#each starterWorkspaces as starter (starter.id)}
                     <button
                       type="button"
-                      class="w-full text-left p-2 rounded-md border transition-colors {selectedStarterId === starter.id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                      class="w-full text-left p-2 rounded-md border transition-colors {selectedStarterId === starter.id ? 'border-primary bg-secondary' : 'border-border hover:border-muted-foreground/50'}"
                       onclick={() => { selectedStarterId = starter.id; }}
                     >
                       <div class="flex items-center gap-2">

@@ -134,6 +134,8 @@ pub fn run() {
             commands::pick_workspace_folder,
             commands::authorize_workspace_path,
             commands::reveal_in_file_manager,
+            commands::read_binary_file,
+            commands::write_binary_file,
             commands::check_for_app_update,
             commands::install_app_update,
             // Export

@@ -534,7 +534,7 @@
               {@const installing = installingIds.has(plugin.id)}
               <button
                 type="button"
-                class={`text-left rounded-lg border p-3 transition ${selectedPlugin?.id === plugin.id && !mobileState.isMobile ? "border-primary" : "hover:border-foreground/40"}`}
+                class={`text-left rounded-lg border p-3 transition ${selectedPlugin?.id === plugin.id && !mobileState.isMobile ? "border-primary" : "hover:border-muted-foreground"}`}
                 onclick={() => selectPlugin(plugin.id)}
               >
                 <div class="flex items-center justify-between gap-2">

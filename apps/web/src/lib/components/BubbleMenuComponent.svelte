@@ -293,6 +293,7 @@
   .toolbar-button.active {
     background: var(--accent);
     color: var(--accent-foreground);
+    box-shadow: inset 0 -2px 0 var(--ring);
   }
 
   .toolbar-button.destructive {
@@ -328,9 +329,9 @@
     }
 
     .toolbar-button {
-      padding: 8px;
-      min-width: 36px;
-      min-height: 36px;
+      padding: 10px;
+      min-width: 44px;
+      min-height: 44px;
     }
 
     .toolbar-divider {

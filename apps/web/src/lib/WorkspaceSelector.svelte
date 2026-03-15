@@ -287,7 +287,7 @@
     <Popover.Trigger>
       <button
         type="button"
-        class="flex items-center gap-1.5 px-2 py-1 -mx-1 rounded-md text-sm font-medium text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors max-w-[180px]"
+        class="flex items-center gap-1.5 px-2 py-2.5 md:py-1 -mx-1 rounded-md text-sm font-medium text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors max-w-[180px]"
         disabled={switching}
       >
         {#if switching}
@@ -326,7 +326,7 @@
         <div class="border-t p-2">
           <button
             type="button"
-            class="flex items-center gap-2 w-full px-2 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+            class="flex items-center gap-2 w-full px-2 py-2.5 md:py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
             onclick={() => { pickerProvider = null; }}
           >
             Back
@@ -352,19 +352,19 @@
                 />
                 <button
                   type="button"
-                  class="size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
+                  class="size-11 md:size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
                   onclick={submitRename}
                   disabled={renameLoading || !renameValue.trim()}
                 >
                   {#if renameLoading}
-                    <Loader2 class="size-3.5 animate-spin" />
+                    <Loader2 class="size-4 md:size-3.5 animate-spin" />
                   {:else}
-                    <Check class="size-3.5" />
+                    <Check class="size-4 md:size-3.5" />
                   {/if}
                 </button>
                 <button
                   type="button"
-                  class="size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
+                  class="size-11 md:size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
                   onclick={cancelRename}
                   disabled={renameLoading}
                 >
@@ -377,7 +377,7 @@
                 <span class="text-sm text-destructive truncate flex-1">Delete "{ws.name}"?</span>
                 <button
                   type="button"
-                  class="px-2 py-0.5 text-xs rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                  class="px-3 py-2 md:px-2 md:py-0.5 text-xs rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
                   onclick={() => confirmDelete(ws.id)}
                   disabled={deleteLoading}
                 >
@@ -389,7 +389,7 @@
                 </button>
                 <button
                   type="button"
-                  class="size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
+                  class="size-11 md:size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
                   onclick={cancelDelete}
                 >
                   <span class="text-xs">&#x2715;</span>
@@ -423,10 +423,10 @@
                 <div class="relative pr-2">
                   <button
                     type="button"
-                    class="size-6 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 hover:bg-accent-foreground/10 transition-all {menuOpenId === ws.id ? 'opacity-100' : ''}"
+                    class="size-11 md:size-6 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 hover:bg-accent-foreground/10 transition-all {menuOpenId === ws.id ? 'opacity-100' : ''}"
                     onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === ws.id ? null : ws.id; }}
                   >
-                    <Ellipsis class="size-3.5 text-muted-foreground" />
+                    <Ellipsis class="size-4 md:size-3.5 text-muted-foreground" />
                   </button>
                   {#if menuOpenId === ws.id}
                     <div class="absolute right-0 top-7 z-50 min-w-[120px] rounded-md border bg-popover p-1 shadow-md">
@@ -474,7 +474,7 @@
           <div class="p-2">
             <button
               type="button"
-              class="flex items-center gap-2 w-full px-2 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+              class="flex items-center gap-2 w-full px-2 py-2.5 md:py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
               onclick={handleCreateWorkspace}
             >
               <Plus class="size-3.5" />

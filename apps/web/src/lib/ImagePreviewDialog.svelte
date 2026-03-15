@@ -25,10 +25,10 @@
 
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Content
-    class="max-w-[90vw] max-h-[90vh] w-auto p-0 overflow-hidden bg-black/95 border-none"
+    class="!inset-0 !translate-x-0 !translate-y-0 !start-0 !top-0 flex items-center justify-center max-w-none w-full h-full p-0 overflow-hidden bg-black/95 border-none rounded-none data-[state=open]:!zoom-in-100 data-[state=closed]:!zoom-out-100"
     showCloseButton={false}
   >
-    <div class="relative flex items-center justify-center w-full h-full">
+    <div class="relative flex items-center justify-center w-full h-full max-w-[90vw] max-h-[90vh] mx-auto">
       <!-- Header bar -->
       <div class="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-2 bg-gradient-to-b from-black/60 to-transparent z-10">
         <span class="text-sm text-white/80 truncate">{mediaName}</span>

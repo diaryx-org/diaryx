@@ -24,7 +24,11 @@
   let { editor, open = $bindable(false), onOpen }: Props = $props();
   let wrapperElement: HTMLDivElement | null = $state(null);
 
-  const pluginBlockCommands = $derived(getPluginStore().editorInsertCommands.block);
+  const pluginBlockCommands = $derived(
+    getPluginStore().editorInsertCommands.block.filter(
+      (c) => c.placement === "PickerAndStylePicker" || c.placement === "All",
+    ),
+  );
 
   type BlockType =
     | "paragraph"
@@ -330,6 +334,14 @@
   .icon-button.active {
     background: var(--accent);
     color: var(--accent-foreground);
+    box-shadow: inset 0 -2px 0 var(--ring);
+  }
+
+  @media (max-width: 767px) {
+    .icon-button {
+      width: 44px;
+      height: 44px;
+    }
   }
 
   /* Toolbar button styles (matching BubbleMenuComponent) */

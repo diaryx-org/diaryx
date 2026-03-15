@@ -19,6 +19,9 @@ import {
   getCachedPluginIcon,
 } from "$lib/plugins/pluginIconResolver";
 
+/** Where an insert command appears in editor UI surfaces. */
+export type InsertCommandPlacement = "Picker" | "PickerAndStylePicker" | "All";
+
 /** A plugin insert command ready for rendering in editor menus. */
 export interface PluginInsertCommand {
   /** The TipTap node name (extension_id). */
@@ -34,6 +37,8 @@ export interface PluginInsertCommand {
   description: string | null;
   /** Whether this is inline or block. */
   nodeType: "InlineAtom" | "BlockAtom" | "InlineMark";
+  /** Where this command should appear. Defaults to "Picker". */
+  placement: InsertCommandPlacement;
 }
 
 const PLUGIN_ENABLED_KEY = "diaryx-plugin-enabled";
@@ -522,6 +527,7 @@ function getEditorInsertCommands(): {
         icon: getCachedPluginIcon(iconName),
         description: ext.insert_command.description ?? null,
         nodeType: ext.node_type,
+        placement: ext.insert_command.placement ?? "Picker",
       };
 
       if (ext.node_type === "InlineAtom") {

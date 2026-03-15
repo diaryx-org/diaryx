@@ -57,7 +57,7 @@
           </button>
           <div class="relative">
             <button
-              class="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+              class="rounded-md p-1 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
               onclick={() => toggleMoreOptions(request.id)}
               title="More options"
             >
@@ -102,7 +102,7 @@
             {/if}
           </div>
           <button
-            class="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            class="rounded-md p-1 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
             onclick={() => handleDismiss(request)}
             title="Dismiss"
           >

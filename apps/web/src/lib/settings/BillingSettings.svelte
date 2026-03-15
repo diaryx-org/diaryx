@@ -151,7 +151,7 @@
   {/if}
 
   <!-- Current Plan -->
-  <div class="flex items-center justify-between p-3 bg-muted/50 rounded-md">
+  <div class="flex items-center justify-between p-3 bg-secondary rounded-md">
     <div>
       <div class="flex items-center gap-2">
         <span class="font-medium">
@@ -268,7 +268,7 @@
         </p>
       {:else if isWaitingForCheckout}
         <!-- Waiting for Stripe checkout to complete (Tauri) -->
-        <div class="flex flex-col items-center gap-2 p-4 bg-muted/50 rounded-md text-center">
+        <div class="flex flex-col items-center gap-2 p-4 bg-secondary rounded-md text-center">
           <Loader2 class="size-5 animate-spin text-muted-foreground" />
           <p class="text-sm font-medium">Complete checkout in your browser</p>
           <p class="text-xs text-muted-foreground">

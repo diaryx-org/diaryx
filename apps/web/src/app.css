@@ -9,6 +9,14 @@
   }
 }
 
+/* Offset toast notifications by safe area insets */
+[data-sonner-toaster][data-y-position="top"] {
+  top: env(safe-area-inset-top, 0px) !important;
+}
+[data-sonner-toaster][data-y-position="bottom"] {
+  bottom: env(safe-area-inset-bottom, 0px) !important;
+}
+
 /* Prevent iOS bounce scroll and ensure proper height calculation */
 html,
 body,
@@ -29,6 +37,13 @@ body {
     "Segoe UI",
     Roboto,
     sans-serif;
+  accent-color: var(--primary);
+  caret-color: var(--primary);
+}
+
+::selection {
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 /* Use dynamic viewport height for better mobile support */
@@ -191,4 +206,37 @@ body {
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* High contrast editor: force pure white/black background and text */
+.high-contrast-editor .editor-content {
+  color: #000 !important;
+}
+.high-contrast-editor .editor-content h1,
+.high-contrast-editor .editor-content h2,
+.high-contrast-editor .editor-content h3,
+.high-contrast-editor .editor-content p,
+.high-contrast-editor .editor-content ul,
+.high-contrast-editor .editor-content ol,
+.high-contrast-editor .editor-content li,
+.high-contrast-editor .editor-content blockquote {
+  color: #000 !important;
+}
+/* Editor scrollable container background */
+.high-contrast-editor [data-spotlight="editor-area"] > .overflow-y-auto {
+  background: #fff !important;
+}
+.high-contrast-editor.dark .editor-content,
+.high-contrast-editor.dark .editor-content h1,
+.high-contrast-editor.dark .editor-content h2,
+.high-contrast-editor.dark .editor-content h3,
+.high-contrast-editor.dark .editor-content p,
+.high-contrast-editor.dark .editor-content ul,
+.high-contrast-editor.dark .editor-content ol,
+.high-contrast-editor.dark .editor-content li,
+.high-contrast-editor.dark .editor-content blockquote {
+  color: #fff !important;
+}
+.high-contrast-editor.dark [data-spotlight="editor-area"] > .overflow-y-auto {
+  background: #000 !important;
 }

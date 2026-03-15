@@ -600,7 +600,7 @@
           {#each filteredEntries as entry}
             <button
               type="button"
-              class="w-full text-left rounded-md border p-2.5 transition hover:border-foreground/40"
+              class="w-full text-left rounded-md border p-2.5 transition hover:border-muted-foreground"
               onclick={() => (detailTypographyId = entry.id)}
             >
               <div

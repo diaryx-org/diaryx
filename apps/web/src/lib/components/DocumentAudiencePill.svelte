@@ -16,9 +16,10 @@
     rootPath: string;
     api: Api | null;
     onChange: (value: string[] | null) => void;
+    onOpenManager?: () => void;
   }
 
-  let { audience, entryPath, rootPath, api, onChange }: Props = $props();
+  let { audience, entryPath, rootPath, api, onChange, onOpenManager }: Props = $props();
 
   const mobileState = getMobileState();
   const templateContextStore = getTemplateContextStore();
@@ -160,6 +161,15 @@
       {/each}
     </Command.List>
   </Command.Root>
+  {#if onOpenManager}
+    <button
+      type="button"
+      class="w-full text-left text-xs text-muted-foreground hover:text-foreground transition-colors hover:underline px-3 py-1.5 border-t border-border"
+      onclick={() => { open = false; onOpenManager?.(); }}
+    >
+      Manage audiences...
+    </button>
+  {/if}
 {/snippet}
 
 {#snippet trigger()}
@@ -261,8 +271,15 @@
     flex-wrap: wrap;
     gap: 4px;
     padding: 2px 0;
+    min-height: 44px;
     border-radius: 6px;
     transition: transform 0.15s ease, background 0.15s ease;
+  }
+
+  @media (min-width: 768px) {
+    .pill-area {
+      min-height: unset;
+    }
   }
 
   .pill-area:hover {
@@ -275,11 +292,18 @@
     align-items: center;
     gap: 4px;
     padding: 2px 8px;
+    min-height: 44px;
     border-radius: 4px;
     font-size: 12px;
     color: var(--muted-foreground);
     background: transparent;
     transition: background 0.15s ease;
+  }
+
+  @media (min-width: 768px) {
+    .pill-private {
+      min-height: unset;
+    }
   }
 
   .pill-area:hover .pill-private {
@@ -329,12 +353,19 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
+    width: 44px;
+    height: 44px;
     border-radius: 4px;
     color: var(--muted-foreground);
     background: transparent;
     transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  @media (min-width: 768px) {
+    .pill-add {
+      width: 20px;
+      height: 20px;
+    }
   }
 
   .pill-area:hover .pill-add {
@@ -347,13 +378,20 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0;
-    margin: 0;
+    padding: 8px;
+    margin: -8px -6px -8px 0;
     border: none;
     background: none;
     color: var(--muted-foreground);
     cursor: pointer;
     transition: color 0.15s ease;
+  }
+
+  @media (min-width: 768px) {
+    .pill-remove {
+      padding: 0;
+      margin: 0;
+    }
   }
 
   .pill-remove:hover {

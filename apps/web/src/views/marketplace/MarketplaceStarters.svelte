@@ -335,7 +335,7 @@
             {@const applying = applyingIds.has(starter.id)}
             <button
               type="button"
-              class="w-full text-left rounded-md border p-2.5 transition hover:border-foreground/40"
+              class="w-full text-left rounded-md border p-2.5 transition hover:border-muted-foreground"
               onclick={() => (detailStarterId = starter.id)}
             >
               <div class="flex items-center gap-2 mb-1">

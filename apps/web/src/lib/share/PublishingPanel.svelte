@@ -366,7 +366,7 @@
     <!-- Audience list or empty state -->
     {#if !hasAnyAudience}
       <!-- Private workspace: no audiences, no default audience -->
-      <div class="space-y-3 p-3 rounded-md bg-muted/50 border border-border">
+      <div class="space-y-3 p-3 rounded-md bg-secondary border border-border">
         <div class="flex items-start gap-2.5">
           <ShieldOff class="size-5 text-muted-foreground shrink-0 mt-0.5" />
           <div class="space-y-1">
@@ -441,7 +441,7 @@
             {@const dotColor = getAudienceColor(audience, colorStore.audienceColors)}
             {@const isDefault = isDefaultOnly(audience)}
             <button
-              class="w-full flex items-center gap-2 px-2.5 py-2 rounded-md border border-border bg-background hover:bg-muted/50 transition-colors text-left"
+              class="w-full flex items-center gap-2 px-2.5 py-2 rounded-md border border-border bg-background hover:bg-secondary transition-colors text-left"
               onclick={() => openAccessDialog(audience)}
             >
               <span class="size-2.5 rounded-full shrink-0 {dotColor}"></span>
@@ -519,7 +519,7 @@
       <!-- State selector -->
       <div class="space-y-2">
         <button
-          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-colors {accessDialogState === 'unpublished' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}"
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-colors {accessDialogState === 'unpublished' ? 'border-primary bg-secondary' : 'border-border hover:bg-secondary'}"
           onclick={() => { accessDialogState = 'unpublished'; }}
         >
           <div class="flex-1">
@@ -529,7 +529,7 @@
         </button>
 
         <button
-          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-colors {accessDialogState === 'public' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}"
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-colors {accessDialogState === 'public' ? 'border-primary bg-secondary' : 'border-border hover:bg-secondary'}"
           onclick={() => { accessDialogState = 'public'; }}
         >
           <Globe class="size-4 text-muted-foreground shrink-0" />
@@ -540,7 +540,7 @@
         </button>
 
         <button
-          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-colors {accessDialogState === 'access-control' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}"
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-colors {accessDialogState === 'access-control' ? 'border-primary bg-secondary' : 'border-border hover:bg-secondary'}"
           onclick={() => { accessDialogState = 'access-control'; }}
         >
           <Lock class="size-4 text-muted-foreground shrink-0" />
@@ -553,7 +553,7 @@
 
       <!-- Access control options (shown when access-control selected) -->
       {#if accessDialogState === 'access-control'}
-        <div class="space-y-3 p-3 rounded-md bg-muted/50 border border-border">
+        <div class="space-y-3 p-3 rounded-md bg-secondary border border-border">
           <div class="space-y-1.5">
             <label for="access-method" class="text-xs font-medium text-muted-foreground">Method</label>
             <NativeSelect id="access-method" bind:value={accessDialogMethod} class="w-full h-8 text-xs">
@@ -595,7 +595,7 @@
               </div>
 
               {#if lastCreatedAccessUrl}
-                <Alert.Root class="py-2 border border-primary/30 bg-primary/5">
+                <Alert.Root class="py-2 border border-primary/30 bg-secondary">
                   <Alert.Description class="text-xs space-y-2">
                     <p class="font-medium text-foreground">Access URL (shown once)</p>
                     <code class="block text-[11px] break-all bg-background rounded p-2 border border-border">{lastCreatedAccessUrl}</code>

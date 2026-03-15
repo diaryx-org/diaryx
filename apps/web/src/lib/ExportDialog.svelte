@@ -405,7 +405,7 @@
   }
 
   // Build a tree structure from flat paths
-  function buildTree(files: { path: string; relative_path: string }[], binaries: { path: string }[] = []): TreeNode[] {
+  function buildTree(files: { relative_path: string }[], binaries: { path: string }[] = []): TreeNode[] {
     const root: TreeNode[] = [];
 
     // Add markdown files

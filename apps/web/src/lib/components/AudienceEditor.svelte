@@ -15,6 +15,7 @@
     rootPath: string;
     api: Api | null;
     onChange: (value: string[] | null) => void;
+    onOpenManager?: () => void;
   }
 
   let {
@@ -23,6 +24,7 @@
     rootPath,
     api,
     onChange,
+    onOpenManager,
   }: Props = $props();
 
   const mobileState = getMobileState();
@@ -169,8 +171,8 @@
 {/snippet}
 
 {#snippet addButton()}
-  <Button variant="ghost" size="sm" class="h-6 text-xs px-2">
-    <Plus class="size-3 mr-1" />
+  <Button variant="ghost" size="sm" class="h-11 md:h-6 text-xs px-2">
+    <Plus class="size-4 md:size-3 mr-1" />
     Add
   </Button>
 {/snippet}
@@ -187,7 +189,7 @@
       <div class="flex flex-wrap gap-1">
         {#each inheritedTags as tag}
           <span
-            class="inline-flex items-center px-2 py-0.5 rounded-md text-xs bg-muted/50 text-muted-foreground border border-dashed border-border"
+            class="inline-flex items-center px-2 py-0.5 rounded-md text-xs bg-secondary text-muted-foreground border border-dashed border-border"
           >
             {tag}
           </span>
@@ -201,7 +203,7 @@
         <Button
           variant="ghost"
           size="sm"
-          class="h-6 text-xs px-2"
+          class="h-11 md:h-6 text-xs px-2"
           onclick={makeExplicit}
         >
           Make explicit
@@ -283,7 +285,7 @@
         <Button
           variant="ghost"
           size="sm"
-          class="h-6 text-xs px-2"
+          class="h-11 md:h-6 text-xs px-2"
           onclick={revertToInherit}
         >
           Inherit
@@ -300,11 +302,11 @@
           {tag}
           <button
             type="button"
-            class="text-muted-foreground hover:text-destructive transition-colors"
+            class="text-muted-foreground hover:text-destructive transition-colors p-2 md:p-0"
             onclick={() => removeTag(i)}
             aria-label="Remove {tag}"
           >
-            <X class="size-3" />
+            <X class="size-4 md:size-3" />
           </button>
         </span>
       {/each}
@@ -335,12 +337,22 @@
         <Button
           variant="ghost"
           size="sm"
-          class="h-6 text-xs px-2"
+          class="h-11 md:h-6 text-xs px-2"
           onclick={revertToInherit}
         >
           Inherit
         </Button>
       {/if}
     </div>
+  {/if}
+
+  {#if onOpenManager}
+    <button
+      type="button"
+      class="text-xs text-muted-foreground hover:text-foreground transition-colors hover:underline mt-1"
+      onclick={onOpenManager}
+    >
+      Manage audiences...
+    </button>
   {/if}
 </div>

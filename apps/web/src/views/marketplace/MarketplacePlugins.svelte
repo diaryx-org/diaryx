@@ -396,7 +396,7 @@
             {@const installing = installingIds.has(plugin.id)}
             <button
               type="button"
-              class="w-full text-left rounded-md border p-2.5 transition hover:border-foreground/40"
+              class="w-full text-left rounded-md border p-2.5 transition hover:border-muted-foreground"
               onclick={() => (detailPlugin = plugin)}
             >
               <div class="flex items-center justify-between gap-2">

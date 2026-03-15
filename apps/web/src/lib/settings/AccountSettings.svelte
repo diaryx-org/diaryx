@@ -204,7 +204,7 @@
 
       <!-- Sync Setup Prompt (when signed in but sync not enabled) -->
       {#if !syncEnabled && onAddWorkspace}
-        <div class="space-y-2 p-3 rounded-md bg-primary/5 border border-primary/20">
+        <div class="space-y-2 p-3 rounded-md bg-secondary border border-primary/20">
           <p class="text-xs text-muted-foreground">
             Signed in. Set up sync to access your notes across devices. One synced workspace is free.
           </p>
@@ -228,7 +228,7 @@
           <Label class="text-xs text-muted-foreground">Your Devices</Label>
           <div class="space-y-1">
             {#each authState.devices as device}
-              <div class="flex items-center justify-between text-sm p-2 bg-muted/50 rounded-md">
+              <div class="flex items-center justify-between text-sm p-2 bg-secondary rounded-md">
                 {#if renamingDeviceId === device.id}
                   <div class="flex items-center gap-1 flex-1 mr-2">
                     <Smartphone class="size-4 text-muted-foreground shrink-0" />
@@ -300,7 +300,7 @@
           {#if passkeys.length > 0}
             <div class="space-y-1">
               {#each passkeys as pk}
-                <div class="flex items-center justify-between text-sm p-2 bg-muted/50 rounded-md">
+                <div class="flex items-center justify-between text-sm p-2 bg-secondary rounded-md">
                   <div class="flex items-center gap-2">
                     <Fingerprint class="size-4 text-muted-foreground" />
                     <span>{pk.name}</span>

@@ -27,13 +27,16 @@
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
   import PermissionBanner from "./lib/components/PermissionBanner.svelte";
   import AudienceEditor from "./lib/components/AudienceEditor.svelte";
+  import AudienceManager from "./views/audience/AudienceManager.svelte";
   import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
   import EditorFooter from "./views/editor/EditorFooter.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
   import WelcomeScreen from "./views/WelcomeScreen.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
+  import FindBar from "$lib/components/FindBar.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
   import * as Tooltip from "$lib/components/ui/tooltip";
+  import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { PanelLeft, PanelRight, Menu } from "@lucide/svelte";
@@ -56,6 +59,7 @@
   } from "./models/stores";
   import { getPluginStore } from "./models/stores/pluginStore.svelte";
   import { getAudienceColorStore } from "./lib/stores/audienceColorStore.svelte";
+  import { getAudienceColor } from "./lib/utils/audienceDotColor";
   import type {
     PluginConfig,
     PluginPermissions,
@@ -206,7 +210,6 @@
     handleMoveAttachment as moveAttachmentHandler,
     handleLinkClick as linkClickHandler,
     handleValidateWorkspace,
-    handleFindInFile,
     handleWordCount,
     handleCopyAsMarkdown,
     handleViewMarkdown,
@@ -216,6 +219,8 @@
   // Dynamically import Editor to avoid SSR issues
   let Editor: typeof import("./lib/Editor.svelte").default | null =
     $state(null);
+  const mobileState = getMobileState();
+
   // Entry navigation intent tracking (keeps sidebar selection responsive while
   // the backend is still opening the next file).
   let pendingEntryPath = $state<string | null>(null);
@@ -285,6 +290,17 @@
     workspaceMissing = null;
     showWelcomeScreen = true;
   }
+
+  // Find in file state
+  let showFindBar = $state(false);
+
+  // In-app prompt dialogs (replaces window.prompt which is blocked in Tauri WKWebView)
+  let promptDialog = $state<{
+    title: string;
+    label: string;
+    value: string;
+    onSubmit: (value: string) => void;
+  } | null>(null);
 
   // Sidebar resize state
   let resizingSidebar = $state<'left' | 'right' | null>(null);
@@ -366,6 +382,7 @@
 
   // Audience dialog state
   let showAudienceDialog = $state(false);
+  let showAudienceManager = $state(false);
   let audienceDialogPath = $state<string | null>(null);
   let audienceDialogAudience = $state<string[] | null>(null);
   let pendingDeleteName = $derived.by(() => {
@@ -403,6 +420,11 @@
   // Edge hover state for sidebar open buttons (focus mode reveal)
   let leftEdgeHovered = $state(false);
   let rightEdgeHovered = $state(false);
+  // Mobile focus-mode chrome tap-to-reveal state
+  let mobileFocusChromeRevealed = $state(false);
+  let mobileFocusChromeRevealTimer: ReturnType<typeof setTimeout> | undefined;
+  // Effective audience tags for the current entry (includes inherited/default)
+  let effectiveAudienceTags = $state<string[]>([]);
   // FSA reconnect state (shown when local folder needs user gesture to re-grant access)
   let fsaNeedsReconnect = $state(false);
   let fsaReconnectWsId = $state<string | undefined>(undefined);
@@ -419,6 +441,9 @@
   let showUnlinkedFiles = $derived(workspaceStore.showUnlinkedFiles);
   let showHiddenFiles = $derived(workspaceStore.showHiddenFiles);
   let focusMode = $derived(workspaceStore.focusMode);
+  let mobileFocusModeActive = $derived(
+    focusMode && leftSidebarCollapsed && rightSidebarCollapsed,
+  );
 
   // API wrapper - uses execute() internally for all operations
   let api: Api | null = $derived(backend ? createApi(backend) : null);
@@ -472,7 +497,11 @@
   let trackingTouchGesture = false;
   let touchBlocksShellSwipe = false;
   let touchStartedInSelectableContent = false;
+  let touchStartTarget: EventTarget | null = null;
   const COMMAND_PALETTE_EDGE_ZONE_PX = 100;
+
+  // FAB element ref for swipe gesture targeting
+  let editorFabElement: HTMLElement | null = $state(null);
 
   // Progressive swipe state – drives sidebar width interactively during a gesture.
   // `swipeTarget` is set once the gesture direction is locked in.
@@ -492,6 +521,33 @@
   let commandPaletteSwipeProgress: number | null = $derived(
     swipeTarget === "open-command-palette" ? swipeProgress : null,
   );
+
+  function clearMobileFocusChromeRevealTimer(): void {
+    if (mobileFocusChromeRevealTimer) {
+      clearTimeout(mobileFocusChromeRevealTimer);
+      mobileFocusChromeRevealTimer = undefined;
+    }
+  }
+
+  function revealMobileFocusChromeTemporarily(): void {
+    if (!mobileFocusModeActive) {
+      return;
+    }
+
+    mobileFocusChromeRevealed = true;
+    clearMobileFocusChromeRevealTimer();
+    mobileFocusChromeRevealTimer = setTimeout(() => {
+      mobileFocusChromeRevealed = false;
+      mobileFocusChromeRevealTimer = undefined;
+    }, 3000);
+  }
+
+  $effect(() => {
+    if (!mobileFocusModeActive) {
+      clearMobileFocusChromeRevealTimer();
+      mobileFocusChromeRevealed = false;
+    }
+  });
 
   // Helper to handle mixed frontmatter types (Map from WASM vs Object from JSON/Tauri)
   function normalizeFrontmatter(frontmatter: any): Record<string, any> {
@@ -1619,6 +1675,7 @@
     trackingTouchGesture = false;
     touchBlocksShellSwipe = false;
     touchStartedInSelectableContent = false;
+    touchStartTarget = null;
     swipeTarget = null;
     swipeProgress = 0;
   }
@@ -1637,6 +1694,7 @@
     trackingTouchGesture = true;
     touchBlocksShellSwipe = swipeContext.blocksShellSwipe;
     touchStartedInSelectableContent = swipeContext.startsInSelectableContent;
+    touchStartTarget = e.target;
     swipeTarget = null;
     swipeProgress = 0;
   }
@@ -1677,15 +1735,20 @@
       }
 
       if (absDeltaY > absDeltaX) {
-        // Mostly vertical swipe-up from bottom edge → open command palette
+        // Mostly vertical swipe-up → open command palette
+        // On mobile: swipe from the FAB; on desktop: swipe from bottom edge zone
         const viewportHeight = window.innerHeight;
+        const startedOnFab = editorFabElement
+          && touchStartTarget instanceof Node
+          && editorFabElement.contains(touchStartTarget);
+        const startedInBottomZone = touchStartY > viewportHeight - COMMAND_PALETTE_EDGE_ZONE_PX;
         if (
           deltaY < 0 &&
-          touchStartY > viewportHeight - COMMAND_PALETTE_EDGE_ZONE_PX
+          (startedOnFab || (!editorFabElement && startedInBottomZone))
         ) {
           swipeTarget = "open-command-palette";
         } else {
-          return; // vertical but not from footer – ignore
+          return; // vertical but not from FAB/footer – ignore
         }
       } else {
         swipeTarget = resolveSwipeTarget(deltaX);
@@ -1830,6 +1893,27 @@
     // Skip the initial run (before workspace is loaded)
     if (!api || !backend) return;
     refreshTree();
+  });
+
+  // Resolve effective audience (including inherited) for the mobile header dots
+  $effect(() => {
+    const entry = currentEntry;
+    const currentApi = api;
+    if (!entry || !currentApi) {
+      effectiveAudienceTags = [];
+      return;
+    }
+    // If explicit tags exist, use them directly
+    if (Array.isArray(entry.frontmatter?.audience) && entry.frontmatter.audience.length > 0) {
+      effectiveAudienceTags = entry.frontmatter.audience.map(String);
+      return;
+    }
+    // Otherwise resolve inherited/default audience
+    currentApi.getEffectiveAudience(entry.path).then((result) => {
+      effectiveAudienceTags = result.tags ?? [];
+    }).catch(() => {
+      effectiveAudienceTags = [];
+    });
   });
 
   // Check if we're on desktop and expand sidebars by default
@@ -2165,6 +2249,7 @@
     // Cleanup filesystem event subscription
     cleanupEventSubscription?.();
     cleanupMobileGestureListeners?.();
+    clearMobileFocusChromeRevealTimer();
     // Cleanup import:complete listener
     window.removeEventListener("import:complete", handleImportComplete);
   });
@@ -2440,6 +2525,11 @@
     if ((event.metaKey || event.ctrlKey) && event.key === "k") {
       event.preventDefault();
       uiStore.openCommandPalette();
+    }
+    // Find in file with Cmd/Ctrl + F
+    if ((event.metaKey || event.ctrlKey) && event.key === "f") {
+      event.preventDefault();
+      showFindBar = true;
     }
     // Toggle left sidebar with Cmd/Ctrl + [ (bracket)
     if ((event.metaKey || event.ctrlKey) && event.key === "[") {
@@ -3324,10 +3414,16 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     pendingDeleteIncludesDescendants = false;
   }
 
-  // Open audience dialog for a tree entry
+  // Open audience dialog for a tree entry (or full-screen manager if no audiences exist)
   async function handleSetAudience(path: string) {
     if (!api) return;
     try {
+      const available = await api.getAvailableAudiences(tree?.path ?? "");
+      if (available.length === 0) {
+        // No audiences exist — go straight to the full-screen manager
+        showAudienceManager = true;
+        return;
+      }
       const entry = await api.getEntry(path);
       const fm = normalizeFrontmatter(entry.frontmatter);
       audienceDialogPath = path;
@@ -3542,13 +3638,20 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     toast.success("Entry duplicated");
   }
 
-  async function cmdRenameEntry() {
+  function cmdRenameEntry() {
     if (!currentEntry) { toast.error("No entry selected"); return; }
     const currentTitle = (typeof currentEntry.frontmatter?.title === "string" ? currentEntry.frontmatter.title : null)
       || currentEntry.path.split("/").pop()?.replace(".md", "") || "";
-    const newTitle = window.prompt("Enter new title:", currentTitle);
-    if (!newTitle || newTitle === currentTitle) return;
-    await handleRenameEntry(currentEntry.path, newTitle);
+    const entryPath = currentEntry.path;
+    promptDialog = {
+      title: "Rename Entry",
+      label: "New title",
+      value: currentTitle,
+      onSubmit: async (newTitle: string) => {
+        if (!newTitle || newTitle === currentTitle) return;
+        await handleRenameEntry(entryPath, newTitle);
+      },
+    };
   }
 
   function cmdDeleteEntry() {
@@ -3556,7 +3659,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     handleDeleteEntry(currentEntry.path);
   }
 
-  async function cmdMoveEntry() {
+  function cmdMoveEntry() {
     if (!currentEntry || !tree) { toast.error("No entry selected"); return; }
     const allParents: string[] = [];
     function collectParents(node: typeof tree) {
@@ -3567,12 +3670,23 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       node.children.forEach(collectParents);
     }
     collectParents(tree);
-    const options = allParents.filter(p => p !== currentEntry!.path).map(p => p.split("/").pop()?.replace(".md", "") || p).join(", ");
-    const dest = window.prompt(`Move "${currentEntry.path.split("/").pop()?.replace(".md", "")}" to which parent?\n\nAvailable: ${options}`);
-    if (!dest) return;
-    const match = allParents.find(p => p.split("/").pop()?.replace(".md", "").toLowerCase() === dest.toLowerCase());
-    if (!match) { toast.error("Parent not found"); return; }
-    await handleMoveEntry(currentEntry.path, match);
+    const entryPath = currentEntry.path;
+    const entryName = entryPath.split("/").pop()?.replace(".md", "") ?? "";
+    const options = allParents
+      .filter(p => p !== entryPath)
+      .map(p => p.split("/").pop()?.replace(".md", "") || p)
+      .join(", ");
+    promptDialog = {
+      title: "Move Entry",
+      label: `Move "${entryName}" to which parent?\n\nAvailable: ${options}`,
+      value: "",
+      onSubmit: async (dest: string) => {
+        if (!dest) return;
+        const match = allParents.find(p => p.split("/").pop()?.replace(".md", "").toLowerCase() === dest.toLowerCase());
+        if (!match) { toast.error("Parent not found"); return; }
+        await handleMoveEntry(entryPath, match);
+      },
+    };
   }
 
   async function cmdCreateChildEntry() {
@@ -3647,6 +3761,24 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         blob = await convertHeicToJpeg(blob);
         mediaKind = "image";
       }
+
+      // On iOS Tauri, use native image viewer for images (pinch-to-zoom, etc.)
+      if (isTauri() && isIOS() && mediaKind === "image") {
+        const arrayBuffer = await blob.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const base64 = btoa(binary);
+        (window as any).webkit?.messageHandlers?.editorToolbar?.postMessage({
+          type: "imagePreview",
+          base64,
+          name: displayName,
+        });
+        return;
+      }
+
       // Revoke previous preview URL if any
       if (previewImageUrl) URL.revokeObjectURL(previewImageUrl);
       previewImageUrl = URL.createObjectURL(blob);
@@ -3858,12 +3990,50 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       settingsInitialTab = "workspace";
       showSettingsDialog = true;
     }}
-    onFindInFile={handleFindInFile}
+    onFindInFile={() => { showFindBar = true; }}
     onWordCount={cmdWordCount}
   onCopyAsMarkdown={cmdCopyAsMarkdown}
   onViewMarkdown={cmdViewMarkdown}
   onReorderFootnotes={cmdReorderFootnotes}
 />
+
+<!-- In-app Prompt Dialog (replaces window.prompt) -->
+<Dialog.Root
+  open={!!promptDialog}
+  onOpenChange={(open) => { if (!open) promptDialog = null; }}
+>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>{promptDialog?.title ?? ""}</Dialog.Title>
+    </Dialog.Header>
+    <form
+      onsubmit={(e) => {
+        e.preventDefault();
+        const value = promptDialog?.value ?? "";
+        const onSubmit = promptDialog?.onSubmit;
+        promptDialog = null;
+        onSubmit?.(value);
+      }}
+    >
+      <!-- svelte-ignore a11y_label_has_associated_control -->
+      <label class="text-sm text-muted-foreground whitespace-pre-line">{promptDialog?.label ?? ""}</label>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        type="text"
+        class="mt-2 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] md:text-sm"
+        value={promptDialog?.value ?? ""}
+        oninput={(e) => {
+          if (promptDialog) promptDialog = { ...promptDialog, value: (e.target as HTMLInputElement).value };
+        }}
+        autofocus
+      />
+      <div class="flex justify-end gap-2 mt-4">
+        <Button variant="outline" type="button" onclick={() => { promptDialog = null; }}>Cancel</Button>
+        <Button type="submit">OK</Button>
+      </div>
+    </form>
+  </Dialog.Content>
+</Dialog.Root>
 
 <SettingsDialog
   bind:open={showSettingsDialog}
@@ -4016,14 +4186,20 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
           rootPath={tree?.path ?? ""}
           {api}
           onChange={handleAudienceChange}
+          onOpenManager={() => { showAudienceDialog = false; audienceDialogPath = null; showAudienceManager = true; }}
         />
       {/if}
     </div>
   </Dialog.Content>
 </Dialog.Root>
 
+<!-- Full-screen Audience Manager -->
+{#if showAudienceManager && api}
+  <AudienceManager {api} rootPath={tree?.path ?? ""} onClose={() => { showAudienceManager = false; }} />
+{/if}
+
 <!-- Toast Notifications -->
-<Toaster />
+<Toaster position={mobileState.isMobile ? "top-center" : "bottom-right"} />
 
 <!-- Tooltip Provider for keyboard shortcut hints -->
 <Tooltip.Provider>
@@ -4155,6 +4331,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       showWelcomeScreen = true;
     }}
     onSetAudience={handleSetAudience}
+    onOpenAudienceManager={() => { showAudienceManager = true; }}
     requestedTab={requestedLeftTab}
     onRequestedTabConsumed={() => (requestedLeftTab = null)}
     onPluginHostAction={handlePluginHostAction}
@@ -4183,7 +4360,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   />
 
   <!-- Main Content Area -->
-  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]" data-spotlight="editor-area">
+  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative md:pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]" data-spotlight="editor-area">
     <!-- Sidebar open buttons (visible when collapsed, fade in focus mode, reveal on hover via edge strip) -->
     {#if leftSidebarCollapsed}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -4222,29 +4399,65 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       </div>
     {/if}
     {#if currentEntry}
-      <!-- Mobile top navigation strip -->
-      <header class="flex items-center justify-between px-2 py-1.5 border-b border-border bg-background shrink-0 md:hidden select-none">
+      {#if mobileFocusModeActive && !mobileFocusChromeRevealed}
         <button
           type="button"
-          class="p-2"
+          class="absolute inset-x-0 top-0 z-20 h-[calc(env(safe-area-inset-top)+0.75rem)] md:hidden"
+          aria-label="Show editor controls"
+          onclick={revealMobileFocusChromeTemporarily}
+          onpointerdown={revealMobileFocusChromeTemporarily}
+        >
+          <span class="sr-only">Show editor controls</span>
+        </button>
+      {/if}
+      <!-- Mobile top navigation strip -->
+      <header
+        class="flex items-center justify-between px-2 py-1.5 border-b border-sidebar-border bg-sidebar-accent md:hidden select-none shrink-0
+          pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]
+          transition-[opacity,transform] duration-300 ease-in-out
+          {mobileFocusModeActive ? 'absolute inset-x-0 top-0 z-30' : 'relative shrink-0'}
+          {mobileFocusModeActive && !mobileFocusChromeRevealed ? '-translate-y-full opacity-0 pointer-events-none' : 'translate-y-0 opacity-100'}"
+        onpointerdown={revealMobileFocusChromeTemporarily}
+        ontouchstart={revealMobileFocusChromeTemporarily}
+      >
+        <button
+          type="button"
+          class="p-3"
           onclick={toggleLeftSidebar}
           aria-label="Toggle navigation"
         >
           <Menu class="size-5 text-muted-foreground" />
         </button>
-        <span class="text-sm font-medium text-foreground truncate mx-2">
-          {typeof currentEntry.frontmatter?.title === "string"
-            ? currentEntry.frontmatter.title
-            : currentEntry.path.split("/").pop()?.replace(".md", "") ?? ""}
+        <span class="flex items-center gap-1.5 min-w-0 mx-2">
+          <span class="text-sm font-medium text-foreground truncate">
+            {typeof currentEntry.frontmatter?.title === "string"
+              ? currentEntry.frontmatter.title
+              : currentEntry.path.split("/").pop()?.replace(".md", "") ?? ""}
+          </span>
+          {#if effectiveAudienceTags.length > 0}
+            <button
+              type="button"
+              class="flex items-center gap-1 shrink-0 p-2"
+              onclick={() => { showAudienceManager = true; }}
+              aria-label="Manage audiences"
+            >
+              {#each effectiveAudienceTags as tag}
+                <span
+                  class="size-2 rounded-full {getAudienceColor(tag, getAudienceColorStore().audienceColors)}"
+                  title={tag}
+                ></span>
+              {/each}
+            </button>
+          {/if}
         </span>
         {#if rightSidebarCollapsed}
           <button
             type="button"
-            class="p-2"
+            class="p-3"
             onclick={toggleRightSidebar}
             aria-label="Open properties panel"
           >
-            <PanelRight class="size-4 text-muted-foreground" />
+            <PanelRight class="size-5 text-muted-foreground" />
           </button>
         {:else}
           <div class="size-9"></div>
@@ -4263,8 +4476,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         onAttachmentInsert={handleAttachmentInsert}
         onFileDrop={handleEditorFileDrop}
         onLinkClick={handleLinkClick}
-
       />
+      <FindBar bind:open={showFindBar} {editorRef} />
       {#if loadingTargetPath}
         <div
           data-testid="entry-switch-loading-overlay"
@@ -4282,10 +4495,12 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         leftSidebarOpen={!leftSidebarCollapsed}
         rightSidebarOpen={!rightSidebarCollapsed}
         {focusMode}
+        mobileFocusChromeVisible={mobileFocusChromeRevealed}
         readonly={editorReadonly}
         commandPaletteOpen={uiStore.showCommandPalette}
         onSave={save}
         onOpenCommandPalette={uiStore.openCommandPalette}
+        onRevealMobileFocusChrome={revealMobileFocusChromeTemporarily}
         {api}
         onPluginToolbarAction={handlePluginToolbarAction}
         audience={currentEntry.frontmatter.audience as string[] | null ?? null}
@@ -4298,6 +4513,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
             handlePropertyChange("audience", value);
           }
         }}
+        onOpenAudienceManager={() => { showAudienceManager = true; }}
+        onFabMount={(el) => { editorFabElement = el; }}
       />
     {:else}
       <EditorEmptyState
@@ -4357,6 +4574,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     requestedTab={requestedSidebarTab}
     onRequestedTabConsumed={() => (requestedSidebarTab = null)}
     onPluginHostAction={handlePluginHostAction}
+    onOpenAudienceManager={() => { showAudienceManager = true; }}
   />
 
   {#if spotlightSteps}

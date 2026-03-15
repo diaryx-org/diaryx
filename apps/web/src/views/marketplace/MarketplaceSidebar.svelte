@@ -39,11 +39,11 @@
 
   <!-- Section Tabs -->
   <div class="px-3 pt-1 pb-1 shrink-0">
-    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
+    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5 overflow-x-auto">
       {#each sections as section (section.id)}
         <button
           type="button"
-          class="flex-1 px-1 py-1.5 text-xs font-medium rounded transition-colors {activeSection === section.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="shrink-0 px-2 md:px-1 py-2.5 md:py-1.5 text-sm md:text-xs font-medium rounded transition-colors {activeSection === section.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => (activeSection = section.id)}
         >
           {section.label}

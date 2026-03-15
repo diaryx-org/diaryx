@@ -500,7 +500,7 @@
             {@const applying = applyingBundleIds.has(bundle.id)}
             <button
               type="button"
-              class="w-full text-left rounded-md border p-2.5 transition hover:border-foreground/40"
+              class="w-full text-left rounded-md border p-2.5 transition hover:border-muted-foreground"
               onclick={() => (detailBundleId = bundle.id)}
             >
               {#if themeById.has(bundle.theme_id)}

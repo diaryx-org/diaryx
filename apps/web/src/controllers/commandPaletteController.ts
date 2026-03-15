@@ -204,15 +204,29 @@ export async function handleCreateChildUnderCurrent(
  * Trigger browser's find functionality.
  */
 export function handleFindInFile(): void {
-  if (typeof window !== 'undefined') {
-    try {
-      // @ts-ignore - execCommand is deprecated but still works
-      document.execCommand('find');
-    } catch {
-      // Fallback: show keyboard shortcut hint
-      toast.info('Find in File', { description: 'Use Cmd/Ctrl+F to search' });
+  if (typeof window === 'undefined') return;
+
+  // Try the non-standard window.find() API (supported in Safari/Chrome)
+  try {
+    if (typeof (window as any).find === 'function' && (window as any).find()) {
+      return;
     }
+  } catch {
+    // Ignore — fall through to toast
   }
+
+  // Try Firefox's execCommand('find')
+  try {
+    if (document.execCommand('find')) return;
+  } catch {
+    // Ignore — fall through to toast
+  }
+
+  // Fallback: show keyboard shortcut hint
+  const isMac = navigator.platform?.toUpperCase().includes('MAC');
+  toast.info('Find in File', {
+    description: `Use ${isMac ? '⌘' : 'Ctrl'}+F to search`,
+  });
 }
 
 /**

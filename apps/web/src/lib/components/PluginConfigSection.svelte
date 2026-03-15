@@ -37,8 +37,8 @@
           class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer hover:text-foreground w-full"
           onclick={() => togglePlugin(name)}
         >
-          <ChevronRight class="size-3 transition-transform {isCollapsed(name) ? '' : 'rotate-90'}" />
-          <Puzzle class="size-3" />
+          <ChevronRight class="size-4 md:size-3 transition-transform {isCollapsed(name) ? '' : 'rotate-90'}" />
+          <Puzzle class="size-4 md:size-3" />
           <span class="font-medium">{name}</span>
         </button>
         {#if !isCollapsed(name)}

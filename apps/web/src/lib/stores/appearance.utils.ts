@@ -212,4 +212,5 @@ export const DEFAULT_APPEARANCE: UserAppearance = {
   accentHue: null,
   typographyPresetId: "default",
   typographyOverrides: {},
+  highContrastEditor: false,
 };

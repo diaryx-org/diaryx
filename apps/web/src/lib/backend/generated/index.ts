@@ -33,6 +33,7 @@ export type { FixResult } from './FixResult';
 export type { FixSummary } from './FixSummary';
 export type { ImportResult } from './ImportResult';
 export type { InsertCommand } from './InsertCommand';
+export type { InsertCommandPlacement } from './InsertCommandPlacement';
 export type { LinkFormat } from './LinkFormat';
 export type { LinkParserOperation } from './LinkParserOperation';
 export type { LinkParserResult } from './LinkParserResult';

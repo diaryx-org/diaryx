@@ -114,8 +114,8 @@
     height: 24px;
     border-radius: 6px;
     background: var(--card);
-    border: 1px solid var(--border);
-    color: var(--muted-foreground);
+    border: 1px solid var(--ring);
+    color: var(--accent-foreground);
     cursor: pointer;
     transition: all 0.15s ease;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
@@ -136,8 +136,8 @@
 
   @media (max-width: 767px) {
     .trigger-button {
-      width: 36px;
-      height: 36px;
+      width: 44px;
+      height: 44px;
     }
   }
 </style>

@@ -8,6 +8,7 @@
   import { Label } from "$lib/components/ui/label";
   import { Eye, Sun, Moon, Monitor } from "@lucide/svelte";
   import { getThemeStore, type ThemeMode } from "../stores/theme.svelte";
+  import { getAppearanceStore } from "../stores/appearance.svelte";
 
   interface Props {
     focusMode?: boolean;
@@ -18,6 +19,7 @@
   }: Props = $props();
 
   const themeStore = getThemeStore();
+  const appearanceStore = getAppearanceStore();
 </script>
 
 <div class="space-y-3">
@@ -50,6 +52,21 @@
         <Moon class="size-3" /> Dark
       </option>
     </select>
+  </div>
+
+  <!-- High Contrast Editor -->
+  <div class="flex items-center justify-between gap-4 px-1">
+    <Label for="high-contrast-editor" class="text-sm cursor-pointer flex flex-col gap-0.5">
+      <span>High contrast editor</span>
+      <span class="font-normal text-xs text-muted-foreground">
+        Use pure black and white for editor text and background, regardless of theme.
+      </span>
+    </Label>
+    <Switch
+      id="high-contrast-editor"
+      checked={appearanceStore.highContrastEditor}
+      onCheckedChange={(checked) => appearanceStore.setHighContrastEditor(checked)}
+    />
   </div>
 
   <!-- Focus Mode -->

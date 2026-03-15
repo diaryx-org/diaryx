@@ -4,6 +4,7 @@ const SHELL_GESTURE_EXCLUSION_SELECTOR = [
   '[data-slot="drawer-content"]',
   '[data-slot="drawer-overlay"]',
   '[aria-modal="true"]',
+  '[data-table-grip]',
 ].join(", ");
 
 const SELECTABLE_CONTENT_SELECTOR = [

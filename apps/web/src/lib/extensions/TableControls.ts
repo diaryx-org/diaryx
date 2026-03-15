@@ -19,7 +19,9 @@ import {
   TableMap,
   CellSelection,
   addColumnAfter,
+  addColumnBefore,
   addRowAfter,
+  addRowBefore,
   deleteRow,
   deleteColumn,
   moveTableRow,
@@ -106,11 +108,19 @@ class TableControlsView {
   private popoverType: "row" | "col" | null = null;
   private popoverIndex = -1;
   private resizeObserver: ResizeObserver | null = null;
-  private boundClosePopover = (e: MouseEvent) => {
+  private boundClosePopover = (e: Event) => {
     if (this.popover && !this.popover.contains(e.target as Node)) {
       this.closePopover();
     }
   };
+
+  // Drag-to-reorder state
+  private dragType: "row" | "col" | null = null;
+  private dragIndex = -1;
+  private dragStartX = 0;
+  private dragStartY = 0;
+  private isDragging = false;
+  private static DRAG_THRESHOLD = 8; // px before switching from tap to drag
 
   constructor(view: EditorView) {
     this.view = view;
@@ -166,7 +176,7 @@ class TableControlsView {
 
   destroy() {
     this.resizeObserver?.disconnect();
-    document.removeEventListener("mousedown", this.boundClosePopover);
+    document.removeEventListener("pointerdown", this.boundClosePopover);
     this.container.remove();
   }
 
@@ -204,11 +214,8 @@ class TableControlsView {
         btn.type = "button";
         btn.innerHTML = GRIP_DOTS_SVG;
         btn.title = `Row ${r + 1}`;
-        btn.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          this.togglePopover("row", r, btn);
-        });
+        btn.setAttribute("data-table-grip", "row");
+        this.attachGripListeners(btn, "row", r);
         this.container.appendChild(btn);
         this.rowGrips.push(btn);
       }
@@ -219,11 +226,8 @@ class TableControlsView {
         btn.type = "button";
         btn.innerHTML = GRIP_DOTS_SVG;
         btn.title = `Column ${c + 1}`;
-        btn.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          this.togglePopover("col", c, btn);
-        });
+        btn.setAttribute("data-table-grip", "col");
+        this.attachGripListeners(btn, "col", c);
         this.container.appendChild(btn);
         this.colGrips.push(btn);
       }
@@ -233,7 +237,7 @@ class TableControlsView {
       this.addRowBtn.type = "button";
       this.addRowBtn.innerHTML = PLUS_SVG;
       this.addRowBtn.title = "Add row";
-      this.addRowBtn.addEventListener("mousedown", (e) => {
+      this.addRowBtn.addEventListener("pointerdown", (e) => {
         e.preventDefault();
         e.stopPropagation();
         this.addRow();
@@ -245,7 +249,7 @@ class TableControlsView {
       this.addColBtn.type = "button";
       this.addColBtn.innerHTML = PLUS_SVG;
       this.addColBtn.title = "Add column";
-      this.addColBtn.addEventListener("mousedown", (e) => {
+      this.addColBtn.addEventListener("pointerdown", (e) => {
         e.preventDefault();
         e.stopPropagation();
         this.addColumn();
@@ -270,6 +274,7 @@ class TableControlsView {
     if (!containerParent) return;
     const parentRect = containerParent.getBoundingClientRect();
     const tableRect = this.tableDom.getBoundingClientRect();
+    const isMobile = window.innerWidth < 768;
 
     const rows = this.tableDom.querySelectorAll("tr");
     rows.forEach((tr, i) => {
@@ -277,7 +282,10 @@ class TableControlsView {
       const grip = this.rowGrips[i];
       const trRect = tr.getBoundingClientRect();
       grip.style.position = "absolute";
-      grip.style.left = `${tableRect.left - parentRect.left - 28}px`;
+      // Mobile: inside the first cell; Desktop: 28px left of the table
+      grip.style.left = isMobile
+        ? `${tableRect.left - parentRect.left + 2}px`
+        : `${tableRect.left - parentRect.left - 28}px`;
       grip.style.top = `${trRect.top - parentRect.top + trRect.height / 2 - 12}px`;
     });
 
@@ -290,7 +298,10 @@ class TableControlsView {
         const cellRect = cell.getBoundingClientRect();
         grip.style.position = "absolute";
         grip.style.left = `${cellRect.left - parentRect.left + cellRect.width / 2 - 12}px`;
-        grip.style.top = `${tableRect.top - parentRect.top - 28}px`;
+        // Mobile: inside the first row; Desktop: 28px above the table
+        grip.style.top = isMobile
+          ? `${tableRect.top - parentRect.top + 2}px`
+          : `${tableRect.top - parentRect.top - 28}px`;
       });
     }
 
@@ -302,7 +313,10 @@ class TableControlsView {
 
     if (this.addColBtn) {
       this.addColBtn.style.position = "absolute";
-      this.addColBtn.style.left = `${tableRect.right - parentRect.left + 4}px`;
+      // Mobile: inside the table, right-aligned; Desktop: 4px right of the table
+      this.addColBtn.style.left = isMobile
+        ? `${tableRect.right - parentRect.left - 28}px`
+        : `${tableRect.right - parentRect.left + 4}px`;
       this.addColBtn.style.top = `${tableRect.top - parentRect.top + tableRect.height / 2 - 12}px`;
     }
   }
@@ -348,7 +362,7 @@ class TableControlsView {
     this.popover = popover;
 
     setTimeout(() => {
-      document.addEventListener("mousedown", this.boundClosePopover);
+      document.addEventListener("pointerdown", this.boundClosePopover);
     }, 0);
   }
 
@@ -358,20 +372,18 @@ class TableControlsView {
 
     const items: PopoverItem[] = [
       {
-        label: "Move up",
-        disabled: row === 0,
+        label: "Add above",
         action: () => {
-          const cmd = moveTableRow({ from: row, to: row - 1 });
-          cmd(this.view.state, this.view.dispatch);
+          this.selectCellInRow(row);
+          addRowBefore(this.view.state, this.view.dispatch);
           this.closePopover();
         },
       },
       {
-        label: "Move down",
-        disabled: row >= map.height - 1,
+        label: "Add below",
         action: () => {
-          const cmd = moveTableRow({ from: row, to: row + 1 });
-          cmd(this.view.state, this.view.dispatch);
+          this.selectCellInRow(row);
+          addRowAfter(this.view.state, this.view.dispatch);
           this.closePopover();
         },
       },
@@ -395,20 +407,18 @@ class TableControlsView {
 
     const items: PopoverItem[] = [
       {
-        label: "Move left",
-        disabled: col === 0,
+        label: "Add left",
         action: () => {
-          const cmd = moveTableColumn({ from: col, to: col - 1 });
-          cmd(this.view.state, this.view.dispatch);
+          this.selectCellInCol(col);
+          addColumnBefore(this.view.state, this.view.dispatch);
           this.closePopover();
         },
       },
       {
-        label: "Move right",
-        disabled: col >= map.width - 1,
+        label: "Add right",
         action: () => {
-          const cmd = moveTableColumn({ from: col, to: col + 1 });
-          cmd(this.view.state, this.view.dispatch);
+          this.selectCellInCol(col);
+          addColumnAfter(this.view.state, this.view.dispatch);
           this.closePopover();
         },
       },
@@ -437,7 +447,7 @@ class TableControlsView {
         btn.classList.add("disabled");
       }
       btn.textContent = item.label;
-      btn.addEventListener("mousedown", (e) => {
+      btn.addEventListener("pointerdown", (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (!item.disabled) item.action();
@@ -447,7 +457,7 @@ class TableControlsView {
   }
 
   private closePopover() {
-    document.removeEventListener("mousedown", this.boundClosePopover);
+    document.removeEventListener("pointerdown", this.boundClosePopover);
     if (this.popover) {
       this.popover.remove();
       this.popover = null;
@@ -456,7 +466,127 @@ class TableControlsView {
     this.popoverIndex = -1;
   }
 
+  /* ---- Grip tap/drag handling ---- */
+
+  private attachGripListeners(
+    btn: HTMLButtonElement,
+    type: "row" | "col",
+    index: number,
+  ) {
+    btn.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      btn.setPointerCapture(e.pointerId);
+      this.dragType = type;
+      this.dragIndex = index;
+      this.dragStartX = e.clientX;
+      this.dragStartY = e.clientY;
+      this.isDragging = false;
+    });
+
+    btn.addEventListener("pointermove", (e) => {
+      if (this.dragType !== type || this.dragIndex !== index) return;
+      const dx = e.clientX - this.dragStartX;
+      const dy = e.clientY - this.dragStartY;
+      if (
+        !this.isDragging &&
+        Math.abs(type === "row" ? dy : dx) > TableControlsView.DRAG_THRESHOLD
+      ) {
+        this.isDragging = true;
+        this.closePopover();
+        btn.classList.add("dragging");
+      }
+    });
+
+    btn.addEventListener("pointerup", (e) => {
+      if (this.dragType !== type || this.dragIndex !== index) {
+        this.resetDrag();
+        return;
+      }
+
+      if (this.isDragging) {
+        // Compute how many rows/columns we moved over
+        this.completeDrag(type, index, e);
+        btn.classList.remove("dragging");
+      } else {
+        // It was a tap – show the popover
+        this.togglePopover(type, index, btn);
+      }
+      this.resetDrag();
+    });
+
+    btn.addEventListener("pointercancel", () => {
+      btn.classList.remove("dragging");
+      this.resetDrag();
+    });
+  }
+
+  private resetDrag() {
+    this.dragType = null;
+    this.dragIndex = -1;
+    this.isDragging = false;
+  }
+
+  private completeDrag(
+    type: "row" | "col",
+    fromIndex: number,
+    e: PointerEvent,
+  ) {
+    if (!this.tableDom || !this.tableNode) return;
+    const map = TableMap.get(this.tableNode);
+
+    if (type === "row") {
+      const dy = e.clientY - this.dragStartY;
+      const rows = this.tableDom.querySelectorAll("tr");
+      if (rows.length === 0) return;
+      // Estimate row height from the dragged row
+      const rowHeight = rows[fromIndex]?.getBoundingClientRect().height ?? 40;
+      const steps = Math.round(dy / rowHeight);
+      const toIndex = Math.max(0, Math.min(map.height - 1, fromIndex + steps));
+      if (toIndex !== fromIndex) {
+        const cmd = moveTableRow({ from: fromIndex, to: toIndex });
+        cmd(this.view.state, this.view.dispatch);
+      }
+    } else {
+      const dx = e.clientX - this.dragStartX;
+      const firstRow = this.tableDom.querySelector("tr");
+      if (!firstRow) return;
+      const cells = firstRow.querySelectorAll("th, td");
+      const cellWidth = cells[fromIndex]?.getBoundingClientRect().width ?? 80;
+      const steps = Math.round(dx / cellWidth);
+      const toIndex = Math.max(0, Math.min(map.width - 1, fromIndex + steps));
+      if (toIndex !== fromIndex) {
+        const cmd = moveTableColumn({ from: fromIndex, to: toIndex });
+        cmd(this.view.state, this.view.dispatch);
+      }
+    }
+  }
+
   /* ---- Actions ---- */
+
+  /** Place the cursor in a cell of the given row so addRowBefore/After works. */
+  private selectCellInRow(row: number) {
+    if (!this.tableNode) return;
+    const map = TableMap.get(this.tableNode);
+    const start = this.tableStart + 1;
+    const cellPos = start + map.map[row * map.width];
+    const $pos = this.view.state.doc.resolve(cellPos);
+    this.view.dispatch(
+      this.view.state.tr.setSelection(TextSelection.create(this.view.state.doc, $pos.pos)),
+    );
+  }
+
+  /** Place the cursor in a cell of the given column so addColumnBefore/After works. */
+  private selectCellInCol(col: number) {
+    if (!this.tableNode) return;
+    const map = TableMap.get(this.tableNode);
+    const start = this.tableStart + 1;
+    const cellPos = start + map.map[col];
+    const $pos = this.view.state.doc.resolve(cellPos);
+    this.view.dispatch(
+      this.view.state.tr.setSelection(TextSelection.create(this.view.state.doc, $pos.pos)),
+    );
+  }
 
   /** Select an entire row via CellSelection so deleteRow targets it. */
   private selectRow(row: number) {

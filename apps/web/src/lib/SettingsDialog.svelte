@@ -265,7 +265,7 @@
         {#each settingsTabs as tab (tab.id)}
           <button
             type="button"
-            class="shrink-0 px-2 py-1.5 text-xs font-medium rounded transition-colors {activeTab === tab.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+            class="shrink-0 px-3 md:px-2 py-2.5 md:py-1.5 text-sm md:text-xs font-medium rounded transition-colors {activeTab === tab.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
             onclick={() => (activeTab = tab.id)}
           >
             {tab.label}

@@ -103,6 +103,7 @@
     onInitializeWorkspace?: () => void;
     onShowWelcome?: () => void;
     onSetAudience?: (path: string) => void;
+    onOpenAudienceManager?: () => void;
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
     onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
@@ -154,6 +155,7 @@
     onInitializeWorkspace,
     onShowWelcome,
     onSetAudience,
+    onOpenAudienceManager,
     requestedTab = null,
     onRequestedTabConsumed,
     onPluginHostAction,
@@ -403,6 +405,11 @@
   // Check if a node is loading
   function isNodeLoading(path: string): boolean {
     return loadingNodes.has(path);
+  }
+
+  // Check if a node is the active entry (in editor or sidebar-selected)
+  function isNodeActive(path: string): boolean {
+    return selectedEntryPaths.has(path) || currentEntry?.path === path;
   }
 
   function handleOpenSettingsClick(): void {
@@ -1315,14 +1322,14 @@
   <!-- Header -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="relative flex items-center justify-between px-4 py-4 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+1rem)]"
+    class="relative flex items-center justify-between px-2 md:px-4 py-1.5 md:py-4 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))] md:pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+1rem)] bg-sidebar-accent"
     onmousedown={maybeStartWindowDrag}
   >
     <button
       type="button"
       onclick={onShowWelcome}
       data-window-drag-exclude
-      class="text-xl font-semibold text-sidebar-foreground hover:text-sidebar-foreground/80 transition-colors flex items-baseline gap-1.5"
+      class="text-xl font-semibold text-sidebar-foreground hover:text-sidebar-foreground/80 transition-colors flex items-baseline gap-1.5 pl-2 md:pl-0"
     >
       Diaryx
       <span class="text-xs font-normal text-sidebar-foreground/50">v{__APP_VERSION__}</span>
@@ -1334,10 +1341,10 @@
           size="icon"
           onclick={onToggleCollapse}
           data-window-drag-exclude
-          class="size-8"
+          class="size-10 md:size-8"
           aria-label="Collapse sidebar"
         >
-          <PanelLeftClose class="size-4" />
+          <PanelLeftClose class="size-5 md:size-4" />
         </Button>
       </Tooltip.Trigger>
       {#if !mobileState.isMobile && !collapsed}
@@ -1388,7 +1395,7 @@
         {:else}
           <!-- Tree View -->
           {#if !mobileState.isMobile && !mobileState.isTouchDevice && selectedEntryPaths.size > 1}
-            <div class="mb-2 flex items-center justify-between gap-2 rounded-md border border-sidebar-border bg-muted/50 px-2 py-1.5">
+            <div class="mb-2 flex items-center justify-between gap-2 rounded-md border border-sidebar-border bg-secondary px-2 py-1.5">
               <p class="text-xs text-muted-foreground">
                 {selectedEntryPaths.size} selected
               </p>
@@ -1590,13 +1597,13 @@
           onclick={() => (leftTab = tab.id)}
         >
           {#if tab.id === "files"}
-            <FolderTree class="size-3" />
+            <FolderTree class="size-3 {leftTab === tab.id ? 'text-accent-foreground' : ''}" />
           {:else if tab.icon === "share"}
-            <Share2 class="size-3" />
+            <Share2 class="size-3 {leftTab === tab.id ? 'text-accent-foreground' : ''}" />
           {:else if tab.icon === "history"}
-            <History class="size-3" />
+            <History class="size-3 {leftTab === tab.id ? 'text-accent-foreground' : ''}" />
           {:else if tab.icon === "globe"}
-            <Globe class="size-3" />
+            <Globe class="size-3 {leftTab === tab.id ? 'text-accent-foreground' : ''}" />
           {/if}
           {tab.label}
         </button>
@@ -1608,7 +1615,7 @@
   <!-- Audience Filter -->
   {#if tree}
     <div class="px-3 pt-1 shrink-0">
-      <AudienceFilter {api} rootPath={tree.path} />
+      <AudienceFilter {api} rootPath={tree.path} onOpenManager={onOpenAudienceManager} />
     </div>
   {/if}
 
@@ -1623,7 +1630,7 @@
   </div>
 
   <!-- Profile Footer -->
-  <div class="border-t border-sidebar-border shrink-0 pb-[env(safe-area-inset-bottom)]">
+  <div class="border-t border-sidebar-border shrink-0 pb-[env(safe-area-inset-bottom)] bg-sidebar-accent">
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="relative flex items-center gap-1 px-4 py-2"
@@ -1663,11 +1670,11 @@
               size="icon"
               onclick={handleOpenMarketplaceClick}
               data-window-drag-exclude
-              class="size-8"
+              class="size-10 md:size-8"
               aria-label="Open marketplace"
               data-spotlight="marketplace-button"
             >
-              <Store class="size-4" />
+              <Store class="size-5 md:size-4" />
             </Button>
           </Tooltip.Trigger>
           {#if !mobileState.isMobile && !collapsed && !marketplaceDialogOpen && !marketplaceTooltipSuppressed}
@@ -1683,10 +1690,10 @@
               size="icon"
               onclick={handleOpenSettingsClick}
               data-window-drag-exclude
-              class="size-8"
+              class="size-10 md:size-8"
               aria-label="Open settings"
             >
-              <Settings class="size-4" />
+              <Settings class="size-5 md:size-4" />
             </Button>
           </Tooltip.Trigger>
           {#if !mobileState.isMobile && !collapsed && !settingsDialogOpen && !settingsTooltipSuppressed}
@@ -1960,8 +1967,10 @@
           class="group flex items-center gap-1 rounded-md hover:bg-sidebar-accent transition-colors
             {dropTargetPath === node.path
             ? 'bg-primary/20 ring-2 ring-primary'
-            : ''}"
-          style="padding-left: {depth * 12}px"
+            : isNodeActive(node.path)
+              ? 'bg-sidebar-accent'
+              : ''}"
+          style="padding-left: {depth * 12}px;{isNodeActive(node.path) ? ' border-left: 3px solid var(--sidebar-primary); padding-left: ' + (depth * 12 - 3) + 'px;' : ''}"
           role="presentation"
           ondragover={(e) => handleDragOver(e, node.path)}
           ondragleave={handleDragLeave}
@@ -1970,7 +1979,7 @@
           {#if node.children.length > 0}
             <button
               type="button"
-              class="p-1 rounded-sm hover:bg-sidebar-accent-foreground/10 active:bg-sidebar-accent-foreground/20 transition-colors"
+              class="p-1 rounded-sm hover:bg-sidebar-accent active:bg-sidebar-accent transition-colors"
               onclick={(e) => {
                 e.stopPropagation();
                 handleToggleNode(node.path, node);
@@ -1980,10 +1989,10 @@
               disabled={isNodeLoading(node.path)}
             >
               {#if isNodeLoading(node.path)}
-                <Loader2 class="size-4 text-muted-foreground animate-spin" />
+                <Loader2 class="size-5 md:size-4 text-muted-foreground animate-spin" />
               {:else}
                 <ChevronRight
-                  class="size-4 text-muted-foreground transition-transform duration-200 {expandedNodes.has(
+                  class="size-5 md:size-4 text-muted-foreground transition-transform duration-200 {expandedNodes.has(
                     node.path,
                   )
                     ? 'rotate-90'
@@ -1992,24 +2001,20 @@
               {/if}
             </button>
           {:else}
-            <span class="w-6"></span>
+            <span class="w-7 md:w-6"></span>
           {/if}
           <button
             type="button"
-            class="flex-1 min-w-0 flex items-center gap-2 py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {selectedEntryPaths.has(
-            node.path,
-          )
-              ? 'text-sidebar-primary font-medium bg-sidebar-accent'
-              : selectedEntryPath === node.path
-                ? 'text-sidebar-primary bg-sidebar-accent/70'
-                : 'text-sidebar-foreground'}"
+            class="flex-1 min-w-0 flex items-center gap-2 py-2.5 md:py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {isNodeActive(node.path)
+              ? 'text-sidebar-primary font-medium'
+              : 'text-sidebar-foreground'}"
             onpointerdown={(e) => { if (e.button === 2) e.preventDefault(); }}
             onclick={(event) => handleEntryClick(node.path, event)}
           >
             {#if node.children.length > 0}
-              <Folder class="size-4 shrink-0 text-muted-foreground" />
+              <Folder class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
             {:else}
-              <FileText class="size-4 shrink-0 text-muted-foreground" />
+              <FileText class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
             {/if}
             <span class="truncate flex-1">{node.name.replace(".md", "")}</span>
             {#if hasValidationError(node.path)}
@@ -2189,7 +2194,7 @@
           {#if mobileState.isMobile || mobileState.isTouchDevice}
             <button
               type="button"
-              class="p-1.5 rounded-md hover:bg-sidebar-accent-foreground/10 transition-colors shrink-0"
+              class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors shrink-0"
               onclick={(e) => {
                 e.stopPropagation();
                 handleContextTarget(node.path);

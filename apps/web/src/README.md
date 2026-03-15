@@ -116,3 +116,11 @@ switch.
 - **Swipe left** from anywhere progressively opens the right sidebar (or closes an open left sidebar).
 - Gestures that begin inside modal/dialog surfaces or turn into an active text selection are ignored so marketplace/settings navigation and editor selection do not accidentally trigger sidebars.
 - Gesture listeners are attached early in `onMount` (before workspace init) so they work even when initialisation fails.
+
+## Mobile Focus Mode Chrome
+
+When focus mode is active on mobile and both sidebars are collapsed,
+`App.svelte` moves the header and editor footer off-canvas instead of leaving
+their space reserved in the layout. Thin tap targets at the top and bottom
+edges temporarily reveal both control bars, so the editor uses the full
+viewport until the chrome is explicitly summoned.

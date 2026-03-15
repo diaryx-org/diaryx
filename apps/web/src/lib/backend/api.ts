@@ -866,25 +866,74 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'Strings').data;
     },
 
-    /** Plan an export operation. */
+    /**
+     * Plan an export by walking the workspace tree and checking audience tags.
+     * No plugin required — built from core getWorkspaceTree + getFrontmatter.
+     */
     async planExport(rootPath: string, audience: string): Promise<ExportPlan> {
-      const result = await pluginCommand('publish', 'PlanExport', {
-        root_path: rootPath,
-        audience,
-      });
-      return result as ExportPlan;
+      const tree = await this.getWorkspaceTree(rootPath);
+      const included: ExportPlan['included'] = [];
+      const excluded: ExportPlan['excluded'] = [];
+      const rootDir = rootPath.replace(/\/[^/]+$/, '');
+
+      const collectNodes = (node: TreeNode): TreeNode[] => {
+        const out: TreeNode[] = [node];
+        for (const c of node.children) out.push(...collectNodes(c));
+        return out;
+      };
+
+      const nodes = collectNodes(tree);
+      await Promise.all(nodes.map(async (node) => {
+        try {
+          const fm = await this.getFrontmatter(node.path);
+          const entryAudience = fm.audience;
+          const relativePath = node.path.startsWith(rootDir + '/')
+            ? node.path.slice(rootDir.length + 1)
+            : node.path;
+
+          if (audience === '*') {
+            included.push({ source_path: node.path, relative_path: relativePath, dest_path: relativePath, filtered_contents: [] });
+          } else if (Array.isArray(entryAudience)) {
+            if (entryAudience.includes(audience)) {
+              included.push({ source_path: node.path, relative_path: relativePath, dest_path: relativePath, filtered_contents: [] });
+            } else {
+              excluded.push({ path: node.path, reason: { AudienceMismatch: { file_audience: entryAudience as string[], requested: audience } } });
+            }
+          } else {
+            // No audience set — include (inherits or unfiltered)
+            included.push({ source_path: node.path, relative_path: relativePath, dest_path: relativePath, filtered_contents: [] });
+          }
+        } catch {
+          excluded.push({ path: node.path, reason: 'NoAudienceDefined' });
+        }
+      }));
+
+      included.sort((a, b) => a.relative_path.localeCompare(b.relative_path));
+      return { included, excluded, audience, source_root: rootPath, destination: '' };
     },
 
-    /** Export to memory. */
+    /**
+     * Export entries to memory as markdown files.
+     * No plugin required — reads entry content directly.
+     */
     async exportToMemory(rootPath: string, audience: string): Promise<ExportedFile[]> {
-      const result = await pluginCommand('publish', 'ExportToMemory', {
-        root_path: rootPath,
-        audience,
-      });
-      return (result ?? []) as ExportedFile[];
+      const plan = await this.planExport(rootPath, audience);
+      const files: ExportedFile[] = [];
+
+      await Promise.all(plan.included.map(async (item) => {
+        try {
+          const entry = await this.getEntry(item.source_path);
+          files.push({ path: item.relative_path, content: entry.content });
+        } catch {
+          // Skip entries that can't be read
+        }
+      }));
+
+      files.sort((a, b) => a.path.localeCompare(b.path));
+      return files;
     },
 
-    /** Export to HTML. */
+    /** Export to HTML. Delegates to publish plugin if available. */
     async exportToHtml(rootPath: string, audience: string): Promise<ExportedFile[]> {
       const result = await pluginCommand('publish', 'ExportToHtml', {
         root_path: rootPath,
@@ -893,13 +942,31 @@ export function createApi(backend: Backend) {
       return (result ?? []) as ExportedFile[];
     },
 
-    /** Export binary attachments (returns paths only, use readBinary to get data). */
+    /** Export binary attachments by scanning the tree for attachment references. */
     async exportBinaryAttachments(rootPath: string, audience: string): Promise<BinaryFileInfo[]> {
-      const result = await pluginCommand('publish', 'ExportBinaryAttachments', {
-        root_path: rootPath,
-        audience,
-      });
-      return (result ?? []) as BinaryFileInfo[];
+      const plan = await this.planExport(rootPath, audience);
+      const attachments: BinaryFileInfo[] = [];
+      const seen = new Set<string>();
+      const rootDir = rootPath.replace(/\/[^/]+$/, '');
+
+      await Promise.all(plan.included.map(async (item) => {
+        try {
+          const entryAttachments = await this.getAttachments(item.source_path);
+          for (const att of entryAttachments) {
+            const sourcePath = await resolveAttachmentStoragePath(item.source_path, att);
+            if (seen.has(sourcePath)) continue;
+            seen.add(sourcePath);
+            const relativePath = sourcePath.startsWith(rootDir + '/')
+              ? sourcePath.slice(rootDir.length + 1)
+              : sourcePath;
+            attachments.push({ source_path: sourcePath, relative_path: relativePath });
+          }
+        } catch {
+          // Skip entries whose attachments can't be resolved
+        }
+      }));
+
+      return attachments;
     },
 
     // =========================================================================

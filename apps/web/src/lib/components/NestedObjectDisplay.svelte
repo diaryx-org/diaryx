@@ -40,7 +40,7 @@
         class="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer hover:text-foreground w-full"
         onclick={() => toggleKey(key)}
       >
-        <ChevronRight class="size-3 transition-transform {isCollapsed(key) ? '' : 'rotate-90'}" />
+        <ChevronRight class="size-4 md:size-3 transition-transform {isCollapsed(key) ? '' : 'rotate-90'}" />
         <span class="font-medium">{formatKey(key)}</span>
       </button>
       {#if !isCollapsed(key)}
@@ -70,7 +70,7 @@
             onclick={() => onNavigateLink?.(value as string)}
             title={linkParsed.path}
           >
-            <ArrowUpRight class="size-3" />
+            <ArrowUpRight class="size-4 md:size-3" />
             {linkParsed.title || linkParsed.path}
           </button>
         {:else if typeof value === "boolean"}

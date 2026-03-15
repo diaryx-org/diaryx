@@ -147,7 +147,7 @@
         <button
           type="button"
           class="w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors
-            {isSelected ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}
+            {isSelected ? 'border-primary bg-secondary' : 'border-border hover:border-primary/50'}
             {!isSupported ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}"
           disabled={!isSupported}
           onclick={() => handleSelect(option.type)}
@@ -183,7 +183,7 @@
         <button
           type="button"
           class="w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors
-            {isSelected || (isCurrent && !selectedType) ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}
+            {isSelected || (isCurrent && !selectedType) ? 'border-primary bg-secondary' : 'border-border hover:border-primary/50'}
             cursor-pointer"
           onclick={() => handleSelectPlugin(provider.contribution.id)}
         >

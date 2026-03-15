@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from "svelte";
   import * as Command from "$lib/components/ui/command";
   import type { Api } from "./backend/api";
   import { getMobileState } from "./hooks/useMobile.svelte";
@@ -77,20 +76,32 @@
 
   let searchValue = $state("");
 
-  async function handleCommand(action: () => void | Promise<void>) {
+  function handleCommand(action: () => void | Promise<void>) {
     open = false;
     searchValue = "";
-    // Let the palette dialog unmount before executing commands that open another dialog.
-    await tick();
-    await action();
+    action();
   }
 
   const mobileState = getMobileState();
 
-  // Show the mobile sheet when open OR actively swiping OR animating closed
+  // Show the mobile sheet when open OR actively swiping OR animating open/closed
   const swiping = $derived(swipeProgress != null && swipeProgress > 0);
   let closing = $state(false);
+  let opening = $state(false);
   const showMobileSheet = $derived(open || swiping || closing);
+
+  // When open changes to true, animate the sheet up from the bottom
+  $effect(() => {
+    if (open && mobileState.isMobile) {
+      opening = true;
+      // Wait one frame so the sheet mounts at translateY(100%), then animate to 0
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          opening = false;
+        });
+      });
+    }
+  });
 
   /** Animate close, then actually set open = false */
   function closeWithAnimation() {
@@ -264,7 +275,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="fixed inset-0 z-50 {swiping ? 'pointer-events-none' : ''}"
-      style="background: rgba(0,0,0,{closing
+      style="background: rgba(0,0,0,{closing || opening
         ? 0
         : open
           ? (dismissDragging ? Math.max(0, 0.5 - dismissDragY / 600) : 0.5)
@@ -278,7 +289,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="fixed inset-x-0 bottom-0 z-50 rounded-t-lg border-t bg-background max-h-[80vh] overflow-hidden {swiping ? 'pointer-events-none' : ''}"
-      style="transform: translateY({closing
+      style="transform: translateY({closing || opening
         ? '100%'
         : open
           ? (dismissDragging ? dismissDragY + 'px' : '0')

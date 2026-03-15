@@ -1765,6 +1765,47 @@ pub fn reveal_in_file_manager<R: Runtime>(
     }
 }
 
+/// Read a binary file relative to the workspace root.
+/// Used by the attachment system for file reads.
+#[tauri::command]
+pub fn read_binary_file<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+) -> Result<Vec<u8>, SerializableError> {
+    let resolved = resolve_workspace_item_path(&app, &path)?;
+    std::fs::read(&resolved).map_err(|e| SerializableError {
+        kind: "FileRead".to_string(),
+        message: format!("Failed to read binary file: {}", e),
+        path: Some(resolved),
+    })
+}
+
+/// Write binary content to a file relative to the workspace root.
+/// Used by the attachment system for file uploads.
+#[tauri::command]
+pub fn write_binary_file<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+    data: Vec<u8>,
+) -> Result<(), SerializableError> {
+    let resolved = resolve_workspace_item_path(&app, &path)?;
+
+    // Ensure parent directory exists
+    if let Some(parent) = resolved.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| SerializableError {
+            kind: "FileWrite".to_string(),
+            message: format!("Failed to create parent directory: {}", e),
+            path: Some(resolved.clone()),
+        })?;
+    }
+
+    std::fs::write(&resolved, &data).map_err(|e| SerializableError {
+        kind: "FileWrite".to_string(),
+        message: format!("Failed to write binary file: {}", e),
+        path: Some(resolved),
+    })
+}
+
 /// Check whether a direct-distribution desktop update is available.
 #[tauri::command]
 pub async fn check_for_app_update<R: Runtime>(

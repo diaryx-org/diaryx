@@ -129,6 +129,7 @@ export interface UserAppearance {
   accentHue: number | null;
   typographyPresetId: string;
   typographyOverrides: Partial<TypographySettings>;
+  highContrastEditor: boolean;
 }
 
 // ---------------------------------------------------------------------------

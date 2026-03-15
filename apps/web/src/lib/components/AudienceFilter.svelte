@@ -10,21 +10,20 @@
   import { getTemplateContextStore } from "../stores/templateContextStore.svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
   import { getAudienceColor } from "$lib/utils/audienceDotColor";
-  import ManageAudiencesModal from "./ManageAudiencesModal.svelte";
   import type { Api } from "../backend";
 
   interface Props {
     api: Api | null;
     rootPath: string | null;
+    onOpenManager?: () => void;
   }
 
-  let { api, rootPath }: Props = $props();
+  let { api, rootPath, onOpenManager }: Props = $props();
 
   const templateContextStore = getTemplateContextStore();
   const colorStore = getAudienceColorStore();
 
   let audiences = $state<string[]>([]);
-  let showManageModal = $state(false);
 
   async function loadAudiences() {
     if (!api || !rootPath) {
@@ -103,7 +102,7 @@
           <button
             type="button"
             class="manage-btn"
-            onclick={() => { showManageModal = true; }}
+            onclick={() => { onOpenManager?.(); }}
           >
             Manage audiences…
           </button>
@@ -111,16 +110,6 @@
       </Select.Content>
     </Select.Root>
   </div>
-{/if}
-
-<!-- Manage Audiences Modal -->
-{#if api && rootPath}
-  <ManageAudiencesModal
-    open={showManageModal}
-    {api}
-    rootPath={rootPath}
-    onClose={() => { showManageModal = false; loadAudiences(); }}
-  />
 {/if}
 
 <style>
@@ -131,7 +120,7 @@
 
   .audience-filter :global(.audience-filter-trigger) {
     width: 100%;
-    height: 28px;
+    height: 44px;
     padding: 0 8px;
     font-size: 12px;
     background: transparent;
@@ -139,6 +128,12 @@
     color: var(--sidebar-foreground);
     opacity: 0.7;
     transition: all 0.15s ease;
+  }
+
+  @media (min-width: 768px) {
+    .audience-filter :global(.audience-filter-trigger) {
+      height: 28px;
+    }
   }
 
   .audience-filter :global(.audience-filter-trigger:hover) {
@@ -178,7 +173,7 @@
   .manage-btn {
     width: 100%;
     text-align: left;
-    padding: 4px 8px;
+    padding: 12px 8px;
     font-size: 12px;
     color: var(--muted-foreground);
     background: none;
@@ -186,6 +181,12 @@
     border-radius: 4px;
     cursor: pointer;
     transition: color 0.15s ease;
+  }
+
+  @media (min-width: 768px) {
+    .manage-btn {
+      padding: 4px 8px;
+    }
   }
 
   .manage-btn:hover {

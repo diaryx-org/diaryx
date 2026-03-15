@@ -248,6 +248,10 @@ function loadAppearance(): UserAppearance {
       next.typographyPresetId = parsed.typographyPresetId;
     }
 
+    if (typeof parsed.highContrastEditor === "boolean") {
+      next.highContrastEditor = parsed.highContrastEditor;
+    }
+
     const explicitOverrides = parseTypographySettingsInput(parsed.typographyOverrides);
     const legacyTypography = readLegacyTypographySettings(parsed);
 
@@ -661,12 +665,16 @@ export function createAppearanceStore() {
     if (isDefault) {
       clearCssVars();
       clearVarsCache();
-      return;
+    } else {
+      const palette = resolveEffectivePalette(preset, mode, appearance.accentHue);
+      const vars = applyCssVars(palette, typography);
+      cacheVarsForFouc(vars);
     }
 
-    const palette = resolveEffectivePalette(preset, mode, appearance.accentHue);
-    const vars = applyCssVars(palette, typography);
-    cacheVarsForFouc(vars);
+    document.documentElement.classList.toggle(
+      "high-contrast-editor",
+      appearance.highContrastEditor,
+    );
   }
 
   function update(partial: Partial<UserAppearance>): void {
@@ -938,6 +946,9 @@ export function createAppearanceStore() {
     get accentHue() {
       return appearance.accentHue;
     },
+    get highContrastEditor() {
+      return appearance.highContrastEditor;
+    },
     get typography() {
       const effective = resolveTypographySettings(appearance, getTypographyMap());
       return {
@@ -986,6 +997,10 @@ export function createAppearanceStore() {
       update({ accentHue: hue });
     },
 
+    setHighContrastEditor(enabled: boolean) {
+      update({ highContrastEditor: enabled });
+    },
+
     setFontFamily(fontFamily: FontFamily) {
       setTypographyOverride("fontFamily", fontFamily);
     },
@@ -1017,6 +1032,7 @@ export function createAppearanceStore() {
       void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
       clearCssVars();
       clearVarsCache();
+      document.documentElement.classList.remove("high-contrast-editor");
     },
 
     exportTheme(): ThemeExport {
@@ -1090,6 +1106,9 @@ export function getAppearanceStore() {
       get accentHue() {
         return null;
       },
+      get highContrastEditor() {
+        return false;
+      },
       get typography() {
         return {
           fontFamily: BUILTIN_TYPOGRAPHY_PRESETS.default.settings.fontFamily,
@@ -1131,6 +1150,7 @@ export function getAppearanceStore() {
       setPreset: () => {},
       setTypographyPreset: () => {},
       setAccentHue: () => {},
+      setHighContrastEditor: () => {},
       setFontFamily: () => {},
       setBaseFontSize: () => {},
       setLineHeight: () => {},

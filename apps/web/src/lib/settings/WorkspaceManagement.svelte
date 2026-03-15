@@ -467,7 +467,7 @@
           ? 'border-destructive/40 bg-destructive/5'
           : syncActionStatus.tone === 'success'
             ? 'border-green-500/40 bg-green-500/5'
-            : 'bg-muted/50'}"
+            : 'bg-secondary'}"
       >
         <div class="flex items-start justify-between gap-2">
           <p
@@ -514,7 +514,7 @@
 
         <div class="space-y-1">
           {#each syncedWorkspaces as ws (ws.id)}
-            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50">
+            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-secondary">
               {#if renamingId === ws.id}
                 {@render renameRow(ws.id)}
               {:else}
@@ -601,7 +601,7 @@
 
         <div class="space-y-1">
           {#each cloudWorkspaces as remote (remote.id)}
-            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50">
+            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-secondary">
               <span class="flex items-center gap-1.5 flex-1 min-w-0">
                 <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
                 <span class="text-sm truncate">{remote.name}</span>
@@ -654,7 +654,7 @@
 
         <div class="space-y-1">
           {#each localWorkspaces as ws (ws.id)}
-            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50">
+            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-secondary">
               {#if renamingId === ws.id}
                 {@render renameRow(ws.id)}
               {:else}

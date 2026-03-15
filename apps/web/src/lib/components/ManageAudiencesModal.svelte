@@ -1,5 +1,8 @@
 <script lang="ts">
   /**
+   * @deprecated Use `views/audience/AudienceManager.svelte` instead.
+   * Kept as reference until AudienceManager is verified.
+   *
    * ManageAudiencesModal — list, create, rename, and delete audiences.
    *
    * Colors are persistent: each audience gets a Tailwind bg class assigned
@@ -289,12 +292,14 @@
               <div class="flex items-center gap-2 px-3 py-2">
                 <!-- Colored dot — click to open inline swatch picker -->
                 <button
-                  class="size-2.5 rounded-full shrink-0 {dotClass} focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-foreground/30 hover:scale-125 transition-transform"
+                  class="size-6 md:size-4 rounded-full shrink-0 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-foreground/30 hover:scale-110 transition-transform"
                   onclick={() => toggleColorPicker(name)}
                   aria-label="Change color for {name}"
                   title="Click to change color"
                   disabled={working || deleteWorking}
-                ></button>
+                >
+                  <span class="size-2.5 rounded-full {dotClass}"></span>
+                </button>
 
                 {#if isEditing}
                   <!-- Edit mode -->
@@ -310,24 +315,24 @@
                     disabled={working}
                   />
                   <button
-                    class="text-muted-foreground hover:text-primary transition-colors disabled:opacity-40"
+                    class="p-2.5 md:p-0.5 text-muted-foreground hover:text-primary transition-colors disabled:opacity-40 rounded"
                     onclick={confirmRename}
                     disabled={working}
                     aria-label="Save rename"
                   >
                     {#if working}
-                      <Loader2 class="size-3.5 animate-spin" />
+                      <Loader2 class="size-4 md:size-3.5 animate-spin" />
                     {:else}
-                      <Check class="size-3.5" />
+                      <Check class="size-4 md:size-3.5" />
                     {/if}
                   </button>
                   <button
-                    class="text-muted-foreground hover:text-foreground transition-colors"
+                    class="p-2.5 md:p-0.5 text-muted-foreground hover:text-foreground transition-colors rounded"
                     onclick={cancelEdit}
                     disabled={working}
                     aria-label="Cancel rename"
                   >
-                    <X class="size-3.5" />
+                    <X class="size-4 md:size-3.5" />
                   </button>
                 {:else}
                   <!-- Normal view -->
@@ -340,23 +345,23 @@
                     class="flex items-center gap-1 opacity-0 focus-within:opacity-100 [li:hover_&]:opacity-100"
                   >
                     <button
-                      class="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
+                      class="text-muted-foreground hover:text-foreground transition-colors p-2.5 md:p-0.5 rounded"
                       onclick={() => startEdit(name)}
                       disabled={working || deleteWorking || !!deleteCandidate}
                       aria-label="Rename {name}"
                     >
-                      <Pencil class="size-3.5" />
+                      <Pencil class="size-4 md:size-3.5" />
                     </button>
                     <button
-                      class="text-muted-foreground hover:text-destructive transition-colors p-0.5 rounded"
+                      class="text-muted-foreground hover:text-destructive transition-colors p-2.5 md:p-0.5 rounded"
                       onclick={() => requestDelete(name)}
                       disabled={working || deleteWorking || !!deleteCandidate}
                       aria-label="Delete {name}"
                     >
                       {#if working && !deleteCandidate}
-                        <Loader2 class="size-3.5 animate-spin" />
+                        <Loader2 class="size-4 md:size-3.5 animate-spin" />
                       {:else}
-                        <Trash2 class="size-3.5" />
+                        <Trash2 class="size-4 md:size-3.5" />
                       {/if}
                     </button>
                   </div>
@@ -370,12 +375,14 @@
                   {#each AUDIENCE_PALETTE as swatch}
                     {@const isActive = dotClass === swatch}
                     <button
-                      class="size-4 rounded-full {swatch} shrink-0 transition-transform hover:scale-110
+                      class="size-8 md:size-6 rounded-full shrink-0 flex items-center justify-center transition-transform hover:scale-110
                         {isActive ? 'ring-2 ring-offset-1 ring-foreground/60 scale-110' : ''}"
                       onclick={() => pickColor(name, swatch)}
                       aria-label="Set color {swatch}"
                       title={swatch}
-                    ></button>
+                    >
+                      <span class="size-4 md:size-3 rounded-full {swatch}"></span>
+                    </button>
                   {/each}
                 </div>
               {/if}
@@ -403,18 +410,18 @@
                 autofocus
               />
               <button
-                class="text-muted-foreground hover:text-primary transition-colors"
+                class="p-2.5 md:p-0.5 text-muted-foreground hover:text-primary transition-colors rounded"
                 onclick={confirmCreate}
                 aria-label="Add audience"
               >
-                <Check class="size-3.5" />
+                <Check class="size-4 md:size-3.5" />
               </button>
               <button
-                class="text-muted-foreground hover:text-foreground transition-colors"
+                class="p-2.5 md:p-0.5 text-muted-foreground hover:text-foreground transition-colors rounded"
                 onclick={cancelCreate}
                 aria-label="Cancel"
               >
-                <X class="size-3.5" />
+                <X class="size-4 md:size-3.5" />
               </button>
             </li>
           {/if}
@@ -437,10 +444,10 @@
             </p>
           </div>
           <div class="flex items-center gap-2 justify-end">
-            <Button variant="ghost" size="sm" onclick={cancelDelete} disabled={deleteWorking}>
+            <Button variant="ghost" class="h-11 md:h-9" onclick={cancelDelete} disabled={deleteWorking}>
               Cancel
             </Button>
-            <Button variant="destructive" size="sm" onclick={confirmDelete} disabled={deleteWorking}>
+            <Button variant="destructive" class="h-11 md:h-9" onclick={confirmDelete} disabled={deleteWorking}>
               {#if deleteWorking}
                 <Loader2 class="size-3 animate-spin mr-1" />
                 Deleting…
@@ -457,15 +464,15 @@
     <Dialog.Footer class="mt-2 flex items-center justify-between sm:justify-between">
       <Button
         variant="outline"
-        size="sm"
+        class="h-11 md:h-9"
         onclick={startCreate}
         disabled={isCreating || loading || working || deleteWorking}
       >
-        <Plus class="size-3.5 mr-1.5" />
+        <Plus class="size-4 md:size-3.5 mr-1.5" />
         Add audience
       </Button>
       <Dialog.Close>
-        <Button variant="ghost" size="sm">Close</Button>
+        <Button variant="ghost" class="h-11 md:h-9">Close</Button>
       </Dialog.Close>
     </Dialog.Footer>
   </Dialog.Content>

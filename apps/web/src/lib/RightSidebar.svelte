@@ -66,6 +66,7 @@
   import {
     getAttachmentAvailability,
     getAttachmentMediaKind,
+    getAttachmentThumbnailUrl,
     isPreviewableAttachmentKind,
   } from "@/models/services/attachmentService";
   import { parseLinkDisplay } from "$lib/utils/linkParser";
@@ -122,6 +123,7 @@
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
     onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
+    onOpenAudienceManager?: () => void;
   }
 
   let {
@@ -147,6 +149,7 @@
     requestedTab = null,
     onRequestedTabConsumed,
     onPluginHostAction,
+    onOpenAudienceManager,
   }: Props = $props();
 
   // Progressive swipe derived state (mobile only – desktop keeps width-based animation)
@@ -496,6 +499,54 @@
     [...attachmentStatuses.values()].some(s => s === 'remote')
   );
 
+  // Attachment thumbnail cache (attachPath -> blob URL)
+  let attachmentThumbnails = $state<Map<string, string>>(new Map());
+
+  // Load thumbnails for image attachments when the section is expanded
+  $effect(() => {
+    if (attachmentsCollapsed || !entry || !api) return;
+    const attachments = getAttachments();
+    if (attachments.length === 0) return;
+    const entryPath = entry.path;
+    const currentApi = api;
+    let cancelled = false;
+
+    void (async () => {
+      let changed = false;
+      for (const attachment of attachments) {
+        if (cancelled) return;
+        const attachPath = getAttachmentPath(attachment);
+        if (attachmentThumbnails.has(attachPath)) continue;
+        const kind = getAttachmentMediaKind(attachPath);
+        if (kind !== "image") continue;
+        // Only load thumbnail if the file is available locally
+        const status = attachmentStatuses.get(attachPath);
+        if (status !== "local" && status !== undefined) continue;
+        try {
+          const url = await getAttachmentThumbnailUrl(currentApi, entryPath, attachPath);
+          if (cancelled) return;
+          if (url) {
+            attachmentThumbnails.set(attachPath, url);
+            changed = true;
+          }
+        } catch {
+          // Ignore thumbnail load failures
+        }
+      }
+      if (!cancelled && changed) {
+        attachmentThumbnails = new Map(attachmentThumbnails);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  });
+
+  // Clear thumbnails when entry changes
+  $effect(() => {
+    void entry?.path;
+    attachmentThumbnails = new Map();
+  });
+
   // Collapsible section state
   let audienceCollapsed = $state(true);
   let configCollapsed = $state(true);
@@ -750,7 +801,7 @@
   <!-- Header with collapse button -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="relative flex items-center justify-between px-4 py-3 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.75rem)]"
+    class="relative flex items-center justify-between px-2 md:px-4 py-1.5 md:py-3 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))] md:pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.75rem)] bg-sidebar-accent"
     onmousedown={maybeStartWindowDrag}
   >
     <Tooltip.Root bind:open={collapseTooltipOpen}>
@@ -760,10 +811,10 @@
           size="icon"
           onclick={handleCollapseClick}
           data-window-drag-exclude
-          class="size-8"
+          class="size-10 md:size-8"
           aria-label="Collapse panel"
         >
-          <PanelRightClose class="size-4" />
+          <PanelRightClose class="size-5 md:size-4" />
         </Button>
       </Tooltip.Trigger>
       {#if !mobileState.isMobile && !collapsed}
@@ -788,7 +839,7 @@
   </div>
 
   <!-- Content -->
-  <div class="flex-1 overflow-y-auto">
+  <div class="flex-1 overflow-y-auto overflow-x-hidden">
     {#if activeTab === "properties"}
       <!-- Properties Tab -->
       {#if entry}
@@ -808,11 +859,11 @@
                 <Button
                   variant="ghost"
                   size="icon"
-                  class="size-5 opacity-0 group-hover:opacity-100 transition-opacity"
+                  class="size-11 md:size-5 opacity-0 group-hover:opacity-100 transition-opacity"
                   onclick={() => onPropertyRemove?.(key)}
                   aria-label="Remove property"
                 >
-                  <X class="size-3" />
+                  <X class="size-4 md:size-3" />
                 </Button>
               </div>
               <div class="pl-5.5">
@@ -839,11 +890,11 @@
                           {/if}
                           <button
                             type="button"
-                            class="text-muted-foreground hover:text-destructive transition-colors"
+                            class="text-muted-foreground hover:text-destructive transition-colors p-2.5 md:p-0"
                             onclick={() => handleContentsItemRemove(key, i)}
                             aria-label="Remove item"
                           >
-                            <X class="size-3" />
+                            <X class="size-4 md:size-3" />
                           </button>
                         </span>
                       {/each}
@@ -860,9 +911,9 @@
                       <Button
                         variant="ghost"
                         size="sm"
-                        class="h-6 text-xs px-2 mt-1"
+                        class="h-11 md:h-6 text-sm md:text-xs px-2 mt-1"
                       >
-                        <Plus class="size-3 mr-1" />
+                        <Plus class="size-4 md:size-3 mr-1" />
                         Add
                       </Button>
                     </FilePickerPopover>
@@ -878,11 +929,11 @@
                           {item}
                           <button
                             type="button"
-                            class="opacity-0 group-hover/tag:opacity-100 hover:text-destructive transition-opacity"
+                            class="opacity-0 group-hover/tag:opacity-100 hover:text-destructive transition-opacity p-2.5 md:p-0"
                             onclick={() => handleArrayItemRemove(key, i)}
                             aria-label="Remove item"
                           >
-                            <X class="size-3" />
+                            <X class="size-4 md:size-3" />
                           </button>
                         </span>
                       {/each}
@@ -900,31 +951,31 @@
                         <Button
                           variant="ghost"
                           size="icon"
-                          class="size-6"
+                          class="size-11 md:size-6"
                           onclick={() => handleAddArrayItem(key)}
                         >
-                          <Check class="size-3" />
+                          <Check class="size-4 md:size-3" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          class="size-6"
+                          class="size-11 md:size-6"
                           onclick={() => {
                             addingArrayItemKey = null;
                             newArrayItem = "";
                           }}
                         >
-                          <X class="size-3" />
+                          <X class="size-4 md:size-3" />
                         </Button>
                       </div>
                     {:else}
                       <Button
                         variant="ghost"
                         size="sm"
-                        class="h-6 text-xs px-2 mt-1"
+                        class="h-11 md:h-6 text-sm md:text-xs px-2 mt-1"
                         onclick={() => (addingArrayItemKey = key)}
                       >
-                        <Plus class="size-3 mr-1" />
+                        <Plus class="size-4 md:size-3 mr-1" />
                         Add
                       </Button>
                     {/if}
@@ -950,7 +1001,7 @@
                   <Input
                     type="datetime-local"
                     value={formatDateForInput(String(value))}
-                    class="h-8 text-base md:text-sm"
+                    class="h-8 text-base md:text-sm min-w-0 w-full"
                     onchange={(e) => {
                       const target = e.target as HTMLInputElement;
                       onPropertyChange?.(key, parseDateFromInput(target.value));
@@ -974,11 +1025,11 @@
                         <Button
                           variant="ghost"
                           size="icon"
-                          class="size-5"
+                          class="size-11 md:size-5"
                           onclick={() => onPropertyChange?.(key, "")}
                           aria-label="Clear parent"
                         >
-                          <X class="size-3" />
+                          <X class="size-4 md:size-3" />
                         </Button>
                       </div>
                     {/if}
@@ -993,7 +1044,7 @@
                       <Button
                         variant="ghost"
                         size="sm"
-                        class="h-6 text-xs px-2"
+                        class="h-11 md:h-6 text-xs px-2"
                       >
                         {#if value}
                           <Replace class="size-3 mr-1" />
@@ -1088,7 +1139,7 @@
               <Button
                 variant="default"
                 size="sm"
-                class="flex-1 h-7 text-xs"
+                class="flex-1 h-11 md:h-7 text-xs"
                 onclick={handleAddProperty}
               >
                 <Check class="size-3 mr-1" />
@@ -1097,7 +1148,7 @@
               <Button
                 variant="ghost"
                 size="sm"
-                class="h-7 text-xs"
+                class="h-11 md:h-7 text-xs"
                 onclick={() => {
                   showAddProperty = false;
                   newPropertyKey = "";
@@ -1112,7 +1163,7 @@
           <Button
             variant="outline"
             size="sm"
-            class="w-full h-8 text-xs"
+            class="w-full h-11 md:h-8 text-xs"
             onclick={() => (showAddProperty = true)}
           >
             <Plus class="size-3 mr-1" />
@@ -1129,10 +1180,10 @@
           onclick={() => audienceCollapsed = !audienceCollapsed}
         >
           <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            <Eye class="size-3.5" />
+            <Eye class="size-4.5 md:size-3.5" />
             <span class="font-medium">Audience</span>
           </div>
-          <ChevronRight class="size-3.5 text-muted-foreground transition-transform {audienceCollapsed ? '' : 'rotate-90'}" />
+          <ChevronRight class="size-4.5 md:size-3.5 text-muted-foreground transition-transform {audienceCollapsed ? '' : 'rotate-90'}" />
         </button>
         {#if !audienceCollapsed}
         <AudienceEditor
@@ -1147,6 +1198,7 @@
               onPropertyChange?.("audience", value);
             }
           }}
+          onOpenManager={onOpenAudienceManager}
         />
         {/if}
       </div>
@@ -1160,10 +1212,10 @@
             onclick={() => configCollapsed = !configCollapsed}
           >
             <div class="flex items-center gap-2 text-xs text-muted-foreground">
-              <Settings2 class="size-3.5" />
+              <Settings2 class="size-4.5 md:size-3.5" />
               <span class="font-medium">Workspace Config</span>
             </div>
-            <ChevronRight class="size-3.5 text-muted-foreground transition-transform {configCollapsed ? '' : 'rotate-90'}" />
+            <ChevronRight class="size-4.5 md:size-3.5 text-muted-foreground transition-transform {configCollapsed ? '' : 'rotate-90'}" />
           </button>
           {#if !configCollapsed}
             <WorkspaceConfigSection rootIndexPath={entry.path} />
@@ -1179,10 +1231,10 @@
               onclick={() => pluginsCollapsed = !pluginsCollapsed}
             >
               <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                <Puzzle class="size-3.5" />
+                <Puzzle class="size-4.5 md:size-3.5" />
                 <span class="font-medium">Plugins</span>
               </div>
-              <ChevronRight class="size-3.5 text-muted-foreground transition-transform {pluginsCollapsed ? '' : 'rotate-90'}" />
+              <ChevronRight class="size-4.5 md:size-3.5 text-muted-foreground transition-transform {pluginsCollapsed ? '' : 'rotate-90'}" />
             </button>
             {#if !pluginsCollapsed}
               <PluginConfigSection
@@ -1202,10 +1254,10 @@
           onclick={() => attachmentsCollapsed = !attachmentsCollapsed}
         >
           <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            <Paperclip class="size-3.5" />
+            <Paperclip class="size-4.5 md:size-3.5" />
             <span class="font-medium">Attachments</span>
           </div>
-          <ChevronRight class="size-3.5 text-muted-foreground transition-transform {attachmentsCollapsed ? '' : 'rotate-90'}" />
+          <ChevronRight class="size-4.5 md:size-3.5 text-muted-foreground transition-transform {attachmentsCollapsed ? '' : 'rotate-90'}" />
         </button>
 
         {#if !attachmentsCollapsed}
@@ -1228,6 +1280,7 @@
               {@const canPreview = isPreviewableAttachmentKind(previewKind)}
               {@const status = attachmentStatuses.get(attachPath) ?? 'unknown'}
               {@const meta = entry ? getAttachmentMetadata(entry.path, attachPath) : null}
+              {@const thumbUrl = attachmentThumbnails.get(attachPath)}
               <div
                 class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-secondary/50 group cursor-grab active:cursor-grabbing"
                 role="listitem"
@@ -1247,7 +1300,11 @@
                   onclick={() => canPreview && onPreviewAttachment?.(attachment)}
                   disabled={!canPreview}
                 >
-                  <Icon class="size-3.5 shrink-0 text-muted-foreground" />
+                  {#if thumbUrl}
+                    <img src={thumbUrl} alt="" class="size-8 rounded object-cover shrink-0" draggable="false" />
+                  {:else}
+                    <Icon class="size-3.5 shrink-0 text-muted-foreground" />
+                  {/if}
                   <div class="flex flex-col min-w-0">
                     <span
                       class="text-xs text-foreground truncate {canPreview ? 'hover:underline' : ''}"
@@ -1269,21 +1326,21 @@
                     <Button
                       variant="ghost"
                       size="icon"
-                      class="size-5"
+                      class="size-11 md:size-5"
                       onclick={(e: MouseEvent) => { e.stopPropagation(); downloadAttachment(attachPath); }}
                       aria-label="Download attachment"
                     >
-                      <Download class="size-3 text-muted-foreground" />
+                      <Download class="size-4 md:size-3 text-muted-foreground" />
                     </Button>
                   {/if}
                   <Button
                     variant="ghost"
                     size="icon"
-                    class="size-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                    class="size-11 md:size-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
                     onclick={() => onDeleteAttachment?.(attachment)}
                     aria-label="Remove attachment"
                   >
-                    <Trash2 class="size-3" />
+                    <Trash2 class="size-4 md:size-3" />
                   </Button>
                 </div>
               </div>
@@ -1293,7 +1350,7 @@
             <Button
               variant="outline"
               size="sm"
-              class="w-full h-7 text-xs mb-2"
+              class="w-full h-11 md:h-7 text-xs mb-2"
               onclick={() => downloadAllRemoteAttachments()}
             >
               <CloudDownload class="size-3 mr-1" />
@@ -1316,9 +1373,9 @@
           <Button
             variant="outline"
             size="sm"
-            class="w-full h-7 text-xs"
+            class="w-full h-11 md:h-7 text-xs"
           >
-            <Plus class="size-3 mr-1" />
+            <Plus class="size-4 md:size-3 mr-1" />
             Add Attachment
           </Button>
         </FilePickerPopover>
@@ -1474,10 +1531,16 @@
     {/if}
   </div>
 
+  <!-- Safe area footer spacer (when no tab toggle) -->
+  {#if !(historyTabId || nonHistoryPluginTabs.length > 0)}
+    <div class="shrink-0 pb-[env(safe-area-inset-bottom)] md:hidden border-t border-sidebar-border bg-sidebar-accent"></div>
+  {/if}
+
   <!-- Tab Toggle (hidden when only one tab) -->
   {#if historyTabId || nonHistoryPluginTabs.length > 0}
-  <div class="px-3 pt-1 pb-[calc(env(safe-area-inset-bottom)+0.25rem)] shrink-0">
-    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+  <div class="shrink-0 border-t border-sidebar-border pb-[env(safe-area-inset-bottom)] bg-sidebar-accent">
+    <div class="flex items-center px-3 py-2">
+    <div class="flex-1 flex items-center gap-1 bg-muted rounded-md min-h-8 py-1 px-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       <button
         type="button"
         class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
@@ -1503,6 +1566,7 @@
           {tab.contribution.label}
         </button>
       {/each}
+    </div>
     </div>
   </div>
   {/if}

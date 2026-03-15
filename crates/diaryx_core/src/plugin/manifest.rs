@@ -289,11 +289,30 @@ pub enum EditMode {
     SourceToggle,
 }
 
+/// Where an insert command should appear in the editor UI.
+///
+/// Controls which menus/surfaces render the insert button. Defaults to
+/// `BlockPicker` so that block atoms only appear in the block picker ("+"
+/// menu on web, block picker dropdown on iOS) and not in the block style
+/// picker or as a standalone toolbar button.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub enum InsertCommandPlacement {
+    /// Only appear in the block/inline picker menu (default for block atoms).
+    #[default]
+    Picker,
+    /// Appear in both the picker and the block style picker (BubbleMenu dropdown).
+    PickerAndStylePicker,
+    /// Appear everywhere: picker, style picker, and as a standalone toolbar button.
+    All,
+}
+
 /// Metadata for an insert button in the editor menus.
 ///
 /// When present on an [`EditorExtension`](UiContribution::EditorExtension),
 /// the host renders a button in the appropriate menu (MoreStylesPicker for
-/// inline atoms/marks, BlockPicker/BlockStylePicker for block atoms).
+/// inline atoms/marks, BlockPicker for block atoms).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
@@ -305,6 +324,12 @@ pub struct InsertCommand {
     pub icon: Option<String>,
     /// Tooltip / description for the button.
     pub description: Option<String>,
+    /// Where this insert command should appear in the UI.
+    ///
+    /// Defaults to [`InsertCommandPlacement::Picker`] so that block atoms
+    /// only show in the block picker and not duplicated in other surfaces.
+    #[serde(default)]
+    pub placement: InsertCommandPlacement,
 }
 
 /// Click behavior for inline mark extensions.

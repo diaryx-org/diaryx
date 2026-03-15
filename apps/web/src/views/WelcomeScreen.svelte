@@ -207,7 +207,7 @@
                 {@const colors = getThemeColors(bundle.theme_id)}
                 <button
                   type="button"
-                  class="text-left p-4 rounded-lg border-2 transition-colors {selectedBundleId === bundle.id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                  class="text-left p-4 rounded-lg border-2 transition-colors {selectedBundleId === bundle.id ? 'border-primary bg-secondary' : 'border-border hover:border-muted-foreground/50'}"
                   onclick={() => { selectedBundleId = bundle.id; }}
                 >
                   <div class="space-y-2">

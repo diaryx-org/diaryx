@@ -30,3 +30,11 @@ It also uses controlled `onOpenChange` gating plus `ignoreNonKeyboardFocus` so
 focus restoration and open-state races do not reopen it. After closing the
 palette, the trigger is blurred and the tooltip remains blocked until the
 pointer leaves the button once.
+
+## Mobile Focus Mode
+
+When focus mode is active on mobile and both sidebars are closed,
+`EditorFooter.svelte` becomes an absolute overlay instead of reserving layout
+space at the bottom of the editor. A bottom-edge reveal strip delegates back to
+`App.svelte` so the mobile header and footer reappear together for temporary
+access to navigation and editor actions.

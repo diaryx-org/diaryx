@@ -1245,10 +1245,14 @@
   }
 
   /* Table styles */
+  :global(.editor-content .tableWrapper) {
+    overflow-x: auto;
+    margin: 0.75em 0;
+  }
+
   :global(.editor-content table) {
     border-collapse: collapse;
     width: 100%;
-    margin: 0.75em 0;
   }
 
   :global(.editor-content th),

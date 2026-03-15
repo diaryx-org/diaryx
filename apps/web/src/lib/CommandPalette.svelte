@@ -1,7 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
   import * as Command from "$lib/components/ui/command";
-  import * as Drawer from "$lib/components/ui/drawer";
   import type { Api } from "./backend/api";
   import { getMobileState } from "./hooks/useMobile.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
@@ -26,6 +25,8 @@
 
   interface Props {
     open: boolean;
+    /** 0-1 during an interactive swipe-up gesture, null otherwise */
+    swipeProgress?: number | null;
     api: Api | null;
     hasEntry: boolean;
     hasEditor: boolean;
@@ -49,6 +50,7 @@
 
   let {
     open = $bindable(),
+    swipeProgress = null,
     api,
     hasEntry,
     hasEditor,
@@ -84,6 +86,52 @@
   }
 
   const mobileState = getMobileState();
+
+  // Show the mobile sheet when open OR actively swiping OR animating closed
+  const swiping = $derived(swipeProgress != null && swipeProgress > 0);
+  let closing = $state(false);
+  const showMobileSheet = $derived(open || swiping || closing);
+
+  /** Animate close, then actually set open = false */
+  function closeWithAnimation() {
+    if (closing) return;
+    closing = true;
+    // Wait for the CSS transition (300ms) to finish before unmounting
+    setTimeout(() => {
+      open = false;
+      searchValue = "";
+      closing = false;
+    }, 300);
+  }
+
+  // Drag-to-dismiss: only activates from the drag handle area at the top of the sheet.
+  // Touching the scrollable command list does NOT start a dismiss gesture.
+  let dismissDragY = $state(0);
+  let dismissDragging = $state(false);
+  let dismissStartY = 0;
+
+  function handleHandleTouchStart(e: TouchEvent) {
+    if (!open || e.touches.length !== 1) return;
+    dismissStartY = e.touches[0].clientY;
+    dismissDragY = 0;
+    dismissDragging = true;
+  }
+
+  function handleHandleTouchMove(e: TouchEvent) {
+    if (!dismissDragging || e.touches.length !== 1) return;
+    const delta = e.touches[0].clientY - dismissStartY;
+    dismissDragY = Math.max(0, delta);
+  }
+
+  function handleHandleTouchEnd() {
+    if (!dismissDragging) return;
+    // If dragged more than 80px downward, dismiss
+    if (dismissDragY > 80) {
+      closeWithAnimation();
+    }
+    dismissDragY = 0;
+    dismissDragging = false;
+  }
 </script>
 
 {#snippet commandContent()}
@@ -211,16 +259,50 @@
 {/snippet}
 
 {#if mobileState.isMobile}
-  <!-- Mobile: Use Drawer from bottom -->
-  <Drawer.Root bind:open direction="bottom">
-    <Drawer.Content>
-      <div class="mx-auto w-full max-w-md px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
+  {#if showMobileSheet}
+    <!-- Backdrop -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="fixed inset-0 z-50 {swiping ? 'pointer-events-none' : ''}"
+      style="background: rgba(0,0,0,{closing
+        ? 0
+        : open
+          ? (dismissDragging ? Math.max(0, 0.5 - dismissDragY / 600) : 0.5)
+          : (swipeProgress ?? 0) * 0.5});
+             {!swiping && !dismissDragging ? 'transition: background 0.3s ease-in-out;' : ''}"
+      onclick={closeWithAnimation}
+      onkeydown={(e) => { if (e.key === 'Escape') closeWithAnimation(); }}
+    ></div>
+
+    <!-- Sheet -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="fixed inset-x-0 bottom-0 z-50 rounded-t-lg border-t bg-background max-h-[80vh] overflow-hidden {swiping ? 'pointer-events-none' : ''}"
+      style="transform: translateY({closing
+        ? '100%'
+        : open
+          ? (dismissDragging ? dismissDragY + 'px' : '0')
+          : (100 - (swipeProgress ?? 0) * 100) + '%'});
+             {!swiping && !dismissDragging ? 'transition: transform 0.3s ease-in-out;' : ''}"
+    >
+      <!-- Drag handle (touch target for dismiss gesture) -->
+      <div
+        class="flex justify-center py-4 cursor-grab active:cursor-grabbing"
+        ontouchstart={handleHandleTouchStart}
+        ontouchmove={handleHandleTouchMove}
+        ontouchend={handleHandleTouchEnd}
+        ontouchcancel={handleHandleTouchEnd}
+      >
+        <div class="h-2 w-[100px] shrink-0 rounded-full bg-muted"></div>
+      </div>
+
+      <div class="mx-auto w-full max-w-md px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
         <Command.Root class="rounded-lg border-none shadow-none">
           {@render commandContent()}
         </Command.Root>
       </div>
-    </Drawer.Content>
-  </Drawer.Root>
+    </div>
+  {/if}
 {:else}
   <!-- Desktop: Use Dialog -->
   <Command.Dialog bind:open title="Command Palette" description="Search or run a command">

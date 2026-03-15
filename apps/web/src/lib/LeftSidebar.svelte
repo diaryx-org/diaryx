@@ -67,6 +67,8 @@
     collapsed: boolean;
     sidebarWidth?: number;
     resizing?: boolean;
+    /** 0-1 during an interactive swipe gesture, null otherwise */
+    swipeProgress?: number | null;
     showUnlinkedFiles: boolean;
     api: Api | null;
     onOpenEntry: (path: string) => void;
@@ -117,6 +119,7 @@
     collapsed,
     sidebarWidth = 288,
     resizing = false,
+    swipeProgress = null,
     showUnlinkedFiles,
     api,
     onOpenEntry,
@@ -171,6 +174,10 @@
 
   // Mobile state for showing explicit menu button
   const mobileState = getMobileState();
+
+  // Progressive swipe derived state (mobile only – desktop keeps width-based animation)
+  const swiping = $derived(swipeProgress != null);
+  const isMobile = $derived(mobileState.isMobile);
 
   // Auth state for profile icon
   const authState = $derived(getAuthState());
@@ -1285,10 +1292,11 @@
 </script>
 
 <!-- Mobile overlay backdrop -->
-{#if !collapsed}
+{#if !collapsed || (swipeProgress != null && swipeProgress > 0)}
   <button
     type="button"
-    class="fixed inset-0 bg-black/50 z-30 md:hidden"
+    class="fixed inset-0 z-30 md:hidden {swipeProgress != null ? 'pointer-events-none' : ''}"
+    style="background: rgba(0,0,0,{swipeProgress != null ? swipeProgress * 0.5 : 0.5}); {swipeProgress != null ? '' : 'transition: background 0.3s ease-in-out;'}"
     onclick={onToggleCollapse}
     aria-label="Close sidebar"
   ></button>
@@ -1296,9 +1304,13 @@
 
 <aside
   class="flex flex-col h-full border-r border-border bg-sidebar text-sidebar-foreground shrink-0 select-none
-    {collapsed ? 'opacity-0 overflow-hidden' : ''}
-    fixed md:relative z-40 md:z-auto"
-  style="width: {collapsed ? 0 : sidebarWidth}px; {resizing ? '' : 'transition: width 0.3s ease-in-out, opacity 0.3s ease-in-out;'}"
+    fixed md:relative z-40 md:z-auto
+    {!isMobile && collapsed ? 'opacity-0 overflow-hidden' : ''}
+    {isMobile ? 'overflow-hidden' : ''}"
+  style="{isMobile
+    ? `width: ${sidebarWidth}px; transform: translateX(${swiping ? (-100 + (swipeProgress as unknown as number) * 100) : (collapsed ? -100 : 0)}%); ${swiping ? '' : 'transition: transform 0.3s ease-in-out;'}`
+    : `width: ${collapsed ? 0 : sidebarWidth}px; ${resizing ? '' : 'transition: width 0.3s ease-in-out, opacity 0.3s ease-in-out;'}`
+  }"
 >
   <!-- Header -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->

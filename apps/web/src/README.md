@@ -109,9 +109,10 @@ switch.
 
 ## Mobile Swipe Behavior
 
-`App.svelte` supports touch swipe gestures:
+`App.svelte` supports progressive touch swipe gestures. All gestures are interactive — the target UI follows the finger during the swipe and snaps open or closed on release (threshold: 35%).
 
-- Swipe down from the top edge opens the command palette.
-- Swipe right closes an open right sidebar first; if right is already closed, it opens the left sidebar only when the gesture starts from the left screen edge.
-- Swipe left closes an open left sidebar first; if left is already closed, it opens the right sidebar only when the gesture starts from the right screen edge.
+- **Swipe up** from the bottom edge (footer area) progressively reveals the command palette sheet. The mobile command palette uses a custom bottom sheet (not vaul) so it can be driven by swipe progress and also supports drag-to-dismiss when open.
+- **Swipe right** from anywhere progressively opens the left sidebar (or closes an open right sidebar).
+- **Swipe left** from anywhere progressively opens the right sidebar (or closes an open left sidebar).
 - Gestures that begin inside modal/dialog surfaces or turn into an active text selection are ignored so marketplace/settings navigation and editor selection do not accidentally trigger sidebars.
+- Gesture listeners are attached early in `onMount` (before workspace init) so they work even when initialisation fails.

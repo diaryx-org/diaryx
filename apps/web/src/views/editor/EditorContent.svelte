@@ -51,7 +51,7 @@
 </script>
 
 <!-- Outer container: scrollable area -->
-<div class="flex-1 overflow-y-auto">
+<div class="flex-1 overflow-y-auto overflow-x-hidden">
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- Inner wrapper: padding and max-width controlled by --editor-content-max-width -->

@@ -10,7 +10,6 @@
   import {
     getMobileSwipeStartContext,
     hasNonCollapsedSelection,
-    isSidebarSwipeEdgeStart,
   } from "$lib/mobileSwipe";
   import { createApi, type Api } from "./lib/backend/api";
   import type { Backend } from "./lib/backend/interface";
@@ -473,9 +472,26 @@
   let trackingTouchGesture = false;
   let touchBlocksShellSwipe = false;
   let touchStartedInSelectableContent = false;
-  const SWIPE_THRESHOLD = 80;
-  const CROSS_AXIS_MAX = 50;
   const COMMAND_PALETTE_EDGE_ZONE_PX = 100;
+
+  // Progressive swipe state – drives sidebar width interactively during a gesture.
+  // `swipeTarget` is set once the gesture direction is locked in.
+  const SWIPE_LOCK_PX = 15; // min movement before we lock direction
+  const SWIPE_COMMIT_FRACTION = 0.35; // release past 35% → commit the action
+  const COMMAND_PALETTE_TRAVEL_PX = 320; // distance (px) for a full swipe-up to open command palette
+  type SwipeTarget = "open-left" | "close-left" | "open-right" | "close-right" | "open-command-palette" | null;
+  let swipeTarget: SwipeTarget = $state(null);
+  let swipeProgress = $state(0); // 0 → 1
+  // Exposed to sidebar components: null when no swipe active, 0-1 during gesture
+  let leftSidebarSwipeProgress: number | null = $derived(
+    swipeTarget === "open-left" || swipeTarget === "close-left" ? swipeProgress : null,
+  );
+  let rightSidebarSwipeProgress: number | null = $derived(
+    swipeTarget === "open-right" || swipeTarget === "close-right" ? swipeProgress : null,
+  );
+  let commandPaletteSwipeProgress: number | null = $derived(
+    swipeTarget === "open-command-palette" ? swipeProgress : null,
+  );
 
   // Helper to handle mixed frontmatter types (Map from WASM vs Object from JSON/Tauri)
   function normalizeFrontmatter(frontmatter: any): Record<string, any> {
@@ -1603,6 +1619,8 @@
     trackingTouchGesture = false;
     touchBlocksShellSwipe = false;
     touchStartedInSelectableContent = false;
+    swipeTarget = null;
+    swipeProgress = 0;
   }
 
   function handleTouchStart(e: TouchEvent) {
@@ -1619,6 +1637,85 @@
     trackingTouchGesture = true;
     touchBlocksShellSwipe = swipeContext.blocksShellSwipe;
     touchStartedInSelectableContent = swipeContext.startsInSelectableContent;
+    swipeTarget = null;
+    swipeProgress = 0;
+  }
+
+  /** Determine which sidebar gesture to lock into (called once per gesture). */
+  function resolveSwipeTarget(deltaX: number): SwipeTarget {
+    if (deltaX > 0) {
+      // Swiping right → close right sidebar (if open) or open left sidebar
+      if (!rightSidebarCollapsed) return "close-right";
+      if (leftSidebarCollapsed) return "open-left";
+    } else {
+      // Swiping left → close left sidebar (if open) or open right sidebar
+      if (!leftSidebarCollapsed) return "close-left";
+      if (rightSidebarCollapsed) return "open-right";
+    }
+    return null;
+  }
+
+  function handleTouchMove(e: TouchEvent) {
+    if (!trackingTouchGesture || e.touches.length !== 1) return;
+    if (touchBlocksShellSwipe) return;
+
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - touchStartX;
+    const deltaY = touch.clientY - touchStartY;
+    const absDeltaX = Math.abs(deltaX);
+    const absDeltaY = Math.abs(deltaY);
+
+    // If the direction isn't locked yet, try to lock it
+    if (!swipeTarget) {
+      if (absDeltaX < SWIPE_LOCK_PX && absDeltaY < SWIPE_LOCK_PX) return;
+
+      // Check for active text selection before locking
+      if (touchStartedInSelectableContent) {
+        const selection =
+          typeof window.getSelection === "function" ? window.getSelection() : null;
+        if (hasNonCollapsedSelection(selection)) return;
+      }
+
+      if (absDeltaY > absDeltaX) {
+        // Mostly vertical swipe-up from bottom edge → open command palette
+        const viewportHeight = window.innerHeight;
+        if (
+          deltaY < 0 &&
+          touchStartY > viewportHeight - COMMAND_PALETTE_EDGE_ZONE_PX
+        ) {
+          swipeTarget = "open-command-palette";
+        } else {
+          return; // vertical but not from footer – ignore
+        }
+      } else {
+        swipeTarget = resolveSwipeTarget(deltaX);
+        if (!swipeTarget) return;
+      }
+    }
+
+    // Compute progress (0–1) based on the swipe target
+    let raw: number;
+    switch (swipeTarget) {
+      case "open-left":
+        raw = deltaX / leftSidebarWidth;
+        break;
+      case "close-left":
+        raw = 1 + deltaX / leftSidebarWidth;
+        break;
+      case "open-right":
+        raw = -deltaX / rightSidebarWidth;
+        break;
+      case "close-right":
+        raw = 1 - deltaX / rightSidebarWidth;
+        break;
+      case "open-command-palette":
+        raw = -deltaY / COMMAND_PALETTE_TRAVEL_PX; // swipe up → negative deltaY → positive progress
+        break;
+      default:
+        return;
+    }
+
+    swipeProgress = Math.max(0, Math.min(1, raw));
   }
 
   function handleTouchEnd(e: TouchEvent) {
@@ -1627,56 +1724,25 @@
       return;
     }
 
-    const touch = e.changedTouches[0];
-    const deltaY = touch.clientY - touchStartY;
-    const deltaX = touch.clientX - touchStartX;
-    const absDeltaY = Math.abs(deltaY);
-    const absDeltaX = Math.abs(deltaX);
-    const viewportWidth = window.innerWidth;
-    const selection =
-      typeof window.getSelection === "function" ? window.getSelection() : null;
-
-    if (touchBlocksShellSwipe) {
-      resetTouchGestureTracking();
-      return;
-    }
-
-    if (touchStartedInSelectableContent && hasNonCollapsedSelection(selection)) {
-      resetTouchGestureTracking();
-      return;
-    }
-
-    if (
-      touchStartY < COMMAND_PALETTE_EDGE_ZONE_PX &&
-      deltaY > SWIPE_THRESHOLD &&
-      absDeltaX < CROSS_AXIS_MAX
-    ) {
-      uiStore.openCommandPalette();
-      resetTouchGestureTracking();
-      return;
-    }
-
-    if (deltaX > SWIPE_THRESHOLD && absDeltaY < CROSS_AXIS_MAX) {
-      if (!rightSidebarCollapsed) {
-        toggleRightSidebar();
-      } else if (
-        leftSidebarCollapsed &&
-        isSidebarSwipeEdgeStart(touchStartX, viewportWidth, "right")
-      ) {
-        toggleLeftSidebar();
-      }
-      resetTouchGestureTracking();
-      return;
-    }
-
-    if (deltaX < -SWIPE_THRESHOLD && absDeltaY < CROSS_AXIS_MAX) {
-      if (!leftSidebarCollapsed) {
-        toggleLeftSidebar();
-      } else if (
-        rightSidebarCollapsed &&
-        isSidebarSwipeEdgeStart(touchStartX, viewportWidth, "left")
-      ) {
-        toggleRightSidebar();
+    // If a progressive gesture was active, commit or revert
+    if (swipeTarget) {
+      const commit = swipeProgress >= SWIPE_COMMIT_FRACTION;
+      switch (swipeTarget) {
+        case "open-left":
+          if (commit) uiStore.setLeftSidebarCollapsed(false);
+          break;
+        case "close-left":
+          if (swipeProgress < (1 - SWIPE_COMMIT_FRACTION)) uiStore.setLeftSidebarCollapsed(true);
+          break;
+        case "open-right":
+          if (commit) uiStore.setRightSidebarCollapsed(false);
+          break;
+        case "close-right":
+          if (swipeProgress < (1 - SWIPE_COMMIT_FRACTION)) uiStore.setRightSidebarCollapsed(true);
+          break;
+        case "open-command-palette":
+          if (commit) uiStore.openCommandPalette();
+          break;
       }
       resetTouchGestureTracking();
       return;
@@ -1689,6 +1755,7 @@
     if (cleanupMobileGestureListeners) return;
 
     document.addEventListener("touchstart", handleTouchStart, { passive: true });
+    document.addEventListener("touchmove", handleTouchMove, { passive: true });
     document.addEventListener("touchend", handleTouchEnd, { passive: true });
     document.addEventListener("touchcancel", resetTouchGestureTracking, {
       passive: true,
@@ -1696,6 +1763,7 @@
 
     cleanupMobileGestureListeners = () => {
       document.removeEventListener("touchstart", handleTouchStart);
+      document.removeEventListener("touchmove", handleTouchMove);
       document.removeEventListener("touchend", handleTouchEnd);
       document.removeEventListener("touchcancel", resetTouchGestureTracking);
       cleanupMobileGestureListeners = null;
@@ -1795,6 +1863,14 @@
       uiStore.setLeftSidebarCollapsed(false);
       uiStore.setRightSidebarCollapsed(false);
     }
+
+    // Add swipe gestures for mobile:
+    // - Swipe up from bottom: open command palette
+    // - Swipe right from the left edge: open left sidebar (or close right sidebar if open)
+    // - Swipe left from the right edge: open right sidebar (or close left sidebar if open)
+    // Gestures that begin inside modal surfaces or become text selections are ignored.
+    // Attached early so gestures work even if workspace initialisation fails.
+    attachMobileGestureListeners();
 
     // On macOS Tauri with overlay titlebar, set titlebar area height for traffic light clearance
     if (isTauri() && (navigator.platform === "MacIntel" || navigator.platform.startsWith("Mac"))) {
@@ -2058,13 +2134,6 @@
       if (justVerifiedMagicLink && getWorkspaces().length > 0 && !isSyncEnabled()) {
         showAddWorkspace = true;
       }
-
-      // Add swipe gestures for mobile:
-      // - Swipe down from top: open command palette
-      // - Swipe right from the left edge: open left sidebar (or close right sidebar if open)
-      // - Swipe left from the right edge: open right sidebar (or close left sidebar if open)
-      // Gestures that begin inside modal surfaces or become text selections are ignored.
-      attachMobileGestureListeners();
 
     } catch (e) {
       if (e instanceof FsaGestureRequiredError) {
@@ -3771,6 +3840,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 <!-- Command Palette -->
   <CommandPalette
     bind:open={uiStore.showCommandPalette}
+    swipeProgress={commandPaletteSwipeProgress}
     {api}
     hasEntry={!!currentEntry}
     hasEditor={!!editorRef}
@@ -4035,6 +4105,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     collapsed={leftSidebarCollapsed}
     sidebarWidth={leftSidebarWidth}
     resizing={resizingSidebar === 'left'}
+    swipeProgress={leftSidebarSwipeProgress}
     onOpenEntry={openEntry}
     onToggleNode={toggleNode}
     onToggleCollapse={toggleLeftSidebar}
@@ -4263,6 +4334,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     collapsed={rightSidebarCollapsed}
     sidebarWidth={rightSidebarWidth}
     resizing={resizingSidebar === 'right'}
+    swipeProgress={rightSidebarSwipeProgress}
     onToggleCollapse={toggleRightSidebar}
     onPropertyChange={handlePropertyChange}
     onPropertyRemove={handlePropertyRemove}

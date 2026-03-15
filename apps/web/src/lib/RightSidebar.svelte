@@ -99,6 +99,8 @@
     collapsed: boolean;
     sidebarWidth?: number;
     resizing?: boolean;
+    /** 0-1 during an interactive swipe gesture, null otherwise */
+    swipeProgress?: number | null;
     onToggleCollapse: () => void;
     onPropertyChange?: (key: string, value: unknown) => void;
     onPropertyRemove?: (key: string) => void;
@@ -127,6 +129,7 @@
     collapsed,
     sidebarWidth = 288,
     resizing = false,
+    swipeProgress = null,
     onToggleCollapse,
     onPropertyChange,
     onPropertyRemove,
@@ -145,6 +148,10 @@
     onRequestedTabConsumed,
     onPluginHostAction,
   }: Props = $props();
+
+  // Progressive swipe derived state (mobile only – desktop keeps width-based animation)
+  const swiping = $derived(swipeProgress != null);
+  const isMobile = $derived(mobileState.isMobile);
 
   // Detect if current entry is the workspace root index
   const isRootIndex = $derived(
@@ -719,10 +726,11 @@
 </script>
 
 <!-- Mobile overlay backdrop -->
-{#if !collapsed}
+{#if !collapsed || (swipeProgress != null && swipeProgress > 0)}
   <button
     type="button"
-    class="fixed inset-0 bg-black/50 z-30 md:hidden"
+    class="fixed inset-0 z-30 md:hidden {swipeProgress != null ? 'pointer-events-none' : ''}"
+    style="background: rgba(0,0,0,{swipeProgress != null ? swipeProgress * 0.5 : 0.5}); {swipeProgress != null ? '' : 'transition: background 0.3s ease-in-out;'}"
     onclick={onToggleCollapse}
     aria-label="Close properties panel"
   ></button>
@@ -730,9 +738,13 @@
 
 <aside
   class="flex flex-col h-full border-l border-border bg-sidebar text-sidebar-foreground shrink-0 select-none
-    {collapsed ? 'opacity-0 overflow-hidden' : ''}
-    fixed right-0 md:relative z-40 md:z-auto"
-  style="width: {collapsed ? 0 : sidebarWidth}px; {resizing ? '' : 'transition: width 0.3s ease-in-out, opacity 0.3s ease-in-out;'}"
+    fixed right-0 md:relative z-40 md:z-auto
+    {!isMobile && collapsed ? 'opacity-0 overflow-hidden' : ''}
+    {isMobile ? 'overflow-hidden' : ''}"
+  style="{isMobile
+    ? `width: ${sidebarWidth}px; transform: translateX(${swiping ? (100 - (swipeProgress as unknown as number) * 100) : (collapsed ? 100 : 0)}%); ${swiping ? '' : 'transition: transform 0.3s ease-in-out;'}`
+    : `width: ${collapsed ? 0 : sidebarWidth}px; ${resizing ? '' : 'transition: width 0.3s ease-in-out, opacity 0.3s ease-in-out;'}`
+  }"
   data-spotlight="properties-panel"
 >
   <!-- Header with collapse button -->

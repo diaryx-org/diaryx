@@ -15,13 +15,13 @@
   import SignInForm from "$lib/components/SignInForm.svelte";
 
   interface Props {
-    onGetStarted: (selectedBundle: BundleRegistryEntry | null) => void;
+    onGetStarted: (selectedBundle: BundleRegistryEntry | null) => void | Promise<void>;
     onSignIn: () => void;
     /** When set, user navigated here from an existing workspace — show a "Return" button */
     returnWorkspaceName?: string | null;
     onReturn?: () => void;
     /** Called when a returning user picks a bundle to create a new workspace */
-    onCreateNewWithBundle?: (selectedBundle: BundleRegistryEntry | null) => void;
+    onCreateNewWithBundle?: (selectedBundle: BundleRegistryEntry | null) => void | Promise<void>;
   }
 
   let { onGetStarted, onSignIn, returnWorkspaceName = null, onReturn, onCreateNewWithBundle }: Props = $props();
@@ -36,6 +36,26 @@
   let themes = $state<ThemeRegistryEntry[]>([]);
   let loading = $state(true);
   let selectedBundleId = $state<string>("bundle.default");
+  let settingUp = $state(false);
+
+  async function handleGetStarted(bundle: BundleRegistryEntry | null) {
+    settingUp = true;
+    try {
+      await onGetStarted(bundle);
+    } catch {
+      settingUp = false;
+    }
+  }
+
+  async function handleCreateNewWithBundle(bundle: BundleRegistryEntry | null) {
+    if (!onCreateNewWithBundle) return;
+    settingUp = true;
+    try {
+      await onCreateNewWithBundle(bundle);
+    } catch {
+      settingUp = false;
+    }
+  }
 
   let defaultBundle = $derived(
     bundles.find((b) => b.id === "bundle.default") ?? null,
@@ -113,13 +133,13 @@
             {:else}
               <Button
                 class="w-full get-started-btn"
-                disabled={loading}
-                onclick={() => onGetStarted(defaultBundle)}
+                disabled={loading || settingUp}
+                onclick={() => handleGetStarted(defaultBundle)}
               >
-                {#if loading}
+                {#if loading || settingUp}
                   <Loader2 class="size-4 animate-spin mr-2" />
                 {/if}
-                Get Started
+                {settingUp ? 'Setting up…' : 'Get Started'}
               </Button>
 
               <Button
@@ -259,15 +279,19 @@
             <div class="fade-in" style="animation-delay: 0.3s">
               <Button
                 class="w-full get-started-btn"
+                disabled={settingUp}
                 onclick={() => {
                   if (returnWorkspaceName && onCreateNewWithBundle) {
-                    onCreateNewWithBundle(selectedBundle);
+                    handleCreateNewWithBundle(selectedBundle);
                   } else {
-                    onGetStarted(selectedBundle);
+                    handleGetStarted(selectedBundle);
                   }
                 }}
               >
-                {#if returnWorkspaceName}
+                {#if settingUp}
+                  <Loader2 class="size-4 animate-spin mr-2" />
+                  Setting up…
+                {:else if returnWorkspaceName}
                   {#if selectedBundle}
                     New Workspace with {selectedBundle.name}
                   {:else}

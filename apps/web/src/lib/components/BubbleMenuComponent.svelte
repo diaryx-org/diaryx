@@ -9,12 +9,12 @@
     Columns2,
     Trash2,
   } from "@lucide/svelte";
-  import HighlightColorPicker from "./HighlightColorPicker.svelte";
+  import AttributeMarkPicker from "./AttributeMarkPicker.svelte";
   import BlockStylePicker from "./BlockStylePicker.svelte";
   import MoreStylesPicker from "./MoreStylesPicker.svelte";
   import LinkInsertPopover from "./LinkInsertPopover.svelte";
-  import type { HighlightColor } from "$lib/extensions/ColoredHighlightMark";
   import type { Api } from "$lib/backend/api";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 
   interface Props {
     editor: Editor | null;
@@ -30,23 +30,32 @@
   // Track active states reactively
   let isBoldActive = $state(false);
   let isItalicActive = $state(false);
-  let isHighlightActive = $state(false);
-  let currentHighlightColor = $state<HighlightColor | null>(null);
   let isLinkActive = $state(false);
   let isInCodeBlock = $state(false);
   let isInTable = $state(false);
+
+  // Generic mark toolbar entries (e.g., highlight color picker)
+  const markToolbarEntries = $derived(getPluginStore().markToolbarEntries);
+  let markActiveStates = $state<Record<string, boolean>>({});
+  let markCurrentValues = $state<Record<string, string | null>>({});
+  let markPickerOpen = $state<Record<string, boolean>>({});
 
   function updateActiveStates() {
     if (!editor) return;
     isBoldActive = editor.isActive("bold");
     isItalicActive = editor.isActive("italic");
-    isHighlightActive = editor.isActive("coloredHighlight");
-    // Get the current highlight color from the editor state
-    if (isHighlightActive) {
-      const attrs = editor.getAttributes("coloredHighlight");
-      currentHighlightColor = (attrs.color as HighlightColor) || "yellow";
-    } else {
-      currentHighlightColor = null;
+    for (const entry of markToolbarEntries) {
+      const extName = entry.extensionId;
+      const hasExt = editor.extensionManager.extensions.some(e => e.name === extName);
+      if (hasExt) {
+        markActiveStates[extName] = editor.isActive(extName);
+        if (markActiveStates[extName] && entry.attribute) {
+          const attrs = editor.getAttributes(extName);
+          markCurrentValues[extName] = (attrs[entry.attribute.name] as string) || entry.attribute.default;
+        } else {
+          markCurrentValues[extName] = null;
+        }
+      }
     }
     isLinkActive = editor.isActive("link");
     isInCodeBlock = editor.isActive("codeBlock");
@@ -65,15 +74,16 @@
 
   // Dropdown mutual exclusion: only one open at a time
   let blockStyleOpen = $state(false);
-  let highlightOpen = $state(false);
   let linkPopoverOpen = $state(false);
   let moreStylesOpen = $state(false);
 
   function closeAllDropdowns() {
     blockStyleOpen = false;
-    highlightOpen = false;
     linkPopoverOpen = false;
     moreStylesOpen = false;
+    for (const key of Object.keys(markPickerOpen)) {
+      markPickerOpen[key] = false;
+    }
   }
 
   function handleLink() {
@@ -210,7 +220,16 @@
       <Italic class="size-4" />
     </button>
 
-    <HighlightColorPicker {editor} isActive={isHighlightActive} currentColor={currentHighlightColor} bind:open={highlightOpen} onOpen={() => { closeAllDropdowns(); }} />
+    {#each markToolbarEntries as entry (entry.extensionId)}
+      <AttributeMarkPicker
+        {editor}
+        {entry}
+        isActive={markActiveStates[entry.extensionId] ?? false}
+        currentValue={markCurrentValues[entry.extensionId]}
+        open={markPickerOpen[entry.extensionId] ?? false}
+        onOpen={() => { closeAllDropdowns(); markPickerOpen[entry.extensionId] = true; }}
+      />
+    {/each}
 
     <div class="link-button-wrapper">
       <button

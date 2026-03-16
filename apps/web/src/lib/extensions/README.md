@@ -5,8 +5,6 @@ part_of: '[README](/apps/web/src/lib/README.md)'
 attachments:
   - '[AttachmentExtension.ts](/apps/web/src/lib/extensions/AttachmentExtension.ts)'
   - '[AttachmentPickerNode.ts](/apps/web/src/lib/extensions/AttachmentPickerNode.ts)'
-  - '[ColoredHighlightMark.ts](/apps/web/src/lib/extensions/ColoredHighlightMark.ts)'
-  - '[DrawingBlock.ts](/apps/web/src/lib/extensions/DrawingBlock.ts)'
   - '[TableControls.ts](/apps/web/src/lib/extensions/TableControls.ts)'
   - '[TemplateVariable.ts](/apps/web/src/lib/extensions/TemplateVariable.ts)'
   - '[ConditionalBlock.ts](/apps/web/src/lib/extensions/ConditionalBlock.ts)'
@@ -24,8 +22,6 @@ Custom TipTap editor extensions.
 |------|---------|
 | `AttachmentExtension.ts` | Attachment node extension |
 | `AttachmentPickerNode.ts` | Attachment picker node view |
-| `ColoredHighlightMark.ts` | Colored text highlight mark |
-| `DrawingBlock.ts` | Freehand drawing block (SVG attachment) |
 | `TableControls.ts` | Notion-style inline table controls (row/column grips, add buttons) |
 | `TemplateVariable.ts` | Render-time template variable pills (`{{ variable }}`) with live value resolution |
 | `ConditionalBlock.ts` | Conditional block markers (`{{#if}}`, `{{#for-audience}}`, `{{else}}`, `{{/if}}`) with branch decorations |

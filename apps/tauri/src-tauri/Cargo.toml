@@ -37,6 +37,9 @@ uuid = { version = "1", features = ["v4"] }
 # Apple IAP (StoreKit 2) — optional, only for App Store builds
 tauri-plugin-iap = { path = "../../../crates/tauri-plugin-iap", optional = true }
 
+# Apple iCloud Drive workspace storage — optional, only for iOS builds
+tauri-plugin-icloud = { path = "../../../crates/tauri-plugin-icloud", optional = true }
+
 # Native iOS keyboard toolbar for TipTap editor
 tauri-plugin-editor-toolbar = { path = "../../../crates/tauri-plugin-editor-toolbar" }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
@@ -56,7 +59,8 @@ default = ["custom-protocol", "extism-plugins"]
 custom-protocol = ["tauri/custom-protocol"]
 desktop-updater = ["dep:tauri-plugin-updater"]
 iap = ["dep:tauri-plugin-iap"]
-apple = ["iap", "diaryx_extism/pulley"]
+icloud = ["dep:tauri-plugin-icloud"]
+apple = ["iap", "icloud", "diaryx_extism/pulley"]
 extism-plugins = ["dep:diaryx_extism", "dep:dirs", "dep:futures-lite", "diaryx_extism/wasi-runner", "diaryx_extism/http", "diaryx_extism/ws-transport"]
 
 [dev-dependencies]

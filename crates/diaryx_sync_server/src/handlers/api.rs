@@ -373,24 +373,24 @@ async fn delete_workspace(
     state.sync_v2.storage_cache.evict_storage(&workspace_id);
 
     let db_path = state.sync_v2.storage_cache.workspace_db_path(&workspace_id);
-    if db_path.exists() {
-        if let Err(err) = std::fs::remove_file(&db_path) {
-            warn!(
-                "Failed to remove CRDT DB for deleted workspace {}: {}",
-                workspace_id, err
-            );
-        }
+    if db_path.exists()
+        && let Err(err) = std::fs::remove_file(&db_path)
+    {
+        warn!(
+            "Failed to remove CRDT DB for deleted workspace {}: {}",
+            workspace_id, err
+        );
     }
 
     // Clean up git repo directory
     let git_path = state.sync_v2.storage_cache.git_repo_path(&workspace_id);
-    if git_path.exists() {
-        if let Err(err) = std::fs::remove_dir_all(&git_path) {
-            warn!(
-                "Failed to remove git repo for deleted workspace {}: {}",
-                workspace_id, err
-            );
-        }
+    if git_path.exists()
+        && let Err(err) = std::fs::remove_dir_all(&git_path)
+    {
+        warn!(
+            "Failed to remove git repo for deleted workspace {}: {}",
+            workspace_id, err
+        );
     }
 
     info!(
@@ -777,10 +777,12 @@ fn normalize_attachment_path(file_path: &str, raw_attachment_path: &str) -> Opti
 
     let file = Path::new(normalized_file_path.as_deref().unwrap_or(""));
 
-    if trimmed.starts_with('[') && trimmed.contains("](") && !trimmed.ends_with(')') {
-        if let Some(normalized) = normalize_attachment_path_once(file, &format!("{})", trimmed)) {
-            return Some(normalized);
-        }
+    if trimmed.starts_with('[')
+        && trimmed.contains("](")
+        && !trimmed.ends_with(')')
+        && let Some(normalized) = normalize_attachment_path_once(file, &format!("{})", trimmed))
+    {
+        return Some(normalized);
     }
 
     normalize_attachment_path_once(file, trimmed)
@@ -1235,14 +1237,13 @@ async fn complete_attachment_upload(
         }
     };
     if is_new_blob && projected > limit_bytes {
-        if !session.r2_multipart_upload_id.is_empty() {
-            if let Err(err) = state
+        if !session.r2_multipart_upload_id.is_empty()
+            && let Err(err) = state
                 .blob_store
                 .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
                 .await
-            {
-                error!("Failed to abort over-limit multipart upload: {}", err);
-            }
+        {
+            error!("Failed to abort over-limit multipart upload: {}", err);
         }
         if let Err(err) = state
             .repo

@@ -193,12 +193,13 @@ fn normalize_attachment_path(file_path: &str, raw_attachment_path: &str) -> Opti
     }
 
     let trimmed = raw_attachment_path.trim();
-    if trimmed.starts_with('[') && trimmed.contains("](") && !trimmed.ends_with(')') {
-        if let Some(normalized) =
+    if trimmed.starts_with('[')
+        && trimmed.contains("](")
+        && !trimmed.ends_with(')')
+        && let Some(normalized) =
             normalize_attachment_path_once(file_path, &format!("{})", trimmed))
-        {
-            return Some(normalized);
-        }
+    {
+        return Some(normalized);
     }
 
     normalize_attachment_path_once(file_path, trimmed)

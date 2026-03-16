@@ -46,6 +46,7 @@
     "iap:allow-get-products",
     "iap:allow-purchase",
     "iap:allow-restore-purchases",
-    "iap:allow-get-subscription-status"
+    "iap:allow-get-subscription-status",
+    "icloud:default"
   ]
 }

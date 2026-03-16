@@ -16,6 +16,7 @@ import {
   getBuiltinExtension,
   isEditorExtension,
   type EditorExtensionManifest,
+  type EditorExtensionContext,
   type RenderFn,
 } from "./editorExtensionFactory";
 
@@ -63,6 +64,23 @@ export function getTauriEditorExtensions(): any[] {
 
       if (ext.node_type === "InlineMark") {
         extensions.push(createMarkFromManifest(ext));
+      } else if (ext.edit_mode === "Iframe" && ext.iframe_component_id) {
+        const pluginId = String(manifest.id);
+        const ctx: EditorExtensionContext = {
+          pluginId,
+          getComponentHtml: async (componentId) => {
+            const { invoke } = await import("@tauri-apps/api/core");
+            try {
+              return await invoke<string>("get_plugin_component_html", {
+                pluginId,
+                componentId,
+              });
+            } catch {
+              return null;
+            }
+          },
+        };
+        extensions.push(createExtensionFromManifest(ext, null, {}, ctx));
       } else if (ext.render_export) {
         const renderFn = createTauriRenderFn(
           String(manifest.id),

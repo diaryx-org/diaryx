@@ -1,42 +1,34 @@
 <script lang="ts">
   import type { Editor } from "@tiptap/core";
-  import { Highlighter, X } from "@lucide/svelte";
-  import { HIGHLIGHT_COLORS, type HighlightColor } from "$lib/extensions/ColoredHighlightMark";
+  import { X } from "@lucide/svelte";
+  import type { MarkToolbarEntry } from "@/models/stores/pluginStore.svelte";
 
   interface Props {
     editor: Editor | null;
+    entry: MarkToolbarEntry;
     isActive: boolean;
-    currentColor?: HighlightColor | null;
+    currentValue?: string | null;
     open?: boolean;
     onOpen?: () => void;
   }
 
-  let { editor, isActive, currentColor = null, open = $bindable(false), onOpen }: Props = $props();
+  let { editor, entry, isActive, currentValue = null, open = $bindable(false), onOpen }: Props = $props();
   let wrapperElement: HTMLDivElement | null = $state(null);
 
-  // Color display configuration
-  const colorConfig: Record<HighlightColor, { label: string }> = {
-    red: { label: "Red" },
-    orange: { label: "Orange" },
-    yellow: { label: "Yellow" },
-    green: { label: "Green" },
-    cyan: { label: "Cyan" },
-    blue: { label: "Blue" },
-    violet: { label: "Violet" },
-    pink: { label: "Pink" },
-    brown: { label: "Brown" },
-    grey: { label: "Grey" },
-  };
+  /** Title-case a value string for display (e.g., "red" → "Red"). */
+  function titleCase(s: string): string {
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
 
-  function handleColorSelect(color: HighlightColor) {
-    if (!editor) return;
-    editor.chain().focus().toggleColoredHighlight(color).run();
+  function handleValueSelect(value: string) {
+    if (!editor || !entry.attribute) return;
+    editor.chain().focus().toggleMark(entry.extensionId, { [entry.attribute.name]: value }).run();
     open = false;
   }
 
-  function handleRemoveHighlight() {
+  function handleRemove() {
     if (!editor) return;
-    editor.chain().focus().unsetColoredHighlight().run();
+    editor.chain().focus().unsetMark(entry.extensionId).run();
     open = false;
   }
 
@@ -44,19 +36,25 @@
     e.preventDefault();
     e.stopPropagation();
 
-    // If already highlighted, show the color picker (for mobile double-tap behavior)
+    if (!entry.attribute) {
+      // Simple mark toggle (no attributes)
+      editor?.chain().focus().toggleMark(entry.extensionId).run();
+      return;
+    }
+
+    // If already active, show the picker (for mobile double-tap behavior)
     if (isActive) {
       onOpen?.();
       open = true;
       return;
     }
 
-    // Otherwise toggle yellow highlight
-    editor?.chain().focus().toggleColoredHighlight("yellow").run();
+    // Otherwise toggle with default value
+    editor?.chain().focus().toggleMark(entry.extensionId, { [entry.attribute.name]: entry.attribute.default }).run();
   }
 
   function handleContextMenu(e: MouseEvent) {
-    // Right-click: show color picker (desktop)
+    if (!entry.attribute?.validValues.length) return;
     e.preventDefault();
     e.stopPropagation();
     onOpen?.();
@@ -69,7 +67,6 @@
     }
   }
 
-  // Close on escape key
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && open) {
       open = false;
@@ -77,10 +74,8 @@
     }
   }
 
-  // Set up click outside listener when open
   $effect(() => {
     if (open) {
-      // Use setTimeout to avoid the current click from closing immediately
       const timeoutId = setTimeout(() => {
         document.addEventListener("mousedown", handleClickOutside);
         document.addEventListener("keydown", handleKeydown);
@@ -95,48 +90,50 @@
   });
 </script>
 
-<div class="highlight-picker-wrapper" bind:this={wrapperElement}>
+<div class="attr-picker-wrapper" bind:this={wrapperElement}>
   <button
     type="button"
     class="toolbar-button {isActive ? 'active' : ''}"
     onmousedown={handleClick}
     oncontextmenu={handleContextMenu}
-    title="Highlight (right-click for colors)"
+    title="{entry.label}{entry.attribute ? ' (right-click for options)' : ''}"
     aria-pressed={isActive}
-    aria-haspopup="true"
+    aria-haspopup={!!entry.attribute?.validValues.length}
     aria-expanded={open}
   >
-    <span class="highlight-button-content">
-      <Highlighter class="size-4" />
-      {#if isActive && currentColor}
+    <span class="attr-button-content">
+      <entry.icon class="size-4" />
+      {#if isActive && currentValue && entry.attribute?.cssClassPrefix}
         <span
-          class="color-indicator highlight-{currentColor}"
-          aria-label="Current color: {colorConfig[currentColor].label}"
+          class="color-indicator {entry.attribute.cssClassPrefix}{currentValue}"
+          aria-label="Current: {titleCase(currentValue)}"
         ></span>
       {/if}
     </span>
   </button>
 
-  {#if open}
+  {#if open && entry.attribute?.validValues.length}
     <div
-      class="color-picker-dropdown"
+      class="attr-picker-dropdown"
       role="menu"
       tabindex="-1"
       onmousedown={(e) => e.preventDefault()}
     >
-      <div class="color-grid">
-        {#each HIGHLIGHT_COLORS as color}
+      <div class="attr-grid">
+        {#each entry.attribute.validValues as value}
           <button
             type="button"
-            class="color-swatch highlight-{color}"
-            class:selected={currentColor === color}
-            onclick={() => handleColorSelect(color)}
-            title={colorConfig[color].label}
-            aria-label={`Highlight ${colorConfig[color].label}`}
+            class="attr-swatch {entry.attribute.cssClassPrefix ? `${entry.attribute.cssClassPrefix}${value}` : ''}"
+            class:selected={currentValue === value}
+            onclick={() => handleValueSelect(value)}
+            title={titleCase(value)}
+            aria-label={`${entry.label} ${titleCase(value)}`}
             role="menuitem"
           >
-            {#if currentColor === color}
+            {#if currentValue === value}
               <span class="checkmark">&#10003;</span>
+            {:else if !entry.attribute.cssClassPrefix}
+              {titleCase(value)}
             {/if}
           </button>
         {/each}
@@ -144,13 +141,13 @@
       {#if isActive}
         <button
           type="button"
-          class="remove-highlight"
-          onclick={handleRemoveHighlight}
-          title="Remove highlight"
+          class="remove-mark"
+          onclick={handleRemove}
+          title="Remove {entry.label.toLowerCase()}"
           role="menuitem"
         >
           <X class="size-3" />
-          <span>Remove highlight</span>
+          <span>Remove {entry.label.toLowerCase()}</span>
         </button>
       {/if}
     </div>
@@ -158,12 +155,12 @@
 </div>
 
 <style>
-  .highlight-picker-wrapper {
+  .attr-picker-wrapper {
     position: relative;
     display: inline-flex;
   }
 
-  .color-picker-dropdown {
+  .attr-picker-dropdown {
     position: absolute;
     bottom: calc(100% + 8px);
     left: 50%;
@@ -193,13 +190,13 @@
     }
   }
 
-  .color-grid {
+  .attr-grid {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 4px;
   }
 
-  .color-swatch {
+  .attr-swatch {
     width: 24px;
     height: 24px;
     border-radius: 4px;
@@ -211,12 +208,12 @@
     transition: all 0.15s ease;
   }
 
-  .color-swatch:hover {
+  .attr-swatch:hover {
     transform: scale(1.1);
     border-color: var(--foreground);
   }
 
-  .color-swatch.selected {
+  .attr-swatch.selected {
     border-color: var(--foreground);
   }
 
@@ -226,7 +223,7 @@
     color: var(--foreground);
   }
 
-  .remove-highlight {
+  .remove-mark {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -240,20 +237,18 @@
     transition: all 0.15s ease;
   }
 
-  .remove-highlight:hover {
+  .remove-mark:hover {
     background: var(--accent);
     color: var(--accent-foreground);
   }
 
-  /* Button content wrapper for positioning indicator */
-  .highlight-button-content {
+  .attr-button-content {
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
   }
 
-  /* Small color indicator dot */
   .color-indicator {
     position: absolute;
     bottom: -2px;
@@ -264,7 +259,6 @@
     border: 1px solid var(--background);
   }
 
-  /* Toolbar button styles (matching BubbleMenuComponent) */
   .toolbar-button {
     display: flex;
     align-items: center;
@@ -293,10 +287,8 @@
     color: var(--accent-foreground);
   }
 
-  /* Mobile adjustments */
   @media (max-width: 767px) {
-    .highlight-picker-wrapper {
-      /* Remove positioning context so dropdown centers relative to .bubble-menu instead of this button */
+    .attr-picker-wrapper {
       position: static;
     }
 
@@ -306,7 +298,7 @@
       min-height: 36px;
     }
 
-    .color-swatch {
+    .attr-swatch {
       width: 28px;
       height: 28px;
     }

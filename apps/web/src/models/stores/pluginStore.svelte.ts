@@ -543,6 +543,62 @@ function getEditorInsertCommands(): {
   return { inline, block, mark };
 }
 
+/** A mark with toolbar configuration, ready for rendering in BubbleMenu. */
+export interface MarkToolbarEntry {
+  /** TipTap mark name (extension_id). */
+  extensionId: string;
+  /** Toolbar button label / tooltip. */
+  label: string;
+  /** Lucide icon name. */
+  iconName: string;
+  /** Resolved Svelte icon component. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  icon: Component<any>;
+  /** Primary attribute (for picker dropdown). Null if no attributes with valid_values. */
+  attribute: {
+    name: string;
+    default: string;
+    validValues: string[];
+    cssClassPrefix: string | null;
+  } | null;
+}
+
+/** InlineMark extensions with toolbar config — drives BubbleMenu and iOS toolbar pickers. */
+function getMarkToolbarEntries(): MarkToolbarEntry[] {
+  const entries: MarkToolbarEntry[] = [];
+  for (const manifest of manifests) {
+    for (const ui of manifest.ui) {
+      if (ui.slot !== "EditorExtension") continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ext = ui as any;
+      if (ext.node_type !== "InlineMark" || !ext.toolbar) continue;
+
+      const toolbar = ext.toolbar as { icon: string; label: string };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const attrs = (ext.attributes ?? []) as any[];
+      const primaryAttr = attrs.find(
+        (a: { valid_values?: string[] }) => a.valid_values?.length,
+      );
+
+      entries.push({
+        extensionId: ext.extension_id,
+        label: toolbar.label,
+        iconName: toolbar.icon,
+        icon: getCachedPluginIcon(toolbar.icon),
+        attribute: primaryAttr
+          ? {
+              name: primaryAttr.name,
+              default: primaryAttr.default,
+              validValues: primaryAttr.valid_values,
+              cssClassPrefix: primaryAttr.css_class_prefix ?? null,
+            }
+          : null,
+      });
+    }
+  }
+  return entries;
+}
+
 /** Eagerly load icons for all plugin insert commands. Call after plugins load. */
 async function preloadInsertCommandIcons(): Promise<void> {
   for (const manifest of manifests) {
@@ -552,6 +608,9 @@ async function preloadInsertCommandIcons(): Promise<void> {
       const ext = ui as any;
       if (ext.insert_command?.icon) {
         await loadPluginIcon(ext.insert_command.icon);
+      }
+      if (ext.toolbar?.icon) {
+        await loadPluginIcon(ext.toolbar.icon);
       }
     }
   }
@@ -642,6 +701,9 @@ export function getPluginStore() {
     },
     get editorInsertCommands() {
       return getEditorInsertCommands();
+    },
+    get markToolbarEntries() {
+      return getMarkToolbarEntries();
     },
     preloadInsertCommandIcons,
     isPluginEnabled,

@@ -193,8 +193,7 @@ extension EditorToolbarPlugin {
                     taskList: editor.isActive('taskList'),
                     blockquote: editor.isActive('blockquote'),
                     codeBlock: editor.isActive('codeBlock'),
-                    link: editor.isActive('link'),
-                    coloredHighlight: editor.isActive('coloredHighlight')
+                    link: editor.isActive('link')
                 };
 
                 for (var i = 0; i < pluginMarkIds.length; i++) {
@@ -222,7 +221,8 @@ extension EditorToolbarPlugin {
                 var commands = bridge.getPluginCommands();
                 if (!commands) return;
 
-                pluginMarkIds = (commands.marks || []).map(function(c) { return c.extensionId; });
+                pluginMarkIds = (commands.marks || []).map(function(c) { return c.extensionId; })
+                    .concat((commands.toolbarMarks || []).map(function(c) { return c.extensionId; }));
 
                 window.webkit.messageHandlers.editorToolbar.postMessage({
                     type: 'pluginCommands',
@@ -445,7 +445,6 @@ class EditorToolbar: UIView {
             makeButton(systemName: "italic", action: #selector(doItalic), id: "italic"),
             makeButton(systemName: "strikethrough", action: #selector(doStrike), id: "strike"),
             makeButton(systemName: "chevron.left.forwardslash.chevron.right", action: #selector(doCode), id: "code"),
-            makeHighlightButton(),
             makeButton(systemName: "link", action: #selector(doLink), id: "link"),
         ])
     }
@@ -560,69 +559,6 @@ class EditorToolbar: UIView {
     /// Rebuild the block picker menu to include updated plugin commands
     private func refreshBlockPickerMenu() {
         blockPickerButton?.menu = buildBlockPickerMenu()
-    }
-
-    // MARK: - Highlight Button
-
-    private var highlightButton: UIButton?
-
-    private func makeHighlightButton() -> UIButton {
-        let button = UIButton(type: .system)
-        let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        button.setImage(UIImage(systemName: "highlighter", withConfiguration: config), for: .normal)
-        button.tintColor = .secondaryLabel
-        button.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 36),
-            button.heightAnchor.constraint(equalToConstant: 36),
-        ])
-
-        // Tap toggles yellow highlight
-        button.addAction(UIAction { [weak self] _ in
-            self?.haptics.impactOccurred()
-            self?.execHighlight("yellow")
-        }, for: .touchUpInside)
-
-        // Long-press shows color picker menu
-        button.showsMenuAsPrimaryAction = false
-        button.menu = buildHighlightMenu()
-
-        buttonMap["coloredHighlight"] = button
-        highlightButton = button
-        return button
-    }
-
-    private static let highlightColors: [(name: String, color: String)] = [
-        ("Red", "red"), ("Orange", "orange"), ("Yellow", "yellow"),
-        ("Green", "green"), ("Cyan", "cyan"), ("Blue", "blue"),
-        ("Violet", "violet"), ("Pink", "pink"), ("Brown", "brown"),
-        ("Grey", "grey"),
-    ]
-
-    private func buildHighlightMenu() -> UIMenu {
-        let colorActions = Self.highlightColors.map { entry in
-            UIAction(title: entry.name) { [weak self] _ in
-                self?.haptics.impactOccurred()
-                self?.execHighlight(entry.color)
-            }
-        }
-        let colorsMenu = UIMenu(title: "", options: .displayInline, children: colorActions)
-
-        let remove = UIAction(title: "Remove Highlight", image: UIImage(systemName: "xmark"), attributes: .destructive) { [weak self] _ in
-            self?.haptics.impactOccurred()
-            self?.webView?.evaluateJavaScript(
-                "globalThis.__diaryx_tiptapEditor?.chain().focus().unsetColoredHighlight().run();",
-                completionHandler: nil
-            )
-        }
-        let removeMenu = UIMenu(title: "", options: .displayInline, children: [remove])
-
-        return UIMenu(title: "Highlight", children: [colorsMenu, removeMenu])
-    }
-
-    private func execHighlight(_ color: String) {
-        let js = "globalThis.__diaryx_tiptapEditor?.chain().focus().toggleColoredHighlight('\(color)').run();"
-        webView?.evaluateJavaScript(js, completionHandler: nil)
     }
 
     // MARK: - Button Factories
@@ -881,6 +817,21 @@ class EditorToolbar: UIView {
             }
         }
 
+        if let toolbarMarks = dict["toolbarMarks"] as? [[String: Any]] {
+            for m in toolbarMarks {
+                guard let extId = m["extensionId"] as? String,
+                      let label = m["label"] as? String else { continue }
+                let attr = m["attribute"] as? [String: Any]
+                newCommands.append(PluginCommand(
+                    extensionId: extId, label: label,
+                    iconName: m["iconName"] as? String, nodeType: "toolbarMark",
+                    attributeName: attr?["name"] as? String,
+                    attributeDefaultValue: attr?["defaultValue"] as? String,
+                    attributeValidValues: attr?["validValues"] as? [String]
+                ))
+            }
+        }
+
         guard newCommands != pluginCommands else { return }
         pluginCommands = newCommands
         rebuildPluginButtons()
@@ -955,9 +906,38 @@ class EditorToolbar: UIView {
             ])
 
             let captured = cmd
-            button.addAction(UIAction { [weak self] _ in
-                self?.execPluginCommand(captured)
-            }, for: .touchUpInside)
+            if cmd.nodeType == "toolbarMark", let values = cmd.attributeValidValues, !values.isEmpty {
+                // Toolbar mark with attribute picker: tap toggles default, long-press shows menu
+                let attrName = cmd.attributeName ?? "value"
+                let defaultVal = cmd.attributeDefaultValue ?? values.first ?? ""
+
+                button.addAction(UIAction { [weak self] _ in
+                    self?.haptics.impactOccurred()
+                    let js = "globalThis.__diaryx_tiptapEditor?.chain().focus().toggleMark('\(cmd.extensionId)',{\(attrName):'\(defaultVal)'}).run();"
+                    self?.webView?.evaluateJavaScript(js, completionHandler: nil)
+                }, for: .touchUpInside)
+
+                button.showsMenuAsPrimaryAction = false
+                let valueActions = values.map { value in
+                    UIAction(title: value.prefix(1).uppercased() + value.dropFirst()) { [weak self] _ in
+                        self?.haptics.impactOccurred()
+                        let js = "globalThis.__diaryx_tiptapEditor?.chain().focus().toggleMark('\(cmd.extensionId)',{\(attrName):'\(value)'}).run();"
+                        self?.webView?.evaluateJavaScript(js, completionHandler: nil)
+                    }
+                }
+                let valuesMenu = UIMenu(title: "", options: .displayInline, children: valueActions)
+                let remove = UIAction(title: "Remove \(cmd.label)", image: UIImage(systemName: "xmark"), attributes: .destructive) { [weak self] _ in
+                    self?.haptics.impactOccurred()
+                    let js = "globalThis.__diaryx_tiptapEditor?.chain().focus().unsetMark('\(cmd.extensionId)').run();"
+                    self?.webView?.evaluateJavaScript(js, completionHandler: nil)
+                }
+                let removeMenu = UIMenu(title: "", options: .displayInline, children: [remove])
+                button.menu = UIMenu(title: cmd.label, children: [valuesMenu, removeMenu])
+            } else {
+                button.addAction(UIAction { [weak self] _ in
+                    self?.execPluginCommand(captured)
+                }, for: .touchUpInside)
+            }
 
             stackView.addArrangedSubview(button)
             buttonMap[cmd.extensionId] = button
@@ -973,6 +953,10 @@ class EditorToolbar: UIView {
         switch cmd.nodeType {
         case "mark":
             js = "globalThis.__diaryx_tiptapEditor?.chain().focus().toggleMark('\(cmd.extensionId)').run();"
+        case "toolbarMark":
+            let attrName = cmd.attributeName ?? "value"
+            let defaultVal = cmd.attributeDefaultValue ?? ""
+            js = "globalThis.__diaryx_tiptapEditor?.chain().focus().toggleMark('\(cmd.extensionId)',{\(attrName):'\(defaultVal)'}).run();"
         case "blockPickerItem":
             if let promptMsg = cmd.promptMessage, let paramKey = cmd.promptParamKey {
                 promptUserInput(message: promptMsg, defaultValue: cmd.promptDefault ?? "") { [weak self] input in
@@ -1030,6 +1014,7 @@ class EditorToolbar: UIView {
         "bookmark": "bookmark",
         "tag": "tag",
         "puzzle": "puzzlepiece",
+        "highlighter": "highlighter",
     ]
 }
 
@@ -1046,6 +1031,10 @@ struct PluginCommand: Equatable {
     var promptMessage: String? = nil
     var promptDefault: String? = nil
     var promptParamKey: String? = nil
+    // Toolbar mark attribute fields
+    var attributeName: String? = nil
+    var attributeDefaultValue: String? = nil
+    var attributeValidValues: [String]? = nil
 
     static func == (lhs: PluginCommand, rhs: PluginCommand) -> Bool {
         lhs.extensionId == rhs.extensionId &&
@@ -1056,7 +1045,10 @@ struct PluginCommand: Equatable {
         lhs.editorCommand == rhs.editorCommand &&
         lhs.promptMessage == rhs.promptMessage &&
         lhs.promptDefault == rhs.promptDefault &&
-        lhs.promptParamKey == rhs.promptParamKey
+        lhs.promptParamKey == rhs.promptParamKey &&
+        lhs.attributeName == rhs.attributeName &&
+        lhs.attributeDefaultValue == rhs.attributeDefaultValue &&
+        lhs.attributeValidValues == rhs.attributeValidValues
     }
 }
 

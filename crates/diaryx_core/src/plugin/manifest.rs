@@ -55,6 +55,11 @@ pub enum PluginCapability {
     },
     /// Contributes editor extensions (TipTap nodes/marks).
     EditorExtension,
+    /// Provides media format transcoding (e.g. HEIC→JPEG).
+    MediaTranscoder {
+        /// Supported conversion pairs as `"source:target"` strings.
+        conversions: Vec<String>,
+    },
 }
 
 /// A UI extension point contributed by a plugin.
@@ -176,7 +181,7 @@ pub enum UiContribution {
         /// What kind of editor node this creates.
         node_type: EditorNodeType,
         /// Markdown syntax delimiters for parsing and serialization.
-        markdown: MarkdownSyntax,
+        markdown: Box<MarkdownSyntax>,
         /// Name of the plugin's WASM export to call for rendering.
         ///
         /// Only required for atom nodes rendered by guest code.
@@ -185,6 +190,12 @@ pub enum UiContribution {
         ///
         /// Only required for atom nodes that expose source editing.
         edit_mode: Option<EditMode>,
+        /// Component ID for `get_component_html` when `edit_mode` is `Iframe`.
+        ///
+        /// The host calls the plugin's `get_component_html` command with this ID
+        /// to load the iframe editor HTML.
+        #[serde(default)]
+        iframe_component_id: Option<String>,
         /// Optional CSS to inject for rendered output.
         css: Option<String>,
         /// Optional insert command for editor menu integration.
@@ -193,14 +204,44 @@ pub enum UiContribution {
         /// (MoreStylesPicker for inline atoms/marks, BlockPicker for block
         /// atoms) to insert an empty node of this type.
         #[serde(default)]
-        insert_command: Option<InsertCommand>,
+        insert_command: Box<Option<InsertCommand>>,
         /// Optional keyboard shortcut string (e.g., `"Mod-Shift-s"`).
         #[serde(default)]
         keyboard_shortcut: Option<String>,
         /// Optional click behavior for marks (e.g., spoiler reveal/hide).
         #[serde(default)]
         click_behavior: Option<ClickBehavior>,
+        /// HTML tag to render (defaults to "span" if absent).
+        #[serde(default)]
+        html_tag: Option<String>,
+        /// Base CSS class always applied to the rendered element.
+        #[serde(default)]
+        base_css_class: Option<String>,
+        /// Typed attributes for InlineMark extensions.
+        #[serde(default)]
+        attributes: Option<Vec<MarkAttribute>>,
+        /// Optional toolbar configuration for InlineMark extensions.
+        ///
+        /// When present, the host renders a toolbar button in the bubble menu
+        /// (web) and iOS keyboard toolbar with an optional attribute picker.
+        #[serde(default)]
+        toolbar: Box<Option<MarkToolbar>>,
     },
+}
+
+/// Toolbar configuration for InlineMark extensions.
+///
+/// When present, the host renders a toolbar button in the bubble menu
+/// (web) and iOS keyboard toolbar. For marks with attributes that have
+/// `valid_values`, the button opens a picker dropdown.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub struct MarkToolbar {
+    /// Lucide icon name for the toolbar button (e.g., "highlighter").
+    pub icon: String,
+    /// Tooltip / accessibility label for the button.
+    pub label: String,
 }
 
 /// Which sidebar a tab appears in.
@@ -265,6 +306,57 @@ pub struct MarkdownSyntax {
     pub open: String,
     /// Closing delimiter (e.g., `"$"` or `"$$"`).
     pub close: String,
+    /// Optional attribute embedded in the markdown syntax.
+    #[serde(default)]
+    pub attribute_syntax: Option<MarkdownAttributeSyntax>,
+    /// When true, the block syntax is single-line (no newlines between
+    /// open/close delimiters). Used for markdown patterns like
+    /// `![drawing:alt](path)` where the entire block is one line.
+    #[serde(default)]
+    pub single_line: bool,
+}
+
+/// How a mark attribute is embedded in the markdown delimiters.
+///
+/// For highlight: `=={color}text==` means the attribute appears as `{value}`
+/// immediately after the opening delimiter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub struct MarkdownAttributeSyntax {
+    /// Which attribute this syntax maps to (must match a [`MarkAttribute::name`]).
+    pub attribute: String,
+    /// Opening wrapper around the value in the markdown (e.g., `"{"` for `{color}`).
+    pub open: String,
+    /// Closing wrapper around the value in the markdown (e.g., `"}"` for `{color}`).
+    pub close: String,
+    /// Where the attribute appears relative to the content.
+    /// `"after_open"` means between the opening delimiter and the content.
+    #[serde(default = "default_after_open")]
+    pub position: String,
+}
+
+fn default_after_open() -> String {
+    "after_open".into()
+}
+
+/// A typed attribute on an InlineMark extension.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub struct MarkAttribute {
+    /// Attribute name (becomes the TipTap attribute key, e.g., "color").
+    pub name: String,
+    /// Default value when not explicitly set.
+    pub default: String,
+    /// HTML attribute name for storage (e.g., "data-highlight-color").
+    pub html_attribute: String,
+    /// Allowed values. If non-empty, input/paste rules reject unknown values.
+    #[serde(default)]
+    pub valid_values: Vec<String>,
+    /// If set, the factory generates `class="{prefix}{value}"` on rendered HTML.
+    #[serde(default)]
+    pub css_class_prefix: Option<String>,
 }
 
 /// Whether a markdown syntax is inline or block-level.
@@ -287,6 +379,9 @@ pub enum EditMode {
     Popover,
     /// Click toggles between source textarea and rendered preview (for block nodes).
     SourceToggle,
+    /// Content is edited inside a sandboxed iframe loaded from the plugin's
+    /// `get_component_html` command. Used for rich interactive editors like drawing.
+    Iframe,
 }
 
 /// Where an insert command should appear in the editor UI.

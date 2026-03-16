@@ -77,11 +77,10 @@ export default defineConfig({
     target: isTauri
       ? process.env.TAURI_ENV_PLATFORM === "windows"
         ? "chrome105"
-        : "safari13"
+        : "safari14"
       : "es2020",
-    // heic2any (~1.4 MB) is already lazy-loaded; tiptap (~500 KB) is the
-    // editor core and unavoidable.  Raise the limit so these don't warn.
-    chunkSizeWarningLimit: 1500,
+    // tiptap (~500 KB) is the editor core and unavoidable.
+    chunkSizeWarningLimit: 600,
     // Don't minify for debug builds
     minify: isTauri && process.env.TAURI_ENV_DEBUG ? false : "esbuild",
     // Produce sourcemaps for debug builds

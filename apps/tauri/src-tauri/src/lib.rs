@@ -83,6 +83,12 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_iap::init());
     }
 
+    // Apple iCloud Drive plugin — only included with `--features icloud` (for iOS builds)
+    #[cfg(feature = "icloud")]
+    {
+        builder = builder.plugin(tauri_plugin_icloud::init());
+    }
+
     // Core state
     builder = builder
         .manage(AppState::new())
@@ -168,6 +174,8 @@ pub fn run() {
             commands::call_plugin_render,
             // OAuth Webview (native popup for OAuth sign-in)
             commands::oauth_webview,
+            // iCloud Drive workspace storage
+            commands::set_icloud_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

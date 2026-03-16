@@ -136,18 +136,35 @@ describe('attachmentService', () => {
   })
 
   describe('convertHeicToJpeg', () => {
-    it('should convert HEIC blob to JPEG', async () => {
+    it('should convert HEIC blob to JPEG when converter plugin is registered', async () => {
+      const { registerTranscoder, clearAllTranscoders } = await import('./imageConverterService')
+      const mockPlugin = {
+        callBinary: vi.fn().mockResolvedValue((() => {
+          // Build a valid wire-format response: status=0 (ok), format=0 (jpeg), reserved=0,0, payload_len, payload
+          const jpegPayload = new TextEncoder().encode('mock-jpeg-output')
+          const buf = new Uint8Array(8 + jpegPayload.byteLength)
+          const view = new DataView(buf.buffer)
+          view.setUint8(0, 0) // status ok
+          view.setUint8(1, 0) // format jpeg
+          view.setUint16(2, 0) // reserved
+          view.setUint32(4, jpegPayload.byteLength, true)
+          buf.set(jpegPayload, 8)
+          return buf
+        })()),
+      }
+      registerTranscoder('test-heic-plugin', mockPlugin as any, ['heic:jpeg'])
+
       const heicBlob = new Blob(['mock-heic-data'], { type: 'image/heic' })
       const result = await convertHeicToJpeg(heicBlob)
 
       expect(result).toBeInstanceOf(Blob)
       expect(result.type).toBe('image/jpeg')
+      clearAllTranscoders()
     })
 
-    it('should return original blob on conversion failure', async () => {
-      // Mock heic2any to throw an error
-      const heic2any = await import('heic2any')
-      vi.mocked(heic2any.default).mockRejectedValueOnce(new Error('Conversion failed'))
+    it('should return original blob when no converter plugin is registered', async () => {
+      const { clearAllTranscoders } = await import('./imageConverterService')
+      clearAllTranscoders()
 
       const heicBlob = new Blob(['mock-heic-data'], { type: 'image/heic' })
       const result = await convertHeicToJpeg(heicBlob)

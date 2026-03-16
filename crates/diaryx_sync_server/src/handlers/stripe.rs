@@ -345,13 +345,12 @@ fn handle_checkout_completed(state: &StripeState, data: &serde_json::Value) {
     };
 
     // Save subscription ID
-    if let Some(sub_id) = data["subscription"].as_str() {
-        if let Err(e) = state
+    if let Some(sub_id) = data["subscription"].as_str()
+        && let Err(e) = state
             .repo
             .set_stripe_subscription_id(&user_id, Some(sub_id))
-        {
-            error!("Failed to save subscription ID: {}", e);
-        }
+    {
+        error!("Failed to save subscription ID: {}", e);
     }
 
     // Upgrade to Plus

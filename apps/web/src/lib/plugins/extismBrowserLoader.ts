@@ -53,6 +53,7 @@ export interface GuestManifest {
   commands: string[];
   cli?: unknown[];
   requested_permissions?: RequestedPermissionsManifest;
+  conversions?: string[];
 }
 
 export interface RequestedPermissionsManifest {
@@ -1310,6 +1311,10 @@ function convertGuestManifest(guest: GuestManifest): PluginManifest {
           } as unknown as PluginCapability;
         case "editor_extension":
           return "EditorExtension" as PluginCapability;
+        case "media_transcoder":
+          return {
+            MediaTranscoder: { conversions: guest.conversions ?? [] },
+          } as unknown as PluginCapability;
         default:
           console.warn(`[extism] Unknown capability: ${cap}`);
           return null;

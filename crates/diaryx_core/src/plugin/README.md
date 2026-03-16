@@ -17,6 +17,7 @@ Plugins can also declare host UI surface ownership in their manifest via
 - `ContextMenu` — plugin-owned context menu UI (currently `LeftSidebarTree` target)
 - `WorkspaceProvider` — provider entry surfaced in workspace link/download UI
 - `EditorExtension` — declarative TipTap atoms, inline marks, or host-builtins
+- `MediaTranscoder` — media format conversion (e.g. HEIC→JPEG) via binary `transcode_image` export
 
 Plugins are registered in the `PluginRegistry`, which is stored on the `Diaryx<FS>` struct and wired into the command handler.
 

@@ -102,6 +102,11 @@ pub struct Config {
     /// workspace folders selected by the user. Other platforms ignore it.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub workspace_bookmarks: HashMap<String, String>,
+
+    /// Whether iCloud Drive storage is enabled (iOS only).
+    /// When true, the workspace is stored in the iCloud container directory.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub icloud_enabled: bool,
 }
 
 /// Configuration for git-backed version history.
@@ -158,6 +163,7 @@ impl Config {
             git: GitConfig::default(),
             workspaces: Vec::new(),
             workspace_bookmarks: HashMap::new(),
+            icloud_enabled: false,
         }
     }
 
@@ -178,6 +184,7 @@ impl Config {
             git: GitConfig::default(),
             workspaces: Vec::new(),
             workspace_bookmarks: HashMap::new(),
+            icloud_enabled: false,
         }
     }
 
@@ -331,6 +338,7 @@ impl Default for Config {
             git: GitConfig::default(),
             workspaces: Vec::new(),
             workspace_bookmarks: HashMap::new(),
+            icloud_enabled: false,
         }
     }
 }
@@ -394,6 +402,7 @@ impl Config {
             git: GitConfig::default(),
             workspaces: Vec::new(),
             workspace_bookmarks: HashMap::new(),
+            icloud_enabled: false,
         };
 
         config.save()?;
@@ -421,6 +430,7 @@ impl Default for Config {
             git: GitConfig::default(),
             workspaces: Vec::new(),
             workspace_bookmarks: HashMap::new(),
+            icloud_enabled: false,
         }
     }
 }

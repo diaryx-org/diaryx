@@ -12,7 +12,6 @@
     Paperclip,
     Code,
     Table2,
-    Pencil,
     Ellipsis,
   } from "@lucide/svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
@@ -132,10 +131,6 @@
     onSelect(() =>
       editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
     );
-  }
-
-  function handleDrawing() {
-    onSelect(() => editor.commands.insertDrawingBlock());
   }
 
   function handleAttachment() {
@@ -326,9 +321,6 @@
         <div class="submenu-dropdown">
           <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, handleHtmlBlock)}>
             <Code class="size-3.5" /> HTML
-          </button>
-          <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, handleDrawing)}>
-            <Pencil class="size-3.5" /> Drawing
           </button>
           {#if pluginBlockPickerItems.length > 0}
             <div class="submenu-divider"></div>

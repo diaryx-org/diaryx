@@ -364,10 +364,10 @@ async fn delete_site(
     let db_result = state.repo.delete_published_site(&site.id);
 
     // Clean up custom domain KV mapping if set.
-    if let Some(domain) = &site.custom_domain {
-        if let Some(kv) = &state.kv_client {
-            let _ = kv.delete_domain_mapping(domain).await;
-        }
+    if let Some(domain) = &site.custom_domain
+        && let Some(kv) = &state.kv_client
+    {
+        let _ = kv.delete_domain_mapping(domain).await;
     }
 
     release_publish_lock(&state.publish_lock, &workspace_id).await;
@@ -855,12 +855,11 @@ async fn set_custom_domain(
     }
 
     // Remove old KV mapping if changing domains.
-    if let Some(old_domain) = &site.custom_domain {
-        if *old_domain != domain {
-            if let Some(kv) = &state.kv_client {
-                let _ = kv.delete_domain_mapping(old_domain).await;
-            }
-        }
+    if let Some(old_domain) = &site.custom_domain
+        && *old_domain != domain
+        && let Some(kv) = &state.kv_client
+    {
+        let _ = kv.delete_domain_mapping(old_domain).await;
     }
 
     if state
@@ -876,11 +875,11 @@ async fn set_custom_domain(
     }
 
     // Write domain→slug mapping to KV.
-    if let Some(kv) = &state.kv_client {
-        if let Err(err) = kv.put_domain_mapping(&domain, &site.slug).await {
-            tracing::error!("Failed to write KV domain mapping: {}", err);
-            // Don't fail the request — SQLite is the source of truth.
-        }
+    if let Some(kv) = &state.kv_client
+        && let Err(err) = kv.put_domain_mapping(&domain, &site.slug).await
+    {
+        tracing::error!("Failed to write KV domain mapping: {}", err);
+        // Don't fail the request — SQLite is the source of truth.
     }
 
     // Re-fetch the updated site for the response.
@@ -924,10 +923,10 @@ async fn remove_custom_domain(
         }
     };
 
-    if let Some(domain) = &site.custom_domain {
-        if let Some(kv) = &state.kv_client {
-            let _ = kv.delete_domain_mapping(domain).await;
-        }
+    if let Some(domain) = &site.custom_domain
+        && let Some(kv) = &state.kv_client
+    {
+        let _ = kv.delete_domain_mapping(domain).await;
     }
 
     if state.repo.set_custom_domain(&site.id, None).is_err() {

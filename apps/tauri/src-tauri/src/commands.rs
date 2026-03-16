@@ -65,6 +65,11 @@ pub struct AppPaths {
     pub is_mobile: bool,
     /// Whether this build targets Apple's App Store distribution path.
     pub is_apple_build: bool,
+    /// iCloud workspace path (if iCloud is enabled and available)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icloud_workspace: Option<PathBuf>,
+    /// Whether iCloud storage is currently active for this session
+    pub icloud_active: bool,
 }
 
 /// Metadata for an available application update.
@@ -1626,6 +1631,8 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             log_file,
             is_mobile: true,
             is_apple_build: cfg!(feature = "apple"),
+            icloud_workspace: None,
+            icloud_active: false,
         })
     } else {
         // On desktop, use standard locations
@@ -1675,6 +1682,8 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             log_file,
             is_mobile: false,
             is_apple_build: cfg!(feature = "apple"),
+            icloud_workspace: None,
+            icloud_active: false,
         })
     }
 }
@@ -2035,6 +2044,8 @@ pub async fn pick_workspace_folder<R: Runtime>(
             log_file: paths.log_file,
             is_mobile: paths.is_mobile,
             is_apple_build: paths.is_apple_build,
+            icloud_workspace: paths.icloud_workspace.clone(),
+            icloud_active: paths.icloud_active,
         }))
     }
 }
@@ -2083,6 +2094,41 @@ pub async fn authorize_workspace_path<R: Runtime>(
     }
 }
 
+/// Resolve iCloud state from config and set up monitoring if active.
+async fn resolve_icloud_state<R: Runtime>(
+    _app: &AppHandle<R>,
+    config: &Config,
+    _actual_workspace: &Path,
+    is_mobile: bool,
+) -> (Option<PathBuf>, bool) {
+    if !config.icloud_enabled || !is_mobile {
+        return (None, false);
+    }
+
+    #[cfg(feature = "icloud")]
+    {
+        use tauri_plugin_icloud::mobile::ICloud;
+        log::info!("[initialize_app] iCloud is enabled, setting up monitoring...");
+
+        let icloud_workspace = Some(_actual_workspace.to_path_buf());
+
+        // Trigger download for workspace root and start monitoring
+        if let Some(icloud) = _app.try_state::<ICloud<R>>() {
+            let _ = icloud
+                .trigger_download(_actual_workspace.to_string_lossy().into_owned())
+                .await;
+            let _ = icloud.start_status_monitoring().await;
+        }
+
+        (icloud_workspace, true)
+    }
+
+    #[cfg(not(feature = "icloud"))]
+    {
+        (None, false)
+    }
+}
+
 /// Initialize the app - creates necessary directories and default workspace if needed
 #[tauri::command]
 pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, SerializableError> {
@@ -2119,12 +2165,28 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
     log::info!("[initialize_app] Loading/creating config...");
     let config_exists = paths.config_path.exists();
     let mut config = if paths.is_mobile {
-        // On mobile, use the platform-specific Documents/Diaryx path
-        log::info!(
-            "[initialize_app] Mobile: using platform workspace path: {:?}",
-            paths.default_workspace
-        );
-        Config::new(paths.default_workspace.clone())
+        // On mobile, load config if it exists (may have iCloud state), else use defaults
+        if paths.config_path.exists() {
+            log::info!(
+                "[initialize_app] Mobile: loading existing config from {:?}",
+                paths.config_path
+            );
+            Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+                .await
+                .unwrap_or_else(|e| {
+                    log::warn!(
+                        "[initialize_app] Mobile: failed to load config, using defaults: {:?}",
+                        e
+                    );
+                    Config::new(paths.default_workspace.clone())
+                })
+        } else {
+            log::info!(
+                "[initialize_app] Mobile: using platform workspace path: {:?}",
+                paths.default_workspace
+            );
+            Config::new(paths.default_workspace.clone())
+        }
     } else if paths.config_path.exists() {
         log::info!(
             "[initialize_app] Loading existing config from {:?}",
@@ -2281,6 +2343,10 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
         }
     }
 
+    // Determine iCloud state from config
+    let (icloud_workspace, icloud_active) =
+        resolve_icloud_state(&app, &config, &actual_workspace, paths.is_mobile).await;
+
     // Return paths with the actual workspace from config
     Ok(AppPaths {
         data_dir: paths.data_dir,
@@ -2291,6 +2357,218 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
         log_file: paths.log_file,
         is_mobile: paths.is_mobile,
         is_apple_build: paths.is_apple_build,
+        icloud_workspace,
+        icloud_active,
+    })
+}
+
+// ============================================================================
+// iCloud Commands
+// ============================================================================
+
+/// Enable or disable iCloud Drive storage for the workspace.
+///
+/// When enabling: checks iCloud availability, gets the container URL,
+/// migrates files to iCloud, and updates the config.
+/// When disabling: migrates files back to local Documents and updates config.
+#[cfg(feature = "icloud")]
+#[tauri::command]
+pub async fn set_icloud_enabled<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<AppPaths, SerializableError> {
+    use tauri_plugin_icloud::mobile::ICloud;
+
+    let paths = get_platform_paths(&app)?;
+    let fs = SyncToAsyncFs::new(RealFileSystem);
+    let mut config =
+        Config::load_from_or_default(&fs, &paths.config_path, paths.default_workspace.clone())
+            .await;
+
+    let icloud = app.state::<ICloud<R>>();
+
+    if enabled {
+        // Check iCloud availability
+        let availability =
+            icloud
+                .check_icloud_available()
+                .await
+                .map_err(|e| SerializableError {
+                    kind: "ICloudError".to_string(),
+                    message: format!("Failed to check iCloud availability: {}", e),
+                    path: None,
+                })?;
+
+        if !availability.is_available {
+            return Err(SerializableError {
+                kind: "ICloudError".to_string(),
+                message: "iCloud is not available. Please sign in to iCloud in Settings.".into(),
+                path: None,
+            });
+        }
+
+        // Get iCloud container URL
+        let container_info =
+            icloud
+                .get_icloud_container_url()
+                .await
+                .map_err(|e| SerializableError {
+                    kind: "ICloudError".to_string(),
+                    message: format!("Failed to get iCloud container: {}", e),
+                    path: None,
+                })?;
+
+        let icloud_workspace = PathBuf::from(&container_info.documents_url).join("Diaryx");
+        let current_workspace = config.default_workspace.clone();
+
+        // Migrate files to iCloud (only if current workspace has content)
+        if current_workspace.exists() && current_workspace != icloud_workspace {
+            icloud
+                .migrate_to_icloud(
+                    current_workspace.to_string_lossy().into_owned(),
+                    icloud_workspace.to_string_lossy().into_owned(),
+                )
+                .await
+                .map_err(|e| SerializableError {
+                    kind: "ICloudError".to_string(),
+                    message: format!("Failed to migrate to iCloud: {}", e),
+                    path: None,
+                })?;
+
+            log::info!(
+                "[set_icloud_enabled] Migrated files from {:?} to {:?}",
+                current_workspace,
+                icloud_workspace
+            );
+        }
+
+        // Update config
+        config.icloud_enabled = true;
+        config.default_workspace = icloud_workspace.clone();
+        save_config_file(&config, &paths.config_path).await?;
+
+        // Start monitoring sync status
+        let _ = icloud.start_status_monitoring().await;
+
+        // Reinitialize workspace at new path
+        let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
+        if !icloud_workspace.exists() {
+            std::fs::create_dir_all(&icloud_workspace).map_err(|e| SerializableError {
+                kind: "IoError".to_string(),
+                message: format!("Failed to create iCloud workspace directory: {}", e),
+                path: Some(icloud_workspace.clone()),
+            })?;
+        }
+        let workspace_has_root = ws
+            .find_root_index_in_dir(&icloud_workspace)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        if !workspace_has_root {
+            ws.init_workspace(&icloud_workspace, Some("My Workspace"), None)
+                .await
+                .map_err(|e| e.to_serializable())?;
+        }
+
+        // Update AppState
+        {
+            let app_state = app.state::<AppState>();
+            let mut ws_lock = acquire_lock(&app_state.workspace_path)?;
+            *ws_lock = Some(icloud_workspace.clone());
+            let mut diaryx_lock = acquire_lock(&app_state.diaryx)?;
+            *diaryx_lock = None;
+        }
+
+        Ok(AppPaths {
+            data_dir: paths.data_dir,
+            document_dir: paths.document_dir,
+            default_workspace: icloud_workspace.clone(),
+            config_path: paths.config_path,
+            log_dir: paths.log_dir,
+            log_file: paths.log_file,
+            is_mobile: paths.is_mobile,
+            is_apple_build: paths.is_apple_build,
+            icloud_workspace: Some(icloud_workspace),
+            icloud_active: true,
+        })
+    } else {
+        // Disabling iCloud — migrate back to local
+        let local_workspace = paths.document_dir.join("Diaryx");
+        let current_workspace = config.default_workspace.clone();
+
+        if current_workspace.exists() && current_workspace != local_workspace {
+            icloud
+                .migrate_from_icloud(
+                    current_workspace.to_string_lossy().into_owned(),
+                    local_workspace.to_string_lossy().into_owned(),
+                )
+                .await
+                .map_err(|e| SerializableError {
+                    kind: "ICloudError".to_string(),
+                    message: format!("Failed to migrate from iCloud: {}", e),
+                    path: None,
+                })?;
+
+            log::info!(
+                "[set_icloud_enabled] Migrated files from {:?} to {:?}",
+                current_workspace,
+                local_workspace
+            );
+        }
+
+        // Stop monitoring
+        let _ = icloud.stop_status_monitoring().await;
+
+        // Update config
+        config.icloud_enabled = false;
+        config.default_workspace = local_workspace.clone();
+        save_config_file(&config, &paths.config_path).await?;
+
+        // Reinitialize workspace at local path
+        if !local_workspace.exists() {
+            std::fs::create_dir_all(&local_workspace).map_err(|e| SerializableError {
+                kind: "IoError".to_string(),
+                message: format!("Failed to create local workspace directory: {}", e),
+                path: Some(local_workspace.clone()),
+            })?;
+        }
+
+        // Update AppState
+        {
+            let app_state = app.state::<AppState>();
+            let mut ws_lock = acquire_lock(&app_state.workspace_path)?;
+            *ws_lock = Some(local_workspace.clone());
+            let mut diaryx_lock = acquire_lock(&app_state.diaryx)?;
+            *diaryx_lock = None;
+        }
+
+        Ok(AppPaths {
+            data_dir: paths.data_dir,
+            document_dir: paths.document_dir,
+            default_workspace: local_workspace,
+            config_path: paths.config_path,
+            log_dir: paths.log_dir,
+            log_file: paths.log_file,
+            is_mobile: paths.is_mobile,
+            is_apple_build: paths.is_apple_build,
+            icloud_workspace: None,
+            icloud_active: false,
+        })
+    }
+}
+
+/// Stub for non-icloud builds.
+#[cfg(not(feature = "icloud"))]
+#[tauri::command]
+pub async fn set_icloud_enabled<R: Runtime>(
+    _app: AppHandle<R>,
+    _enabled: bool,
+) -> Result<AppPaths, SerializableError> {
+    Err(SerializableError {
+        kind: "ICloudError".to_string(),
+        message: "iCloud support is not available in this build".into(),
+        path: None,
     })
 }
 
@@ -3645,6 +3923,8 @@ pub async fn reinitialize_workspace<R: Runtime>(
         log_file: paths.log_file,
         is_mobile: paths.is_mobile,
         is_apple_build: paths.is_apple_build,
+        icloud_workspace: paths.icloud_workspace.clone(),
+        icloud_active: paths.icloud_active,
     })
 }
 

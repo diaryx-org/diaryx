@@ -28,6 +28,7 @@ import {
   getBuiltinExtension,
   isEditorExtension,
   type EditorExtensionManifest,
+  type EditorExtensionContext,
   type RenderFn,
 } from "./editorExtensionFactory";
 import {
@@ -41,6 +42,11 @@ import {
   readWorkspaceBinary,
   writeWorkspaceBinary,
 } from "$lib/workspace/workspaceAssetStorage";
+import {
+  registerTranscoder,
+  unregisterTranscodersByPlugin,
+  clearAllTranscoders,
+} from "@/models/services/imageConverterService";
 
 // ============================================================================
 // Legacy IndexedDB storage (migration only)
@@ -148,11 +154,33 @@ function invalidateEditorExtensions(): void {
   pluginExtensionsVersion++;
 }
 
+function registerTranscodersFromManifest(
+  pluginId: string,
+  plugin: BrowserExtismPlugin,
+): void {
+  const caps = plugin.manifest.capabilities ?? [];
+  for (const cap of caps) {
+    if (
+      typeof cap === "object" &&
+      cap !== null &&
+      "MediaTranscoder" in (cap as Record<string, unknown>)
+    ) {
+      const mt = (cap as Record<string, unknown>).MediaTranscoder as {
+        conversions?: string[];
+      };
+      if (Array.isArray(mt?.conversions) && mt.conversions.length > 0) {
+        registerTranscoder(pluginId, plugin, mt.conversions);
+      }
+    }
+  }
+}
+
 async function unloadAllPlugins(): Promise<void> {
   await Promise.allSettled(
     Array.from(loadedPlugins.values()).map((plugin) => plugin.close()),
   );
   loadedPlugins.clear();
+  clearAllTranscoders();
   browserManifests = [];
   invalidateEditorExtensions();
 }
@@ -237,6 +265,7 @@ export async function installPlugin(
   // Track loaded instance.
   loadedPlugins.set(id, plugin);
   browserManifests = [...browserManifests, plugin.manifest];
+  registerTranscodersFromManifest(id, plugin);
   invalidateEditorExtensions();
 
   return plugin.manifest;
@@ -256,6 +285,7 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
     await plugin.close();
     loadedPlugins.delete(pluginId);
   }
+  unregisterTranscodersByPlugin(pluginId);
   await deleteWorkspaceTree(`.diaryx/plugins/${pluginId}`);
   browserManifests = browserManifests.filter(
     (m) => (m.id as unknown as string) !== pluginId,
@@ -319,6 +349,7 @@ export async function loadAllPlugins(): Promise<void> {
         clearPreservedPluginEditorExtensions(id);
         loadedPlugins.set(id, plugin);
         browserManifests = [...browserManifests, plugin.manifest];
+        registerTranscodersFromManifest(id, plugin);
         console.log(
           `[browserPluginManager] Loaded plugin: ${id} (${plugin.manifest.name}) v${plugin.manifest.version}`,
         );
@@ -456,6 +487,21 @@ export function getEditorExtensions(): any[] {
 
           if (manifest.node_type === "InlineMark") {
             extensions.push(createMarkFromManifest(manifest));
+          } else if (manifest.edit_mode === "Iframe" && manifest.iframe_component_id) {
+            const pluginId = plugin.manifest.id as unknown as string;
+            const ctx: EditorExtensionContext = {
+              pluginId,
+              getComponentHtml: async (componentId) => {
+                const result = await dispatchCommand(pluginId, "get_component_html", {
+                  component_id: componentId,
+                });
+                if (!result.success || !result.data) return null;
+                return extractComponentHtml(result.data);
+              },
+            };
+            extensions.push(
+              createExtensionFromManifest(manifest, null, {}, ctx),
+            );
           } else if (manifest.render_export) {
             const renderExport = manifest.render_export;
             const renderFn: RenderFn = (source, displayMode) =>
@@ -598,4 +644,22 @@ export async function dispatchCommand(
     error: result.error ?? null,
   });
   return result;
+}
+
+// ============================================================================
+// HTML extraction helper
+// ============================================================================
+
+/** Extract HTML string from a command response payload (same logic as PluginIframe). */
+function extractComponentHtml(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return null;
+
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.response === "string") return obj.response;
+  if (typeof obj.html === "string") return obj.html;
+  if (typeof obj.data === "string") return obj.data;
+  if (obj.type === "PluginResult" && typeof obj.data === "string") return obj.data;
+  if (obj.success === true) return extractComponentHtml(obj.data);
+  return null;
 }

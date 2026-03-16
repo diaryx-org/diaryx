@@ -350,6 +350,9 @@ fn convert_guest_manifest(guest: &GuestManifest) -> PluginManifest {
                 commands: guest.commands.clone(),
             }),
             "editor_extension" => Some(PluginCapability::EditorExtension),
+            "media_transcoder" => Some(PluginCapability::MediaTranscoder {
+                conversions: guest.conversions.clone(),
+            }),
             other => {
                 log::warn!("Unknown capability: {other}");
                 None

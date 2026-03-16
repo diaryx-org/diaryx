@@ -2206,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx"
-version = "1.3.4"
+version = "1.4.0"
 dependencies = [
  "axum",
  "clap",
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_core"
-version = "1.3.4"
+version = "1.4.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2284,7 +2284,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_daily"
-version = "1.3.4"
+version = "1.4.0"
 dependencies = [
  "chrono",
  "chrono-english",
@@ -2294,7 +2294,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_extism"
-version = "1.3.4"
+version = "1.4.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync"
-version = "1.3.4"
+version = "1.4.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync_server"
-version = "1.3.4"
+version = "1.4.0"
 dependencies = [
  "async-stripe",
  "async-trait",
@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_tauri"
-version = "1.3.4"
+version = "1.4.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2423,6 +2423,7 @@ dependencies = [
  "tauri-plugin-editor-toolbar",
  "tauri-plugin-fs",
  "tauri-plugin-iap",
+ "tauri-plugin-icloud",
  "tauri-plugin-opener",
  "tauri-plugin-shell",
  "tauri-plugin-updater",
@@ -2435,7 +2436,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_wasm"
-version = "1.3.4"
+version = "1.4.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8119,6 +8120,16 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-iap"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+]
+
+[[package]]
+name = "tauri-plugin-icloud"
 version = "0.1.0"
 dependencies = [
  "serde",

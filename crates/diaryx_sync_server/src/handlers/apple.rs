@@ -127,18 +127,18 @@ async fn verify_receipt(
     }
 
     // Validate appAccountToken matches authenticated user (if present)
-    if let Some(ref token) = payload.app_account_token {
-        if token != user_id {
-            warn!(
-                "appAccountToken mismatch: expected {}, got {}",
-                user_id, token
-            );
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Account token mismatch" })),
-            )
-                .into_response();
-        }
+    if let Some(ref token) = payload.app_account_token
+        && token != user_id
+    {
+        warn!(
+            "appAccountToken mismatch: expected {}, got {}",
+            user_id, token
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Account token mismatch" })),
+        )
+            .into_response();
     }
 
     // Check subscription is active

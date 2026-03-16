@@ -346,14 +346,14 @@ async fn main() {
                 };
 
                 for row in due {
-                    if !row.r2_key.is_empty() {
-                        if let Err(err) = gc_blob_store.delete(&row.r2_key).await {
-                            error!(
-                                "Blob GC delete failed for {} (user {}): {}",
-                                row.r2_key, row.user_id, err
-                            );
-                            continue;
-                        }
+                    if !row.r2_key.is_empty()
+                        && let Err(err) = gc_blob_store.delete(&row.r2_key).await
+                    {
+                        error!(
+                            "Blob GC delete failed for {} (user {}): {}",
+                            row.r2_key, row.user_id, err
+                        );
+                        continue;
                     }
                     if let Err(err) = gc_repo.delete_blob_row(&row.user_id, &row.blob_hash) {
                         error!(
@@ -384,16 +384,15 @@ async fn main() {
                 };
 
                 for session in expired {
-                    if !session.r2_multipart_upload_id.is_empty() {
-                        if let Err(err) = uploads_blob_store
+                    if !session.r2_multipart_upload_id.is_empty()
+                        && let Err(err) = uploads_blob_store
                             .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
                             .await
-                        {
-                            error!(
-                                "Attachment upload abort failed for {}:{}: {}",
-                                session.upload_id, session.r2_key, err
-                            );
-                        }
+                    {
+                        error!(
+                            "Attachment upload abort failed for {}:{}: {}",
+                            session.upload_id, session.r2_key, err
+                        );
                     }
                     if let Err(err) =
                         uploads_repo.set_attachment_upload_status(&session.upload_id, "expired")

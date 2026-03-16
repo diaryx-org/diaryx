@@ -17,6 +17,7 @@ attachments:
   - "[WorkspaceSettings.svelte](/apps/web/src/lib/settings/WorkspaceSettings.svelte)"
   - "[PluginsSettings.svelte](/apps/web/src/lib/settings/PluginsSettings.svelte)"
   - "[PluginSettingsTab.svelte](/apps/web/src/lib/settings/PluginSettingsTab.svelte)"
+  - "[ICloudSettings.svelte](/apps/web/src/lib/settings/ICloudSettings.svelte)"
   - "[syncSettingsLogic.ts](/apps/web/src/lib/settings/syncSettingsLogic.ts)"
 exclude:
   - "*.lock"
@@ -38,6 +39,7 @@ Settings panel components for `SettingsDialog.svelte`.
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
 | `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified, and local installs review requested permissions on both browser and Tauri paths before install. |
 | `PluginSettingsTab.svelte` | Declarative plugin field renderer, including generic host actions, follow-up commands, workspace metadata patch handling, and temporary file-byte bridging for plugin commands that call `host_request_file`. |
+| `ICloudSettings.svelte` | iCloud Drive toggle and sync status (iOS Apple builds only). Conditionally rendered in the Data tab. |
 | `syncSettingsLogic.ts` | Shared sync/storage usage helpers used by settings UIs. |
 
 ## Plugin Settings Tabs

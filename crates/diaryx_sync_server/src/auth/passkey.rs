@@ -268,16 +268,16 @@ impl PasskeyService {
             .map_err(|e| PasskeyError::DatabaseError(e.to_string()))?;
 
         for cred_info in &creds {
-            if let Ok(mut passkey) = serde_json::from_str::<Passkey>(&cred_info.credential_json) {
-                if passkey.cred_id() == auth_result.cred_id() {
-                    passkey.update_credential(&auth_result);
-                    if let Ok(updated_json) = serde_json::to_string(&passkey) {
-                        let _ = self
-                            .repo
-                            .update_passkey_credential(&cred_info.id, &updated_json);
-                    }
-                    break;
+            if let Ok(mut passkey) = serde_json::from_str::<Passkey>(&cred_info.credential_json)
+                && passkey.cred_id() == auth_result.cred_id()
+            {
+                passkey.update_credential(&auth_result);
+                if let Ok(updated_json) = serde_json::to_string(&passkey) {
+                    let _ = self
+                        .repo
+                        .update_passkey_credential(&cred_info.id, &updated_json);
                 }
+                break;
             }
         }
 
@@ -407,16 +407,16 @@ impl PasskeyService {
 
         // Update the credential's counter and last_used_at
         for cred_info in &creds {
-            if let Ok(mut passkey) = serde_json::from_str::<Passkey>(&cred_info.credential_json) {
-                if passkey.cred_id() == auth_result.cred_id() {
-                    passkey.update_credential(&auth_result);
-                    if let Ok(updated_json) = serde_json::to_string(&passkey) {
-                        let _ = self
-                            .repo
-                            .update_passkey_credential(&cred_info.id, &updated_json);
-                    }
-                    break;
+            if let Ok(mut passkey) = serde_json::from_str::<Passkey>(&cred_info.credential_json)
+                && passkey.cred_id() == auth_result.cred_id()
+            {
+                passkey.update_credential(&auth_result);
+                if let Ok(updated_json) = serde_json::to_string(&passkey) {
+                    let _ = self
+                        .repo
+                        .update_passkey_credential(&cred_info.id, &updated_json);
                 }
+                break;
             }
         }
 

@@ -334,22 +334,12 @@ export function bytesToBase64(bytes: Uint8Array): string {
 
 /**
  * Convert HEIC/HEIF blob to JPEG for browser display.
- * Returns original blob if conversion fails.
+ * Delegates to the plugin-provided image converter service.
+ * Returns original blob if no converter plugin is installed or conversion fails.
  */
 export async function convertHeicToJpeg(blob: Blob): Promise<Blob> {
-  try {
-    const { default: heic2any } = await import('heic2any');
-    const result = await heic2any({
-      blob,
-      toType: 'image/jpeg',
-      quality: 0.92,
-    });
-    // heic2any can return an array of blobs for multi-image HEIC files
-    return Array.isArray(result) ? result[0] : result;
-  } catch (e) {
-    console.warn('[AttachmentService] HEIC conversion failed:', e);
-    return blob;
-  }
+  const { convertBlobImage } = await import('./imageConverterService');
+  return convertBlobImage(blob, '.heic', 'jpeg', 92);
 }
 
 /**

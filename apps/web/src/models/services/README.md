@@ -9,6 +9,7 @@ attachments:
   - '[sitePublishingService.ts](/apps/web/src/models/services/sitePublishingService.ts)'
   - '[toastService.ts](/apps/web/src/models/services/toastService.ts)'
   - '[updaterService.ts](/apps/web/src/models/services/updaterService.ts)'
+  - '[imageConverterService.ts](/apps/web/src/models/services/imageConverterService.ts)'
 exclude:
   - '*.lock'
   - '*.test.ts'
@@ -27,6 +28,7 @@ Business logic services that coordinate between stores and backend.
 | `sitePublishingService.ts` | Sync-server client for workspace site lifecycle, publish triggers, and audience token CRUD (`/api/workspaces/{id}/site*`). |
 | `toastService.ts` | Toast notification wrappers with consistent error/status formatting. |
 | `updaterService.ts` | Tauri desktop updater check/install helpers that surface release availability through toasts without affecting web or App Store builds. |
+| `imageConverterService.ts` | Plugin-backed media transcoder registry. Manages conversion plugins (e.g. HEIC→JPEG) registered via the `MediaTranscoder` capability. |
 
 ## Migration Notes
 

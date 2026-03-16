@@ -39,6 +39,10 @@ interface AppPaths {
   crdt_initialized: boolean;
   /** Error message if CRDT initialization failed */
   crdt_error: string | null;
+  /** iCloud workspace path (if iCloud is enabled and available) */
+  icloud_workspace: string | null;
+  /** Whether iCloud storage is currently active */
+  icloud_active: boolean;
   /** Index signature for Record compatibility */
   [key: string]: string | boolean | null;
 }

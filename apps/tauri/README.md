@@ -192,7 +192,7 @@ The Tauri app includes `tauri-plugin-iap` for StoreKit 2 integration on iOS and 
 - **Plugin**: `tauri-plugin-iap` v0.8 (StoreKit 2, iOS 15+/macOS 13+)
 - **Product ID**: `diaryx_plus_monthly` (configured in App Store Connect)
 - **Capabilities**: `iap:default` in both `mobile.json` and `default.json`
-- **Feature flag**: `apple` — App Store build umbrella feature that currently enables `iap` and excludes the desktop updater
+- **Feature flag**: `apple` — App Store build umbrella feature that currently enables `iap`, `icloud`, and excludes the desktop updater
 - **iOS handler model**: IAP plugin commands use native async handlers (not ad-hoc `Task {}` wrappers) to reduce Swift concurrency allocator crashes seen during simulator testing
 - **Simulator behavior**: by default, iOS simulator uses a crash-safe mock purchase/restore/status path in the plugin; set `DIARYX_IAP_SIMULATOR_REAL=1` in the Xcode scheme environment to force real StoreKit calls
 - **Device packaging**: iOS target sets `SWIFT_STDLIB_TOOL_FLAGS=--source-libraries $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)` so `libswiftCore.dylib` and related Swift runtime libraries are embedded correctly for phone builds
@@ -237,6 +237,21 @@ access across relaunches without requiring broad filesystem entitlements.
 when a workspace path is still accessible but missing from config, which helps
 heal paths chosen by older builds once they are re-selected in the current
 session.
+
+## iCloud Drive (iOS)
+
+The Tauri app includes `tauri-plugin-icloud` for iCloud Drive workspace storage on iOS. When enabled, the workspace is stored in the iCloud container directory (`iCloud.org.diaryx.app`) and syncs across devices automatically.
+
+- **Plugin**: `tauri-plugin-icloud` (iOS only)
+- **Container ID**: `iCloud.org.diaryx.app`
+- **Feature flag**: `icloud` (included in `apple` umbrella)
+- **Entitlement**: `com.apple.developer.ubiquity-container-identifiers` in the iOS entitlements plist
+- **Config field**: `icloud_enabled` in `Config` — persists the user's choice across launches
+- **Frontend**: iCloud settings appear in Settings > Data on Apple builds, with a toggle and sync status indicator
+- **Migration**: Toggling iCloud on/off migrates workspace files between local Documents and the iCloud container using `FileManager.setUbiquitous` (upload) and `FileManager.copyItem` (download)
+- **Sync status**: An `NSMetadataQuery` monitors the iCloud documents scope and emits `icloud-sync-status-changed` Tauri events to the frontend
+
+**Note**: The iCloud container must also be registered in Apple Developer portal and the provisioning profile regenerated to include the iCloud entitlement.
 
 On iOS, workspace files are stored in the app `Documents` directory and surfaced in the Files app under "On My iPhone" by enabling:
 

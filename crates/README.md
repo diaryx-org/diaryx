@@ -28,6 +28,8 @@ This folder contains Diaryx crates for core features and platform bindings.
 - `[diaryx_sync_server](/crates/diaryx_sync_server/README.md)`: Sync server to enable live sync/multi-device sync (soon publishing as well).
 - `[diaryx_sync](/crates/diaryx_sync/README.md)`: Shared sync protocol library used by both `diaryx_sync_server` and the CLI's local web editing mode.
 - `[diaryx_extism](/crates/diaryx_extism/README.md)`: Extism host runtime — loads WASM guest plugins at runtime
+- `tauri-plugin-icloud`: Tauri plugin for iCloud Drive workspace storage (iOS)
+- `tauri-plugin-iap`: Tauri plugin for Apple In-App Purchases via StoreKit 2
 
 Plugin guest crates (sync, publish, daily, AI, math, spoiler, import, templating, S3 storage, Google Drive storage) now live in standalone repos under [diaryx-org](https://github.com/diaryx-org).
 

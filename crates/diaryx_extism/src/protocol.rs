@@ -66,6 +66,9 @@ pub struct GuestManifest {
     /// Optional default permission request + rationale shown during install.
     #[serde(default)]
     pub requested_permissions: Option<GuestRequestedPermissions>,
+    /// Supported conversion pairs for `media_transcoder` capability (e.g. `["heic:jpeg"]`).
+    #[serde(default)]
+    pub conversions: Vec<String>,
 }
 
 /// Event sent to the guest's `on_event` function.
@@ -123,6 +126,7 @@ mod tests {
             commands: vec!["do-thing".into()],
             cli: vec![],
             requested_permissions: None,
+            conversions: vec![],
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let parsed: GuestManifest = serde_json::from_str(&json).unwrap();

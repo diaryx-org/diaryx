@@ -8,7 +8,6 @@
   import TaskItem from "@tiptap/extension-task-item";
   import Placeholder from "@tiptap/extension-placeholder";
   import CodeBlock from "@tiptap/extension-code-block";
-  import { ColoredHighlightMark } from "./extensions/ColoredHighlightMark";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
   import {
@@ -43,8 +42,6 @@
   import { BlockPickerNode } from "./extensions/BlockPickerNode";
   // Custom extension for raw HTML blocks
   import { HtmlBlock } from "./extensions/HtmlBlock";
-  // Custom extension for inline drawing blocks
-  import { DrawingBlock } from "./extensions/DrawingBlock";
   // Custom extension for Notion-style inline table controls
   import { TableControls } from "./extensions/TableControls";
   // Custom extension for markdown footnotes
@@ -54,6 +51,7 @@
   import { getEditorExtensions, getPluginExtensionsVersion } from "$lib/plugins/browserPluginManager.svelte";
   import { getPreservedEditorExtensions } from "$lib/plugins/preservedEditorExtensions.svelte";
   import { getTauriEditorExtensions } from "$lib/plugins/tauriEditorExtensions";
+  import { setEditorExtensionIframeContext } from "$lib/plugins/editorExtensionFactory";
   import type { Api } from "$lib/backend/api";
   import { isTauri } from "$lib/backend/interface";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
@@ -161,6 +159,9 @@
   }
 
   function createEditor() {
+    // Update global iframe context so iframe node views read the current entry
+    setEditorExtensionIframeContext({ entryPath, api: api ?? null });
+
     const initialContent = editor ? appendFootnoteDefinitions(editor) : content;
     destroyEditor();
 
@@ -243,7 +244,6 @@
           class: "editor-code-block",
         },
       }),
-      ColoredHighlightMark,
       Typography,
       Image.configure({
         inline: true,
@@ -462,11 +462,6 @@
       FootnoteRef,
       // Raw HTML block extension
       HtmlBlock.configure({
-        entryPath,
-        api,
-      }),
-      // Inline drawing block extension
-      DrawingBlock.configure({
         entryPath,
         api,
       }),
@@ -778,6 +773,16 @@
                 message: item.contribution.prompt.message,
                 defaultValue: item.contribution.prompt.default_value,
                 paramKey: item.contribution.prompt.param_key,
+              } : null,
+            })),
+            toolbarMarks: store.markToolbarEntries.map(entry => ({
+              extensionId: entry.extensionId,
+              label: entry.label,
+              iconName: entry.iconName,
+              attribute: entry.attribute ? {
+                name: entry.attribute.name,
+                defaultValue: entry.attribute.default,
+                validValues: entry.attribute.validValues,
               } : null,
             })),
           };
@@ -1475,94 +1480,6 @@
   :global(.table-grip-popover-item.disabled:hover) {
     background: transparent;
     color: var(--foreground);
-  }
-
-  /* Colored highlight mark styles */
-  :global(.highlight-mark) {
-    border-radius: 2px;
-    padding: 0 2px;
-  }
-
-  /* Light mode highlight colors */
-  :global(.highlight-red) {
-    background: oklch(0.92 0.12 25);
-  }
-
-  :global(.highlight-orange) {
-    background: oklch(0.93 0.1 60);
-  }
-
-  :global(.highlight-yellow) {
-    background: oklch(0.95 0.12 95);
-  }
-
-  :global(.highlight-green) {
-    background: oklch(0.92 0.08 145);
-  }
-
-  :global(.highlight-cyan) {
-    background: oklch(0.92 0.08 195);
-  }
-
-  :global(.highlight-blue) {
-    background: oklch(0.88 0.1 250);
-  }
-
-  :global(.highlight-violet) {
-    background: oklch(0.9 0.1 300);
-  }
-
-  :global(.highlight-pink) {
-    background: oklch(0.93 0.1 350);
-  }
-
-  :global(.highlight-brown) {
-    background: oklch(0.88 0.06 60);
-  }
-
-  :global(.highlight-grey) {
-    background: oklch(0.9 0 0);
-  }
-
-  /* Dark mode highlight colors */
-  :global(.dark .highlight-red) {
-    background: oklch(0.35 0.12 25);
-  }
-
-  :global(.dark .highlight-orange) {
-    background: oklch(0.38 0.1 60);
-  }
-
-  :global(.dark .highlight-yellow) {
-    background: oklch(0.42 0.12 95);
-  }
-
-  :global(.dark .highlight-green) {
-    background: oklch(0.38 0.08 145);
-  }
-
-  :global(.dark .highlight-cyan) {
-    background: oklch(0.38 0.08 195);
-  }
-
-  :global(.dark .highlight-blue) {
-    background: oklch(0.35 0.1 250);
-  }
-
-  :global(.dark .highlight-violet) {
-    background: oklch(0.38 0.1 300);
-  }
-
-  :global(.dark .highlight-pink) {
-    background: oklch(0.4 0.1 350);
-  }
-
-  :global(.dark .highlight-brown) {
-    background: oklch(0.38 0.06 60);
-  }
-
-  :global(.dark .highlight-grey) {
-    background: oklch(0.4 0 0);
   }
 
   /* Collaborative cursor styles */

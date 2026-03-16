@@ -1,0 +1,12 @@
+[default]
+description = "Allows all iCloud commands"
+permissions = [
+    "allow-check-icloud-available",
+    "allow-get-icloud-container-url",
+    "allow-trigger-download",
+    "allow-get-sync-status",
+    "allow-start-status-monitoring",
+    "allow-stop-status-monitoring",
+    "allow-migrate-to-icloud",
+    "allow-migrate-from-icloud",
+]

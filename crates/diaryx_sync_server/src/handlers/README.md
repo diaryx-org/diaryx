@@ -43,7 +43,7 @@ HTTP route handlers for the sync server API.
 Workspace creation returns `403` when the user's workspace limit is reached, and `409` for duplicate names.
 The per-user workspace limit defaults to the user's tier (Free=1, Plus=10) and can be overridden via `workspace_limit` on the users table.
 The `GET /auth/me` response includes `workspace_limit`, `tier`, `published_site_limit`, and `attachment_limit_bytes`.
-Auth verification also enforces the tier device cap during session creation; Free and Plus users can keep up to two registered devices, and extra sign-ins return `403` until a device is deleted.
+Auth verification also enforces the tier device cap during session creation; Free users can keep up to 2 registered devices and Plus users up to 10. When the limit is reached the `403` response includes a `devices` array with each device's `id`, `name`, and `last_seen_at`. The client can then re-submit the verification request with `replace_device_id` set to the ID of the device to remove, completing sign-in in one step.
 
 ### Snapshot Endpoints
 

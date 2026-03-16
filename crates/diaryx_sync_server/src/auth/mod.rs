@@ -2,7 +2,7 @@ mod magic_link;
 mod middleware;
 pub mod passkey;
 
-pub use magic_link::{MagicLinkError, MagicLinkService, VerifyResult};
+pub use magic_link::{DeviceLimitDevice, MagicLinkError, MagicLinkService, VerifyResult};
 pub use middleware::{
     AuthExtractor, AuthUser, OptionalAuth, RequireAuth, extract_token_from_query, validate_token,
 };

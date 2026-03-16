@@ -240,19 +240,6 @@ export class TauriBackend implements Backend {
     console.log("[TauriBackend] Step 3 complete: Result validated");
     console.log("[TauriBackend] App paths:", this.appPaths);
 
-    // Step 4: Check CRDT initialization status
-    if (!this.appPaths.crdt_initialized) {
-      console.warn(
-        "[TauriBackend] CRDT storage failed to initialize:",
-        this.appPaths.crdt_error || "Unknown error",
-      );
-      console.warn(
-        "[TauriBackend] Sync and history features may not work correctly.",
-      );
-    } else {
-      console.log("[TauriBackend] CRDT storage initialized successfully");
-    }
-
     // Create config object from appPaths (no separate command needed)
     // The workspace path is already resolved by initialize_app
     this.config = {

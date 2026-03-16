@@ -61,6 +61,17 @@ pub enum ExtismLoadError {
         min: u32,
         max: u32,
     },
+
+    /// The plugin requires a newer version of Diaryx than is currently running.
+    #[error(
+        "Plugin '{plugin_name}' requires Diaryx v{required} or later, \
+             but this is v{running}"
+    )]
+    AppVersionTooOld {
+        plugin_name: String,
+        required: String,
+        running: String,
+    },
 }
 
 /// Check that the guest's protocol version is within the range this host supports.
@@ -78,6 +89,35 @@ fn validate_protocol_version(
         });
     }
     Ok(())
+}
+
+/// Parse a `"major.minor.patch"` version string into a comparable tuple.
+fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = v.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+/// Check that the running Diaryx version satisfies the plugin's minimum.
+fn validate_app_version(
+    manifest: &GuestManifest,
+    plugin_name: &str,
+) -> Result<(), ExtismLoadError> {
+    let required = match &manifest.min_app_version {
+        Some(v) => v,
+        None => return Ok(()),
+    };
+    let running = env!("CARGO_PKG_VERSION");
+    match (parse_version(required), parse_version(running)) {
+        (Some(req), Some(cur)) if cur >= req => Ok(()),
+        _ => Err(ExtismLoadError::AppVersionTooOld {
+            plugin_name: plugin_name.to_string(),
+            required: required.clone(),
+            running: running.to_string(),
+        }),
+    }
 }
 
 fn parse_guest_manifest(
@@ -132,6 +172,9 @@ pub fn inspect_plugin_wasm_manifest(wasm_path: &Path) -> Result<GuestManifest, E
     // Log a warning for incompatible plugins but don't fail — CI inspection
     // should still show metadata even for incompatible plugins.
     if let Err(e) = validate_protocol_version(&manifest, &plugin_name) {
+        log::warn!("{e}");
+    }
+    if let Err(e) = validate_app_version(&manifest, &plugin_name) {
         log::warn!("{e}");
     }
 
@@ -239,6 +282,7 @@ pub fn load_plugin_from_wasm(
     // Call the guest's manifest export.
     let guest_manifest = parse_guest_manifest(&mut plugin, &plugin_name)?;
     validate_protocol_version(&guest_manifest, &plugin_name)?;
+    validate_app_version(&guest_manifest, &plugin_name)?;
 
     if let Ok(ctx) = user_data.get()
         && let Ok(mut guard) = ctx.lock()
@@ -324,6 +368,7 @@ fn load_single_plugin(
         gm
     };
     validate_protocol_version(&guest_manifest, plugin_name)?;
+    validate_app_version(&guest_manifest, plugin_name)?;
 
     if let Ok(ctx) = user_data.get()
         && let Ok(mut guard) = ctx.lock()

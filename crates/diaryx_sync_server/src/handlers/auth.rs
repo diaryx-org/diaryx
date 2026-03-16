@@ -52,6 +52,9 @@ pub struct VerifyCodeRequest {
     pub code: String,
     pub email: String,
     pub device_name: Option<String>,
+    /// When the device limit has been reached, the client can re-submit the
+    /// request with this field set to the ID of the device to replace.
+    pub replace_device_id: Option<String>,
 }
 
 /// Query params for magic link verification
@@ -59,6 +62,7 @@ pub struct VerifyCodeRequest {
 pub struct VerifyQuery {
     pub token: String,
     pub device_name: Option<String>,
+    pub replace_device_id: Option<String>,
 }
 
 /// Response for successful verification
@@ -80,6 +84,19 @@ pub struct UserResponse {
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: String,
+    /// When the error is "device_limit_reached", this contains the user's
+    /// existing devices so the client can offer a replacement prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devices: Option<Vec<crate::auth::DeviceLimitDevice>>,
+}
+
+impl ErrorResponse {
+    fn new(error: impl Into<String>) -> Self {
+        Self {
+            error: error.into(),
+            devices: None,
+        }
+    }
 }
 
 /// Response for user info
@@ -142,9 +159,7 @@ async fn request_magic_link(
     if !email.contains('@') || email.len() < 5 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Invalid email address".to_string(),
-            }),
+            Json(ErrorResponse::new("Invalid email address")),
         )
             .into_response();
     }
@@ -156,9 +171,9 @@ async fn request_magic_link(
             warn!("Rate limited magic link request for {}", email);
             return (
                 StatusCode::TOO_MANY_REQUESTS,
-                Json(ErrorResponse {
-                    error: "Too many requests. Please try again later.".to_string(),
-                }),
+                Json(ErrorResponse::new(
+                    "Too many requests. Please try again later.",
+                )),
             )
                 .into_response();
         }
@@ -166,9 +181,7 @@ async fn request_magic_link(
             error!("Failed to create magic link: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to create magic link".to_string(),
-                }),
+                Json(ErrorResponse::new("Failed to create magic link")),
             )
                 .into_response();
         }
@@ -186,9 +199,7 @@ async fn request_magic_link(
             error!("Failed to send magic link email: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to send email".to_string(),
-                }),
+                Json(ErrorResponse::new("Failed to send email")),
             )
                 .into_response();
         }
@@ -232,6 +243,7 @@ async fn verify_magic_link(
         &query.token,
         query.device_name.as_deref(),
         None, // Could extract user-agent from headers
+        query.replace_device_id.as_deref(),
     );
 
     match result {
@@ -252,15 +264,23 @@ async fn verify_magic_link(
         }
         Err(crate::auth::MagicLinkError::InvalidToken) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Invalid or expired link. Please request a new one.".to_string(),
-            }),
+            Json(ErrorResponse::new(
+                "Invalid or expired link. Please request a new one.",
+            )),
         )
             .into_response(),
-        Err(crate::auth::MagicLinkError::DeviceLimitReached { .. }) => (
+        Err(crate::auth::MagicLinkError::InvalidReplaceDevice) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "The device to replace was not found on this account.",
+            )),
+        )
+            .into_response(),
+        Err(crate::auth::MagicLinkError::DeviceLimitReached { devices, .. }) => (
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
                 error: "Device limit reached. Remove a device to sign in on a new one.".to_string(),
+                devices: Some(devices),
             }),
         )
             .into_response(),
@@ -268,9 +288,7 @@ async fn verify_magic_link(
             error!("Failed to verify magic link: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Verification failed".to_string(),
-                }),
+                Json(ErrorResponse::new("Verification failed")),
             )
                 .into_response()
         }
@@ -287,6 +305,7 @@ async fn verify_code(
         &body.email,
         body.device_name.as_deref(),
         None,
+        body.replace_device_id.as_deref(),
     );
 
     match result {
@@ -310,15 +329,23 @@ async fn verify_code(
         }
         Err(crate::auth::MagicLinkError::InvalidToken) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Invalid or expired code. Please request a new one.".to_string(),
-            }),
+            Json(ErrorResponse::new(
+                "Invalid or expired code. Please request a new one.",
+            )),
         )
             .into_response(),
-        Err(crate::auth::MagicLinkError::DeviceLimitReached { .. }) => (
+        Err(crate::auth::MagicLinkError::InvalidReplaceDevice) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "The device to replace was not found on this account.",
+            )),
+        )
+            .into_response(),
+        Err(crate::auth::MagicLinkError::DeviceLimitReached { devices, .. }) => (
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
                 error: "Device limit reached. Remove a device to sign in on a new one.".to_string(),
+                devices: Some(devices),
             }),
         )
             .into_response(),
@@ -326,9 +353,7 @@ async fn verify_code(
             error!("Failed to verify code: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Verification failed".to_string(),
-                }),
+                Json(ErrorResponse::new("Verification failed")),
             )
                 .into_response()
         }
@@ -456,9 +481,7 @@ async fn rename_device(
     if name.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Device name cannot be empty".to_string(),
-            }),
+            Json(ErrorResponse::new("Device name cannot be empty")),
         )
             .into_response();
     }
@@ -520,9 +543,7 @@ async fn delete_account(
             error!("Failed to query blob keys for {}: {}", user_id, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to delete account".to_string(),
-                }),
+                Json(ErrorResponse::new("Failed to delete account")),
             )
                 .into_response();
         }
@@ -535,9 +556,7 @@ async fn delete_account(
             error!("Failed to delete user {}: {}", user_id, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to delete account".to_string(),
-                }),
+                Json(ErrorResponse::new("Failed to delete account")),
             )
                 .into_response();
         }
@@ -604,9 +623,7 @@ async fn passkey_register_start(
             error!("Passkey register start failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
+                Json(ErrorResponse::new(e.to_string())),
             )
                 .into_response()
         }
@@ -636,9 +653,7 @@ async fn passkey_register_finish(
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Invalid credential: {}", e),
-                }),
+                Json(ErrorResponse::new(format!("Invalid credential: {}", e))),
             )
                 .into_response();
         }
@@ -659,18 +674,14 @@ async fn passkey_register_finish(
         }
         Err(crate::auth::PasskeyError::ChallengeNotFound) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Challenge expired or not found".to_string(),
-            }),
+            Json(ErrorResponse::new("Challenge expired or not found")),
         )
             .into_response(),
         Err(e) => {
             error!("Passkey register finish failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
+                Json(ErrorResponse::new(e.to_string())),
             )
                 .into_response()
         }
@@ -720,18 +731,14 @@ async fn passkey_auth_start(
         }
         Err(crate::auth::PasskeyError::NoPasskeys) => (
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "No passkeys registered for this email".to_string(),
-            }),
+            Json(ErrorResponse::new("No passkeys registered for this email")),
         )
             .into_response(),
         Err(e) => {
             error!("Passkey auth start failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
+                Json(ErrorResponse::new(e.to_string())),
             )
                 .into_response()
         }
@@ -743,6 +750,7 @@ struct PasskeyAuthFinishRequest {
     challenge_id: String,
     credential: serde_json::Value,
     device_name: Option<String>,
+    replace_device_id: Option<String>,
 }
 
 /// POST /auth/passkeys/authenticate/finish (public) → VerifyResponse
@@ -755,9 +763,7 @@ async fn passkey_auth_finish(
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Invalid credential: {}", e),
-                }),
+                Json(ErrorResponse::new(format!("Invalid credential: {}", e))),
             )
                 .into_response();
         }
@@ -768,6 +774,7 @@ async fn passkey_auth_finish(
         &credential,
         body.device_name.as_deref(),
         None,
+        body.replace_device_id.as_deref(),
     ) {
         Ok(result) => {
             info!("User {} logged in via passkey", result.email);
@@ -786,22 +793,22 @@ async fn passkey_auth_finish(
         }
         Err(crate::auth::PasskeyError::ChallengeNotFound) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Challenge expired or not found".to_string(),
-            }),
+            Json(ErrorResponse::new("Challenge expired or not found")),
         )
             .into_response(),
         Err(crate::auth::PasskeyError::InvalidCredential(msg)) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Authentication failed: {}", msg),
-            }),
+            Json(ErrorResponse::new(format!(
+                "Authentication failed: {}",
+                msg
+            ))),
         )
             .into_response(),
-        Err(crate::auth::PasskeyError::DeviceLimitReached { .. }) => (
+        Err(crate::auth::PasskeyError::DeviceLimitReached { devices, .. }) => (
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
                 error: "Device limit reached. Remove a device to sign in on a new one.".to_string(),
+                devices: Some(devices),
             }),
         )
             .into_response(),
@@ -809,9 +816,7 @@ async fn passkey_auth_finish(
             error!("Passkey auth finish failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
+                Json(ErrorResponse::new(e.to_string())),
             )
                 .into_response()
         }
@@ -848,9 +853,7 @@ async fn passkey_list(
             error!("Failed to list passkeys: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to list passkeys".to_string(),
-                }),
+                Json(ErrorResponse::new("Failed to list passkeys")),
             )
                 .into_response()
         }

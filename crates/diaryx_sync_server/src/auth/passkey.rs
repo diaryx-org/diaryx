@@ -29,7 +29,10 @@ pub enum PasskeyError {
     InvalidCredential(String),
     DatabaseError(String),
     WebauthnError(String),
-    DeviceLimitReached { limit: u32 },
+    DeviceLimitReached {
+        limit: u32,
+        devices: Vec<super::DeviceLimitDevice>,
+    },
     SessionError(String),
 }
 
@@ -42,7 +45,7 @@ impl std::fmt::Display for PasskeyError {
             PasskeyError::InvalidCredential(e) => write!(f, "Invalid credential: {}", e),
             PasskeyError::DatabaseError(e) => write!(f, "Database error: {}", e),
             PasskeyError::WebauthnError(e) => write!(f, "WebAuthn error: {}", e),
-            PasskeyError::DeviceLimitReached { limit } => {
+            PasskeyError::DeviceLimitReached { limit, .. } => {
                 write!(f, "Device limit reached for this account (max {})", limit)
             }
             PasskeyError::SessionError(e) => write!(f, "Session error: {}", e),
@@ -63,7 +66,9 @@ pub struct PasskeyInfo {
 
 fn map_session_error(err: MagicLinkError) -> PasskeyError {
     match err {
-        MagicLinkError::DeviceLimitReached { limit } => PasskeyError::DeviceLimitReached { limit },
+        MagicLinkError::DeviceLimitReached { limit, devices } => {
+            PasskeyError::DeviceLimitReached { limit, devices }
+        }
         other => PasskeyError::SessionError(other.to_string()),
     }
 }
@@ -235,6 +240,7 @@ impl PasskeyService {
         credential: &PublicKeyCredential,
         device_name: Option<&str>,
         user_agent: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, PasskeyError> {
         let challenge = self
             .repo
@@ -242,7 +248,13 @@ impl PasskeyService {
             .map_err(|e| PasskeyError::DatabaseError(e.to_string()))?
             .ok_or(PasskeyError::ChallengeNotFound)?;
 
-        self.finish_authentication_with_challenge(challenge, credential, device_name, user_agent)
+        self.finish_authentication_with_challenge(
+            challenge,
+            credential,
+            device_name,
+            user_agent,
+            replace_device_id,
+        )
     }
 
     /// Internal: complete email-scoped passkey auth given an already-consumed challenge.
@@ -252,6 +264,7 @@ impl PasskeyService {
         credential: &PublicKeyCredential,
         device_name: Option<&str>,
         user_agent: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, PasskeyError> {
         let auth_state: PasskeyAuthentication = serde_json::from_str(&challenge.state_json)
             .map_err(|e| PasskeyError::WebauthnError(e.to_string()))?;
@@ -283,7 +296,7 @@ impl PasskeyService {
 
         // Create session via the shared helper
         self.magic_link_service
-            .create_session_for_email(&challenge.email, device_name, user_agent)
+            .create_session_for_email(&challenge.email, device_name, user_agent, replace_device_id)
             .map_err(map_session_error)
     }
 
@@ -348,6 +361,7 @@ impl PasskeyService {
         credential: &PublicKeyCredential,
         device_name: Option<&str>,
         user_agent: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, PasskeyError> {
         let challenge = self
             .repo
@@ -355,7 +369,13 @@ impl PasskeyService {
             .map_err(|e| PasskeyError::DatabaseError(e.to_string()))?
             .ok_or(PasskeyError::ChallengeNotFound)?;
 
-        self.finish_discoverable_with_challenge(challenge, credential, device_name, user_agent)
+        self.finish_discoverable_with_challenge(
+            challenge,
+            credential,
+            device_name,
+            user_agent,
+            replace_device_id,
+        )
     }
 
     /// Internal: complete discoverable auth given an already-consumed challenge.
@@ -365,6 +385,7 @@ impl PasskeyService {
         credential: &PublicKeyCredential,
         device_name: Option<&str>,
         user_agent: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, PasskeyError> {
         let auth_state: DiscoverableAuthentication = serde_json::from_str(&challenge.state_json)
             .map_err(|e| PasskeyError::WebauthnError(e.to_string()))?;
@@ -422,7 +443,7 @@ impl PasskeyService {
 
         // Create session via the shared helper
         self.magic_link_service
-            .create_session_for_email(&user.email, device_name, user_agent)
+            .create_session_for_email(&user.email, device_name, user_agent, replace_device_id)
             .map_err(map_session_error)
     }
 
@@ -433,6 +454,7 @@ impl PasskeyService {
         credential: &PublicKeyCredential,
         device_name: Option<&str>,
         user_agent: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, PasskeyError> {
         let challenge = self
             .repo
@@ -446,12 +468,14 @@ impl PasskeyService {
                 credential,
                 device_name,
                 user_agent,
+                replace_device_id,
             ),
             "discoverable_authentication" => self.finish_discoverable_with_challenge(
                 challenge,
                 credential,
                 device_name,
                 user_agent,
+                replace_device_id,
             ),
             _ => Err(PasskeyError::ChallengeNotFound),
         }

@@ -47,6 +47,7 @@
   // Custom extension for markdown footnotes
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
   import { SearchHighlight } from "./extensions/SearchHighlight";
+  import { toast } from "svelte-sonner";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
   import { getEditorExtensions, getPluginExtensionsVersion } from "$lib/plugins/browserPluginManager.svelte";
   import { getPreservedEditorExtensions } from "$lib/plugins/preservedEditorExtensions.svelte";
@@ -627,75 +628,87 @@
       }
     }
 
-    editor = new Editor({
-      element,
-      extensions,
-      content: preprocessFootnotes(initialContent),
-      contentType: "markdown",
-      editable: !readonly,
-      onCreate: () => {
-        // Track the last external content value that has been applied so we don't
-        // overwrite the editor unless the prop actually changes.
-        lastAppliedContentProp = initialContent;
-      },
-      onUpdate: () => {
-        if (onchange && !isUpdatingContent) {
-          onchange();
-        }
-      },
-      onBlur: () => {
-        onblur?.();
-      },
-      editorProps: {
-        attributes: {
-          class: "editor-content",
+    function createEditor(editorContent: string) {
+      return new Editor({
+        element,
+        extensions,
+        content: preprocessFootnotes(editorContent),
+        contentType: "markdown",
+        editable: !readonly,
+        onCreate: () => {
+          // Track the last external content value that has been applied so we don't
+          // overwrite the editor unless the prop actually changes.
+          lastAppliedContentProp = initialContent;
         },
-        handleKeyDown: (view, event) => {
-          // Right Arrow on empty paragraph opens floating menu
-          if (event.key === "ArrowRight" && floatingMenuRef) {
-            const { state } = view;
-            const { selection } = state;
-            const { empty } = selection;
-            const anchor = selection.$anchor;
-
-            // Check if we're on an empty paragraph (same conditions as floating menu shouldShow)
-            const isEmptyParagraph =
-              anchor.parent.type.name === "paragraph" &&
-              anchor.parent.content.size === 0;
-
-            if (empty && isEmptyParagraph) {
-              event.preventDefault();
-              floatingMenuRef.expand();
-              return true;
-            }
+        onUpdate: () => {
+          if (onchange && !isUpdatingContent) {
+            onchange();
           }
-          return false;
         },
-        handlePaste: (_view, event) => {
-          const items = event.clipboardData?.items;
-          if (!items) return false;
+        onBlur: () => {
+          onblur?.();
+        },
+        editorProps: {
+          attributes: {
+            class: "editor-content",
+          },
+          handleKeyDown: (view, event) => {
+            // Right Arrow on empty paragraph opens floating menu
+            if (event.key === "ArrowRight" && floatingMenuRef) {
+              const { state } = view;
+              const { selection } = state;
+              const { empty } = selection;
+              const anchor = selection.$anchor;
 
-          for (const item of items) {
-            // Handle pasted images
-            if (item.type.startsWith('image/')) {
-              const file = item.getAsFile();
-              if (file && onFileDrop) {
+              // Check if we're on an empty paragraph (same conditions as floating menu shouldShow)
+              const isEmptyParagraph =
+                anchor.parent.type.name === "paragraph" &&
+                anchor.parent.content.size === 0;
+
+              if (empty && isEmptyParagraph) {
                 event.preventDefault();
-                onFileDrop(file).then(result => {
-                  if (result && result.blobUrl && editor) {
-                    editor.chain().focus()
-                      .setImage({ src: result.blobUrl, alt: file.name })
-                      .run();
-                  }
-                });
+                floatingMenuRef.expand();
                 return true;
               }
             }
-          }
-          return false;
+            return false;
+          },
+          handlePaste: (_view, event) => {
+            const items = event.clipboardData?.items;
+            if (!items) return false;
+
+            for (const item of items) {
+              // Handle pasted images
+              if (item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (file && onFileDrop) {
+                  event.preventDefault();
+                  onFileDrop(file).then(result => {
+                    if (result && result.blobUrl && editor) {
+                      editor.chain().focus()
+                        .setImage({ src: result.blobUrl, alt: file.name })
+                        .run();
+                    }
+                  });
+                  return true;
+                }
+              }
+            }
+            return false;
+          },
         },
-      },
-    });
+      });
+    }
+
+    try {
+      editor = createEditor(initialContent);
+    } catch (err) {
+      console.error("[Editor] Failed to load content, recovering with empty document:", err);
+      toast.error("Entry contains invalid content", {
+        description: "The editor recovered by loading an empty document. Your data is safe — try re-opening the entry or removing incompatible plugins.",
+      });
+      editor = createEditor("");
+    }
 
     if (typeof globalThis !== 'undefined') {
       (globalThis as any).__diaryx_tiptapEditor = editor;
@@ -802,7 +815,14 @@
   export function setContent(markdown: string): void {
     if (!editor) return;
     lastAppliedContentProp = markdown;
-    editor.commands.setContent(preprocessFootnotes(markdown), { contentType: "markdown" });
+    try {
+      editor.commands.setContent(preprocessFootnotes(markdown), { contentType: "markdown" });
+    } catch (err) {
+      console.error("[Editor] Failed to set content:", err);
+      toast.error("Could not load entry content", {
+        description: "The document may contain nodes from an incompatible plugin.",
+      });
+    }
   }
 
   /**
@@ -972,7 +992,14 @@
     // so replace the document with the external source of truth.
     lastAppliedContentProp = content;
     isUpdatingContent = true;
-    editor.commands.setContent(preprocessFootnotes(content), { contentType: "markdown" });
+    try {
+      editor.commands.setContent(preprocessFootnotes(content), { contentType: "markdown" });
+    } catch (err) {
+      console.error("[Editor] Failed to sync content prop:", err);
+      toast.error("Could not load entry content", {
+        description: "The document may contain nodes from an incompatible plugin.",
+      });
+    }
     setTimeout(() => {
       isUpdatingContent = false;
     }, 0);

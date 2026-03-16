@@ -13,7 +13,6 @@ part_of: "[README](/README.md)"
 
 ## Todo (short-term, medium priority)
 
-- Update to VITE 8
 - Upload to iOS/Mac App Store
 - Also bundle for stores for various platforms
 - Publish updated diaryx.org site

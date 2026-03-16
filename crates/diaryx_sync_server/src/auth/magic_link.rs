@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::db::AuthRepo;
 use chrono::{Duration, Utc};
+use serde::Serialize;
 use std::sync::Arc;
 
 /// Magic link authentication service
@@ -18,6 +19,15 @@ pub struct VerifyResult {
     pub email: String,
 }
 
+/// Info about a device, returned when the device limit is reached so the
+/// client can offer a "replace this device?" prompt.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceLimitDevice {
+    pub id: String,
+    pub name: Option<String>,
+    pub last_seen_at: String,
+}
+
 /// Error types for magic link operations
 #[derive(Debug)]
 pub enum MagicLinkError {
@@ -26,7 +36,12 @@ pub enum MagicLinkError {
     /// Too many magic link requests (rate limited)
     RateLimited,
     /// Account already has the maximum number of registered devices
-    DeviceLimitReached { limit: u32 },
+    DeviceLimitReached {
+        limit: u32,
+        devices: Vec<DeviceLimitDevice>,
+    },
+    /// The replace_device_id didn't match any device owned by this user
+    InvalidReplaceDevice,
     /// Database error
     DatabaseError(String),
     /// Email sending error
@@ -40,8 +55,11 @@ impl std::fmt::Display for MagicLinkError {
             MagicLinkError::RateLimited => {
                 write!(f, "Too many requests. Please try again later.")
             }
-            MagicLinkError::DeviceLimitReached { limit } => {
+            MagicLinkError::DeviceLimitReached { limit, .. } => {
                 write!(f, "Device limit reached for this account (max {})", limit)
+            }
+            MagicLinkError::InvalidReplaceDevice => {
+                write!(f, "The device to replace was not found on this account")
             }
             MagicLinkError::DatabaseError(e) => write!(f, "Database error: {}", e),
             MagicLinkError::EmailError(e) => write!(f, "Email error: {}", e),
@@ -87,12 +105,15 @@ impl MagicLinkService {
 
     /// Verify a magic link token and create a session
     ///
-    /// Returns the session token and user info on success
+    /// Returns the session token and user info on success.
+    /// If `replace_device_id` is provided and the device limit has been
+    /// reached, the specified device is removed first.
     pub fn verify_magic_link(
         &self,
         token: &str,
         device_name: Option<&str>,
         user_agent: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, MagicLinkError> {
         // Verify and consume the magic token
         let email = self
@@ -101,16 +122,19 @@ impl MagicLinkService {
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?
             .ok_or(MagicLinkError::InvalidToken)?;
 
-        self.create_session_for_email(&email, device_name, user_agent)
+        self.create_session_for_email(&email, device_name, user_agent, replace_device_id)
     }
 
-    /// Verify a 6-digit code and create a session
+    /// Verify a 6-digit code and create a session.
+    /// If `replace_device_id` is provided and the device limit has been
+    /// reached, the specified device is removed first.
     pub fn verify_code(
         &self,
         code: &str,
         email: &str,
         device_name: Option<&str>,
         user_agent: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, MagicLinkError> {
         let email = email.trim().to_lowercase();
         let verified_email = self
@@ -119,15 +143,19 @@ impl MagicLinkService {
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?
             .ok_or(MagicLinkError::InvalidToken)?;
 
-        self.create_session_for_email(&verified_email, device_name, user_agent)
+        self.create_session_for_email(&verified_email, device_name, user_agent, replace_device_id)
     }
 
     /// Shared session-creation logic used by link, code, and passkey verification.
+    ///
+    /// When `replace_device_id` is `Some`, the specified device will be removed
+    /// to make room if the device limit is reached, instead of returning an error.
     pub(crate) fn create_session_for_email(
         &self,
         email: &str,
         device_name: Option<&str>,
         user_agent: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, MagicLinkError> {
         // Get or create user
         let user_id = self
@@ -146,9 +174,35 @@ impl MagicLinkService {
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
 
         if device_count >= device_limit {
-            return Err(MagicLinkError::DeviceLimitReached {
-                limit: device_limit,
-            });
+            if let Some(replace_id) = replace_device_id {
+                // Verify the device belongs to this user before deleting
+                let devices = self
+                    .repo
+                    .get_user_devices(&user_id)
+                    .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
+                if !devices.iter().any(|d| d.id == replace_id) {
+                    return Err(MagicLinkError::InvalidReplaceDevice);
+                }
+                self.repo
+                    .delete_device(replace_id)
+                    .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
+            } else {
+                let devices = self
+                    .repo
+                    .get_user_devices(&user_id)
+                    .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
+                return Err(MagicLinkError::DeviceLimitReached {
+                    limit: device_limit,
+                    devices: devices
+                        .into_iter()
+                        .map(|d| DeviceLimitDevice {
+                            id: d.id,
+                            name: d.name,
+                            last_seen_at: d.last_seen_at.to_rfc3339(),
+                        })
+                        .collect(),
+                });
+            }
         }
 
         // Update last login
@@ -221,7 +275,7 @@ mod tests {
 
         // Verify magic link
         let result = service
-            .verify_magic_link(&token, Some("Test"), None)
+            .verify_magic_link(&token, Some("Test"), None, None)
             .unwrap();
         assert_eq!(result.email, "test@example.com");
         assert!(!result.session_token.is_empty());
@@ -229,7 +283,7 @@ mod tests {
         assert!(!result.device_id.is_empty());
 
         // Token should be consumed
-        let second_try = service.verify_magic_link(&token, None, None);
+        let second_try = service.verify_magic_link(&token, None, None, None);
         assert!(matches!(second_try, Err(MagicLinkError::InvalidToken)));
     }
 
@@ -241,13 +295,13 @@ mod tests {
 
         // Verify using the code
         let result = service
-            .verify_code(&code, "code@example.com", Some("Test Device"), None)
+            .verify_code(&code, "code@example.com", Some("Test Device"), None, None)
             .unwrap();
         assert_eq!(result.email, "code@example.com");
         assert!(!result.session_token.is_empty());
 
         // Code should be consumed — second attempt should fail
-        let second_try = service.verify_code(&code, "code@example.com", None, None);
+        let second_try = service.verify_code(&code, "code@example.com", None, None, None);
         assert!(matches!(second_try, Err(MagicLinkError::InvalidToken)));
     }
 
@@ -259,11 +313,11 @@ mod tests {
 
         // Using the code should also consume the link
         service
-            .verify_code(&code, "both@example.com", None, None)
+            .verify_code(&code, "both@example.com", None, None, None)
             .unwrap();
 
         // Link should now be invalid
-        let link_try = service.verify_magic_link(&token, None, None);
+        let link_try = service.verify_magic_link(&token, None, None, None);
         assert!(matches!(link_try, Err(MagicLinkError::InvalidToken)));
     }
 
@@ -286,19 +340,19 @@ mod tests {
     fn test_free_tier_allows_two_devices_only() {
         let service = setup_test_service();
         let first = service
-            .create_session_for_email("free-devices@example.com", Some("MacBook"), None)
+            .create_session_for_email("free-devices@example.com", Some("MacBook"), None, None)
             .unwrap();
         let second = service
-            .create_session_for_email("free-devices@example.com", Some("iPhone"), None)
+            .create_session_for_email("free-devices@example.com", Some("iPhone"), None, None)
             .unwrap();
 
         assert_ne!(first.device_id, second.device_id);
 
         let third =
-            service.create_session_for_email("free-devices@example.com", Some("iPad"), None);
+            service.create_session_for_email("free-devices@example.com", Some("iPad"), None, None);
         assert!(matches!(
             third,
-            Err(MagicLinkError::DeviceLimitReached { limit: 2 })
+            Err(MagicLinkError::DeviceLimitReached { limit: 2, .. })
         ));
     }
 }

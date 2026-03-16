@@ -604,7 +604,7 @@ impl WorkspaceCrdt {
                 continue;
             }
             // Check if part_of references a non-existent or deleted entry
-            let parent_ref = meta.part_of.as_deref().unwrap();
+            let parent_ref = meta.part_of.as_deref().expect("part_of checked above");
             let parent_exists = all_keys.contains(parent_ref)
                 && files.iter().any(|(id, m)| id == parent_ref && !m.deleted);
             if !parent_exists {

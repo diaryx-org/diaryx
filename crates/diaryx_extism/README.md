@@ -27,10 +27,11 @@ the host through a JSON protocol (`protocol.rs`).
 | `get_config` | `""` | config JSON | Config read |
 | `set_config` | config JSON | `""` | Config write |
 
-`GuestManifest` supports optional `requested_permissions`:
+`GuestManifest` supports optional fields:
 
-- `defaults` (`PluginPermissions`) for install-time defaults
-- `reasons` (`HashMap<String, String>`) for permission rationale text
+- `requested_permissions` — install-time permission defaults and rationale text
+- `min_app_version` — minimum Diaryx version required (e.g. `"1.4.0"`);
+  the loader rejects plugins when the running app is too old
 
 ## Host functions available to guests
 

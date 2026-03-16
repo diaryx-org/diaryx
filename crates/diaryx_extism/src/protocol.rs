@@ -69,6 +69,12 @@ pub struct GuestManifest {
     /// Supported conversion pairs for `media_transcoder` capability (e.g. `["heic:jpeg"]`).
     #[serde(default)]
     pub conversions: Vec<String>,
+    /// Minimum Diaryx version required to run this plugin (e.g. `"1.4.0"`).
+    ///
+    /// The host checks this at load time and rejects the plugin with a
+    /// user-friendly message when the running app is too old.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_app_version: Option<String>,
 }
 
 /// Event sent to the guest's `on_event` function.

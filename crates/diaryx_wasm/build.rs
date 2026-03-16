@@ -11,6 +11,6 @@ fn main() {
 
     let body = extract_body(&readme);
 
-    let out_dir = env::var("OUT_DIR").unwrap();
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set by Cargo");
     fs::write(Path::new(&out_dir).join("README.md"), body).expect("Failed to write README.md");
 }

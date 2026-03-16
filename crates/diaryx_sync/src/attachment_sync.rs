@@ -280,7 +280,9 @@ impl<H: HttpClient> AttachmentSyncClient<H> {
             return Ok(());
         }
 
-        let upload_id = init_resp.upload_id.unwrap();
+        let upload_id = init_resp
+            .upload_id
+            .expect("upload_id must be present when status is not already_exists");
         let uploaded: std::collections::HashSet<usize> =
             init_resp.uploaded_parts.into_iter().collect();
 

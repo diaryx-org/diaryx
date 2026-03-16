@@ -2099,26 +2099,25 @@ async fn resolve_icloud_state<R: Runtime>(
     _app: &AppHandle<R>,
     config: &Config,
     _actual_workspace: &Path,
-    is_mobile: bool,
+    _is_mobile: bool,
 ) -> (Option<PathBuf>, bool) {
-    if !config.icloud_enabled || !is_mobile {
+    if !config.icloud_enabled {
         return (None, false);
     }
 
     #[cfg(feature = "icloud")]
     {
-        use tauri_plugin_icloud::mobile::ICloud;
         log::info!("[initialize_app] iCloud is enabled, setting up monitoring...");
 
         let icloud_workspace = Some(_actual_workspace.to_path_buf());
 
-        // Trigger download for workspace root and start monitoring
-        if let Some(icloud) = _app.try_state::<ICloud<R>>() {
-            let _ = icloud
-                .trigger_download(_actual_workspace.to_string_lossy().into_owned())
-                .await;
-            let _ = icloud.start_status_monitoring().await;
-        }
+        // Trigger download for workspace root (no-op on macOS) and start monitoring
+        let _ = tauri_plugin_icloud::do_trigger_download(
+            _app,
+            _actual_workspace.to_string_lossy().into_owned(),
+        )
+        .await;
+        let _ = tauri_plugin_icloud::do_start_monitoring(_app).await;
 
         (icloud_workspace, true)
     }
@@ -2219,9 +2218,9 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
     // Use the workspace path from config (may differ from platform default)
     let mut actual_workspace = config.default_workspace.clone();
     #[cfg(target_os = "macos")]
-    let active_access = match activate_workspace_access_from_config(&mut config, &actual_workspace)?
+    let active_access = match activate_workspace_access_from_config(&mut config, &actual_workspace)
     {
-        Some((access, bookmark_changed)) => {
+        Ok(Some((access, bookmark_changed))) => {
             log::info!(
                 "[initialize_app] Restored security-scoped workspace access: configured={:?} resolved={:?}",
                 actual_workspace,
@@ -2235,11 +2234,11 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
             }
             Some(access)
         }
-        None => {
+        Ok(None) => {
             config_changed |=
                 try_backfill_workspace_bookmark(&mut config, &actual_workspace, "initialize_app");
-            match activate_workspace_access_from_config(&mut config, &actual_workspace)? {
-                Some((access, bookmark_changed)) => {
+            match activate_workspace_access_from_config(&mut config, &actual_workspace) {
+                Ok(Some((access, bookmark_changed))) => {
                     log::info!(
                         "[initialize_app] Backfilled security-scoped workspace access: configured={:?} resolved={:?}",
                         actual_workspace,
@@ -2253,9 +2252,49 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
                     }
                     Some(access)
                 }
-                None => {
+                Ok(None) => {
                     log::info!(
                         "[initialize_app] No stored security-scoped workspace bookmark for {:?}",
+                        actual_workspace
+                    );
+                    None
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[initialize_app] Failed to resolve backfilled bookmark for {:?}: {:?} — continuing without sandbox access",
+                        actual_workspace,
+                        e
+                    );
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!(
+                "[initialize_app] Failed to resolve stored bookmark for {:?}: {:?} — continuing without sandbox access",
+                actual_workspace,
+                e
+            );
+            // Stale bookmark — try backfill, but don't abort init
+            config_changed |=
+                try_backfill_workspace_bookmark(&mut config, &actual_workspace, "initialize_app");
+            match activate_workspace_access_from_config(&mut config, &actual_workspace) {
+                Ok(Some((access, bookmark_changed))) => {
+                    log::info!(
+                        "[initialize_app] Backfilled security-scoped workspace access after stale bookmark: {:?}",
+                        access.resolved_path()
+                    );
+                    config_changed |= bookmark_changed;
+                    actual_workspace = access.resolved_path().to_path_buf();
+                    if config.default_workspace != actual_workspace {
+                        config.default_workspace = actual_workspace.clone();
+                        config_changed = true;
+                    }
+                    Some(access)
+                }
+                _ => {
+                    log::info!(
+                        "[initialize_app] No valid bookmark available for {:?}, continuing without sandbox access",
                         actual_workspace
                     );
                     None
@@ -2377,27 +2416,21 @@ pub async fn set_icloud_enabled<R: Runtime>(
     app: AppHandle<R>,
     enabled: bool,
 ) -> Result<AppPaths, SerializableError> {
-    use tauri_plugin_icloud::mobile::ICloud;
-
     let paths = get_platform_paths(&app)?;
     let fs = SyncToAsyncFs::new(RealFileSystem);
     let mut config =
         Config::load_from_or_default(&fs, &paths.config_path, paths.default_workspace.clone())
             .await;
 
-    let icloud = app.state::<ICloud<R>>();
-
     if enabled {
         // Check iCloud availability
-        let availability =
-            icloud
-                .check_icloud_available()
-                .await
-                .map_err(|e| SerializableError {
-                    kind: "ICloudError".to_string(),
-                    message: format!("Failed to check iCloud availability: {}", e),
-                    path: None,
-                })?;
+        let availability = tauri_plugin_icloud::check_available(&app)
+            .await
+            .map_err(|e| SerializableError {
+                kind: "ICloudError".to_string(),
+                message: format!("Failed to check iCloud availability: {}", e),
+                path: None,
+            })?;
 
         if !availability.is_available {
             return Err(SerializableError {
@@ -2408,32 +2441,30 @@ pub async fn set_icloud_enabled<R: Runtime>(
         }
 
         // Get iCloud container URL
-        let container_info =
-            icloud
-                .get_icloud_container_url()
-                .await
-                .map_err(|e| SerializableError {
-                    kind: "ICloudError".to_string(),
-                    message: format!("Failed to get iCloud container: {}", e),
-                    path: None,
-                })?;
+        let container_info = tauri_plugin_icloud::get_container_url(&app)
+            .await
+            .map_err(|e| SerializableError {
+                kind: "ICloudError".to_string(),
+                message: format!("Failed to get iCloud container: {}", e),
+                path: None,
+            })?;
 
         let icloud_workspace = PathBuf::from(&container_info.documents_url).join("Diaryx");
         let current_workspace = config.default_workspace.clone();
 
         // Migrate files to iCloud (only if current workspace has content)
         if current_workspace.exists() && current_workspace != icloud_workspace {
-            icloud
-                .migrate_to_icloud(
-                    current_workspace.to_string_lossy().into_owned(),
-                    icloud_workspace.to_string_lossy().into_owned(),
-                )
-                .await
-                .map_err(|e| SerializableError {
-                    kind: "ICloudError".to_string(),
-                    message: format!("Failed to migrate to iCloud: {}", e),
-                    path: None,
-                })?;
+            tauri_plugin_icloud::do_migrate_to_icloud(
+                &app,
+                current_workspace.to_string_lossy().into_owned(),
+                icloud_workspace.to_string_lossy().into_owned(),
+            )
+            .await
+            .map_err(|e| SerializableError {
+                kind: "ICloudError".to_string(),
+                message: format!("Failed to migrate to iCloud: {}", e),
+                path: None,
+            })?;
 
             log::info!(
                 "[set_icloud_enabled] Migrated files from {:?} to {:?}",
@@ -2448,7 +2479,7 @@ pub async fn set_icloud_enabled<R: Runtime>(
         save_config_file(&config, &paths.config_path).await?;
 
         // Start monitoring sync status
-        let _ = icloud.start_status_monitoring().await;
+        let _ = tauri_plugin_icloud::do_start_monitoring(&app).await;
 
         // Reinitialize workspace at new path
         let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
@@ -2494,21 +2525,26 @@ pub async fn set_icloud_enabled<R: Runtime>(
         })
     } else {
         // Disabling iCloud — migrate back to local
-        let local_workspace = paths.document_dir.join("Diaryx");
+        let local_workspace = if paths.is_mobile {
+            paths.document_dir.join("Diaryx")
+        } else {
+            // On macOS desktop, use the platform default workspace path
+            paths.default_workspace.clone()
+        };
         let current_workspace = config.default_workspace.clone();
 
         if current_workspace.exists() && current_workspace != local_workspace {
-            icloud
-                .migrate_from_icloud(
-                    current_workspace.to_string_lossy().into_owned(),
-                    local_workspace.to_string_lossy().into_owned(),
-                )
-                .await
-                .map_err(|e| SerializableError {
-                    kind: "ICloudError".to_string(),
-                    message: format!("Failed to migrate from iCloud: {}", e),
-                    path: None,
-                })?;
+            tauri_plugin_icloud::do_migrate_from_icloud(
+                &app,
+                current_workspace.to_string_lossy().into_owned(),
+                local_workspace.to_string_lossy().into_owned(),
+            )
+            .await
+            .map_err(|e| SerializableError {
+                kind: "ICloudError".to_string(),
+                message: format!("Failed to migrate from iCloud: {}", e),
+                path: None,
+            })?;
 
             log::info!(
                 "[set_icloud_enabled] Migrated files from {:?} to {:?}",
@@ -2518,7 +2554,7 @@ pub async fn set_icloud_enabled<R: Runtime>(
         }
 
         // Stop monitoring
-        let _ = icloud.stop_status_monitoring().await;
+        let _ = tauri_plugin_icloud::do_stop_monitoring(&app).await;
 
         // Update config
         config.icloud_enabled = false;
@@ -3826,57 +3862,94 @@ pub async fn reinitialize_workspace<R: Runtime>(
         let mut loaded_config =
             load_workspace_config(&paths.config_path, &paths.default_workspace).await;
 
-        let access = activate_workspace_access_from_config(&mut loaded_config, &ws_path)?;
-        if let Some((access, bookmark_changed)) = access {
-            log::info!(
-                "[reinitialize_workspace] Restored security-scoped workspace access: configured={:?} resolved={:?}",
-                ws_path,
-                access.resolved_path()
-            );
-            config_changed |= bookmark_changed;
-            ws_path = access.resolved_path().to_path_buf();
-            if loaded_config.default_workspace == PathBuf::from(&workspace_path)
-                && loaded_config.default_workspace != ws_path
-            {
-                loaded_config.default_workspace = ws_path.clone();
-                config_changed = true;
-            }
-            if config_changed {
-                save_config_file(&loaded_config, &paths.config_path).await?;
-            }
-            Some(access)
-        } else {
-            config_changed |= try_backfill_workspace_bookmark(
-                &mut loaded_config,
-                &ws_path,
-                "reinitialize_workspace",
-            );
-            match activate_workspace_access_from_config(&mut loaded_config, &ws_path)? {
-                Some((access, bookmark_changed)) => {
-                    log::info!(
-                        "[reinitialize_workspace] Backfilled security-scoped workspace access: configured={:?} resolved={:?}",
-                        ws_path,
-                        access.resolved_path()
-                    );
-                    config_changed |= bookmark_changed;
-                    ws_path = access.resolved_path().to_path_buf();
-                    if loaded_config.default_workspace == PathBuf::from(&workspace_path)
-                        && loaded_config.default_workspace != ws_path
-                    {
-                        loaded_config.default_workspace = ws_path.clone();
-                        config_changed = true;
-                    }
-                    if config_changed {
-                        save_config_file(&loaded_config, &paths.config_path).await?;
-                    }
-                    Some(access)
+        match activate_workspace_access_from_config(&mut loaded_config, &ws_path) {
+            Ok(Some((access, bookmark_changed))) => {
+                log::info!(
+                    "[reinitialize_workspace] Restored security-scoped workspace access: configured={:?} resolved={:?}",
+                    ws_path,
+                    access.resolved_path()
+                );
+                config_changed |= bookmark_changed;
+                ws_path = access.resolved_path().to_path_buf();
+                if loaded_config.default_workspace == PathBuf::from(&workspace_path)
+                    && loaded_config.default_workspace != ws_path
+                {
+                    loaded_config.default_workspace = ws_path.clone();
+                    config_changed = true;
                 }
-                None => {
-                    log::info!(
-                        "[reinitialize_workspace] No stored security-scoped workspace bookmark for {:?}",
-                        ws_path
-                    );
-                    None
+                if config_changed {
+                    save_config_file(&loaded_config, &paths.config_path).await?;
+                }
+                Some(access)
+            }
+            Ok(None) => {
+                config_changed |= try_backfill_workspace_bookmark(
+                    &mut loaded_config,
+                    &ws_path,
+                    "reinitialize_workspace",
+                );
+                match activate_workspace_access_from_config(&mut loaded_config, &ws_path) {
+                    Ok(Some((access, bookmark_changed))) => {
+                        log::info!(
+                            "[reinitialize_workspace] Backfilled security-scoped workspace access: configured={:?} resolved={:?}",
+                            ws_path,
+                            access.resolved_path()
+                        );
+                        config_changed |= bookmark_changed;
+                        ws_path = access.resolved_path().to_path_buf();
+                        if loaded_config.default_workspace == PathBuf::from(&workspace_path)
+                            && loaded_config.default_workspace != ws_path
+                        {
+                            loaded_config.default_workspace = ws_path.clone();
+                            config_changed = true;
+                        }
+                        if config_changed {
+                            save_config_file(&loaded_config, &paths.config_path).await?;
+                        }
+                        Some(access)
+                    }
+                    Ok(None) => {
+                        log::info!(
+                            "[reinitialize_workspace] No stored security-scoped workspace bookmark for {:?}",
+                            ws_path
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[reinitialize_workspace] Failed to resolve backfilled bookmark for {:?}: {:?} — continuing without sandbox access",
+                            ws_path,
+                            e
+                        );
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "[reinitialize_workspace] Failed to resolve stored bookmark for {:?}: {:?} — continuing without sandbox access",
+                    ws_path,
+                    e
+                );
+                config_changed |= try_backfill_workspace_bookmark(
+                    &mut loaded_config,
+                    &ws_path,
+                    "reinitialize_workspace",
+                );
+                match activate_workspace_access_from_config(&mut loaded_config, &ws_path) {
+                    Ok(Some((access, bookmark_changed))) => {
+                        log::info!(
+                            "[reinitialize_workspace] Backfilled after stale bookmark: {:?}",
+                            access.resolved_path()
+                        );
+                        config_changed |= bookmark_changed;
+                        ws_path = access.resolved_path().to_path_buf();
+                        if config_changed {
+                            save_config_file(&loaded_config, &paths.config_path).await?;
+                        }
+                        Some(access)
+                    }
+                    _ => None,
                 }
             }
         }

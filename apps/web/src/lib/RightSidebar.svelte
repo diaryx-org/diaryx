@@ -6,10 +6,9 @@
   import { Input } from "$lib/components/ui/input";
   import * as Alert from "$lib/components/ui/alert";
   import FilePickerPopover from "$lib/components/FilePickerPopover.svelte";
-  import AudienceEditor from "$lib/components/AudienceEditor.svelte";
-  import WorkspaceConfigSection from "$lib/components/WorkspaceConfigSection.svelte";
+  import DocumentAudiencePill from "$lib/components/DocumentAudiencePill.svelte";
   import NestedObjectDisplay from "$lib/components/NestedObjectDisplay.svelte";
-  import PluginConfigSection from "$lib/components/PluginConfigSection.svelte";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import {
     Calendar,
     Clock,
@@ -39,12 +38,17 @@
     Replace,
     Eye,
     Settings2,
-    ChevronRight,
     CloudDownload,
     Download,
     CheckCircle2,
     Loader2,
     Puzzle,
+    Ellipsis,
+    ArrowUp,
+    ArrowDown,
+    Copy,
+    GripVertical,
+    FileOutput,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
@@ -70,6 +74,7 @@
     isPreviewableAttachmentKind,
   } from "@/models/services/attachmentService";
   import { parseLinkDisplay } from "$lib/utils/linkParser";
+  import MoveConfigDialog from "$lib/components/MoveConfigDialog.svelte";
 
   interface CrdtHistoryEntry {
     update_id: bigint;
@@ -124,6 +129,8 @@
     onRequestedTabConsumed?: () => void;
     onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
     onOpenAudienceManager?: () => void;
+    onPropertyReorder?: (keys: string[]) => void;
+    onEntryRefreshRequest?: () => void;
   }
 
   let {
@@ -150,6 +157,8 @@
     onRequestedTabConsumed,
     onPluginHostAction,
     onOpenAudienceManager,
+    onPropertyReorder,
+    onEntryRefreshRequest,
   }: Props = $props();
 
   // Progressive swipe derived state (mobile only – desktop keeps width-based animation)
@@ -504,7 +513,7 @@
 
   // Load thumbnails for image attachments when the section is expanded
   $effect(() => {
-    if (attachmentsCollapsed || !entry || !api) return;
+    if (!entry || !api) return;
     const attachments = getAttachments();
     if (attachments.length === 0) return;
     const entryPath = entry.path;
@@ -547,11 +556,6 @@
     attachmentThumbnails = new Map();
   });
 
-  // Collapsible section state
-  let audienceCollapsed = $state(true);
-  let configCollapsed = $state(true);
-  let pluginsCollapsed = $state(true);
-  let attachmentsCollapsed = $state(true);
   let collapseTooltipOpen = $state(false);
 
   // State for adding new properties
@@ -562,6 +566,15 @@
   // State for adding new array items
   let addingArrayItemKey = $state<string | null>(null);
   let newArrayItem = $state("");
+
+  // Drag state for property reordering
+  let draggedPropertyKey = $state<string | null>(null);
+  let dropTargetPropertyKey = $state<string | null>(null);
+  let dropPosition = $state<'above' | 'below' | null>(null);
+
+  // Move config dialog state
+  let moveConfigDialogOpen = $state(false);
+  let moveConfigSectionKey = $state<string | null>(null);
 
   // Resolve a link string to a workspace path and navigate to it
   async function navigateToLink(link: string) {
@@ -594,6 +607,10 @@
     if (lowerKey === "tags" || lowerKey === "categories") return Tag;
     if (lowerKey === "part_of" || lowerKey === "parent") return Link;
     if (lowerKey === "contents" || lowerKey === "children") return List;
+    if (lowerKey === "audience") return Eye;
+    if (lowerKey === "attachments") return Paperclip;
+    if (lowerKey === "plugins") return Puzzle;
+    if (lowerKey === "workspace_config") return Settings2;
     return Hash;
   }
 
@@ -610,10 +627,7 @@
     return dateKeys.includes(lowerKey) || /^\d{4}-\d{2}-\d{2}/.test(value);
   }
 
-  // Keys that have dedicated UI sections and should not appear in generic metadata
-  const DEDICATED_SECTION_KEYS = ["attachments", "audience"];
-
-  // Workspace config keys that are shown in the dedicated config section (root index only)
+  // Workspace config keys (used for "Move to another file" option on root index)
   const WORKSPACE_CONFIG_KEYS = [
     "link_format",
     "default_template",
@@ -624,36 +638,11 @@
     "default_audience",
   ];
 
-  // Get frontmatter entries sorted with common fields first
+  // Get frontmatter entries in their file order
   function getSortedFrontmatter(
     frontmatter: Record<string, unknown>,
   ): [string, unknown][] {
-    const priorityKeys = [
-      "title",
-      "created",
-      "updated",
-      "date",
-      "tags",
-      "audience",
-      "part_of",
-      "contents",
-    ];
-    const entries = Object.entries(frontmatter).filter(
-      ([key]) =>
-        !DEDICATED_SECTION_KEYS.includes(key.toLowerCase()) &&
-        !(isRootIndex && WORKSPACE_CONFIG_KEYS.includes(key.toLowerCase())) &&
-        !(isRootIndex && key.toLowerCase() === "plugins"),
-    );
-
-    return entries.sort(([a], [b]) => {
-      const aIndex = priorityKeys.indexOf(a.toLowerCase());
-      const bIndex = priorityKeys.indexOf(b.toLowerCase());
-
-      if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-      if (aIndex !== -1) return -1;
-      if (bIndex !== -1) return 1;
-      return a.localeCompare(b);
-    });
+    return Object.entries(frontmatter);
   }
 
   // Format a key for display (convert snake_case to Title Case)
@@ -738,6 +727,82 @@
       addingArrayItemKey = null;
       newArrayItem = "";
     }
+  }
+
+  function handlePropertyDragStart(e: DragEvent, key: string) {
+    draggedPropertyKey = key;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("application/vnd.diaryx.property-key", key);
+    }
+  }
+
+  function handlePropertyDragOver(e: DragEvent, key: string) {
+    if (!draggedPropertyKey || draggedPropertyKey === key) return;
+    if (e.dataTransfer && e.dataTransfer.types.includes("application/vnd.diaryx.property-key")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      dropTargetPropertyKey = key;
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      dropPosition = e.clientY < midY ? 'above' : 'below';
+    }
+  }
+
+  function handlePropertyDragLeave() {
+    dropTargetPropertyKey = null;
+    dropPosition = null;
+  }
+
+  function handlePropertyDrop(e: DragEvent, targetKey: string) {
+    e.preventDefault();
+    if (!draggedPropertyKey || !entry) return;
+    const sorted = getSortedFrontmatter(entry.frontmatter);
+    const keys = sorted.map(([k]) => k);
+    const fromIndex = keys.indexOf(draggedPropertyKey);
+    const toIndex = keys.indexOf(targetKey);
+    if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
+      handlePropertyDragEnd();
+      return;
+    }
+    // Remove dragged key and insert at new position
+    keys.splice(fromIndex, 1);
+    const insertIndex = dropPosition === 'below' ? keys.indexOf(targetKey) + 1 : keys.indexOf(targetKey);
+    keys.splice(insertIndex, 0, draggedPropertyKey);
+    onPropertyReorder?.(keys);
+    handlePropertyDragEnd();
+  }
+
+  function handlePropertyDragEnd() {
+    draggedPropertyKey = null;
+    dropTargetPropertyKey = null;
+    dropPosition = null;
+  }
+
+  function handleMoveProperty(key: string, direction: 'up' | 'down') {
+    if (!entry) return;
+    const sorted = getSortedFrontmatter(entry.frontmatter);
+    const keys = sorted.map(([k]) => k);
+    const index = keys.indexOf(key);
+    if (direction === 'up' && index > 0) {
+      [keys[index], keys[index - 1]] = [keys[index - 1], keys[index]];
+    } else if (direction === 'down' && index < keys.length - 1) {
+      [keys[index], keys[index + 1]] = [keys[index + 1], keys[index]];
+    }
+    onPropertyReorder?.(keys);
+  }
+
+  async function handleCopyPropertyValue(value: unknown) {
+    try {
+      await navigator.clipboard.writeText(String(value ?? ""));
+    } catch (e) {
+      console.error("[RightSidebar] Failed to copy value:", e);
+    }
+  }
+
+  function openMoveConfigDialog(key: string) {
+    moveConfigSectionKey = key;
+    moveConfigDialogOpen = true;
   }
 
   // Format date for datetime-local input
@@ -845,29 +910,224 @@
       {#if entry}
       {#if Object.keys(entry.frontmatter).length > 0}
         <div class="p-3 space-y-3">
-          {#each getSortedFrontmatter(entry.frontmatter) as [key, value]}
+          {#each getSortedFrontmatter(entry.frontmatter) as [key, value], index}
             {@const Icon = getIcon(key)}
-            <div class="space-y-1 group">
-              <div
-                class="flex items-center justify-between text-xs text-muted-foreground"
-              >
-                <div class="flex items-center gap-2">
+            {@const sortedEntries = getSortedFrontmatter(entry.frontmatter)}
+            {@const isFirst = index === 0}
+            {@const isLast = index === sortedEntries.length - 1}
+            {@const isConfigKey = WORKSPACE_CONFIG_KEYS.includes(key.toLowerCase())}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="space-y-1 group {draggedPropertyKey === key ? 'opacity-50' : ''} {dropTargetPropertyKey === key && dropPosition === 'above' ? 'border-t-2 border-primary' : ''} {dropTargetPropertyKey === key && dropPosition === 'below' ? 'border-b-2 border-primary' : ''}"
+              ondragover={(e) => handlePropertyDragOver(e, key)}
+              ondragleave={handlePropertyDragLeave}
+              ondrop={(e) => handlePropertyDrop(e, key)}
+            >
+              <div class="flex items-center justify-between text-xs text-muted-foreground">
+                <div class="flex items-center gap-1">
+                  <!-- Drag handle -->
+                  <button
+                    type="button"
+                    class="cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity p-0.5 -ml-1"
+                    draggable="true"
+                    ondragstart={(e) => handlePropertyDragStart(e, key)}
+                    ondragend={handlePropertyDragEnd}
+                    aria-label="Drag to reorder"
+                  >
+                    <GripVertical class="size-3" />
+                  </button>
                   <Icon class="size-3.5" />
                   <span class="font-medium">{formatKey(key)}</span>
                 </div>
-                <!-- Delete button -->
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="size-11 md:size-5 opacity-0 group-hover:opacity-100 transition-opacity"
-                  onclick={() => onPropertyRemove?.(key)}
-                  aria-label="Remove property"
-                >
-                  <X class="size-4 md:size-3" />
-                </Button>
+                <!-- Property actions dropdown -->
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger>
+                    {#snippet child({ props })}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="size-11 md:size-5 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+                        {...props}
+                        aria-label="Property actions"
+                      >
+                        <Ellipsis class="size-4 md:size-3" />
+                      </Button>
+                    {/snippet}
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="end" class="w-48">
+                    <DropdownMenu.Item
+                      disabled={isFirst}
+                      onclick={() => handleMoveProperty(key, 'up')}
+                    >
+                      <ArrowUp class="size-4" />
+                      Move Up
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      disabled={isLast}
+                      onclick={() => handleMoveProperty(key, 'down')}
+                    >
+                      <ArrowDown class="size-4" />
+                      Move Down
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item onclick={() => handleCopyPropertyValue(value)}>
+                      <Copy class="size-4" />
+                      Copy Value
+                    </DropdownMenu.Item>
+                    {#if isRootIndex && isConfigKey}
+                      <DropdownMenu.Item onclick={() => openMoveConfigDialog(key)}>
+                        <FileOutput class="size-4" />
+                        Move to another file...
+                      </DropdownMenu.Item>
+                    {/if}
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item
+                      variant="destructive"
+                      onclick={() => onPropertyRemove?.(key)}
+                    >
+                      <Trash2 class="size-4" />
+                      Delete
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
               </div>
               <div class="pl-5.5">
-                {#if isArray(value) && key === 'contents'}
+                {#if key === 'audience'}
+                  <!-- Audience with pill picker -->
+                  <DocumentAudiencePill
+                    audience={value as string[] | null ?? null}
+                    entryPath={entry.path}
+                    rootPath={workspaceStore.tree?.path ?? ""}
+                    {api}
+                    onChange={async (v) => {
+                      if (v === null) {
+                        await onPropertyRemove?.("audience");
+                      } else {
+                        await onPropertyChange?.("audience", v);
+                      }
+                    }}
+                    onOpenManager={onOpenAudienceManager}
+                  />
+                {:else if key === 'attachments'}
+                  <!-- Attachments list -->
+                  <div class="space-y-1">
+                    {#if attachmentError}
+                      <Alert.Root variant="destructive" class="mb-2 py-2">
+                        <AlertCircle class="size-4" />
+                        <Alert.Description class="text-xs">
+                          {attachmentError}
+                        </Alert.Description>
+                      </Alert.Root>
+                    {/if}
+                    {#if getAttachments().length > 0}
+                      <div class="space-y-1 mb-2">
+                        {#each getAttachments() as attachment}
+                          {@const displayName = getAttachmentDisplayName(attachment)}
+                          {@const attachPath = getAttachmentPath(attachment)}
+                          {@const Icon = getFileIcon(attachPath)}
+                          {@const previewKind = getAttachmentMediaKind(attachPath)}
+                          {@const canPreview = isPreviewableAttachmentKind(previewKind)}
+                          {@const status = attachmentStatuses.get(attachPath) ?? 'unknown'}
+                          {@const meta = entry ? getAttachmentMetadata(entry.path, attachPath) : null}
+                          {@const thumbUrl = attachmentThumbnails.get(attachPath)}
+                          <div
+                            class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-secondary/50 group/att cursor-grab active:cursor-grabbing"
+                            role="listitem"
+                            aria-label="Attachment: {displayName}, drag to move"
+                            draggable="true"
+                            ondragstart={(e) => {
+                              if (e.dataTransfer && entry) {
+                                e.dataTransfer.setData('text/x-diaryx-attachment', attachment);
+                                e.dataTransfer.setData('text/x-diaryx-source-entry', entry.path);
+                                e.dataTransfer.effectAllowed = 'move';
+                              }
+                            }}
+                          >
+                            <button
+                              type="button"
+                              class="flex items-center gap-2 min-w-0 {canPreview ? 'hover:text-primary cursor-pointer' : 'cursor-default'}"
+                              onclick={() => canPreview && onPreviewAttachment?.(attachment)}
+                              disabled={!canPreview}
+                            >
+                              {#if thumbUrl}
+                                <img src={thumbUrl} alt="" class="size-8 rounded object-cover shrink-0" draggable="false" />
+                              {:else}
+                                <Icon class="size-3.5 shrink-0 text-muted-foreground" />
+                              {/if}
+                              <div class="flex flex-col min-w-0">
+                                <span
+                                  class="text-xs text-foreground truncate {canPreview ? 'hover:underline' : ''}"
+                                  title={canPreview ? `Preview ${displayName}` : attachPath}
+                                >
+                                  {displayName}
+                                </span>
+                                {#if meta && (status === 'remote' || status === 'downloading')}
+                                  <span class="text-[10px] text-muted-foreground">{formatFileSize(meta.sizeBytes)}</span>
+                                {/if}
+                              </div>
+                            </button>
+                            <div class="flex items-center gap-0.5 shrink-0">
+                              {#if status === 'local'}
+                                <CheckCircle2 class="size-3 text-green-500" />
+                              {:else if status === 'downloading'}
+                                <Loader2 class="size-3 text-muted-foreground animate-spin" />
+                              {:else if status === 'remote'}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  class="size-11 md:size-5"
+                                  onclick={(e: MouseEvent) => { e.stopPropagation(); downloadAttachment(attachPath); }}
+                                  aria-label="Download attachment"
+                                >
+                                  <Download class="size-4 md:size-3 text-muted-foreground" />
+                                </Button>
+                              {/if}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                class="size-11 md:size-5 shrink-0 opacity-0 group-hover/att:opacity-100 transition-opacity"
+                                onclick={() => onDeleteAttachment?.(attachment)}
+                                aria-label="Remove attachment"
+                              >
+                                <Trash2 class="size-4 md:size-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                      {#if isAttachmentSyncEnabled() && hasRemoteAttachments}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          class="w-full h-11 md:h-7 text-xs mb-2"
+                          onclick={() => downloadAllRemoteAttachments()}
+                        >
+                          <CloudDownload class="size-3 mr-1" />
+                          Download All
+                        </Button>
+                      {/if}
+                    {:else}
+                      <p class="text-xs text-muted-foreground mb-2">No attachments</p>
+                    {/if}
+                    <FilePickerPopover
+                      excludePaths={getAttachments().map(getAttachmentPath)}
+                      placeholder="Add attachment..."
+                      onSelect={async (file) => {
+                        const link = await formatAsLink(file.path, file.name);
+                        const currentAttachments = getAttachments();
+                        onPropertyChange?.("attachments", [...currentAttachments, link]);
+                      }}
+                    >
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        class="w-full h-11 md:h-7 text-xs"
+                      >
+                        <Plus class="size-4 md:size-3 mr-1" />
+                        Add Attachment
+                      </Button>
+                    </FilePickerPopover>
+                  </div>
+                {:else if isArray(value) && key === 'contents'}
                   <!-- Contents array with file picker -->
                   <div class="space-y-1">
                     <div class="flex flex-wrap gap-1">
@@ -1172,215 +1432,16 @@
         {/if}
       </div>
 
-      <!-- Audience Section -->
-      <div class="p-3 border-t border-sidebar-border">
-        <button
-          type="button"
-          class="flex items-center justify-between w-full cursor-pointer {audienceCollapsed ? '' : 'mb-2'}"
-          onclick={() => audienceCollapsed = !audienceCollapsed}
-        >
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            <Eye class="size-4.5 md:size-3.5" />
-            <span class="font-medium">Audience</span>
-          </div>
-          <ChevronRight class="size-4.5 md:size-3.5 text-muted-foreground transition-transform {audienceCollapsed ? '' : 'rotate-90'}" />
-        </button>
-        {#if !audienceCollapsed}
-        <AudienceEditor
-          audience={entry.frontmatter.audience as string[] | null ?? null}
-          entryPath={entry.path}
-          rootPath={workspaceStore.tree?.path ?? ""}
-          {api}
-          onChange={(value) => {
-            if (value === null) {
-              onPropertyRemove?.("audience");
-            } else {
-              onPropertyChange?.("audience", value);
-            }
-          }}
-          onOpenManager={onOpenAudienceManager}
-        />
-        {/if}
-      </div>
 
-      <!-- Workspace Config Section (root index only) -->
-      {#if isRootIndex}
-        <div class="p-3 border-t border-sidebar-border">
-          <button
-            type="button"
-            class="flex items-center justify-between w-full cursor-pointer {configCollapsed ? '' : 'mb-2'}"
-            onclick={() => configCollapsed = !configCollapsed}
-          >
-            <div class="flex items-center gap-2 text-xs text-muted-foreground">
-              <Settings2 class="size-4.5 md:size-3.5" />
-              <span class="font-medium">Workspace Config</span>
-            </div>
-            <ChevronRight class="size-4.5 md:size-3.5 text-muted-foreground transition-transform {configCollapsed ? '' : 'rotate-90'}" />
-          </button>
-          {#if !configCollapsed}
-            <WorkspaceConfigSection rootIndexPath={entry.path} />
-          {/if}
-        </div>
-
-        <!-- Plugins Section (root index only) -->
-        {#if entry.frontmatter.plugins && typeof entry.frontmatter.plugins === 'object' && !Array.isArray(entry.frontmatter.plugins)}
-          <div class="p-3 border-t border-sidebar-border">
-            <button
-              type="button"
-              class="flex items-center justify-between w-full cursor-pointer {pluginsCollapsed ? '' : 'mb-2'}"
-              onclick={() => pluginsCollapsed = !pluginsCollapsed}
-            >
-              <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                <Puzzle class="size-4.5 md:size-3.5" />
-                <span class="font-medium">Plugins</span>
-              </div>
-              <ChevronRight class="size-4.5 md:size-3.5 text-muted-foreground transition-transform {pluginsCollapsed ? '' : 'rotate-90'}" />
-            </button>
-            {#if !pluginsCollapsed}
-              <PluginConfigSection
-                plugins={entry.frontmatter.plugins as Record<string, unknown>}
-                onNavigateLink={navigateToLink}
-              />
-            {/if}
-          </div>
-        {/if}
-      {/if}
-
-      <!-- Attachments Section -->
-      <div class="p-3 border-t border-sidebar-border">
-        <button
-          type="button"
-          class="flex items-center justify-between w-full cursor-pointer {attachmentsCollapsed ? '' : 'mb-2'}"
-          onclick={() => attachmentsCollapsed = !attachmentsCollapsed}
-        >
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            <Paperclip class="size-4.5 md:size-3.5" />
-            <span class="font-medium">Attachments</span>
-          </div>
-          <ChevronRight class="size-4.5 md:size-3.5 text-muted-foreground transition-transform {attachmentsCollapsed ? '' : 'rotate-90'}" />
-        </button>
-
-        {#if !attachmentsCollapsed}
-        {#if attachmentError}
-          <Alert.Root variant="destructive" class="mb-2 py-2">
-            <AlertCircle class="size-4" />
-            <Alert.Description class="text-xs">
-              {attachmentError}
-            </Alert.Description>
-          </Alert.Root>
-        {/if}
-
-        {#if getAttachments().length > 0}
-          <div class="space-y-1 mb-2">
-            {#each getAttachments() as attachment}
-              {@const displayName = getAttachmentDisplayName(attachment)}
-              {@const attachPath = getAttachmentPath(attachment)}
-              {@const Icon = getFileIcon(attachPath)}
-              {@const previewKind = getAttachmentMediaKind(attachPath)}
-              {@const canPreview = isPreviewableAttachmentKind(previewKind)}
-              {@const status = attachmentStatuses.get(attachPath) ?? 'unknown'}
-              {@const meta = entry ? getAttachmentMetadata(entry.path, attachPath) : null}
-              {@const thumbUrl = attachmentThumbnails.get(attachPath)}
-              <div
-                class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-secondary/50 group cursor-grab active:cursor-grabbing"
-                role="listitem"
-                aria-label="Attachment: {displayName}, drag to move"
-                draggable="true"
-                ondragstart={(e) => {
-                  if (e.dataTransfer && entry) {
-                    e.dataTransfer.setData('text/x-diaryx-attachment', attachment);
-                    e.dataTransfer.setData('text/x-diaryx-source-entry', entry.path);
-                    e.dataTransfer.effectAllowed = 'move';
-                  }
-                }}
-              >
-                <button
-                  type="button"
-                  class="flex items-center gap-2 min-w-0 {canPreview ? 'hover:text-primary cursor-pointer' : 'cursor-default'}"
-                  onclick={() => canPreview && onPreviewAttachment?.(attachment)}
-                  disabled={!canPreview}
-                >
-                  {#if thumbUrl}
-                    <img src={thumbUrl} alt="" class="size-8 rounded object-cover shrink-0" draggable="false" />
-                  {:else}
-                    <Icon class="size-3.5 shrink-0 text-muted-foreground" />
-                  {/if}
-                  <div class="flex flex-col min-w-0">
-                    <span
-                      class="text-xs text-foreground truncate {canPreview ? 'hover:underline' : ''}"
-                      title={canPreview ? `Preview ${displayName}` : attachPath}
-                    >
-                      {displayName}
-                    </span>
-                    {#if meta && (status === 'remote' || status === 'downloading')}
-                      <span class="text-[10px] text-muted-foreground">{formatFileSize(meta.sizeBytes)}</span>
-                    {/if}
-                  </div>
-                </button>
-                <div class="flex items-center gap-0.5 shrink-0">
-                  {#if status === 'local'}
-                    <CheckCircle2 class="size-3 text-green-500" />
-                  {:else if status === 'downloading'}
-                    <Loader2 class="size-3 text-muted-foreground animate-spin" />
-                  {:else if status === 'remote'}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      class="size-11 md:size-5"
-                      onclick={(e: MouseEvent) => { e.stopPropagation(); downloadAttachment(attachPath); }}
-                      aria-label="Download attachment"
-                    >
-                      <Download class="size-4 md:size-3 text-muted-foreground" />
-                    </Button>
-                  {/if}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="size-11 md:size-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onclick={() => onDeleteAttachment?.(attachment)}
-                    aria-label="Remove attachment"
-                  >
-                    <Trash2 class="size-4 md:size-3" />
-                  </Button>
-                </div>
-              </div>
-            {/each}
-          </div>
-          {#if isAttachmentSyncEnabled() && hasRemoteAttachments}
-            <Button
-              variant="outline"
-              size="sm"
-              class="w-full h-11 md:h-7 text-xs mb-2"
-              onclick={() => downloadAllRemoteAttachments()}
-            >
-              <CloudDownload class="size-3 mr-1" />
-              Download All
-            </Button>
-          {/if}
-        {:else}
-          <p class="text-xs text-muted-foreground mb-2">No attachments</p>
-        {/if}
-
-        <FilePickerPopover
-          excludePaths={getAttachments().map(getAttachmentPath)}
-          placeholder="Add attachment..."
-          onSelect={async (file) => {
-            const link = await formatAsLink(file.path, file.name);
-            const currentAttachments = getAttachments();
-            onPropertyChange?.("attachments", [...currentAttachments, link]);
-          }}
-        >
-          <Button
-            variant="outline"
-            size="sm"
-            class="w-full h-11 md:h-7 text-xs"
-          >
-            <Plus class="size-4 md:size-3 mr-1" />
-            Add Attachment
-          </Button>
-        </FilePickerPopover>
-        {/if}
-      </div>
+      <MoveConfigDialog
+        bind:open={moveConfigDialogOpen}
+        sectionKey={moveConfigSectionKey}
+        sourcePath={entry.path}
+        {api}
+        onSuccess={() => {
+          onEntryRefreshRequest?.();
+        }}
+      />
       {:else}
         <div
           class="flex flex-col items-center justify-center py-8 px-4 text-center"

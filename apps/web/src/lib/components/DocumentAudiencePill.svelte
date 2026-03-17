@@ -15,7 +15,7 @@
     entryPath: string;
     rootPath: string;
     api: Api | null;
-    onChange: (value: string[] | null) => void;
+    onChange: (value: string[] | null) => void | Promise<void>;
     onOpenManager?: () => void;
   }
 
@@ -107,14 +107,14 @@
       ),
   );
 
-  function addTag(tag: string) {
+  async function addTag(tag: string) {
     const trimmed = tag.trim();
     if (!trimmed) return;
     const isNew = !availableAudiences.some(
       (a) => a.toLowerCase() === trimmed.toLowerCase(),
     );
     // audience null means inheriting — start an explicit list with this tag
-    onChange(audience === null ? [trimmed] : [...audience, trimmed]);
+    await onChange(audience === null ? [trimmed] : [...audience, trimmed]);
     if (isNew) {
       colorStore.assignColor(trimmed);
       templateContextStore.bumpAudiencesVersion();

@@ -335,6 +335,7 @@ describe('api', () => {
         path: 'workspace',
         name: 'workspace',
         description: null,
+        is_index: false,
         children: [],
         properties: {},
       }
@@ -355,7 +356,7 @@ describe('api', () => {
     it('should get workspace tree with path and depth', async () => {
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'Tree',
-        data: { path: 'subdir', name: 'subdir', description: null, children: [], properties: {} },
+        data: { path: 'subdir', name: 'subdir', description: null, is_index: false, children: [], properties: {} },
       })
 
       await api.getWorkspaceTree('subdir', 2)

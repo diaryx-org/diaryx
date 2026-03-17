@@ -25,7 +25,7 @@
 
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Content
-    class="!inset-0 !translate-x-0 !translate-y-0 !start-0 !top-0 flex items-center justify-center max-w-none w-full h-full p-0 overflow-hidden bg-black/95 border-none rounded-none data-[state=open]:!zoom-in-100 data-[state=closed]:!zoom-out-100"
+    class="!inset-0 !translate-x-0 !translate-y-0 !start-0 !top-0 flex items-center justify-center max-w-none sm:max-w-none w-full h-full p-0 overflow-hidden bg-black/95 border-none rounded-none data-[state=open]:!zoom-in-100 data-[state=closed]:!zoom-out-100"
     showCloseButton={false}
   >
     <div class="relative flex items-center justify-center w-full h-full max-w-[90vw] max-h-[90vh] mx-auto">

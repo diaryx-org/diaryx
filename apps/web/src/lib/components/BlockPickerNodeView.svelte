@@ -335,9 +335,10 @@
             <div class="submenu-divider"></div>
             {#each pluginBlockCommands as cmd (cmd.extensionId)}
               <button type="button" class="submenu-item" onmousedown={(e) => handleMenuItemClick(e, () => {
+                const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
                 onSelect(() => editor.chain().focus().insertContent({
                   type: cmd.extensionId,
-                  attrs: { source: '' },
+                  attrs: { source: `${id}](` },
                 }).run());
               })}>
                 <cmd.icon class="size-3.5" /> {cmd.label}

@@ -20,6 +20,7 @@
     queueResolveAttachment,
     type AttachmentMediaKind,
   } from "../models/services/attachmentService";
+  import { parseLinkDisplay } from "$lib/utils/linkParser";
   import { Table } from "@tiptap/extension-table";
   import { TableRow } from "@tiptap/extension-table-row";
   import { TableHeader } from "@tiptap/extension-table-header";
@@ -88,6 +89,8 @@
       blobUrl?: string;
       sourceEntryPath: string;
     }) => void;
+    /** Called when user requests to preview a media attachment in the editor */
+    onPreviewMedia?: (attachmentSrc: string) => void;
   }
 
   let {
@@ -102,6 +105,7 @@
     entryPath = "",
     api = null,
     onAttachmentInsert,
+    onPreviewMedia,
   }: Props = $props();
 
   let element: HTMLDivElement;
@@ -267,7 +271,7 @@
           // Capture entryPath and api from the outer scope (Editor props)
           const ep = entryPath;
           const epApi = api;
-          return ({ node, HTMLAttributes }) => {
+          return ({ node, HTMLAttributes, getPos, editor: viewEditor }) => {
             const src = node.attrs.src || "";
             const alt = node.attrs.alt || "";
             const title = node.attrs.title || "";
@@ -295,7 +299,7 @@
               el.classList.remove("editor-image--loading");
             }
 
-            let dom: HTMLElement;
+            let mediaEl: HTMLElement;
 
             if (isVideo) {
               const video = document.createElement("video");
@@ -319,7 +323,7 @@
               } else {
                 video.src = src;
               }
-              dom = video;
+              mediaEl = video;
             } else if (isAudio) {
               const audio = document.createElement("audio");
               audio.controls = true;
@@ -342,7 +346,7 @@
               } else {
                 audio.src = src;
               }
-              dom = audio;
+              mediaEl = audio;
             } else {
               const img = document.createElement("img");
               img.alt = alt;
@@ -366,10 +370,186 @@
               } else {
                 img.src = src;
               }
-              dom = img;
+              mediaEl = img;
             }
 
-            return { dom };
+            // ── Wrapper with selection ring + dropdown ──────────────
+            const wrapper = document.createElement("div");
+            wrapper.className = "editor-media-wrapper";
+            wrapper.appendChild(mediaEl);
+
+            let selected = false;
+            let menu: HTMLElement | null = null;
+
+            function removeMenu() {
+              if (menu) {
+                menu.remove();
+                menu = null;
+              }
+            }
+
+            function showMenu(clientX: number, clientY: number) {
+              removeMenu();
+              menu = document.createElement("div");
+              menu.className = "editor-media-menu";
+
+              const items: { label: string; action: () => void }[] = [];
+
+              // Preview (images/videos only, not audio)
+              if (!isAudio && onPreviewMedia) {
+                items.push({
+                  label: "Preview",
+                  action: () => {
+                    removeMenu();
+                    onPreviewMedia(src);
+                  },
+                });
+              }
+
+              // Alt text
+              if (!isAudio && !isVideo) {
+                items.push({
+                  label: "Edit alt text",
+                  action: () => {
+                    removeMenu();
+                    const currentAlt = node.attrs.alt || "";
+                    const newAlt = window.prompt("Alt text:", currentAlt);
+                    if (newAlt !== null) {
+                      const pos = getPos();
+                      if (pos != null) {
+                        viewEditor.chain().focus()
+                          .command(({ tr }) => {
+                            tr.setNodeMarkup(pos, undefined, { ...node.attrs, alt: newAlt });
+                            return true;
+                          }).run();
+                      }
+                    }
+                  },
+                });
+              }
+
+              // Replace
+              items.push({
+                label: "Replace",
+                action: () => {
+                  removeMenu();
+                  const input = document.createElement("input");
+                  input.type = "file";
+                  input.accept = isVideo ? "video/*" : isAudio ? "audio/*" : "image/*,video/*";
+                  input.onchange = async () => {
+                    const file = input.files?.[0];
+                    if (!file || !onFileDrop) return;
+                    const result = await onFileDrop(file);
+                    if (result) {
+                      const pos = getPos();
+                      if (pos != null) {
+                        viewEditor.chain().focus()
+                          .command(({ tr }) => {
+                            tr.setNodeMarkup(pos, undefined, {
+                              ...node.attrs,
+                              src: result.blobUrl || result.attachmentPath,
+                            });
+                            return true;
+                          }).run();
+                      }
+                    }
+                  };
+                  input.click();
+                },
+              });
+
+              // Delete
+              items.push({
+                label: "Delete",
+                action: () => {
+                  removeMenu();
+                  const pos = getPos();
+                  if (pos != null) {
+                    viewEditor.chain().focus()
+                      .command(({ tr }) => {
+                        tr.delete(pos, pos + node.nodeSize);
+                        return true;
+                      }).run();
+                  }
+                },
+              });
+
+              for (const item of items) {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "editor-media-menu-item";
+                btn.textContent = item.label;
+                btn.addEventListener("mousedown", (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  item.action();
+                });
+                menu.appendChild(btn);
+              }
+
+              // Position at click point, flip above if not enough space below
+              document.body.appendChild(menu);
+              const menuRect = menu.getBoundingClientRect();
+              const spaceBelow = window.innerHeight - clientY;
+              const spaceAbove = clientY;
+              // Also clamp horizontally so it doesn't go off the right edge
+              const left = Math.min(clientX, window.innerWidth - menuRect.width - 8);
+              if (spaceBelow >= menuRect.height + 8) {
+                menu.style.top = `${clientY + 4}px`;
+              } else if (spaceAbove >= menuRect.height + 8) {
+                menu.style.top = `${clientY - menuRect.height - 4}px`;
+              } else {
+                // Not enough room either way — just pin to bottom
+                menu.style.top = `${window.innerHeight - menuRect.height - 8}px`;
+              }
+              menu.style.left = `${Math.max(8, left)}px`;
+            }
+
+            // Show menu on click when already selected
+            wrapper.addEventListener("mousedown", (e) => {
+              if (selected && !menu && !(e.target as HTMLElement).closest(".editor-media-menu")) {
+                // Prevent ProseMirror from stealing focus / re-selecting
+                e.preventDefault();
+                showMenu(e.clientX, e.clientY);
+              }
+            });
+
+            // Close dropdown when clicking outside
+            function handleDocClick(e: MouseEvent) {
+              if (menu && !menu.contains(e.target as Node) && !wrapper.contains(e.target as Node)) {
+                removeMenu();
+              }
+            }
+            document.addEventListener("mousedown", handleDocClick, true);
+
+            return {
+              dom: wrapper,
+              stopEvent(event: Event) {
+                // Let video/audio controls work normally
+                if (isVideo || isAudio) {
+                  const target = event.target as HTMLElement;
+                  if (mediaEl.contains(target) && target !== mediaEl) return true;
+                  if (target === mediaEl && event.type !== "mousedown") return true;
+                }
+                return false;
+              },
+              selectNode() {
+                selected = true;
+                wrapper.classList.add("editor-media-selected");
+              },
+              deselectNode() {
+                selected = false;
+                wrapper.classList.remove("editor-media-selected");
+                removeMenu();
+              },
+              ignoreMutation() {
+                return true;
+              },
+              destroy() {
+                removeMenu();
+                document.removeEventListener("mousedown", handleDocClick, true);
+              },
+            };
           };
         },
       }),
@@ -860,6 +1040,35 @@
   }
 
   /**
+   * Insert an attachment at the current cursor position, using the appropriate
+   * block type for drawing/audio files or a regular image for everything else.
+   */
+  export function handleAttachmentDrop(attachmentRaw: string): void {
+    if (!editor) return;
+    const parsed = parseLinkDisplay(attachmentRaw);
+    const attachmentPath = parsed?.path ?? attachmentRaw;
+    const filename = attachmentPath.split("/").pop() || "";
+    const drawingMatch = filename.match(/^drawing-(.+)\.svg$/);
+    const audioMatch = filename.match(/^audio-(.+)\.\w+$/);
+
+    if (drawingMatch && editor.extensionManager.extensions.some(ext => ext.name === "drawingBlock")) {
+      editor.chain().insertContent({
+        type: "drawingBlock",
+        attrs: { source: `${drawingMatch[1]}](${formatMarkdownDestination(attachmentPath)}` },
+      }).run();
+      return;
+    }
+    if (audioMatch && editor.extensionManager.extensions.some(ext => ext.name === "audioBlock")) {
+      editor.chain().insertContent({
+        type: "audioBlock",
+        attrs: { source: `${audioMatch[1]}](${formatMarkdownDestination(attachmentPath)}` },
+      }).run();
+      return;
+    }
+    editor.chain().setImage({ src: attachmentPath, alt: filename }).run();
+  }
+
+  /**
    * Insert an image at cursor position
    */
   export function insertImage(src: string, alt?: string): void {
@@ -1048,10 +1257,30 @@
   role="application"
   ondragover={(e) => {
     e.preventDefault();
-    e.dataTransfer && (e.dataTransfer.dropEffect = "copy");
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = e.dataTransfer.types.includes("text/x-diaryx-attachment") ? "move" : "copy";
+    }
   }}
   ondrop={async (e) => {
     e.preventDefault();
+
+    // Handle attachment drops from the sidebar.
+    const attachmentRaw = e.dataTransfer?.getData("text/x-diaryx-attachment");
+    if (attachmentRaw && editor) {
+      // Resolve drop coordinates to a document position so the content is
+      // inserted where the user actually dropped, not at the current cursor.
+      const dropPos = editor.view.posAtCoords({ left: e.clientX, top: e.clientY });
+      editor.commands.focus();
+      if (dropPos) {
+        editor.commands.setTextSelection(dropPos.pos);
+      } else {
+        editor.commands.setTextSelection(editor.state.doc.content.size);
+      }
+      handleAttachmentDrop(attachmentRaw);
+      return;
+    }
+
+    // Handle OS file drops
     const file = e.dataTransfer?.files?.[0];
     if (file && onFileDrop) {
       const result = await onFileDrop(file);
@@ -1281,6 +1510,54 @@
   @keyframes shimmer {
     0%, 100% { opacity: 0.4; }
     50% { opacity: 0.7; }
+  }
+
+  /* Media wrapper: selection ring + dropdown */
+  :global(.editor-media-wrapper) {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    border-radius: 6px;
+    transition: box-shadow 0.15s ease;
+    cursor: pointer;
+  }
+
+  :global(.editor-media-selected) {
+    box-shadow: 0 0 0 2px var(--primary);
+    border-radius: 6px;
+  }
+
+  :global(.editor-media-menu) {
+    position: fixed;
+    z-index: 50;
+    min-width: 140px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--popover);
+    color: var(--popover-foreground);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  :global(.editor-media-menu-item) {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 13px;
+    text-align: left;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  :global(.editor-media-menu-item:hover) {
+    background: var(--accent);
+    color: var(--accent-foreground);
   }
 
   /* Footnote ref styles */

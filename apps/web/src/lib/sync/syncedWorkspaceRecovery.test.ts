@@ -8,6 +8,7 @@ describe("syncedWorkspaceRecovery", () => {
         name: "workspace",
         description: null,
         path: "/workspace",
+        is_index: false,
         children: [],
       }),
     ).toBe(true);
@@ -19,14 +20,17 @@ describe("syncedWorkspaceRecovery", () => {
         name: "workspace",
         description: null,
         path: "/workspace",
+        is_index: false,
         children: [{
           name: ".diaryx",
           description: null,
           path: "/workspace/.diaryx",
+          is_index: false,
           children: [{
             name: "plugins",
             description: null,
             path: "/workspace/.diaryx/plugins",
+            is_index: false,
             children: [],
           }],
         }],
@@ -40,10 +44,12 @@ describe("syncedWorkspaceRecovery", () => {
         name: "workspace",
         description: null,
         path: "/workspace",
+        is_index: false,
         children: [{
           name: "index.md",
           description: null,
           path: "/workspace/index.md",
+          is_index: false,
           children: [],
         }],
       }),

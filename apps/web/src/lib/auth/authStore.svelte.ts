@@ -14,6 +14,7 @@ import {
   type User,
   type Workspace,
   type Device,
+  type DeviceLimitDevice,
   type PasskeyListItem,
   AuthError,
   type UserHasDataResponse,
@@ -93,6 +94,63 @@ let state = $state<AuthState>({
 });
 
 let authService: AuthService | null = null;
+
+// ============================================================================
+// Device Replacement
+// ============================================================================
+
+/** When a sign-in attempt hits the device limit, this holds the pending
+ *  verification context so the UI can show a device picker and retry. */
+export interface DeviceReplacementContext {
+  devices: DeviceLimitDevice[];
+  /** Which auth flow hit the limit. */
+  kind: "magic_link" | "code" | "passkey";
+  /** Stashed args needed to retry the verification. */
+  args: Record<string, unknown>;
+}
+
+let deviceReplacementCtx = $state<DeviceReplacementContext | null>(null);
+
+export function getDeviceReplacementContext(): DeviceReplacementContext | null {
+  return deviceReplacementCtx;
+}
+
+export function clearDeviceReplacement(): void {
+  deviceReplacementCtx = null;
+}
+
+/**
+ * Retry the pending sign-in after the user picks a device to replace.
+ */
+export async function retryWithDeviceReplacement(
+  replaceDeviceId: string,
+): Promise<void> {
+  const ctx = deviceReplacementCtx;
+  if (!ctx) throw new Error("No pending device replacement");
+  deviceReplacementCtx = null;
+
+  const args = ctx.args;
+  if (ctx.kind === "magic_link") {
+    await verifyMagicLink(
+      args.token as string,
+      args.customDeviceName as string | undefined,
+      replaceDeviceId,
+    );
+  } else if (ctx.kind === "code") {
+    await verifyCode(
+      args.code as string,
+      args.email as string,
+      args.customDeviceName as string | undefined,
+      replaceDeviceId,
+    );
+  } else if (ctx.kind === "passkey") {
+    await authenticateWithPasskey(
+      args.email as string | undefined,
+      args.customDeviceName as string | undefined,
+      replaceDeviceId,
+    );
+  }
+}
 
 // ============================================================================
 // Getters
@@ -315,8 +373,9 @@ export async function requestMagicLink(
  * Verify a magic link token and log in.
  * @param token - The magic link token
  * @param customDeviceName - Optional custom device name (from user input). Falls back to auto-detected name.
+ * @param replaceDeviceId - If provided, replace this device to make room when at the device limit.
  */
-export async function verifyMagicLink(token: string, customDeviceName?: string): Promise<void> {
+export async function verifyMagicLink(token: string, customDeviceName?: string, replaceDeviceId?: string): Promise<void> {
   if (!authService) {
     throw new Error("Server URL not configured");
   }
@@ -328,7 +387,7 @@ export async function verifyMagicLink(token: string, customDeviceName?: string):
     // Use custom name if provided, otherwise auto-detect
     const deviceName = customDeviceName?.trim() || getDeviceName();
 
-    const response = await authService.verifyMagicLink(token, deviceName);
+    const response = await authService.verifyMagicLink(token, deviceName, replaceDeviceId);
 
     // Store token
     localStorage.setItem(STORAGE_KEYS.TOKEN, response.token);
@@ -346,6 +405,13 @@ export async function verifyMagicLink(token: string, customDeviceName?: string):
     await refreshUserInfo();
     await refreshUserStorageUsage();
   } catch (err) {
+    if (err instanceof AuthError && err.statusCode === 403 && err.devices) {
+      deviceReplacementCtx = {
+        devices: err.devices,
+        kind: "magic_link",
+        args: { token, customDeviceName },
+      };
+    }
     const message =
       err instanceof Error ? err.message : "Failed to verify magic link";
     state.error = message;
@@ -362,6 +428,7 @@ export async function verifyCode(
   code: string,
   email: string,
   customDeviceName?: string,
+  replaceDeviceId?: string,
 ): Promise<void> {
   if (!authService) {
     throw new Error("Server URL not configured");
@@ -372,7 +439,7 @@ export async function verifyCode(
 
   try {
     const deviceName = customDeviceName?.trim() || getDeviceName();
-    const response = await authService.verifyCode(code, email, deviceName);
+    const response = await authService.verifyCode(code, email, deviceName, replaceDeviceId);
 
     // Store token
     localStorage.setItem(STORAGE_KEYS.TOKEN, response.token);
@@ -389,6 +456,13 @@ export async function verifyCode(
     await refreshUserInfo();
     await refreshUserStorageUsage();
   } catch (err) {
+    if (err instanceof AuthError && err.statusCode === 403 && err.devices) {
+      deviceReplacementCtx = {
+        devices: err.devices,
+        kind: "code",
+        args: { code, email, customDeviceName },
+      };
+    }
     const message =
       err instanceof Error ? err.message : "Failed to verify code";
     state.error = message;
@@ -736,6 +810,7 @@ export async function registerPasskey(name: string): Promise<string> {
 export async function authenticateWithPasskey(
   email?: string,
   customDeviceName?: string,
+  replaceDeviceId?: string,
 ): Promise<void> {
   if (!authService) throw new Error("Server URL not configured");
 
@@ -762,6 +837,7 @@ export async function authenticateWithPasskey(
       challenge_id,
       serialized,
       deviceName,
+      replaceDeviceId,
     );
 
     // 4. Same post-login flow as verifyMagicLink
@@ -776,6 +852,13 @@ export async function authenticateWithPasskey(
     await refreshUserInfo();
     await refreshUserStorageUsage();
   } catch (err) {
+    if (err instanceof AuthError && err.statusCode === 403 && err.devices) {
+      deviceReplacementCtx = {
+        devices: err.devices,
+        kind: "passkey",
+        args: { email, customDeviceName },
+      };
+    }
     const message =
       err instanceof Error ? err.message : "Failed to authenticate with passkey";
     state.error = message;

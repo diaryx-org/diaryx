@@ -194,6 +194,17 @@ function mergeTree(oldNode: TreeNode | null, newNode: TreeNode | null): TreeNode
     }
   }
 
+  // Check for order changes (same children but different positions)
+  if (!childrenChanged) {
+    const oldNonPlaceholder = oldNode.children.filter(c => !isPlaceholderNode(c));
+    for (let i = 0; i < mergedChildren.length && i < oldNonPlaceholder.length; i++) {
+      if (mergedChildren[i].path !== oldNonPlaceholder[i].path) {
+        childrenChanged = true;
+        break;
+      }
+    }
+  }
+
   // If nothing changed, return the old node to preserve reference
   if (!nodeChanged && !childrenChanged) {
     return oldNode;

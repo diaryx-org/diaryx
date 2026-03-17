@@ -300,6 +300,126 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         self.write_parsed(path, &parsed).await
     }
 
+    /// Reorder frontmatter keys to match the specified order.
+    /// Keys not in the list are appended at the end in their original order.
+    pub async fn reorder_frontmatter_keys(&self, path: &str, keys: &[String]) -> Result<()> {
+        let content = match self.read_raw(path).await {
+            Ok(c) => c,
+            Err(_) => return Ok(()),
+        };
+
+        let parsed = match frontmatter::parse(&content) {
+            Ok(p) => p,
+            Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+
+        let mut reordered = IndexMap::new();
+        // First, insert keys in the specified order
+        for key in keys {
+            if let Some(value) = parsed.frontmatter.get(key) {
+                reordered.insert(key.clone(), value.clone());
+            }
+        }
+        // Then append any remaining keys not in the specified list
+        for (key, value) in &parsed.frontmatter {
+            if !reordered.contains_key(key) {
+                reordered.insert(key.clone(), value.clone());
+            }
+        }
+
+        let reordered_parsed = frontmatter::ParsedFile {
+            frontmatter: reordered,
+            body: parsed.body,
+        };
+        self.write_parsed(path, &reordered_parsed).await
+    }
+
+    /// Move a frontmatter section to an external file, replacing it with a markdown link.
+    pub async fn move_frontmatter_section_to_file(
+        &self,
+        source_path: &str,
+        section_key: &str,
+        target_path: &str,
+        create_if_missing: bool,
+    ) -> Result<()> {
+        let source_content = self.read_raw(source_path).await?;
+        let mut source_parsed = frontmatter::parse(&source_content)?;
+
+        let section_value = source_parsed
+            .frontmatter
+            .get(section_key)
+            .cloned()
+            .ok_or_else(|| {
+                DiaryxError::Validation(format!("Key '{}' not found in frontmatter", section_key))
+            })?;
+
+        // Prepare target frontmatter
+        let target_fm = match &section_value {
+            Value::Mapping(map) => {
+                // Nested section: write nested keys as top-level frontmatter in target
+                let mut fm = IndexMap::new();
+                for (k, v) in map {
+                    if let Value::String(key_str) = k {
+                        fm.insert(key_str.clone(), v.clone());
+                    }
+                }
+                fm
+            }
+            other => {
+                // Flat config key: write as a single frontmatter property
+                let mut fm = IndexMap::new();
+                fm.insert(section_key.to_string(), other.clone());
+                fm
+            }
+        };
+
+        // Write or update target file
+        let target_resolved = self.resolve_path(target_path);
+        if self.diaryx.fs.exists(&target_resolved).await {
+            let target_content = self.read_raw_or_empty(target_path).await?;
+            let mut target_parsed = frontmatter::parse_or_empty(&target_content)?;
+            for (k, v) in target_fm {
+                target_parsed.frontmatter.insert(k, v);
+            }
+            self.write_parsed(target_path, &target_parsed).await?;
+        } else if create_if_missing {
+            let target_parsed = frontmatter::ParsedFile {
+                frontmatter: target_fm,
+                body: String::new(),
+            };
+            self.write_parsed(target_path, &target_parsed).await?;
+        } else {
+            return Err(DiaryxError::FileRead {
+                path: std::path::PathBuf::from(target_path),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Target file does not exist",
+                ),
+            });
+        }
+
+        // Replace the key's value with a markdown link to the target file
+        let title = section_key.replace('_', " ");
+        let title = title
+            .split_whitespace()
+            .map(|w| {
+                let mut c = w.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let link = format!("[{}]({})", title, target_path);
+        source_parsed
+            .frontmatter
+            .insert(section_key.to_string(), Value::String(link));
+
+        self.write_parsed(source_path, &source_parsed).await
+    }
+
     // -------------------- Content Methods --------------------
 
     /// Get the body content of a file, excluding frontmatter.

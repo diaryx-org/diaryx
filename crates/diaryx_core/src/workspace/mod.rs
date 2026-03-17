@@ -1210,6 +1210,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 ),
                 description: None,
                 path: root_path.to_path_buf(),
+                is_index: false,
                 children: Vec::new(),
                 properties: std::collections::HashMap::new(),
             });
@@ -1250,6 +1251,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 name: format!("... ({} more)", child_count),
                 description: None,
                 path: root_path.to_path_buf(),
+                is_index: false,
                 children: Vec::new(),
                 properties: std::collections::HashMap::new(),
             });
@@ -1303,6 +1305,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                                 name: format!("{} (error)", child_path_str),
                                 description: None,
                                 path: absolute_child_path,
+                                is_index: false,
                                 children: Vec::new(),
                                 properties: std::collections::HashMap::new(),
                             });
@@ -1313,10 +1316,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             }
         }
 
+        let is_index = index.frontmatter.is_index();
         Ok(TreeNode {
             name,
             description: index.frontmatter.description,
             path: root_path.to_path_buf(),
+            is_index,
             children,
             properties: std::collections::HashMap::new(),
         })
@@ -1401,6 +1406,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     name: format!("... ({} more)", entries.len()),
                     description: None,
                     path: node_path.clone(),
+                    is_index: false,
                     children: Vec::new(),
                     properties: std::collections::HashMap::new(),
                 });
@@ -1449,6 +1455,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                             name: file_title,
                             description: file_desc,
                             path: entry,
+                            is_index: false,
                             children: Vec::new(),
                             properties: std::collections::HashMap::new(),
                         });
@@ -1461,6 +1468,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             name,
             description,
             path: node_path,
+            is_index: true,
             children,
             properties: std::collections::HashMap::new(),
         })
@@ -3412,11 +3420,13 @@ mod tests {
             name: "Root".to_string(),
             description: Some("Root description".to_string()),
             path: PathBuf::from("root.md"),
+            is_index: true,
             children: vec![
                 TreeNode {
                     name: "Child 1".to_string(),
                     description: None,
                     path: PathBuf::from("child1.md"),
+                    is_index: false,
                     children: vec![],
                     properties: std::collections::HashMap::new(),
                 },
@@ -3424,6 +3434,7 @@ mod tests {
                     name: "Child 2".to_string(),
                     description: Some("Child desc".to_string()),
                     path: PathBuf::from("child2.md"),
+                    is_index: false,
                     children: vec![],
                     properties: std::collections::HashMap::new(),
                 },

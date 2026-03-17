@@ -295,6 +295,9 @@ pub struct TreeNode {
     pub description: Option<String>,
     /// Path to index/root file
     pub path: PathBuf,
+    /// Whether this node has a `contents` property (even if empty)
+    #[serde(default)]
+    pub is_index: bool,
     /// `contents` property list
     pub children: Vec<TreeNode>,
     /// Additional frontmatter properties for display (populated by --properties flag)

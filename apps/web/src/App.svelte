@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { getBackend, isTauri, replaceBackend, resetBackend } from "./lib/backend";
+  import { getBackend, isTauri, replaceBackend, resetBackend, type TreeNode } from "./lib/backend";
   import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
   import { BackendError } from "./lib/backend/interface";
   import { pickAuthorizedWorkspaceFolder } from "./lib/backend/workspaceAccess";
@@ -26,7 +26,9 @@
   import MarketplaceDialog from "./lib/MarketplaceDialog.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
   import AddWorkspaceDialog from "./lib/AddWorkspaceDialog.svelte";
+  import DeviceReplacementDialog from "./lib/components/DeviceReplacementDialog.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
+  import MoveEntryDialog from "./lib/MoveEntryDialog.svelte";
   import PermissionBanner from "./lib/components/PermissionBanner.svelte";
   import AudienceEditor from "./lib/components/AudienceEditor.svelte";
   import AudienceManager from "./views/audience/AudienceManager.svelte";
@@ -67,6 +69,7 @@
     PluginPermissions,
   } from "./models/stores/permissionStore.svelte";
   import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
+  import { buildCommandRegistry } from "$lib/commandRegistry";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
   import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
   import {
@@ -295,6 +298,9 @@
   // Find in file state
   let showFindBar = $state(false);
 
+  // Move entry dialog
+  let moveEntryDialogPath = $state<string | null>(null);
+
   // In-app prompt dialogs (replaces window.prompt which is blocked in Tauri WKWebView)
   let promptDialog = $state<{
     title: string;
@@ -414,6 +420,47 @@
   /** Bundle pre-selected from welcome screen to apply when creating a new workspace via AddWorkspaceDialog */
   let addWorkspaceBundle = $state<BundleRegistryEntry | null>(null);
   let spotlightSteps = $state<SpotlightStep[] | null>(null);
+
+  // Mobile spotlight actions: open/close sidebars for steps targeting elements inside them
+  const mobileSpotlightActions: Record<string, { prepare: () => Promise<(() => void) | null> }> = {
+    "workspace-tree": {
+      prepare: async () => {
+        uiStore.setLeftSidebarCollapsed(false);
+        await new Promise(r => setTimeout(r, 350));
+        const aside = document.querySelector('[data-spotlight="workspace-tree"]')?.closest('aside');
+        if (aside) (aside as HTMLElement).style.zIndex = '10000';
+        return () => {
+          if (aside) (aside as HTMLElement).style.zIndex = '';
+          uiStore.setLeftSidebarCollapsed(true);
+        };
+      }
+    },
+    "marketplace-button": {
+      prepare: async () => {
+        uiStore.setLeftSidebarCollapsed(false);
+        await new Promise(r => setTimeout(r, 350));
+        const aside = document.querySelector('[data-spotlight="marketplace-button"]')?.closest('aside');
+        if (aside) (aside as HTMLElement).style.zIndex = '10000';
+        return () => {
+          if (aside) (aside as HTMLElement).style.zIndex = '';
+          uiStore.setLeftSidebarCollapsed(true);
+        };
+      }
+    },
+    "properties-panel": {
+      prepare: async () => {
+        uiStore.setLeftSidebarCollapsed(true);
+        uiStore.setRightSidebarCollapsed(false);
+        await new Promise(r => setTimeout(r, 350));
+        const aside = document.querySelector('[data-spotlight="properties-panel"]')?.closest('aside');
+        if (aside) (aside as HTMLElement).style.zIndex = '10000';
+        return () => {
+          if (aside) (aside as HTMLElement).style.zIndex = '';
+          uiStore.setRightSidebarCollapsed(true);
+        };
+      }
+    },
+  };
 
   // Marketplace dialog
   let showMarketplaceDialog = $state(false);
@@ -3660,33 +3707,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   }
 
   function cmdMoveEntry() {
-    if (!currentEntry || !tree) { toast.error("No entry selected"); return; }
-    const allParents: string[] = [];
-    function collectParents(node: typeof tree) {
-      if (!node) return;
-      if (node.children.length > 0 || node.path.endsWith("index.md") || node.path.endsWith("README.md")) {
-        allParents.push(node.path);
-      }
-      node.children.forEach(collectParents);
-    }
-    collectParents(tree);
-    const entryPath = currentEntry.path;
-    const entryName = entryPath.split("/").pop()?.replace(".md", "") ?? "";
-    const options = allParents
-      .filter(p => p !== entryPath)
-      .map(p => p.split("/").pop()?.replace(".md", "") || p)
-      .join(", ");
-    promptDialog = {
-      title: "Move Entry",
-      label: `Move "${entryName}" to which parent?\n\nAvailable: ${options}`,
-      value: "",
-      onSubmit: async (dest: string) => {
-        if (!dest) return;
-        const match = allParents.find(p => p.split("/").pop()?.replace(".md", "").toLowerCase() === dest.toLowerCase());
-        if (!match) { toast.error("Parent not found"); return; }
-        await handleMoveEntry(entryPath, match);
-      },
-    };
+    if (!currentEntry) { toast.error("No entry selected"); return; }
+    moveEntryDialogPath = currentEntry.path;
   }
 
   async function cmdCreateChildEntry() {
@@ -3719,6 +3741,77 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   function cmdReorderFootnotes() {
     handleReorderFootnotes(editorRef);
   }
+
+  // ========================================================================
+  // Command Registry — central source of truth for command palette + footer
+  // ========================================================================
+
+  /** Opens a native file picker filtered to images/videos, uploads, and inserts into the editor. */
+  function cmdUploadMedia() {
+    if (!api || !currentEntry || !editorRef) return;
+    // Snapshot whether the editor has a meaningful cursor position before the
+    // command palette closes and the file picker steals focus.
+    const editor = editorRef.getEditor?.();
+    const hadUserCursor =
+      editor != null && editor.state.selection.anchor > 1;
+
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,video/*";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      // If the user never placed a cursor, move to the end of the document
+      // so the media doesn't land at the very top.
+      if (!hadUserCursor) {
+        editorRef.getEditor?.()?.commands.focus("end");
+      }
+      const result = await handleEditorFileDrop(file);
+      if (result) {
+        handleAttachmentInsert({
+          path: result.attachmentPath,
+          kind: result.kind,
+          blobUrl: result.blobUrl || undefined,
+          sourceEntryPath: currentEntry!.path,
+        });
+      }
+    };
+    input.click();
+  }
+
+  const pluginBlockCommands = $derived(getPluginStore().editorInsertCommands.block);
+  const pluginBlockPickerItems = $derived(getPluginStore().blockPickerItems);
+
+  const commandRegistry = $derived.by(() =>
+    buildCommandRegistry({
+      getEditor: () => editorRef?.getEditor?.() ?? null,
+      hasEntry: !!currentEntry,
+      hasEditor: !!editorRef,
+      readonly: editorReadonly,
+      onUploadMedia: cmdUploadMedia,
+      onDuplicateEntry: cmdDuplicateEntry,
+      onRenameEntry: cmdRenameEntry,
+      onDeleteEntry: cmdDeleteEntry,
+      onMoveEntry: cmdMoveEntry,
+      onCreateChildEntry: cmdCreateChildEntry,
+      onFindInFile: () => { showFindBar = true; },
+      onWordCount: cmdWordCount,
+      onCopyAsMarkdown: cmdCopyAsMarkdown,
+      onViewMarkdown: cmdViewMarkdown,
+      onReorderFootnotes: cmdReorderFootnotes,
+      onOpenWorkspaceSettings: () => {
+        settingsInitialTab = "workspace";
+        showSettingsDialog = true;
+      },
+      onRefreshTree: refreshTree,
+      onValidateWorkspace: cmdValidateWorkspace,
+      onOpenBackupImport: handleQuickBackupExport,
+      onImportFromClipboard: handleImportFromClipboard,
+      onImportMarkdownFile: handleImportMarkdownFile,
+      pluginBlockCommands,
+      pluginBlockPickerItems,
+    }),
+  );
 
   // ========================================================================
   // Attachment Handlers - Thin wrappers that delegate to controllers
@@ -3808,19 +3901,181 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     attachmentInsertHandler(selection, editorRef, currentEntry);
   }
 
-  // Handle drag-drop: attach entry to new parent
-  async function handleMoveEntry(entryPath: string, newParentPath: string) {
+  // Handle drag-drop: attach entry to new parent (with optional position hint for reorder after reparent)
+  async function handleMoveEntry(
+    entryPath: string,
+    newParentPath: string,
+    position?: { beforePath?: string; afterPath?: string },
+  ) {
     if (!api) return;
     if (entryPath === newParentPath) return;
 
-    console.log(
-      `[Drag-Drop] entryPath="${entryPath}" -> newParentPath="${newParentPath}"`,
-    );
-
     try {
+      // Save state for undo: get old parent's contents before the move
+      const oldParentNode = tree ? findTreeParent(tree, entryPath) : null;
+      const oldParentPath = oldParentNode?.path ?? null;
+      let oldContents: unknown[] | null = null;
+      if (oldParentPath) {
+        const oldParentEntry = await api.getEntry(oldParentPath);
+        if (oldParentEntry && Array.isArray(oldParentEntry.frontmatter.contents)) {
+          oldContents = [...oldParentEntry.frontmatter.contents];
+        }
+      }
+
+      // attachEntryToParent handles leaf-to-index conversion internally
+      // (creates directory structure, moves the file, updates hierarchy metadata).
       await api.attachEntryToParent(entryPath, newParentPath);
+
+      // If a position hint was given, reorder within the new parent
+      if (position && (position.beforePath || position.afterPath)) {
+        const parentEntry = await api.getEntry(newParentPath);
+        if (parentEntry && Array.isArray(parentEntry.frontmatter.contents)) {
+          const contents = parentEntry.frontmatter.contents.map(String);
+          // Find the just-added entry in contents and move it to position
+          const entryCanonical = await api.canonicalizeLink(entryPath, newParentPath).catch(() => null);
+          let entryLinkIdx = -1;
+          for (let i = 0; i < contents.length; i++) {
+            const canonical = await api.canonicalizeLink(contents[i], newParentPath).catch(() => null);
+            if (canonical === entryCanonical || canonical === entryPath) {
+              entryLinkIdx = i;
+              break;
+            }
+          }
+          if (entryLinkIdx !== -1) {
+            const [entryLink] = contents.splice(entryLinkIdx, 1);
+            const anchorPath = position.beforePath || position.afterPath!;
+            let anchorIdx = -1;
+            for (let i = 0; i < contents.length; i++) {
+              const canonical = await api.canonicalizeLink(contents[i], newParentPath).catch(() => null);
+              if (canonical === anchorPath) {
+                anchorIdx = i;
+                break;
+              }
+            }
+            if (anchorIdx !== -1) {
+              const insertIdx = position.afterPath ? anchorIdx + 1 : anchorIdx;
+              contents.splice(insertIdx, 0, entryLink);
+              await api.setFrontmatterProperty(newParentPath, "contents", contents, tree?.path);
+            }
+          }
+        }
+      }
+
       await refreshTree();
       await runValidation();
+
+      // Show toast with undo
+      const entryName = entryPath.split("/").pop()?.replace(".md", "") ?? entryPath;
+      const parentName = newParentPath.split("/").pop()?.replace(".md", "") ?? newParentPath;
+      toast.success(`Moved "${entryName}" into "${parentName}"`, {
+        action: oldContents && oldParentPath ? {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              if (!api) return;
+              await api.attachEntryToParent(entryPath, oldParentPath);
+              await api.setFrontmatterProperty(oldParentPath, "contents", oldContents as JsonValue, tree?.path);
+              await refreshTree();
+              if (currentEntry?.path === oldParentPath || currentEntry?.path === newParentPath) {
+                const refreshed = await api.getEntry(currentEntry!.path);
+                if (refreshed) entryStore.setCurrentEntry(refreshed);
+              }
+            } catch {
+              toast.error("Failed to undo move");
+            }
+          },
+        } : undefined,
+      });
+
+      // Refresh current entry if it's the parent
+      if (currentEntry?.path === newParentPath || currentEntry?.path === oldParentPath) {
+        const refreshed = await api.getEntry(currentEntry!.path);
+        if (refreshed) entryStore.setCurrentEntry(refreshed);
+      }
+    } catch (e) {
+      uiStore.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Tree traversal helper for undo support
+  function findTreeParent(root: TreeNode, targetPath: string): TreeNode | null {
+    for (const child of root.children) {
+      if (child.path === targetPath) return root;
+      const found = findTreeParent(child, targetPath);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // Handle reorder of children within a parent (drag between siblings)
+  async function handleReorderChildren(parentPath: string, childPaths: string[]) {
+    if (!api) return;
+    try {
+      // Get the parent entry to access its current contents links
+      const parentEntry = await api.getEntry(parentPath);
+      if (!parentEntry) return;
+      const currentContents = parentEntry.frontmatter.contents;
+      if (!Array.isArray(currentContents)) return;
+
+      // Build a map from canonical path -> original link string
+      const linkByCanonical = new Map<string, string>();
+      for (const link of currentContents) {
+        const linkStr = String(link);
+        try {
+          const canonical = await api.canonicalizeLink(linkStr, parentPath);
+          linkByCanonical.set(canonical, linkStr);
+        } catch {
+          // If canonicalization fails, skip
+        }
+      }
+
+      // Reorder: build new contents array matching childPaths order
+      const newContents: string[] = [];
+      for (const childPath of childPaths) {
+        const originalLink = linkByCanonical.get(childPath);
+        if (originalLink) {
+          newContents.push(originalLink);
+        }
+      }
+      // Append any contents entries that weren't matched (safety)
+      for (const link of currentContents) {
+        if (!newContents.includes(String(link))) {
+          newContents.push(String(link));
+        }
+      }
+
+      // Save old contents for undo
+      const oldContents = currentContents.map(String);
+
+      await api.setFrontmatterProperty(parentPath, "contents", newContents, tree?.path);
+      await refreshTree();
+      // Refresh the current entry if it's the parent whose contents changed
+      if (currentEntry?.path === parentPath) {
+        const refreshed = await api.getEntry(parentPath);
+        if (refreshed) {
+          entryStore.setCurrentEntry(refreshed);
+        }
+      }
+
+      // Toast with undo
+      toast.success("Reordered entries", {
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              if (!api) return;
+              await api.setFrontmatterProperty(parentPath, "contents", oldContents, tree?.path);
+              await refreshTree();
+              if (currentEntry?.path === parentPath) {
+                const refreshed = await api.getEntry(parentPath);
+                if (refreshed) entryStore.setCurrentEntry(refreshed);
+              }
+            } catch {
+              toast.error("Failed to undo reorder");
+            }
+          },
+        },
+      });
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
     }
@@ -3948,6 +4203,32 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     }
   }
 
+  async function handlePropertyReorder(keys: string[]) {
+    if (!api || !currentEntry) return;
+    try {
+      await api.reorderFrontmatterKeys(currentEntry.path, keys);
+      // Refresh entry to get new order
+      const refreshed = await api.getEntry(currentEntry.path);
+      if (refreshed) {
+        entryStore.setCurrentEntry(refreshed);
+      }
+    } catch (e) {
+      uiStore.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function handleEntryRefreshRequest() {
+    if (!api || !currentEntry) return;
+    try {
+      const refreshed = await api.getEntry(currentEntry.path);
+      if (refreshed) {
+        entryStore.setCurrentEntry(refreshed);
+      }
+    } catch (e) {
+      uiStore.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   // Handle link clicks in the editor - delegates to controller
   async function handleLinkClick(href: string) {
     if (!api) return;
@@ -3974,28 +4255,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     bind:open={uiStore.showCommandPalette}
     swipeProgress={commandPaletteSwipeProgress}
     {api}
-    hasEntry={!!currentEntry}
-    hasEditor={!!editorRef}
-  onImportFromClipboard={handleImportFromClipboard}
-  onImportMarkdownFile={handleImportMarkdownFile}
-  onOpenBackupImport={handleQuickBackupExport}
-  onDuplicateEntry={cmdDuplicateEntry}
-  onRenameEntry={cmdRenameEntry}
-  onDeleteEntry={cmdDeleteEntry}
-  onMoveEntry={cmdMoveEntry}
-    onCreateChildEntry={cmdCreateChildEntry}
-    onRefreshTree={refreshTree}
-    onValidateWorkspace={cmdValidateWorkspace}
-    onOpenWorkspaceSettings={() => {
-      settingsInitialTab = "workspace";
-      showSettingsDialog = true;
-    }}
-    onFindInFile={() => { showFindBar = true; }}
-    onWordCount={cmdWordCount}
-  onCopyAsMarkdown={cmdCopyAsMarkdown}
-  onViewMarkdown={cmdViewMarkdown}
-  onReorderFootnotes={cmdReorderFootnotes}
-/>
+    {commandRegistry}
+  />
 
 <!-- In-app Prompt Dialog (replaces window.prompt) -->
 <Dialog.Root
@@ -4084,6 +4345,9 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     addWorkspaceBundle = null;
   }}
 />
+
+<!-- Device Replacement Dialog (shown when sign-in hits device limit) -->
+<DeviceReplacementDialog onAuthenticated={() => handleWelcomeComplete("", "")} />
 
 <!-- Delete Confirmation Dialog -->
 <Dialog.Root bind:open={showDeleteConfirm} onOpenChange={(open) => { if (!open) cancelDeleteEntry(); }}>
@@ -4292,6 +4556,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onOpenAccountSettings={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
     onAddWorkspace={() => { showAddWorkspace = true; }}
     onMoveEntry={handleMoveEntry}
+    onReorderChildren={handleReorderChildren}
+    onOpenMoveDialog={(path) => { moveEntryDialogPath = path; }}
     onCreateChildEntry={handleCreateChildEntry}
     onDeleteEntry={handleDeleteEntry}
     onDeleteEntries={handleDeleteEntries}
@@ -4476,6 +4742,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         onAttachmentInsert={handleAttachmentInsert}
         onFileDrop={handleEditorFileDrop}
         onLinkClick={handleLinkClick}
+        onPreviewMedia={handlePreviewAttachment}
       />
       <FindBar bind:open={showFindBar} {editorRef} />
       {#if loadingTargetPath}
@@ -4503,18 +4770,11 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         onRevealMobileFocusChrome={revealMobileFocusChromeTemporarily}
         {api}
         onPluginToolbarAction={handlePluginToolbarAction}
-        audience={currentEntry.frontmatter.audience as string[] | null ?? null}
-        entryPath={currentEntry.path}
-        rootPath={tree?.path ?? ""}
-        onAudienceChange={(value) => {
-          if (value === null) {
-            handlePropertyRemove("audience");
-          } else {
-            handlePropertyChange("audience", value);
-          }
-        }}
+        audienceTags={effectiveAudienceTags}
         onOpenAudienceManager={() => { showAudienceManager = true; }}
         onFabMount={(el) => { editorFabElement = el; }}
+        {commandRegistry}
+        hasEditor={!!editorRef}
       />
     {:else}
       <EditorEmptyState
@@ -4575,12 +4835,15 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onRequestedTabConsumed={() => (requestedSidebarTab = null)}
     onPluginHostAction={handlePluginHostAction}
     onOpenAudienceManager={() => { showAudienceManager = true; }}
+    onPropertyReorder={handlePropertyReorder}
+    onEntryRefreshRequest={handleEntryRefreshRequest}
   />
 
   {#if spotlightSteps}
     <SpotlightOverlay
       steps={spotlightSteps}
       onComplete={() => { spotlightSteps = null; }}
+      mobileTargetActions={mobileSpotlightActions}
     />
   {/if}
 </div>
@@ -4602,4 +4865,13 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   body={markdownPreviewBody}
   frontmatter={markdownPreviewFrontmatter}
   onOpenChange={(open) => (markdownPreviewOpen = open)}
+/>
+
+<MoveEntryDialog
+  open={!!moveEntryDialogPath}
+  entryPath={moveEntryDialogPath ?? ''}
+  {tree}
+  onMove={handleMoveEntry}
+  onReorderChildren={handleReorderChildren}
+  onClose={() => { moveEntryDialogPath = null; }}
 />

@@ -61,6 +61,16 @@ export function createContextMenuState<T = unknown>() {
   }
 
   /**
+   * Open the bottom sheet for a target item regardless of platform.
+   * Use this for explicit UI triggers like a "more" button.
+   */
+  function openBottomSheet(data: T) {
+    targetData = data;
+    bottomSheetOpen = true;
+    contextMenuOpen = false;
+  }
+
+  /**
    * Handle right-click or long-press event.
    * Call this from the oncontextmenu handler.
    */
@@ -107,6 +117,7 @@ export function createContextMenuState<T = unknown>() {
     },
 
     openMenu,
+    openBottomSheet,
     closeMenu,
     handleContextMenu,
   };

@@ -25,6 +25,7 @@ import {
 import {
   enqueueIncrementalAttachmentUpload,
 } from "@/controllers/attachmentController";
+import DOMPurify from "dompurify";
 
 // ============================================================================
 // Builtin extension registry — complex extensions registered by host ID
@@ -225,7 +226,7 @@ export function createExtensionFromManifest(
         tag,
         {
           [`data-${ext.extension_id}`]: "",
-          class: isInline ? "atom-inline" : "atom-block",
+          class: `${isInline ? "atom-inline" : "atom-block"} plugin-ext-${ext.extension_id}`,
         },
         HTMLAttributes.source || "",
       ];
@@ -254,8 +255,9 @@ export function createExtensionFromManifest(
       tokenize(src: string, _tokens: any[]) {
         if (isBlock && ext.markdown.single_line) {
           // Single-line block: match open...close on one line (no newlines between delimiters)
+          // Use .*? (not .+?) so empty-source blocks like ![drawing:) can round-trip.
           const re = new RegExp(
-            `^${openEsc}(.+?)${closeEsc}(?:\\n|$)`,
+            `^${openEsc}(.*?)${closeEsc}(?:\\n|$)`,
           );
           const match = re.exec(src);
           if (!match) return undefined;
@@ -267,7 +269,7 @@ export function createExtensionFromManifest(
         } else if (isBlock) {
           // Block: match $$\n...\n$$ or $$...$$ (with optional newlines)
           const re = new RegExp(
-            `^${openEsc}\\n?([\\s\\S]+?)\\n?${closeEsc}(?:\\n|$)`,
+            `^${openEsc}\\n?([\\s\\S]*?)\\n?${closeEsc}(?:\\n|$)`,
           );
           const match = re.exec(src);
           if (!match) return undefined;
@@ -461,7 +463,8 @@ export function createMarkFromManifest(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const merged: Record<string, any> = {};
       if (!hasAttrs) merged[`data-${ext.extension_id}`] = "";
-      if (classNames.length) merged.class = classNames.join(" ");
+      classNames.push(`plugin-ext-${ext.extension_id}`);
+      merged.class = classNames.join(" ");
 
       return [tag, mergeAttributes(HTMLAttributes, merged), 0];
     },
@@ -794,7 +797,9 @@ function injectCss(id: string, css: string) {
   injectedCss.add(id);
   const style = document.createElement("style");
   style.setAttribute("data-plugin-css", id);
-  style.textContent = css;
+  // Scope plugin CSS under a per-extension class so it cannot affect elements
+  // outside the plugin's own extension containers.
+  style.textContent = `.plugin-ext-${CSS.escape(id)} { ${css} }`;
   document.head.appendChild(style);
 }
 
@@ -1021,12 +1026,13 @@ function createIframeBlockView(ext: EditorExtensionManifest, context: EditorExte
     let waveformAnimId: number | null = null;
     let audioStream: MediaStream | null = null;
 
-    function updateSource(newSource: string) {
+    function updateSource(newSource: string): boolean {
       const pos = getPos();
-      if (typeof pos !== "number") return;
+      if (typeof pos !== "number") return false;
       editor.view.dispatch(
         editor.view.state.tr.setNodeMarkup(pos, null, { source: newSource }),
       );
+      return true;
     }
 
     // Header
@@ -1358,7 +1364,16 @@ function createIframeBlockView(ext: EditorExtensionManifest, context: EditorExte
       if (data.type === "save") {
         handleSave(data);
       } else if (data.type === "cancel") {
-        renderPreview(currentSource);
+        const { src } = parseDrawingSource(currentSource);
+        if (!src) {
+          // No attachment yet — remove the empty block entirely
+          const pos = getPos();
+          if (typeof pos === "number") {
+            editor.view.dispatch(editor.view.state.tr.delete(pos, pos + node.nodeSize));
+          }
+        } else {
+          renderPreview(currentSource);
+        }
       } else if (data.type === "start-recording" && hasAudioCapture) {
         startHostRecording();
       } else if (data.type === "stop-recording" && hasAudioCapture) {
@@ -1376,8 +1391,10 @@ function createIframeBlockView(ext: EditorExtensionManifest, context: EditorExte
       let filename: string;
       let mimeType: string;
 
-      const { src } = parseDrawingSource(currentSource);
-      const existingFilename = src ? src.split("/").pop() : null;
+      // Extract the block ID and existing attachment path from the source.
+      // Source format: "<id>](<path>" — the ID is the alt portion, path is the src.
+      const { alt: blockId, src: existingSrc } = parseDrawingSource(currentSource);
+      const existingFilename = existingSrc ? existingSrc.split("/").pop() : null;
 
       if (data.audio) {
         // Audio save path
@@ -1388,15 +1405,15 @@ function createIframeBlockView(ext: EditorExtensionManifest, context: EditorExte
         const ext = mimeType.includes("webm") ? ".webm" : mimeType.includes("mp3") ? ".mp3" : mimeType.includes("ogg") ? ".ogg" : ".webm";
         filename = (existingFilename && AUDIO_EXTS.includes(getFileExt(existingFilename)))
           ? existingFilename
-          : `audio-${Date.now().toString(36)}${ext}`;
+          : `audio-${blockId}${ext}`;
       } else {
-        // SVG/drawing save path (existing behavior)
+        // SVG/drawing save path
         const svgString = data.svg as string;
         uint8 = new TextEncoder().encode(svgString);
         mimeType = "image/svg+xml";
         filename = (existingFilename && existingFilename.endsWith(".svg"))
           ? existingFilename
-          : `drawing-${Date.now().toString(36)}.svg`;
+          : `drawing-${blockId}.svg`;
       }
 
       try {
@@ -1410,22 +1427,26 @@ function createIframeBlockView(ext: EditorExtensionManifest, context: EditorExte
           relative = attachmentPath;
         }
 
-        // Create blob URL for display
+        // Update node source IMMEDIATELY — before any further async work that
+        // could yield to the event loop. RegisterAttachment (inside uploadAttachment)
+        // saves the entry, which can trigger a reactive refresh that overwrites
+        // the editor content from disk if we wait too long.
+        const formattedPath = formatMarkdownDestination(relative);
+        const newSource = `${blockId}](${formattedPath}`;
+
+        editingIframe = false;
+        if (!updateSource(newSource)) {
+          currentSource = newSource;
+          renderPreview(newSource);
+        }
+
+        // Now do the non-critical async work (blob URL, sync upload)
         const displayBlob = new Blob([uint8 as BlobPart], { type: mimeType });
         const displayBlobUrl = URL.createObjectURL(displayBlob);
         trackBlobUrl(relative, displayBlobUrl);
 
-        // Enqueue sync upload
         const file = new File([uint8 as BlobPart], filename, { type: mimeType });
         await enqueueIncrementalAttachmentUpload(entryPath, canonical, file, new Uint8Array(uint8));
-
-        // Update node source: alt](path
-        const newAlt = data.alt || "";
-        const formattedPath = formatMarkdownDestination(relative);
-        updateSource(`${newAlt}](${formattedPath}`);
-
-        editingIframe = false;
-        cleanupIframe();
       } catch (e) {
         console.error("[IframeBlockView] Save failed:", e);
       }
@@ -1437,7 +1458,16 @@ function createIframeBlockView(ext: EditorExtensionManifest, context: EditorExte
     if (editor.isEditable) {
       editBtn.addEventListener("click", () => {
         if (editingIframe) {
-          renderPreview(currentSource);
+          const { src } = parseDrawingSource(currentSource);
+          if (!src) {
+            // No attachment — cancel removes the empty block
+            const pos = getPos();
+            if (typeof pos === "number") {
+              editor.view.dispatch(editor.view.state.tr.delete(pos, pos + node.nodeSize));
+            }
+          } else {
+            renderPreview(currentSource);
+          }
         } else {
           startEditing();
         }
@@ -1446,8 +1476,20 @@ function createIframeBlockView(ext: EditorExtensionManifest, context: EditorExte
       editBtn.style.display = "none";
     }
 
-    // Auto-open for new (empty source) drawings
-    if (!currentSource.trim() && editor.isEditable) {
+    // Blocks should always have an ID in proper embed format:
+    //   ![drawing:<id>]()     — empty block
+    //   ![drawing:<id>](path) — block with attachment
+    // The ID is generated at insertion time (BlockPickerNodeView).
+    // Fallback: if a block somehow has no ID (e.g. parsed from old markdown),
+    // assign one locally so handleSave can derive a filename from it.
+    if (!currentSource.includes("](")) {
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      currentSource = `${id}](`;
+    }
+    const { src: initialSrc } = parseDrawingSource(currentSource);
+
+    // Auto-open editor for blocks without an attachment
+    if (!initialSrc && editor.isEditable) {
       startEditing();
     } else {
       renderPreview(currentSource);
@@ -1478,7 +1520,7 @@ function createIframeBlockView(ext: EditorExtensionManifest, context: EditorExte
 function createInlineAtomView(ext: EditorExtensionManifest, renderFn: RenderFn): any {
   return ({ node, getPos, editor }: { node: any; getPos: () => number | undefined; editor: any }) => {
     const dom = document.createElement("span");
-    dom.classList.add("atom-inline-wrapper");
+    dom.classList.add("atom-inline-wrapper", `plugin-ext-${ext.extension_id}`);
     dom.style.display = "inline";
     dom.setAttribute("contenteditable", "false");
 
@@ -1515,7 +1557,7 @@ function createInlineAtomView(ext: EditorExtensionManifest, renderFn: RenderFn):
             const rendered = document.createElement("span");
             rendered.className = "atom-inline-rendered";
             rendered.title = source;
-            rendered.innerHTML = result.html;
+            rendered.innerHTML = DOMPurify.sanitize(result.html);
             dom.appendChild(rendered);
           } else {
             const err = document.createElement("code");
@@ -1612,7 +1654,7 @@ function createBlockAtomView(ext: EditorExtensionManifest, renderFn: RenderFn): 
 
   return ({ node, getPos, editor }: { node: any; getPos: () => number | undefined; editor: any }) => {
     const dom = document.createElement("div");
-    dom.className = "atom-block-container";
+    dom.className = `atom-block-container plugin-ext-${ext.extension_id}`;
     dom.setAttribute("contenteditable", "false");
 
     let currentSource = (node.attrs.source as string) || "";
@@ -1671,7 +1713,7 @@ function createBlockAtomView(ext: EditorExtensionManifest, renderFn: RenderFn): 
           if (sourceMode) return;
           content.textContent = "";
           if (result.html) {
-            content.innerHTML = result.html;
+            content.innerHTML = DOMPurify.sanitize(result.html);
           } else {
             const errDiv = document.createElement("div");
             errDiv.className = "atom-block-error";

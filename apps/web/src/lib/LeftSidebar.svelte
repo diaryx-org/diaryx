@@ -10,6 +10,7 @@
   import { toast } from "svelte-sonner";
 
   import * as ContextMenu from "$lib/components/ui/context-menu";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Popover from "$lib/components/ui/popover";
   import SignInPopover from "./SignInPopover.svelte";
   import MobileActionSheet from "../views/sidebar/MobileActionSheet.svelte";
@@ -80,7 +81,8 @@
     marketplaceDialogOpen?: boolean;
     onOpenAccountSettings: () => void;
     onAddWorkspace: () => void;
-    onMoveEntry: (fromPath: string, toParentPath: string) => void;
+    onMoveEntry: (fromPath: string, toParentPath: string, position?: { beforePath?: string; afterPath?: string }) => void;
+    onOpenMoveDialog?: (path: string) => void;
     onCreateChildEntry: (parentPath: string) => void;
     onDeleteEntry: (path: string) => void;
     onDeleteEntries?: (paths: string[]) => void;
@@ -89,6 +91,7 @@
     onImportMarkdownFile?: () => void;
     onAddAttachment: (entryPath: string) => void;
     onMoveAttachment?: (sourceEntryPath: string, targetEntryPath: string, attachmentPath: string) => void;
+    onReorderChildren?: (parentPath: string, childPaths: string[]) => void;
     onRemoveBrokenPartOf?: (filePath: string) => void;
     onRemoveBrokenContentsRef?: (indexPath: string, target: string) => void;
     onAttachUnlinkedEntry?: (entryPath: string) => void;
@@ -133,6 +136,7 @@
     onOpenAccountSettings,
     onAddWorkspace,
     onMoveEntry,
+    onOpenMoveDialog,
     onCreateChildEntry,
     onDeleteEntry,
     onDeleteEntries,
@@ -141,6 +145,7 @@
     onImportMarkdownFile,
     onAddAttachment: _onAddAttachment,
     onMoveAttachment,
+    onReorderChildren,
     onRemoveBrokenPartOf,
     onRemoveBrokenContentsRef,
     onAttachUnlinkedEntry,
@@ -721,43 +726,11 @@
   }
 
   // =========================================================================
-  // Move To Picker State
+  // Move To Handler
   // =========================================================================
 
-  let showMovePicker = $state(false);
-  let moveTargetPath = $state<string | null>(null);
-  let moveAvailableParents = $state<string[]>([]);
-  let isLoadingMoveParents = $state(false);
-
-  // Open move picker for an entry
-  async function handleMoveToClick(path: string) {
-    if (!api || !tree) return;
-
-    moveTargetPath = path;
-    isLoadingMoveParents = true;
-    try {
-      moveAvailableParents = await api.getAvailableParentIndexes(path, tree.path);
-      showMovePicker = true;
-    } catch (e) {
-      toast.error('Failed to load available parents');
-    } finally {
-      isLoadingMoveParents = false;
-    }
-  }
-
-  // Select a parent to move to
-  async function handleMoveToParent(parentPath: string) {
-    if (!moveTargetPath) return;
-
-    onMoveEntry(moveTargetPath, parentPath);
-    closeMovePicker();
-  }
-
-  // Close move picker
-  function closeMovePicker() {
-    showMovePicker = false;
-    moveTargetPath = null;
-    moveAvailableParents = [];
+  function handleMoveToClick(path: string) {
+    onOpenMoveDialog?.(path);
   }
 
   // =========================================================================
@@ -1085,6 +1058,28 @@
   // Drag state
   let draggedPath: string | null = $state(null);
   let dropTargetPath: string | null = $state(null);
+  let dropPosition: 'above' | 'below' | 'on' | null = $state(null);
+
+
+  // Find the parent TreeNode for a given path by traversing the tree
+  function findParentNode(root: TreeNode, targetPath: string): TreeNode | null {
+    for (const child of root.children) {
+      if (child.path === targetPath) return root;
+      const found = findParentNode(child, targetPath);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // Find a TreeNode by path
+  function findNodeByPath(root: TreeNode, targetPath: string): TreeNode | null {
+    if (root.path === targetPath) return root;
+    for (const child of root.children) {
+      const found = findNodeByPath(child, targetPath);
+      if (found) return found;
+    }
+    return null;
+  }
 
   function isMultiSelectGesture(event: MouseEvent): boolean {
     return !mobileState.isMobile && !mobileState.isTouchDevice && (event.metaKey || event.ctrlKey);
@@ -1194,6 +1189,30 @@
         e.dataTransfer.dropEffect = "move";
       }
       dropTargetPath = path;
+
+      if (tree && draggedPath !== path) {
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const relY = (e.clientY - rect.top) / rect.height;
+        const targetNode = findNodeByPath(tree, path);
+        const isFolder = targetNode != null && (targetNode.children.length > 0 || targetNode.is_index);
+        const altHeld = e.altKey || e.metaKey;
+
+        if (isFolder || altHeld) {
+          // Three-zone: top 25% = above, middle 50% = on (reparent), bottom 25% = below
+          if (relY < 0.25) {
+            dropPosition = 'above';
+          } else if (relY > 0.75) {
+            dropPosition = 'below';
+          } else {
+            dropPosition = 'on';
+          }
+        } else {
+          // Leaf node without modifier: two-zone reorder only
+          dropPosition = relY < 0.5 ? 'above' : 'below';
+        }
+      } else {
+        dropPosition = null;
+      }
       return;
     }
 
@@ -1202,6 +1221,7 @@
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
       dropTargetPath = path;
+      dropPosition = 'on';
       return;
     }
 
@@ -1210,22 +1230,59 @@
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
       dropTargetPath = path;
+      dropPosition = 'on';
     }
   }
 
   function handleDragLeave() {
     dropTargetPath = null;
+    dropPosition = null;
   }
 
   function handleDrop(e: DragEvent, targetPath: string) {
     e.preventDefault();
     e.stopPropagation(); // Prevent bubbling to parent tree nodes
 
-    // Handle entry move
+    // Handle entry drag
     if (draggedPath && draggedPath !== targetPath) {
-      onMoveEntry(draggedPath, targetPath);
+      if (dropPosition === 'above' || dropPosition === 'below') {
+        // Reorder: find common parent and reorder children
+        if (tree) {
+          const targetParent = findParentNode(tree, targetPath);
+          if (targetParent) {
+            // Check if dragged node is also a child of this parent
+            const draggedParent = findParentNode(tree, draggedPath);
+            if (draggedParent && draggedParent.path === targetParent.path) {
+              // Same parent — reorder within
+              const children = getRenderableChildren(draggedParent);
+              const childPaths = children.map(c => c.path);
+              const fromIndex = childPaths.indexOf(draggedPath);
+              const toIndex = childPaths.indexOf(targetPath);
+              if (fromIndex !== -1 && toIndex !== -1 && fromIndex !== toIndex) {
+                childPaths.splice(fromIndex, 1);
+                const insertIndex = dropPosition === 'below'
+                  ? childPaths.indexOf(targetPath) + 1
+                  : childPaths.indexOf(targetPath);
+                childPaths.splice(insertIndex, 0, draggedPath);
+                onReorderChildren?.(draggedParent.path, childPaths);
+              }
+            } else {
+              // Different parent — reparent then reorder to position
+              onMoveEntry(draggedPath, targetParent.path, {
+                beforePath: dropPosition === 'above' ? targetPath : undefined,
+                afterPath: dropPosition === 'below' ? targetPath : undefined,
+              });
+            }
+          }
+        }
+      } else if (dropPosition === 'on') {
+        // Reparent: move entry into target
+        onMoveEntry(draggedPath, targetPath);
+      }
+
       draggedPath = null;
       dropTargetPath = null;
+      dropPosition = null;
       return;
     }
 
@@ -1241,11 +1298,13 @@
 
     draggedPath = null;
     dropTargetPath = null;
+    dropPosition = null;
   }
 
   function handleDragEnd() {
     draggedPath = null;
     dropTargetPath = null;
+    dropPosition = null;
   }
 
   // Get the file path associated with an error (for filtering)
@@ -1883,69 +1942,15 @@
   </div>
 {/if}
 
-<!-- Move To Picker Dialog -->
-{#if showMovePicker}
-  <div
-    class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="move-picker-title"
-    onclick={closeMovePicker}
-    onkeydown={(e) => e.key === 'Escape' && closeMovePicker()}
-    tabindex={-1}
-  >
-    <div
-      class="bg-background rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col"
-      role="presentation"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <div class="flex items-center justify-between p-4 border-b">
-        <h2 id="move-picker-title" class="text-lg font-semibold">Move to</h2>
-        <Button variant="ghost" size="sm" onclick={closeMovePicker}>
-          <X class="size-4" />
-        </Button>
-      </div>
-      <div class="p-4 overflow-y-auto flex-1">
-        {#if isLoadingMoveParents}
-          <div class="flex items-center justify-center py-4">
-            <Loader2 class="size-6 animate-spin text-muted-foreground" />
-          </div>
-        {:else if moveAvailableParents.length === 0}
-          <p class="text-muted-foreground text-sm">No available destinations found.</p>
-        {:else}
-          <p class="text-sm text-muted-foreground mb-3">
-            Select a new parent for this entry:
-          </p>
-          <div class="space-y-2">
-            {#each moveAvailableParents as parentPath}
-              <Button
-                variant="outline"
-                class="w-full justify-start text-left h-auto py-2"
-                onclick={() => handleMoveToParent(parentPath)}
-              >
-                <div class="flex flex-col items-start gap-0.5 overflow-hidden">
-                  <span class="font-medium truncate w-full">{getFileName(parentPath)}</span>
-                  <span class="text-xs text-muted-foreground truncate w-full">{parentPath}</span>
-                </div>
-              </Button>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    </div>
-  </div>
-{/if}
-
 {#snippet treeNode(node: TreeNode, depth: number)}
   <ContextMenu.Root>
     <ContextMenu.Trigger disabled={contextMenuState.useBottomSheet || !!contextMenuOwner}>
       <div
-        class="select-none"
+        class="select-none {draggedPath === node.path ? 'opacity-50' : ''}"
         role="treeitem"
         tabindex={0}
         aria-selected={selectedEntryPaths.has(node.path)}
-        aria-expanded={node.children.length > 0
+        aria-expanded={node.children.length > 0 || node.is_index
           ? expandedNodes.has(node.path)
           : undefined}
         aria-level={depth + 1}
@@ -1956,27 +1961,31 @@
           handleContextTarget(node.path);
           if (contextMenuOwner) {
             e.preventDefault();
-            openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+            openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 || node.is_index });
           } else if (contextMenuState.useBottomSheet) {
             e.preventDefault();
-            contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+            contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 || node.is_index });
           }
         }}
       >
         <div
           class="group flex items-center gap-1 rounded-md hover:bg-sidebar-accent transition-colors
-            {dropTargetPath === node.path
+            {dropTargetPath === node.path && dropPosition === 'on'
             ? 'bg-primary/20 ring-2 ring-primary'
-            : isNodeActive(node.path)
-              ? 'bg-sidebar-accent'
-              : ''}"
+            : dropTargetPath === node.path && dropPosition === 'above'
+              ? 'border-t-2 border-primary'
+              : dropTargetPath === node.path && dropPosition === 'below'
+                ? 'border-b-2 border-primary'
+                : isNodeActive(node.path)
+                  ? 'bg-sidebar-accent'
+                  : ''}"
           style="padding-left: {depth * 12}px;{isNodeActive(node.path) ? ' border-left: 3px solid var(--sidebar-primary); padding-left: ' + (depth * 12 - 3) + 'px;' : ''}"
           role="presentation"
           ondragover={(e) => handleDragOver(e, node.path)}
           ondragleave={handleDragLeave}
           ondrop={(e) => handleDrop(e, node.path)}
         >
-          {#if node.children.length > 0}
+          {#if node.children.length > 0 || node.is_index}
             <button
               type="button"
               class="p-1 rounded-sm hover:bg-sidebar-accent active:bg-sidebar-accent transition-colors"
@@ -1992,7 +2001,9 @@
                 <Loader2 class="size-5 md:size-4 text-muted-foreground animate-spin" />
               {:else}
                 <ChevronRight
-                  class="size-5 md:size-4 text-muted-foreground transition-transform duration-200 {expandedNodes.has(
+                  class="size-5 md:size-4 transition-transform duration-200 {node.children.length === 0
+                    ? 'text-muted-foreground/40'
+                    : 'text-muted-foreground'} {expandedNodes.has(
                     node.path,
                   )
                     ? 'rotate-90'
@@ -2011,7 +2022,7 @@
             onpointerdown={(e) => { if (e.button === 2) e.preventDefault(); }}
             onclick={(event) => handleEntryClick(node.path, event)}
           >
-            {#if node.children.length > 0}
+            {#if node.children.length > 0 || node.is_index}
               <Folder class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
             {:else}
               <FileText class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
@@ -2190,28 +2201,122 @@
             {/if}
           </button>
 
-          <!-- Mobile "more" button - visible tap target for context menu -->
-          {#if mobileState.isMobile || mobileState.isTouchDevice}
+          <!-- "more" button - mobile: opens bottom sheet, desktop: opens dropdown menu -->
+          {#if contextMenuState.useBottomSheet || !!contextMenuOwner}
             <button
               type="button"
-              class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors shrink-0"
+              class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-all shrink-0"
               onclick={(e) => {
                 e.stopPropagation();
                 handleContextTarget(node.path);
                 if (contextMenuOwner) {
-                  openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+                  openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 || node.is_index });
                 } else {
-                  contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+                  contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 || node.is_index });
                 }
               }}
               aria-label="More actions"
             >
               <MoreVertical class="size-4 text-muted-foreground" />
             </button>
+          {:else}
+            {@const isMultiSelected = selectedEntryPaths.size > 1 && selectedEntryPaths.has(node.path)}
+            {@const deleteTargets = getDeleteTargets(node.path)}
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                onclick={(e: MouseEvent) => e.stopPropagation()}
+                class="p-1 flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-all shrink-0 opacity-0 group-hover:opacity-100"
+                aria-label="More actions"
+              >
+                <MoreVertical class="size-4 text-muted-foreground" />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content align="start" class="w-56">
+                {#if isMultiSelected}
+                  <DropdownMenu.Item
+                    variant="destructive"
+                    onclick={() => handleDeleteSelection(node.path)}
+                  >
+                    <Trash2 class="size-4 mr-2" />
+                    Delete Selected ({deleteTargets.length})
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator />
+                  <DropdownMenu.Item onclick={clearMultiSelection}>
+                    <X class="size-4 mr-2" />
+                    Deselect
+                  </DropdownMenu.Item>
+                {:else}
+                  <DropdownMenu.Item onclick={() => onCreateChildEntry(node.path)}>
+                    <Plus class="size-4 mr-2" />
+                    New Entry Here
+                  </DropdownMenu.Item>
+                  {#if onRenameEntry}
+                    <DropdownMenu.Item onclick={() => handleRenameClick(node.path, node.name)}>
+                      <Pencil class="size-4 mr-2" />
+                      Rename
+                    </DropdownMenu.Item>
+                  {/if}
+                  {#if onDuplicateEntry}
+                    <DropdownMenu.Item onclick={() => handleDuplicate(node.path)}>
+                      <Copy class="size-4 mr-2" />
+                      Duplicate
+                    </DropdownMenu.Item>
+                  {/if}
+                  {#if api}
+                    <DropdownMenu.Item onclick={() => handleMoveToClick(node.path)}>
+                      <FolderInput class="size-4 mr-2" />
+                      Move to...
+                    </DropdownMenu.Item>
+                  {/if}
+                  {#if canRevealInFileManager}
+                    <DropdownMenu.Item onclick={() => handleRevealInFileManager(node.path)}>
+                      <FolderOpen class="size-4 mr-2" />
+                      {revealInFileManagerLabel}
+                    </DropdownMenu.Item>
+                  {/if}
+                  {#if onSetAudience}
+                    <DropdownMenu.Item onclick={() => onSetAudience(node.path)}>
+                      <CircleUser class="size-4 mr-2" />
+                      Set Audience...
+                    </DropdownMenu.Item>
+                  {/if}
+                  <DropdownMenu.Separator />
+                  <DropdownMenu.Item onclick={() => onExport(node.path)}>
+                    <Download class="size-4 mr-2" />
+                    Export...
+                  </DropdownMenu.Item>
+                  {#if onValidate}
+                    <DropdownMenu.Item onclick={() => onValidate(node.path)}>
+                      <SearchCheck class="size-4 mr-2" />
+                      Validate
+                    </DropdownMenu.Item>
+                  {/if}
+                  {#if onImportMarkdownFile}
+                    <DropdownMenu.Item onclick={() => onImportMarkdownFile()}>
+                      <FolderInput class="size-4 mr-2" />
+                      Import Markdown File
+                    </DropdownMenu.Item>
+                  {/if}
+                  {#if onOpenBackupImport}
+                    <DropdownMenu.Item onclick={() => onOpenBackupImport()}>
+                      <Settings class="size-4 mr-2" />
+                      Download Backup ZIP
+                    </DropdownMenu.Item>
+                  {/if}
+                  <DropdownMenu.Separator />
+                  <DropdownMenu.Item
+                    variant="destructive"
+                    onclick={() => handleDeleteSelection(node.path)}
+                  >
+                    <Trash2 class="size-4 mr-2" />
+                    Delete
+                  </DropdownMenu.Item>
+                {/if}
+              </DropdownMenu.Content>
+            </DropdownMenu.Root>
           {/if}
         </div>
 
-        {#if node.children.length > 0 && expandedNodes.has(node.path)}
+        {#if (node.children.length > 0 || node.is_index) && expandedNodes.has(node.path)}
           <div class="mt-0.5" role="group">
             {#each getRenderableChildren(node) as child (child.path)}
               {@render treeNode(child, depth + 1)}

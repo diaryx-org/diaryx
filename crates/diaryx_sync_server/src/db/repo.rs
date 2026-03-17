@@ -523,24 +523,61 @@ impl AuthRepo {
 
     /// Verify and consume a magic token (returns email if valid)
     pub fn verify_magic_token(&self, token: &str) -> Result<Option<String>, rusqlite::Error> {
+        let email = self.peek_magic_token(token)?;
+        if email.is_some() {
+            self.consume_magic_token(token)?;
+        }
+        Ok(email)
+    }
+
+    /// Check whether a magic-link token is valid without consuming it.
+    pub fn peek_magic_token(&self, token: &str) -> Result<Option<String>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().timestamp();
 
-        // Get token if valid and not used
-        let result: Option<String> = conn
+        conn.query_row(
+            "SELECT email FROM magic_tokens WHERE token = ? AND used = 0 AND expires_at > ?",
+            params![token, now],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    /// Check whether a magic code is valid without consuming it. Returns the email on success.
+    pub fn peek_magic_code(
+        &self,
+        code: &str,
+        email: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+
+        let found: Option<String> = conn
             .query_row(
-                "SELECT email FROM magic_tokens WHERE token = ? AND used = 0 AND expires_at > ?",
-                params![token, now],
+                "SELECT token FROM magic_tokens WHERE code = ? AND email = ? AND used = 0 AND expires_at > ?",
+                params![code, email, now],
                 |row| row.get(0),
             )
             .optional()?;
 
-        if result.is_some() {
-            // Mark token as used
-            conn.execute("UPDATE magic_tokens SET used = 1 WHERE token = ?", [token])?;
-        }
+        Ok(found.map(|_| email.to_string()))
+    }
 
-        Ok(result)
+    /// Mark a magic-link token (and its associated code) as consumed.
+    pub fn consume_magic_token(&self, token: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE magic_tokens SET used = 1 WHERE token = ?", [token])?;
+        Ok(())
+    }
+
+    /// Mark a magic code as consumed (by code + email lookup).
+    pub fn consume_magic_code(&self, code: &str, email: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE magic_tokens SET used = 1 WHERE code = ? AND email = ?",
+            params![code, email],
+        )?;
+        Ok(())
     }
 
     /// Verify and consume a magic code (returns email if valid).
@@ -847,6 +884,39 @@ impl AuthRepo {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE users SET workspace_limit = ? WHERE id = ?",
+            params![limit.map(|v| v as i64), user_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get effective device limit for a user (per-user override wins, else tier default).
+    pub fn get_effective_device_limit(&self, user_id: &str) -> Result<u32, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(String, Option<i64>)> = conn
+            .query_row(
+                "SELECT tier, device_limit FROM users WHERE id = ?",
+                [user_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((_tier_str, Some(limit))) => Ok(limit as u32),
+            Some((tier_str, None)) => {
+                Ok(UserTier::from_str_lossy(&tier_str).defaults().device_limit)
+            }
+            None => Ok(UserTier::Free.defaults().device_limit),
+        }
+    }
+
+    /// Set an explicit per-user device limit override. Pass `None` to reset to tier default.
+    pub fn set_user_device_limit(
+        &self,
+        user_id: &str,
+        limit: Option<u32>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET device_limit = ? WHERE id = ?",
             params![limit.map(|v| v as i64), user_id],
         )?;
         Ok(())

@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * EditorFooter - Bottom bar for the editor with audience pill, save state, and actions
+   * EditorFooter - Bottom bar for the editor with save state, actions, and audience dots
    *
    * Mobile: renders a FAB (floating action button) that opens a Drawer bottom sheet.
    * Desktop: renders the traditional footer bar (unchanged).
@@ -10,9 +10,9 @@
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Kbd from "$lib/components/ui/kbd";
   import * as Drawer from "$lib/components/ui/drawer";
+  import * as Popover from "$lib/components/ui/popover";
   import type { Api } from "$lib/backend/api";
   import PluginStatusItems from "$lib/components/PluginStatusItems.svelte";
-  import DocumentAudiencePill from "$lib/components/DocumentAudiencePill.svelte";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { maybeStartWindowDrag } from "$lib/windowDrag";
   import {
@@ -23,10 +23,14 @@
     ChevronUp,
     Sparkles,
     Plug,
-    Users,
     Save,
+    Ellipsis,
   } from "@lucide/svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
+  import { getAudienceColor } from "$lib/utils/audienceDotColor";
+  import { getFavoritesStore } from "$lib/stores/favoritesStore.svelte";
+  import type { CommandDefinition } from "$lib/commandRegistry";
 
   const mobileState = getMobileState();
 
@@ -46,14 +50,15 @@
     api?: Api | null;
     /** Plugin toolbar button clicked */
     onPluginToolbarAction?: (pluginId: string, command: string) => void;
-    /** Audience pill props */
-    audience: string[] | null;
-    entryPath: string;
-    rootPath: string;
-    onAudienceChange: (value: string[] | null) => void;
+    /** Resolved effective audience tags for the current entry */
+    audienceTags?: string[];
     onOpenAudienceManager?: () => void;
     /** Callback to expose the FAB element to the parent (for swipe gesture targeting) */
     onFabMount?: (el: HTMLElement | null) => void;
+    /** Command registry for favorites toolbar */
+    commandRegistry?: Map<string, CommandDefinition>;
+    /** Whether the editor is loaded (insert commands need it) */
+    hasEditor?: boolean;
   }
 
   let {
@@ -70,15 +75,36 @@
     onRevealMobileFocusChrome,
     api = null,
     onPluginToolbarAction,
-    audience,
-    entryPath,
-    rootPath,
-    onAudienceChange,
+    audienceTags = [],
     onOpenAudienceManager,
     onFabMount,
+    commandRegistry,
+    hasEditor = false,
   }: Props = $props();
 
   const pluginStore = getPluginStore();
+  const colorStore = getAudienceColorStore();
+  const favoritesStore = getFavoritesStore();
+
+  const MAX_VISIBLE_FAVORITES = 5;
+
+  const favoriteCommands = $derived(
+    hasEditor && commandRegistry
+      ? favoritesStore.ids
+          .map((id) => commandRegistry.get(id))
+          .filter((cmd): cmd is CommandDefinition => !!cmd && cmd.available())
+      : [],
+  );
+
+  const visibleFavorites = $derived(
+    favoriteCommands.slice(0, MAX_VISIBLE_FAVORITES),
+  );
+
+  const overflowFavorites = $derived(
+    favoriteCommands.slice(MAX_VISIBLE_FAVORITES),
+  );
+
+  let overflowOpen = $state(false);
 
   const iconMap: Record<string, typeof Sparkles> = {
     sparkles: Sparkles,
@@ -218,6 +244,19 @@
             </button>
           {/if}
 
+          <!-- Favorites -->
+          {#each favoriteCommands as cmd (cmd.id)}
+            {@const FavIcon = cmd.icon}
+            <button
+              type="button"
+              class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left"
+              onclick={() => handleDrawerAction(cmd.execute)}
+            >
+              <FavIcon class="size-5 text-muted-foreground" />
+              <span class="text-base">{cmd.label}</span>
+            </button>
+          {/each}
+
           <!-- Search Commands -->
           <button
             type="button"
@@ -268,17 +307,28 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="flex items-center justify-between w-full" onmousedown={maybeStartWindowDrag}>
-      <!-- Left side: audience pill -->
+      <!-- Left side: audience dots -->
       <div class="flex items-center gap-2 min-w-0 flex-1">
-        <div class="min-w-0 flex-1">
-          <DocumentAudiencePill
-            {audience}
-            {entryPath}
-            {rootPath}
-            {api}
-            onChange={onAudienceChange}
-          />
-        </div>
+        {#if audienceTags.length > 0 && onOpenAudienceManager}
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                class="flex items-center gap-1 shrink-0 p-1 rounded hover:bg-accent transition-colors"
+                onclick={onOpenAudienceManager}
+                aria-label="Manage audiences"
+              >
+                {#each audienceTags as tag}
+                  <span
+                    class="size-2 rounded-full {getAudienceColor(tag, colorStore.audienceColors)}"
+                    title={tag}
+                  ></span>
+                {/each}
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>{audienceTags.join(", ")}</Tooltip.Content>
+          </Tooltip.Root>
+        {/if}
       </div>
 
       <!-- Right side: actions -->
@@ -331,6 +381,61 @@
               {/if}
             </Tooltip.Content>
           </Tooltip.Root>
+        {/if}
+
+        <!-- Favorite command buttons -->
+        {#each visibleFavorites as cmd (cmd.id)}
+          {@const FavIcon = cmd.icon}
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <Button
+                variant="ghost"
+                size="icon"
+                onclick={(event: MouseEvent) => { blurEventTarget(event.currentTarget); cmd.execute(); }}
+                class="size-8"
+                aria-label={cmd.label}
+              >
+                <FavIcon class="size-4" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>{cmd.label}</Tooltip.Content>
+          </Tooltip.Root>
+        {/each}
+
+        <!-- Overflow favorites popover -->
+        {#if overflowFavorites.length > 0}
+          <Popover.Root bind:open={overflowOpen}>
+            <Popover.Trigger>
+              <Tooltip.Root>
+                <Tooltip.Trigger>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="size-8"
+                    aria-label="More favorites"
+                  >
+                    <Ellipsis class="size-4" />
+                  </Button>
+                </Tooltip.Trigger>
+                {#if !overflowOpen}
+                  <Tooltip.Content>More favorites</Tooltip.Content>
+                {/if}
+              </Tooltip.Root>
+            </Popover.Trigger>
+            <Popover.Content side="top" class="w-48 p-1">
+              {#each overflowFavorites as cmd (cmd.id)}
+                {@const OverflowIcon = cmd.icon}
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent transition-colors text-left"
+                  onclick={() => { overflowOpen = false; cmd.execute(); }}
+                >
+                  <OverflowIcon class="size-4 text-muted-foreground" />
+                  <span>{cmd.label}</span>
+                </button>
+              {/each}
+            </Popover.Content>
+          </Popover.Root>
         {/if}
 
         <!-- Plugin toolbar buttons -->
@@ -386,24 +491,6 @@
             </Tooltip.Content>
           {/if}
         </Tooltip.Root>
-
-        <!-- Manage audiences button -->
-        {#if onOpenAudienceManager}
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              <Button
-                variant="ghost"
-                size="icon"
-                onclick={onOpenAudienceManager}
-                class="size-8"
-                aria-label="Manage audiences"
-              >
-                <Users class="size-4" />
-              </Button>
-            </Tooltip.Trigger>
-            <Tooltip.Content>Manage audiences</Tooltip.Content>
-          </Tooltip.Root>
-        {/if}
       </div>
     </div>
   </footer>

@@ -111,11 +111,19 @@ export interface PasskeyListItem {
   last_used_at: number | null;
 }
 
+export interface DeviceLimitDevice {
+  id: string;
+  name: string | null;
+  last_seen_at: string;
+}
+
 export class AuthError extends Error {
   constructor(
     message: string,
     public statusCode: number,
     public details?: unknown,
+    /** Present when statusCode === 403 and the error is a device limit error. */
+    public devices?: DeviceLimitDevice[],
   ) {
     super(message);
     this.name = "AuthError";
@@ -271,11 +279,15 @@ export class AuthService {
   async verifyMagicLink(
     token: string,
     deviceName?: string,
+    replaceDeviceId?: string,
   ): Promise<VerifyResponse> {
     const url = new URL(`${this.serverUrl}/auth/verify`);
     url.searchParams.set("token", token);
     if (deviceName) {
       url.searchParams.set("device_name", deviceName);
+    }
+    if (replaceDeviceId) {
+      url.searchParams.set("replace_device_id", replaceDeviceId);
     }
 
     const response = await proxyFetch(url.toString());
@@ -285,6 +297,8 @@ export class AuthService {
       throw new AuthError(
         data.error || "Failed to verify magic link",
         response.status,
+        undefined,
+        data.devices,
       );
     }
 
@@ -298,6 +312,7 @@ export class AuthService {
     code: string,
     email: string,
     deviceName?: string,
+    replaceDeviceId?: string,
   ): Promise<VerifyResponse> {
     const response = await proxyFetch(`${this.serverUrl}/auth/verify-code`, {
       method: "POST",
@@ -308,6 +323,7 @@ export class AuthService {
         code,
         email,
         device_name: deviceName,
+        replace_device_id: replaceDeviceId,
       }),
     });
 
@@ -317,6 +333,8 @@ export class AuthService {
       throw new AuthError(
         data.error || "Failed to verify code",
         response.status,
+        undefined,
+        data.devices,
       );
     }
 
@@ -1018,6 +1036,7 @@ export class AuthService {
     challengeId: string,
     credential: any,
     deviceName?: string,
+    replaceDeviceId?: string,
   ): Promise<VerifyResponse> {
     const response = await proxyFetch(
       `${this.serverUrl}/auth/passkeys/authenticate/finish`,
@@ -1028,6 +1047,7 @@ export class AuthService {
           challenge_id: challengeId,
           credential,
           device_name: deviceName,
+          replace_device_id: replaceDeviceId,
         }),
       },
     );
@@ -1036,6 +1056,8 @@ export class AuthService {
       throw new AuthError(
         data.error || "Failed to authenticate with passkey",
         response.status,
+        undefined,
+        data.devices,
       );
     }
     return response.json();

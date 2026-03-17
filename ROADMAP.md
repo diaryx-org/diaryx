@@ -62,3 +62,12 @@ part_of: "[README](/README.md)"
 - Different UI chrome. The only webview needed is for the TipTap editor—everything else could theoretically use a different UI. Possibly test with a Tauri plugin to turn sidebars into SwiftUI, similar to the mobile toolbar plugin.
 - Persistent identifier support for qualified files (ARK). Useful for academia/family history.
 - Integration with FamilySearch API for family history records—import/export
+- Per-audience workspace settings
+- diaryx_sync_server takes plugins and handles only server compute primitives, auth, and billing (sync logic owned entirely by sync plugin, publish logic owned entirely by publish plugin, etc.)
+
+## Possible Marketing Angles
+
+- AI-native journaling
+- CMS (compete with Substack, Wordpress, Ghost)
+- B2B (group announcements for organizations)
+- Super customization--by workspace, by audience?

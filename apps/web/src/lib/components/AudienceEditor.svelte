@@ -14,7 +14,7 @@
     entryPath: string;
     rootPath: string;
     api: Api | null;
-    onChange: (value: string[] | null) => void;
+    onChange: (value: string[] | null) => void | Promise<void>;
     onOpenManager?: () => void;
   }
 
@@ -113,7 +113,7 @@
       ),
   );
 
-  function addTag(tag: string) {
+  async function addTag(tag: string) {
     const trimmed = tag.trim();
     if (!trimmed) return;
 
@@ -123,9 +123,9 @@
 
     if (audience === null) {
       // First tag on an inheriting entry — start explicit with just this tag
-      onChange([trimmed]);
+      await onChange([trimmed]);
     } else {
-      onChange([...audience, trimmed]);
+      await onChange([...audience, trimmed]);
     }
     if (isNew) templateContextStore.bumpAudiencesVersion();
     open = false;

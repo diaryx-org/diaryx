@@ -263,4 +263,31 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         Ok(Response::Ok)
     }
+
+    pub(crate) async fn cmd_reorder_frontmatter_keys(
+        &self,
+        path: String,
+        keys: Vec<String>,
+    ) -> Result<Response> {
+        self.entry().reorder_frontmatter_keys(&path, &keys).await?;
+        Ok(Response::Ok)
+    }
+
+    pub(crate) async fn cmd_move_frontmatter_section_to_file(
+        &self,
+        source_path: String,
+        section_key: String,
+        target_path: String,
+        create_if_missing: bool,
+    ) -> Result<Response> {
+        self.entry()
+            .move_frontmatter_section_to_file(
+                &source_path,
+                &section_key,
+                &target_path,
+                create_if_missing,
+            )
+            .await?;
+        Ok(Response::Ok)
+    }
 }

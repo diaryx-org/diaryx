@@ -115,14 +115,24 @@ impl MagicLinkService {
         user_agent: Option<&str>,
         replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, MagicLinkError> {
-        // Verify and consume the magic token
+        // Validate the token without consuming it — consumption happens only
+        // after the session is successfully created, so the token stays valid
+        // if the caller needs to retry (e.g. after choosing a device to replace).
         let email = self
             .repo
-            .verify_magic_token(token)
+            .peek_magic_token(token)
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?
             .ok_or(MagicLinkError::InvalidToken)?;
 
-        self.create_session_for_email(&email, device_name, user_agent, replace_device_id)
+        let result =
+            self.create_session_for_email(&email, device_name, user_agent, replace_device_id)?;
+
+        // Session created — now consume the token so it can't be reused.
+        self.repo
+            .consume_magic_token(token)
+            .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
+
+        Ok(result)
     }
 
     /// Verify a 6-digit code and create a session.
@@ -137,13 +147,22 @@ impl MagicLinkService {
         replace_device_id: Option<&str>,
     ) -> Result<VerifyResult, MagicLinkError> {
         let email = email.trim().to_lowercase();
-        let verified_email = self
-            .repo
-            .verify_magic_code(code, &email)
+
+        // Validate the code without consuming it.
+        self.repo
+            .peek_magic_code(code, &email)
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?
             .ok_or(MagicLinkError::InvalidToken)?;
 
-        self.create_session_for_email(&verified_email, device_name, user_agent, replace_device_id)
+        let result =
+            self.create_session_for_email(&email, device_name, user_agent, replace_device_id)?;
+
+        // Session created — now consume the code.
+        self.repo
+            .consume_magic_code(code, &email)
+            .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
+
+        Ok(result)
     }
 
     /// Shared session-creation logic used by link, code, and passkey verification.
@@ -163,11 +182,10 @@ impl MagicLinkService {
             .get_or_create_user(email)
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
 
-        let tier = self
+        let device_limit = self
             .repo
-            .get_user_tier(&user_id)
+            .get_effective_device_limit(&user_id)
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
-        let device_limit = tier.defaults().device_limit;
         let device_count = self
             .repo
             .count_user_devices(&user_id)

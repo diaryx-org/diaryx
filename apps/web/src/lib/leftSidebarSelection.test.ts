@@ -19,6 +19,7 @@ function createNode(
     name,
     description: null,
     path,
+    is_index: false,
     children,
   };
 }

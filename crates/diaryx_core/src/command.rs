@@ -247,6 +247,27 @@ pub enum Command {
         key: String,
     },
 
+    /// Reorder frontmatter keys to match a specified order.
+    ReorderFrontmatterKeys {
+        /// Path to the entry file.
+        path: String,
+        /// Ordered list of keys. Unmentioned keys are appended at end.
+        keys: Vec<String>,
+    },
+
+    /// Move a frontmatter section to an external file, replacing it with a markdown link.
+    MoveFrontmatterSectionToFile {
+        /// Path to the source file.
+        source_path: String,
+        /// The frontmatter key to move (e.g. "workspace_config", "plugins", or a flat config key).
+        section_key: String,
+        /// Path to the target file.
+        target_path: String,
+        /// Create the target file if it doesn't exist.
+        #[serde(default)]
+        create_if_missing: bool,
+    },
+
     // === Search ===
     /// Search the workspace for entries.
     SearchWorkspace {
@@ -627,6 +648,7 @@ impl Command {
             | Command::ConvertToLeaf { path }
             | Command::GetFrontmatter { path }
             | Command::RemoveFrontmatterProperty { path, .. }
+            | Command::ReorderFrontmatterKeys { path, .. }
             | Command::ValidateFile { path }
             | Command::FixBrokenPartOf { path }
             | Command::FixBrokenAttachment { path, .. }
@@ -694,6 +716,15 @@ impl Command {
             Command::SyncMoveMetadata { old_path, new_path } => {
                 *old_path = normalizer(old_path);
                 *new_path = normalizer(new_path);
+            }
+
+            Command::MoveFrontmatterSectionToFile {
+                source_path,
+                target_path,
+                ..
+            } => {
+                *source_path = normalizer(source_path);
+                *target_path = normalizer(target_path);
             }
 
             Command::CreateChildEntry { parent_path } => {

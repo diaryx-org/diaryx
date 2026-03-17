@@ -32,6 +32,8 @@
       blobUrl?: string;
       sourceEntryPath: string;
     }) => void;
+    /** Called when user requests to preview a media attachment in the editor */
+    onPreviewMedia?: (attachmentSrc: string) => void;
   }
 
   let {
@@ -47,6 +49,7 @@
     entryPath,
     api,
     onAttachmentInsert,
+    onPreviewMedia,
   }: Props = $props();
 </script>
 
@@ -72,6 +75,26 @@
         }
       }
     }}
+    ondragover={(e) => {
+      // Only handle drags on the empty space below, not bubbled from the editor
+      if (e.target === e.currentTarget && e.dataTransfer?.types.includes("text/x-diaryx-attachment")) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      }
+    }}
+    ondrop={(e) => {
+      // Only handle drops on the empty space below the editor content
+      if (e.target !== e.currentTarget) return;
+      const attachmentRaw = e.dataTransfer?.getData("text/x-diaryx-attachment");
+      if (attachmentRaw) {
+        e.preventDefault();
+        // Focus at end, then let the editor's own drop logic handle via a
+        // synthetic re-dispatch — but simpler to just call focusAtEnd and
+        // dispatch insertContent directly through the editor ref.
+        editorRef?.focusAtEnd?.();
+        editorRef?.handleAttachmentDrop?.(attachmentRaw);
+      }
+    }}
   >
     {#if Editor}
       {#key editorKey}
@@ -88,6 +111,7 @@
           {entryPath}
           {api}
           {onAttachmentInsert}
+          {onPreviewMedia}
         />
       {/key}
     {:else}

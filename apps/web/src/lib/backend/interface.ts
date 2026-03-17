@@ -27,6 +27,8 @@ export interface TreeNode {
   name: string;
   description: string | null;
   path: string;
+  /** Whether this node has a `contents` property (even if empty) */
+  is_index: boolean;
   children: TreeNode[];
 }
 

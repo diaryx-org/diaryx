@@ -190,6 +190,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             name: node.name,
             description: node.description,
             path: node.path,
+            is_index: node.is_index,
             children: filtered_children,
             properties: node.properties,
         }
@@ -480,6 +481,23 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
             Command::RemoveFrontmatterProperty { path, key } => {
                 self.cmd_remove_frontmatter_property(path, key).await
+            }
+            Command::ReorderFrontmatterKeys { path, keys } => {
+                self.cmd_reorder_frontmatter_keys(path, keys).await
+            }
+            Command::MoveFrontmatterSectionToFile {
+                source_path,
+                section_key,
+                target_path,
+                create_if_missing,
+            } => {
+                self.cmd_move_frontmatter_section_to_file(
+                    source_path,
+                    section_key,
+                    target_path,
+                    create_if_missing,
+                )
+                .await
             }
 
             // === Workspace Operations ===

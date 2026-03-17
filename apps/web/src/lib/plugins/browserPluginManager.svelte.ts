@@ -233,8 +233,11 @@ export async function installPlugin(
     `[browserPluginManager] Installing plugin (${(wasmBytes.byteLength / 1024).toFixed(0)} KB)...`,
   );
   const inspected = await inspectBrowserPlugin(wasmBytes);
+  const inspectedId = String(inspected.manifest.id);
+  runtimeIdentity.pluginId = inspectedId;
+  runtimeIdentity.pluginName = String(inspected.manifest.name ?? name ?? inspectedId);
   await persistRequestedPermissionDefaults(
-    String(inspected.manifest.id),
+    inspectedId,
     inspected.requestedPermissions,
   );
   const plugin = await loadBrowserPlugin(wasmBytes, {
@@ -334,8 +337,11 @@ export async function loadAllPlugins(): Promise<void> {
           wasmBytes.byteOffset + wasmBytes.byteLength,
         ) as ArrayBuffer;
         const inspected = await inspectBrowserPlugin(wasmBuffer);
+        const inspectedId = String(inspected.manifest.id);
+        runtimeIdentity.pluginId = inspectedId;
+        runtimeIdentity.pluginName = String(inspected.manifest.name ?? inspectedId);
         await persistRequestedPermissionDefaults(
-          String(inspected.manifest.id),
+          inspectedId,
           inspected.requestedPermissions,
         );
         const plugin = await loadBrowserPlugin(wasmBuffer, {

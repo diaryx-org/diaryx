@@ -623,6 +623,36 @@ export function createApi(backend: Backend) {
       await mirrorWorkspaceMutation();
     },
 
+    /** Reorder frontmatter keys to match a specified order. */
+    async reorderFrontmatterKeys(path: string, keys: string[]): Promise<void> {
+      await backend.execute({
+        type: 'ReorderFrontmatterKeys',
+        params: { path, keys },
+      });
+      await dispatchFileSavedEvent(path, { bodyChanged: false });
+      await mirrorWorkspaceMutation();
+    },
+
+    /** Move a frontmatter section to an external file. */
+    async moveFrontmatterSectionToFile(
+      sourcePath: string,
+      sectionKey: string,
+      targetPath: string,
+      createIfMissing: boolean = true,
+    ): Promise<void> {
+      await backend.execute({
+        type: 'MoveFrontmatterSectionToFile',
+        params: {
+          source_path: sourcePath,
+          section_key: sectionKey,
+          target_path: targetPath,
+          create_if_missing: createIfMissing,
+        },
+      });
+      await dispatchFileSavedEvent(sourcePath, { bodyChanged: false });
+      await mirrorWorkspaceMutation();
+    },
+
     // =========================================================================
     // Link Parser
     // =========================================================================

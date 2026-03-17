@@ -4,22 +4,13 @@
   import { getMobileState } from "./hooks/useMobile.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
   import PluginSidebarPanel from "$lib/components/PluginSidebarPanel.svelte";
+  import { getFavoritesStore } from "$lib/stores/favoritesStore.svelte";
+  import type { CommandDefinition } from "$lib/commandRegistry";
   import {
-    Settings,
-    ClipboardPaste,
-    FileDown,
-    Copy,
-    Pencil,
-    Trash2,
-    FolderInput,
-    FilePlus,
-    RefreshCw,
-    ShieldCheck,
-    Search,
-    LetterText,
-    ClipboardCopy,
-    Code,
-    ListOrdered,
+    Star,
+    GripVertical,
+    ChevronUp,
+    ChevronDown,
   } from "@lucide/svelte";
 
   interface Props {
@@ -27,54 +18,44 @@
     /** 0-1 during an interactive swipe-up gesture, null otherwise */
     swipeProgress?: number | null;
     api: Api | null;
-    hasEntry: boolean;
-    hasEditor: boolean;
-    onImportFromClipboard: () => void;
-    onImportMarkdownFile: () => void;
-    onOpenBackupImport: () => void;
-    onDuplicateEntry?: () => void;
-    onRenameEntry?: () => void;
-    onDeleteEntry?: () => void;
-    onMoveEntry?: () => void;
-    onCreateChildEntry?: () => void;
-    onRefreshTree?: () => void;
-    onValidateWorkspace?: () => void;
-    onOpenWorkspaceSettings?: () => void;
-    onFindInFile?: () => void;
-    onWordCount?: () => void;
-    onCopyAsMarkdown?: () => void;
-    onViewMarkdown?: () => void;
-    onReorderFootnotes?: () => void;
+    commandRegistry: Map<string, CommandDefinition>;
   }
 
   let {
     open = $bindable(),
     swipeProgress = null,
     api,
-    hasEntry,
-    hasEditor,
-    onImportFromClipboard,
-    onImportMarkdownFile,
-    onOpenBackupImport,
-    onDuplicateEntry,
-    onRenameEntry,
-    onDeleteEntry,
-    onMoveEntry,
-    onCreateChildEntry,
-    onRefreshTree,
-    onValidateWorkspace,
-    onOpenWorkspaceSettings,
-    onFindInFile,
-    onWordCount,
-    onCopyAsMarkdown,
-    onViewMarkdown,
-    onReorderFootnotes,
+    commandRegistry,
   }: Props = $props();
 
   const pluginStore = getPluginStore();
   const commandPaletteOwner = $derived(pluginStore.commandPaletteOwner);
+  const favoritesStore = getFavoritesStore();
+  const mobileState = getMobileState();
 
   let searchValue = $state("");
+
+  // ── Derived command lists ────────────────────────────────────────────
+
+  const favoriteCommands = $derived(
+    favoritesStore.ids
+      .map((id) => commandRegistry.get(id))
+      .filter((cmd): cmd is CommandDefinition => !!cmd && cmd.available()),
+  );
+
+  const groupedCommands = $derived(
+    (["insert", "entry", "editor", "workspace"] as const)
+      .map((g) => ({
+        key: g,
+        label: g.charAt(0).toUpperCase() + g.slice(1),
+        commands: [...commandRegistry.values()].filter(
+          (c) => c.group === g && c.available(),
+        ),
+      }))
+      .filter((g) => g.commands.length > 0),
+  );
+
+  // ── Command execution ────────────────────────────────────────────────
 
   function handleCommand(action: () => void | Promise<void>) {
     open = false;
@@ -82,19 +63,70 @@
     action();
   }
 
-  const mobileState = getMobileState();
+  // ── Drag-and-drop reorder (desktop) ──────────────────────────────────
 
-  // Show the mobile sheet when open OR actively swiping OR animating open/closed
+  let draggedId = $state<string | null>(null);
+  let dragOverId = $state<string | null>(null);
+
+  function handleDragStart(e: DragEvent, id: string) {
+    draggedId = id;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", id);
+    }
+  }
+
+  function handleDragOver(e: DragEvent, id: string) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    dragOverId = id;
+  }
+
+  function handleDrop(e: DragEvent, targetId: string) {
+    e.preventDefault();
+    if (!draggedId || draggedId === targetId) {
+      draggedId = null;
+      dragOverId = null;
+      return;
+    }
+    const fromIndex = favoritesStore.ids.indexOf(draggedId);
+    const toIndex = favoritesStore.ids.indexOf(targetId);
+    if (fromIndex >= 0 && toIndex >= 0) {
+      favoritesStore.reorder(fromIndex, toIndex);
+    }
+    draggedId = null;
+    dragOverId = null;
+  }
+
+  function handleDragEnd() {
+    draggedId = null;
+    dragOverId = null;
+  }
+
+  // ── Mobile reorder (up/down buttons) ─────────────────────────────────
+
+  function moveUp(id: string) {
+    const idx = favoritesStore.ids.indexOf(id);
+    if (idx > 0) favoritesStore.reorder(idx, idx - 1);
+  }
+
+  function moveDown(id: string) {
+    const idx = favoritesStore.ids.indexOf(id);
+    if (idx >= 0 && idx < favoritesStore.ids.length - 1) {
+      favoritesStore.reorder(idx, idx + 1);
+    }
+  }
+
+  // ── Mobile sheet animation ───────────────────────────────────────────
+
   const swiping = $derived(swipeProgress != null && swipeProgress > 0);
   let closing = $state(false);
   let opening = $state(false);
   const showMobileSheet = $derived(open || swiping || closing);
 
-  // When open changes to true, animate the sheet up from the bottom
   $effect(() => {
     if (open && mobileState.isMobile) {
       opening = true;
-      // Wait one frame so the sheet mounts at translateY(100%), then animate to 0
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           opening = false;
@@ -103,11 +135,9 @@
     }
   });
 
-  /** Animate close, then actually set open = false */
   function closeWithAnimation() {
     if (closing) return;
     closing = true;
-    // Wait for the CSS transition (300ms) to finish before unmounting
     setTimeout(() => {
       open = false;
       searchValue = "";
@@ -115,8 +145,8 @@
     }, 300);
   }
 
-  // Drag-to-dismiss: only activates from the drag handle area at the top of the sheet.
-  // Touching the scrollable command list does NOT start a dismiss gesture.
+  // ── Drag-to-dismiss ──────────────────────────────────────────────────
+
   let dismissDragY = $state(0);
   let dismissDragging = $state(false);
   let dismissStartY = 0;
@@ -136,7 +166,6 @@
 
   function handleHandleTouchEnd() {
     if (!dismissDragging) return;
-    // If dragged more than 80px downward, dismiss
     if (dismissDragY > 80) {
       closeWithAnimation();
     }
@@ -162,109 +191,88 @@
     <Command.List>
       <Command.Empty>No results found.</Command.Empty>
 
-      {#if hasEntry}
-        <Command.Group heading="Entry">
-          {#if onDuplicateEntry}
-            <Command.Item onSelect={() => handleCommand(onDuplicateEntry)}>
-              <Copy class="mr-2 size-4" />
-              <span>Duplicate Entry</span>
+      <!-- Favorites group -->
+      {#if favoriteCommands.length > 0}
+        <Command.Group heading="Favorites">
+          {#each favoriteCommands as cmd (cmd.id)}
+            {@const CmdIcon = cmd.icon}
+            <Command.Item
+              onSelect={() => handleCommand(cmd.execute)}
+              class="group relative {dragOverId === cmd.id ? 'border-t-2 border-primary' : ''}"
+              draggable={!mobileState.isMobile}
+              ondragstart={(e: DragEvent) => handleDragStart(e, cmd.id)}
+              ondragover={(e: DragEvent) => handleDragOver(e, cmd.id)}
+              ondrop={(e: DragEvent) => handleDrop(e, cmd.id)}
+              ondragend={handleDragEnd}
+            >
+              {#if !mobileState.isMobile}
+                <GripVertical class="mr-1 size-3 text-muted-foreground/50 cursor-grab" />
+              {/if}
+              <CmdIcon class="mr-2 size-4" />
+              <span class="flex-1">{cmd.label}</span>
+              {#if cmd.shortcut}
+                <Command.Shortcut>{cmd.shortcut}</Command.Shortcut>
+              {/if}
+              {#if mobileState.isMobile}
+                <button
+                  type="button"
+                  class="p-1 hover:bg-accent rounded"
+                  onclick={(e: MouseEvent) => { e.stopPropagation(); moveUp(cmd.id); }}
+                  aria-label="Move up"
+                >
+                  <ChevronUp class="size-3 text-muted-foreground" />
+                </button>
+                <button
+                  type="button"
+                  class="p-1 hover:bg-accent rounded"
+                  onclick={(e: MouseEvent) => { e.stopPropagation(); moveDown(cmd.id); }}
+                  aria-label="Move down"
+                >
+                  <ChevronDown class="size-3 text-muted-foreground" />
+                </button>
+              {/if}
+              <button
+                type="button"
+                class="p-1 hover:bg-accent rounded"
+                onclick={(e: MouseEvent) => { e.stopPropagation(); favoritesStore.removeFavorite(cmd.id); }}
+                aria-label="Remove from favorites"
+              >
+                <Star class="size-3.5 fill-yellow-400 text-yellow-400" />
+              </button>
             </Command.Item>
-          {/if}
-          {#if onRenameEntry}
-            <Command.Item onSelect={() => handleCommand(onRenameEntry)}>
-              <Pencil class="mr-2 size-4" />
-              <span>Rename Entry</span>
-            </Command.Item>
-          {/if}
-          {#if onDeleteEntry}
-            <Command.Item onSelect={() => handleCommand(onDeleteEntry)}>
-              <Trash2 class="mr-2 size-4" />
-              <span>Delete Entry</span>
-            </Command.Item>
-          {/if}
-          {#if onMoveEntry}
-            <Command.Item onSelect={() => handleCommand(onMoveEntry)}>
-              <FolderInput class="mr-2 size-4" />
-              <span>Move Entry</span>
-            </Command.Item>
-          {/if}
-          {#if onCreateChildEntry}
-            <Command.Item onSelect={() => handleCommand(onCreateChildEntry)}>
-              <FilePlus class="mr-2 size-4" />
-              <span>Create Child Entry</span>
-            </Command.Item>
-          {/if}
+          {/each}
         </Command.Group>
       {/if}
 
-      {#if hasEditor}
-        <Command.Group heading="Editor">
-          {#if onFindInFile}
-            <Command.Item onSelect={() => handleCommand(onFindInFile)}>
-              <Search class="mr-2 size-4" />
-              <span>Find in File</span>
-              <Command.Shortcut>Cmd/Ctrl+F</Command.Shortcut>
+      <!-- Dynamic groups -->
+      {#each groupedCommands as group (group.key)}
+        <Command.Group heading={group.label}>
+          {#each group.commands as cmd (cmd.id)}
+            {@const CmdIcon = cmd.icon}
+            <Command.Item class="group" onSelect={() => handleCommand(cmd.execute)}>
+              <CmdIcon class="mr-2 size-4" />
+              <span class="flex-1">{cmd.label}</span>
+              {#if cmd.shortcut}
+                <Command.Shortcut>{cmd.shortcut}</Command.Shortcut>
+              {/if}
+              {#if cmd.favoritable}
+                <button
+                  type="button"
+                  class="p-1 hover:bg-accent rounded opacity-0 group-hover:opacity-100 transition-opacity {mobileState.isMobile ? '!opacity-100' : ''}"
+                  onclick={(e: MouseEvent) => { e.stopPropagation(); favoritesStore.toggleFavorite(cmd.id); }}
+                  aria-label={favoritesStore.isFavorite(cmd.id) ? "Remove from favorites" : "Add to favorites"}
+                >
+                  {#if favoritesStore.isFavorite(cmd.id)}
+                    <Star class="size-3.5 fill-yellow-400 text-yellow-400" />
+                  {:else}
+                    <Star class="size-3.5 text-muted-foreground" />
+                  {/if}
+                </button>
+              {/if}
             </Command.Item>
-          {/if}
-          {#if onWordCount}
-            <Command.Item onSelect={() => handleCommand(onWordCount)}>
-              <LetterText class="mr-2 size-4" />
-              <span>Word Count</span>
-            </Command.Item>
-          {/if}
-          {#if onCopyAsMarkdown}
-            <Command.Item onSelect={() => handleCommand(onCopyAsMarkdown)}>
-              <ClipboardCopy class="mr-2 size-4" />
-              <span>Copy as Markdown</span>
-            </Command.Item>
-          {/if}
-          {#if onViewMarkdown}
-            <Command.Item onSelect={() => handleCommand(onViewMarkdown)}>
-              <Code class="mr-2 size-4" />
-              <span>View Markdown Source</span>
-            </Command.Item>
-          {/if}
-          {#if onReorderFootnotes}
-            <Command.Item onSelect={() => handleCommand(onReorderFootnotes)}>
-              <ListOrdered class="mr-2 size-4" />
-              <span>Reorder Footnotes</span>
-            </Command.Item>
-          {/if}
+          {/each}
         </Command.Group>
-      {/if}
-
-      <Command.Group heading="Workspace">
-        {#if onOpenWorkspaceSettings}
-          <Command.Item onSelect={() => handleCommand(onOpenWorkspaceSettings)}>
-            <Settings class="mr-2 size-4" />
-            <span>Workspace Settings</span>
-          </Command.Item>
-        {/if}
-        {#if onRefreshTree}
-          <Command.Item onSelect={() => handleCommand(onRefreshTree)}>
-            <RefreshCw class="mr-2 size-4" />
-            <span>Refresh Tree</span>
-          </Command.Item>
-        {/if}
-        {#if onValidateWorkspace}
-          <Command.Item onSelect={() => handleCommand(onValidateWorkspace)}>
-            <ShieldCheck class="mr-2 size-4" />
-            <span>Validate Workspace</span>
-          </Command.Item>
-        {/if}
-        <Command.Item onSelect={() => handleCommand(onOpenBackupImport)}>
-          <Settings class="mr-2 size-4" />
-          <span>Download Backup ZIP</span>
-        </Command.Item>
-        <Command.Item onSelect={() => handleCommand(onImportFromClipboard)}>
-          <ClipboardPaste class="mr-2 size-4" />
-          <span>Import from Clipboard</span>
-        </Command.Item>
-        <Command.Item onSelect={() => handleCommand(onImportMarkdownFile)}>
-          <FileDown class="mr-2 size-4" />
-          <span>Import Markdown File</span>
-        </Command.Item>
-      </Command.Group>
+      {/each}
     </Command.List>
   {/if}
 {/snippet}

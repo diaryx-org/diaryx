@@ -8,7 +8,9 @@
   } from "./leftSidebarSelection";
   import {
     ChevronRight,
-    Folder,
+    FolderClosed,
+    FolderMinus,
+    FolderOpen,
     FolderPlus,
     FileText,
   } from "@lucide/svelte";
@@ -267,7 +269,7 @@
                 onpointerleave={handlePointerLeave}
                 onclick={() => !isDisabled && handleClick(node.path)}
               >
-                {#if isFolder}
+                {#if hasChildren}
                   <button
                     type="button"
                     class="p-1 rounded-sm hover:bg-sidebar-accent transition-colors"
@@ -279,11 +281,11 @@
                     tabindex={-1}
                   >
                     <ChevronRight
-                      class="size-4 transition-transform duration-200 {!hasChildren
-                        ? 'text-muted-foreground/40'
-                        : 'text-muted-foreground'} {isNodeExpanded(node.path) ? 'rotate-90' : ''}"
+                      class="size-4 transition-transform duration-200 text-muted-foreground {isNodeExpanded(node.path) ? 'rotate-90' : ''}"
                     />
                   </button>
+                {:else if node.is_index}
+                  <span class="w-6"></span>
                 {:else if !isSource && !isDisabled}
                   <button
                     type="button"
@@ -304,8 +306,12 @@
                 {/if}
 
                 <div class="flex-1 min-w-0 flex items-center gap-2 py-1.5 pr-2 text-sm">
-                  {#if hasChildren || node.is_index}
-                    <Folder class="size-4 shrink-0 text-muted-foreground" />
+                  {#if hasChildren && isNodeExpanded(node.path)}
+                    <FolderOpen class="size-4 shrink-0 text-muted-foreground" />
+                  {:else if hasChildren}
+                    <FolderClosed class="size-4 shrink-0 text-muted-foreground" />
+                  {:else if node.is_index}
+                    <FolderMinus class="size-4 shrink-0 text-muted-foreground" />
                   {:else}
                     <FileText class="size-4 shrink-0 text-muted-foreground" />
                   {/if}

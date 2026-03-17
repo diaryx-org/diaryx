@@ -22,6 +22,8 @@
     ChevronDown,
     FileText,
     Folder,
+    FolderClosed,
+    FolderMinus,
     FolderPlus,
     Loader2,
     PanelLeftClose,
@@ -1950,7 +1952,7 @@
         role="treeitem"
         tabindex={0}
         aria-selected={selectedEntryPaths.has(node.path)}
-        aria-expanded={node.children.length > 0 || node.is_index
+        aria-expanded={node.children.length > 0
           ? expandedNodes.has(node.path)
           : undefined}
         aria-level={depth + 1}
@@ -1985,7 +1987,7 @@
           ondragleave={handleDragLeave}
           ondrop={(e) => handleDrop(e, node.path)}
         >
-          {#if node.children.length > 0 || node.is_index}
+          {#if node.children.length > 0}
             <button
               type="button"
               class="p-1 rounded-sm hover:bg-sidebar-accent active:bg-sidebar-accent transition-colors"
@@ -2001,13 +2003,7 @@
                 <Loader2 class="size-5 md:size-4 text-muted-foreground animate-spin" />
               {:else}
                 <ChevronRight
-                  class="size-5 md:size-4 transition-transform duration-200 {node.children.length === 0
-                    ? 'text-muted-foreground/40'
-                    : 'text-muted-foreground'} {expandedNodes.has(
-                    node.path,
-                  )
-                    ? 'rotate-90'
-                    : ''}"
+                  class="size-5 md:size-4 transition-transform duration-200 text-muted-foreground {expandedNodes.has(node.path) ? 'rotate-90' : ''}"
                 />
               {/if}
             </button>
@@ -2022,8 +2018,12 @@
             onpointerdown={(e) => { if (e.button === 2) e.preventDefault(); }}
             onclick={(event) => handleEntryClick(node.path, event)}
           >
-            {#if node.children.length > 0 || node.is_index}
-              <Folder class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
+            {#if node.children.length > 0 && expandedNodes.has(node.path)}
+              <FolderOpen class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
+            {:else if node.children.length > 0}
+              <FolderClosed class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
+            {:else if node.is_index}
+              <FolderMinus class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
             {:else}
               <FileText class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
             {/if}

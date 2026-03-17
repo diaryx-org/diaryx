@@ -2115,11 +2115,33 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             });
         }
 
+        // Resolve old parent before making any changes, so we can remove the
+        // entry from its old parent's contents after attaching it to the new one.
+        let entry_dir = entry_path.parent();
+        let old_index_path = self
+            .resolve_part_of_from_dir(entry_path, entry_dir, entry_dir.unwrap_or(Path::new("")))
+            .await;
+
         // Add entry to parent's contents with proper formatting
         let entry_canonical = self.get_canonical_path(entry_path);
         let title = self.resolve_title(&entry_canonical).await;
         self.add_to_index_contents_canonical(parent_index_path, &entry_canonical, &title)
             .await?;
+
+        // Remove entry from old parent's contents (if it had one and it differs from new parent).
+        if let Some(old_index_path) = old_index_path.as_ref()
+            && old_index_path != parent_index_path
+            && let Err(e) = self
+                .remove_from_index_contents_canonical(old_index_path, &entry_canonical)
+                .await
+        {
+            log::warn!(
+                "attach_entry_to_parent: failed to remove old contents reference '{}' from '{}': {}",
+                entry_canonical,
+                old_index_path.display(),
+                e
+            );
+        }
 
         // Set entry's part_of with proper formatting
         let part_of = if self.root_path.is_some() {
@@ -3960,6 +3982,219 @@ mod tests {
                 .any(|entry| entry.contains("nested/deep/victim.md")),
             "expected README contents to remove deleted file, got {:?}",
             contents
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // attach_entry_to_parent
+    // -------------------------------------------------------------------------
+
+    fn get_contents_strings(
+        ws: &Workspace<SyncToAsyncFs<InMemoryFileSystem>>,
+        index: &str,
+    ) -> Vec<String> {
+        let val = block_on_test(ws.get_frontmatter_property(Path::new(index), "contents")).unwrap();
+        match val {
+            Some(Value::Sequence(items)) => items
+                .into_iter()
+                .filter_map(|v| v.as_str().map(ToString::to_string))
+                .collect(),
+            _ => vec![],
+        }
+    }
+
+    #[test]
+    fn test_attach_entry_to_parent_adds_to_new_parent_contents() {
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("section")).unwrap();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("section/index.md"),
+            "---\ntitle: Section\ncontents: []\npart_of: ../README.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("section/note.md"), "---\ntitle: Note\n---\n")
+            .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        block_on_test(
+            ws.attach_entry_to_parent(Path::new("section/note.md"), Path::new("section/index.md")),
+        )
+        .unwrap();
+
+        let contents = get_contents_strings(&ws, "section/index.md");
+        assert!(
+            contents.iter().any(|e| e.contains("note.md")),
+            "expected section/index.md contents to include note.md, got {:?}",
+            contents
+        );
+
+        let part_of =
+            block_on_test(ws.get_frontmatter_property(Path::new("section/note.md"), "part_of"))
+                .unwrap();
+        assert!(part_of.is_some(), "expected part_of to be set on note.md");
+    }
+
+    #[test]
+    fn test_attach_entry_to_parent_removes_from_old_parent_contents() {
+        // note.md starts as a child of README.md (root). We re-attach it to
+        // section/index.md (same directory as note.md). The root's contents
+        // should no longer reference note.md after the call.
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("section")).unwrap();
+        fs.write_file(
+            Path::new("section/README.md"),
+            "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("section/index.md"),
+            "---\ntitle: Section\ncontents: []\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("section/note.md"),
+            "---\ntitle: Note\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        block_on_test(
+            ws.attach_entry_to_parent(Path::new("section/note.md"), Path::new("section/index.md")),
+        )
+        .unwrap();
+
+        // note.md should now be in section/index.md's contents
+        let section_contents = get_contents_strings(&ws, "section/index.md");
+        assert!(
+            section_contents.iter().any(|e| e.contains("note.md")),
+            "expected section/index.md contents to include note.md, got {:?}",
+            section_contents
+        );
+
+        // note.md should no longer appear in old parent's contents
+        let root_contents = get_contents_strings(&ws, "section/README.md");
+        assert!(
+            !root_contents.iter().any(|e| e.contains("note.md")),
+            "expected README.md contents to no longer include note.md, got {:?}",
+            root_contents
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // attach_and_move_entry_to_parent
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_attach_and_move_entry_to_parent_moves_file_and_updates_hierarchy() {
+        // entry.md lives under root and should be moved into section/.
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("section")).unwrap();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - entry.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("section/index.md"),
+            "---\ntitle: Section\ncontents: []\npart_of: ../README.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("entry.md"),
+            "---\ntitle: Entry\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let new_path =
+            block_on_test(ws.attach_and_move_entry_to_parent(
+                Path::new("entry.md"),
+                Path::new("section/index.md"),
+            ))
+            .unwrap();
+
+        assert_eq!(new_path, PathBuf::from("section/entry.md"));
+
+        // File should exist at new location
+        assert!(block_on_test(ws.fs.exists(Path::new("section/entry.md"))));
+        assert!(!block_on_test(ws.fs.exists(Path::new("entry.md"))));
+
+        // New parent should contain the entry
+        let section_contents = get_contents_strings(&ws, "section/index.md");
+        assert!(
+            section_contents.iter().any(|e| e.contains("entry.md")),
+            "expected section/index.md to contain entry.md, got {:?}",
+            section_contents
+        );
+
+        // Old parent should no longer reference it
+        let root_contents = get_contents_strings(&ws, "README.md");
+        assert!(
+            !root_contents.iter().any(|e| e.contains("entry.md")),
+            "expected README.md to no longer reference entry.md, got {:?}",
+            root_contents
+        );
+    }
+
+    #[test]
+    fn test_attach_and_move_entry_to_parent_converts_leaf_target_to_index() {
+        // Moving entry.md into leaf.md (a non-index) should convert leaf.md into
+        // section/leaf/leaf.md (index) and move entry.md to section/leaf/entry.md.
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("section")).unwrap();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - entry.md\n  - section/leaf.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("entry.md"),
+            "---\ntitle: Entry\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("section/leaf.md"),
+            "---\ntitle: Leaf\npart_of: ../README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let new_path = block_on_test(
+            ws.attach_and_move_entry_to_parent(Path::new("entry.md"), Path::new("section/leaf.md")),
+        )
+        .unwrap();
+
+        // convert_to_index moves section/leaf.md → section/leaf/leaf.md
+        // and entry.md → section/leaf/entry.md
+        assert_eq!(new_path, PathBuf::from("section/leaf/entry.md"));
+
+        assert!(block_on_test(
+            ws.is_index_file(Path::new("section/leaf/leaf.md"))
+        ));
+        assert!(block_on_test(
+            ws.fs.exists(Path::new("section/leaf/entry.md"))
+        ));
+        assert!(!block_on_test(ws.fs.exists(Path::new("entry.md"))));
+
+        // Old parent should no longer reference entry.md at the root level
+        let root_contents = get_contents_strings(&ws, "README.md");
+        assert!(
+            !root_contents.iter().any(|e| e == "entry.md"),
+            "expected README.md to no longer reference entry.md, got {:?}",
+            root_contents
         );
     }
 }

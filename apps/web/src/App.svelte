@@ -3924,19 +3924,21 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 
       // attachEntryToParent handles leaf-to-index conversion internally
       // (creates directory structure, moves the file, updates hierarchy metadata).
-      await api.attachEntryToParent(entryPath, newParentPath);
+      // Returns the new path of the entry, which may differ from entryPath when
+      // the file moves to a different directory.
+      const nextPath = await api.attachEntryToParent(entryPath, newParentPath);
 
       // If a position hint was given, reorder within the new parent
       if (position && (position.beforePath || position.afterPath)) {
         const parentEntry = await api.getEntry(newParentPath);
         if (parentEntry && Array.isArray(parentEntry.frontmatter.contents)) {
           const contents = parentEntry.frontmatter.contents.map(String);
-          // Find the just-added entry in contents and move it to position
-          const entryCanonical = await api.canonicalizeLink(entryPath, newParentPath).catch(() => null);
+          // Find the just-added entry in contents using its new path after the move
+          const entryCanonical = await api.canonicalizeLink(nextPath, newParentPath).catch(() => null);
           let entryLinkIdx = -1;
           for (let i = 0; i < contents.length; i++) {
             const canonical = await api.canonicalizeLink(contents[i], newParentPath).catch(() => null);
-            if (canonical === entryCanonical || canonical === entryPath) {
+            if (canonical === entryCanonical || canonical === nextPath) {
               entryLinkIdx = i;
               break;
             }
@@ -4165,9 +4167,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         };
         entryStore.setCurrentEntry(updatedEntry);
 
-        if (key === 'contents' || key === 'part_of') {
-          await refreshTree();
-        }
+        await refreshTree();
       }
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
@@ -4182,6 +4182,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       const newFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
       delete newFrontmatter[key];
       entryStore.setCurrentEntry({ ...currentEntry, frontmatter: newFrontmatter });
+      await refreshTree();
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
     }
@@ -4198,6 +4199,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         frontmatter: { ...normalizedFrontmatter, [key]: value },
       };
       entryStore.setCurrentEntry(updatedEntry);
+      await refreshTree();
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
     }

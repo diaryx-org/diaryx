@@ -9,6 +9,7 @@
     ArrowLeft,
     SlidersHorizontal,
     ExternalLink,
+    RefreshCw,
   } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -78,6 +79,17 @@
   );
 
   const localPlugins = $derived.by(() => marketplaceClassification.localPlugins);
+
+  const updatablePlugins = $derived.by(() => marketplaceClassification.updatable);
+  const updatableIds = $derived.by(() => marketplaceClassification.updatableIds);
+
+  const updatableByPluginId = $derived.by(() => {
+    const map = new Map<string, (typeof updatablePlugins)[number]>();
+    for (const item of updatablePlugins) {
+      map.set(String(item.installed.id), item);
+    }
+    return map;
+  });
 
   const categories = $derived.by(() => {
     const all = new Set<string>();
@@ -202,12 +214,14 @@
   }
 
   async function installFromRegistry(plugin: RegistryPlugin): Promise<void> {
+    const isUpdate = updatableIds.has(plugin.id);
     installingIds = new Set([...installingIds, plugin.id]);
     try {
       await installRegistryPlugin(plugin);
-      toast.success(`Installed ${plugin.name}`);
+      toast.success(isUpdate ? `Updated ${plugin.name} to v${plugin.version}` : `Installed ${plugin.name}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : `Failed to install ${plugin.name}`);
+      const action = isUpdate ? "update" : "install";
+      toast.error(e instanceof Error ? e.message : `Failed to ${action} ${plugin.name}`);
     } finally {
       installingIds = new Set([...installingIds].filter((id) => id !== plugin.id));
     }
@@ -261,6 +275,8 @@
   {@const installed = installedIds.has(plugin.id)}
   {@const installing = installingIds.has(plugin.id)}
   {@const removing = removingIds.has(plugin.id)}
+  {@const detailHasUpdate = updatableIds.has(plugin.id)}
+  {@const detailUpdateInfo = updatableByPluginId.get(plugin.id)}
   <div class="flex flex-col h-full">
     <div class="flex items-center gap-2 px-3 py-2 border-b shrink-0">
       <Button variant="ghost" size="icon" class="size-7" onclick={() => (detailPlugin = null)} aria-label="Back">
@@ -272,6 +288,11 @@
       <div>
         <div class="flex items-center gap-2 flex-wrap">
           <Badge variant="secondary">v{plugin.version}</Badge>
+          {#if detailHasUpdate && detailUpdateInfo}
+            <Badge variant="outline" class="text-amber-600 dark:text-amber-400 border-amber-500/40">
+              Installed: v{detailUpdateInfo.installed.version}
+            </Badge>
+          {/if}
         </div>
         <p class="text-xs text-muted-foreground mt-1">{plugin.summary}</p>
         <p class="text-xs mt-2">{plugin.description}</p>
@@ -343,6 +364,15 @@
             onCheckedChange={(checked) => setEnabled(plugin.id, checked)}
             disabled={!pluginsSupported}
           />
+          {#if detailHasUpdate}
+            <Button size="sm" onclick={() => installFromRegistry(plugin)} disabled={installing || !pluginsSupported}>
+              {#if installing}
+                <Loader2 class="size-3.5 mr-1.5 animate-spin" />Updating...
+              {:else}
+                <RefreshCw class="size-3.5 mr-1.5" />Update
+              {/if}
+            </Button>
+          {/if}
           <Button variant="outline" size="sm" onclick={() => removePlugin(plugin.id, plugin.name)} disabled={removing}>
             {#if removing}
               <Loader2 class="size-3.5 mr-1.5 animate-spin" />Removing...
@@ -414,28 +444,51 @@
                   {/if}
                 </div>
               {/if}
+              {@const hasUpdate = updatableIds.has(plugin.id)}
               <div class="mt-1.5 flex items-center justify-between gap-2">
-                {#if installed}
+                {#if installed && hasUpdate}
+                  {@const updateInfo = updatableByPluginId.get(plugin.id)}
+                  <span class="text-[11px] text-amber-600 dark:text-amber-400 inline-flex items-center gap-1">
+                    v{updateInfo?.installed.version} &rarr; v{plugin.version}
+                  </span>
+                {:else if installed}
                   <span class="text-[11px] text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1">
                     <Check class="size-2.5" />Installed
                   </span>
                 {:else}
                   <span class="text-[11px] text-muted-foreground">{plugin.author}</span>
                 {/if}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  class="h-6 text-[11px] px-2"
-                  onclick={(e) => { e.stopPropagation(); void installFromRegistry(plugin); }}
-                  disabled={installing || installed || !pluginsSupported}
-                >
-                  {#if installing}
-                    <Loader2 class="size-3 mr-1 animate-spin" />
-                  {:else}
-                    <Download class="size-3 mr-1" />
-                  {/if}
-                  {installing ? "..." : "Install"}
-                </Button>
+                {#if installed && hasUpdate}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-6 text-[11px] px-2"
+                    onclick={(e) => { e.stopPropagation(); void installFromRegistry(plugin); }}
+                    disabled={installing || !pluginsSupported}
+                  >
+                    {#if installing}
+                      <Loader2 class="size-3 mr-1 animate-spin" />
+                    {:else}
+                      <RefreshCw class="size-3 mr-1" />
+                    {/if}
+                    {installing ? "..." : "Update"}
+                  </Button>
+                {:else}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-6 text-[11px] px-2"
+                    onclick={(e) => { e.stopPropagation(); void installFromRegistry(plugin); }}
+                    disabled={installing || installed || !pluginsSupported}
+                  >
+                    {#if installing}
+                      <Loader2 class="size-3 mr-1 animate-spin" />
+                    {:else}
+                      <Download class="size-3 mr-1" />
+                    {/if}
+                    {installing ? "..." : "Install"}
+                  </Button>
+                {/if}
               </div>
             </button>
           {/each}

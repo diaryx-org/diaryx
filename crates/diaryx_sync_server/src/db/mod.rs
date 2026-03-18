@@ -1,6 +1,11 @@
+mod namespaces;
 mod repo;
 mod schema;
 
+pub use namespaces::{
+    AudienceInfo, NamespaceInfo, NamespaceObjectMeta, NamespaceRepo, NamespaceSessionInfo,
+    UsageTotals,
+};
 pub use repo::{
     AccessTokenInfo, AttachmentUploadPart, AttachmentUploadSession, AuthRepo,
     CompletedAttachmentUploadInfo, DeviceInfo, DueBlobDelete, PasskeyChallengeInfo,

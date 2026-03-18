@@ -240,6 +240,11 @@ impl AuthRepo {
         }
     }
 
+    /// Return a clone of the shared connection handle (for sharing with other repos).
+    pub fn connection(&self) -> Arc<Mutex<Connection>> {
+        self.conn.clone()
+    }
+
     // ===== User operations =====
 
     /// Get a user by ID

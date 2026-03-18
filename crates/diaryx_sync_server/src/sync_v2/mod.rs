@@ -19,6 +19,7 @@
 //! - Peer join/leave notifications: via `on_peer_joined`/`on_peer_left` + `Handle::broadcast_text`
 //! - Session joined confirmation: via `on_before_sync` `SendMessages` for guests
 
+mod generic_hook;
 mod handshake;
 mod hooks;
 mod server;
@@ -31,6 +32,7 @@ pub use diaryx_sync::protocol::{
 };
 
 // Re-export from local modules
+pub use generic_hook::GenericNamespaceSyncHook;
 pub use handshake::{ConnectionContext, handle_control_message, perform_handshake};
 pub use hooks::CloudSyncHook;
 pub use server::{SyncV2Server, SyncV2State};

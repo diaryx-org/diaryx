@@ -8,11 +8,14 @@ use diaryx_sync_server::{
     auth::{AuthExtractor, MagicLinkService, PasskeyService},
     blob_store::{BlobStore, build_blob_store, build_sites_store},
     config::Config,
+    db::NamespaceRepo,
     db::{AuthRepo, init_database},
     email::EmailService,
     handlers::sites::verify_domain_route,
     handlers::{
-        ai_routes, api_routes, auth_routes, session_routes, share_session_routes, site_routes,
+        AudienceState, NamespaceState, NsSessionState, ObjectState, ai_routes, api_routes,
+        audience_routes, auth_routes, namespace_routes, ns_session_routes, object_routes,
+        session_routes, share_session_routes, site_routes, usage_routes,
     },
     kv_client::CloudflareKvClient,
     publish::{
@@ -119,10 +122,18 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // Create sync v2 server (siphonophore-based)
+    // Create namespace repo (shared connection from AuthRepo)
+    let ns_repo = Arc::new(NamespaceRepo::new(repo.connection()));
+
+    // Create sync v2 server (siphonophore-based, legacy CloudSyncHook)
     let sync_v2_server = SyncV2Server::new(repo.clone(), workspaces_dir.clone());
     let sync_v2_state = Arc::new(sync_v2_server.state());
     let sync_v2_router = sync_v2_server.into_router_at("/sync2");
+
+    // Create generic namespace sync server (new GenericNamespaceSyncHook)
+    let ns_sync_server =
+        SyncV2Server::new_generic(repo.clone(), ns_repo.clone(), workspaces_dir.clone());
+    let ns_sync_router = ns_sync_server.into_router_at("/namespaces/{ns_id}/sync");
 
     // Create shared rate limiter
     let rate_limiter = diaryx_sync_server::rate_limit::RateLimiter::new();
@@ -169,6 +180,22 @@ async fn main() {
             config.managed_ai.monthly_quota
         );
     }
+
+    // Namespace / object / audience states (new generic resource backend)
+    let namespace_state = NamespaceState {
+        ns_repo: ns_repo.clone(),
+    };
+    let object_state = ObjectState {
+        ns_repo: ns_repo.clone(),
+        blob_store: blob_store.clone(),
+    };
+    let audience_state = AudienceState {
+        ns_repo: ns_repo.clone(),
+        token_signing_key: config.token_signing_key.clone(),
+    };
+    let ns_session_state = NsSessionState {
+        ns_repo: ns_repo.clone(),
+    };
 
     let sessions_state = diaryx_sync_server::handlers::sessions::SessionsState {
         repo: repo.clone(),
@@ -279,8 +306,20 @@ async fn main() {
         )
         // Backward-compatible live share alias
         .nest("/api/sessions", session_routes(sessions_state))
-        // Sync v2 endpoint (siphonophore-based)
-        .merge(sync_v2_router);
+        // Generic namespace routes
+        .nest("/namespaces", namespace_routes(namespace_state))
+        // Object store routes (mounted under /namespaces/{ns_id})
+        .nest("/namespaces/{ns_id}", object_routes(object_state.clone()))
+        // Audience routes (mounted under /namespaces/{ns_id})
+        .nest("/namespaces/{ns_id}", audience_routes(audience_state))
+        // Usage metering route (user-level, not namespace-scoped)
+        .nest("/usage", usage_routes(object_state))
+        // Namespace session routes
+        .nest("/sessions", ns_session_routes(ns_session_state))
+        // Sync v2 endpoint (siphonophore-based, legacy)
+        .merge(sync_v2_router)
+        // Generic namespace sync endpoint (new)
+        .merge(ns_sync_router);
 
     // Stripe billing routes (only if configured)
     if let Some(stripe) = stripe_router {

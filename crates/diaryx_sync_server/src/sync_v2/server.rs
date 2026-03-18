@@ -14,8 +14,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 
-use crate::db::AuthRepo;
+use crate::db::{AuthRepo, NamespaceRepo};
 
+use super::generic_hook::GenericNamespaceSyncHook;
 use super::hooks::CloudSyncHook;
 use super::store::WorkspaceStore;
 
@@ -143,6 +144,38 @@ impl SyncV2Server {
             session_to_workspace: self.session_to_workspace.clone(),
             dirty_workspaces: self.dirty_workspaces.clone(),
             storage_cache: self.storage_cache.clone(),
+        }
+    }
+
+    /// Create a new sync server using the generic namespace hook.
+    ///
+    /// Uses `GenericNamespaceSyncHook` which authenticates via namespace ownership
+    /// instead of workspace listing. No attachment reconciliation — that's client-driven.
+    pub fn new_generic(
+        repo: Arc<AuthRepo>,
+        ns_repo: Arc<NamespaceRepo>,
+        workspaces_dir: PathBuf,
+    ) -> Self {
+        let storage_cache = Arc::new(StorageCache::new(workspaces_dir));
+        let session_to_namespace = Arc::new(RwLock::new(HashMap::new()));
+        let dirty_workspaces: DirtyWorkspaces = Arc::new(RwLock::new(HashMap::new()));
+
+        let delegate = Arc::new(GenericNamespaceSyncHook::new(
+            repo,
+            ns_repo,
+            session_to_namespace.clone(),
+        ));
+
+        let (hook, handle_cell) =
+            DiarySyncHook::new(delegate, storage_cache.clone(), dirty_workspaces.clone());
+        let server = Server::with_hooks(vec![Box::new(hook)]);
+        handle_cell.set(server.handle()).ok();
+
+        Self {
+            server,
+            storage_cache,
+            session_to_workspace: session_to_namespace,
+            dirty_workspaces,
         }
     }
 

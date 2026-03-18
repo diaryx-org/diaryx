@@ -194,6 +194,74 @@ CREATE TABLE IF NOT EXISTS site_access_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_site_access_tokens_site ON site_access_tokens(site_id);
 
+-- ============================================================
+-- Generic namespace / object store / audience tables
+-- (greenfield server primitives)
+-- ============================================================
+
+-- User-owned namespaces.  Convention: id = "workspace:{uuid}" | "site:{uuid}".
+-- No semantic type enforced by server — plugins use naming conventions.
+CREATE TABLE IF NOT EXISTS namespaces (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_namespaces_owner ON namespaces(owner_user_id);
+
+-- Generic key→bytes object store within a namespace.
+-- Objects are backed by R2; the data column stores the R2 object key, not the
+-- bytes directly, to keep SQLite lean.  A NULL r2_key means inline storage for
+-- small objects (≤ 64 KiB) kept in the data column.
+CREATE TABLE IF NOT EXISTS namespace_objects (
+    namespace_id TEXT NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    r2_key TEXT,                          -- NULL = inline
+    data BLOB,                            -- non-NULL when r2_key IS NULL
+    mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+    size_bytes INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (namespace_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_namespace_objects_ns ON namespace_objects(namespace_id);
+
+-- Audience visibility records per namespace.
+CREATE TABLE IF NOT EXISTS namespace_audiences (
+    namespace_id TEXT NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
+    audience_name TEXT NOT NULL,
+    access TEXT NOT NULL DEFAULT 'private', -- 'public' | 'token' | 'private'
+    PRIMARY KEY (namespace_id, audience_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_namespace_audiences_ns ON namespace_audiences(namespace_id);
+
+-- Usage events for metering (bytes_in, bytes_out, bytes_stored, relay_seconds).
+CREATE TABLE IF NOT EXISTS usage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,   -- 'bytes_in' | 'bytes_out' | 'relay_seconds'
+    amount INTEGER NOT NULL,
+    namespace_id TEXT,          -- optional context
+    recorded_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_user ON usage_events(user_id, event_type, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_usage_events_recorded ON usage_events(recorded_at);
+
+-- Namespace-scoped sessions (generic share sessions for any namespace).
+CREATE TABLE IF NOT EXISTS namespace_sessions (
+    code TEXT PRIMARY KEY,
+    namespace_id TEXT NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    read_only INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_namespace_sessions_owner ON namespace_sessions(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_namespace_sessions_ns ON namespace_sessions(namespace_id);
+
 -- Passkey (WebAuthn) credentials for passwordless login.
 CREATE TABLE IF NOT EXISTS passkey_credentials (
     id TEXT PRIMARY KEY,
@@ -413,6 +481,60 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
     }
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_magic_tokens_code ON magic_tokens(code);")?;
 
+    // Forward migration: create namespace/object/audience/usage tables if missing.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS namespaces (
+            id TEXT PRIMARY KEY,
+            owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_namespaces_owner ON namespaces(owner_user_id);
+
+        CREATE TABLE IF NOT EXISTS namespace_objects (
+            namespace_id TEXT NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            r2_key TEXT,
+            data BLOB,
+            mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+            size_bytes INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (namespace_id, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_namespace_objects_ns ON namespace_objects(namespace_id);
+
+        CREATE TABLE IF NOT EXISTS namespace_audiences (
+            namespace_id TEXT NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
+            audience_name TEXT NOT NULL,
+            access TEXT NOT NULL DEFAULT 'private',
+            PRIMARY KEY (namespace_id, audience_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_namespace_audiences_ns ON namespace_audiences(namespace_id);
+
+        CREATE TABLE IF NOT EXISTS usage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            namespace_id TEXT,
+            recorded_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_events_user ON usage_events(user_id, event_type, recorded_at);
+        CREATE INDEX IF NOT EXISTS idx_usage_events_recorded ON usage_events(recorded_at);
+
+        CREATE TABLE IF NOT EXISTS namespace_sessions (
+            code TEXT PRIMARY KEY,
+            namespace_id TEXT NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
+            owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            read_only INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_namespace_sessions_owner ON namespace_sessions(owner_user_id);
+        CREATE INDEX IF NOT EXISTS idx_namespace_sessions_ns ON namespace_sessions(namespace_id);
+        "#,
+    )?;
+
     // Forward migration: create passkey tables if missing.
     let has_passkey_credentials = conn
         .query_row(
@@ -485,6 +607,11 @@ mod tests {
         assert!(tables.contains(&"site_access_tokens".to_string()));
         assert!(tables.contains(&"passkey_credentials".to_string()));
         assert!(tables.contains(&"passkey_challenges".to_string()));
+        assert!(tables.contains(&"namespaces".to_string()));
+        assert!(tables.contains(&"namespace_objects".to_string()));
+        assert!(tables.contains(&"namespace_audiences".to_string()));
+        assert!(tables.contains(&"usage_events".to_string()));
+        assert!(tables.contains(&"namespace_sessions".to_string()));
 
         let user_cols: Vec<String> = conn
             .prepare("PRAGMA table_info(users)")

@@ -75,6 +75,30 @@ pub struct GuestManifest {
     /// user-friendly message when the running app is too old.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_app_version: Option<String>,
+    /// Server-side API endpoints this plugin interacts with.
+    ///
+    /// Declarative metadata: documents the contract between plugin and server.
+    /// The server implements these routes as standard handlers; the client plugin
+    /// calls them. Used for documentation, validation, and future marketplace tooling.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub server_functions: Vec<ServerFunctionDecl>,
+}
+
+/// Declares a server-side API endpoint this plugin interacts with.
+///
+/// This is declarative metadata — the server implements these routes as
+/// standard Rust handlers, and the client plugin calls them. The declaration
+/// documents the plugin↔server contract and enables tooling validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerFunctionDecl {
+    /// Logical name for this function (e.g. `"sync_ws"`, `"put_html"`).
+    pub name: String,
+    /// HTTP method or `"WS"` for WebSocket (e.g. `"GET"`, `"PUT"`, `"POST"`, `"WS"`).
+    pub method: String,
+    /// URL path with optional `{param}` segments (e.g. `"/namespaces/{id}/objects/{key}"`).
+    pub path: String,
+    /// Human-readable description of what this endpoint does.
+    pub description: String,
 }
 
 /// Event sent to the guest's `on_event` function.
@@ -133,6 +157,8 @@ mod tests {
             cli: vec![],
             requested_permissions: None,
             conversions: vec![],
+            min_app_version: None,
+            server_functions: vec![],
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let parsed: GuestManifest = serde_json::from_str(&json).unwrap();

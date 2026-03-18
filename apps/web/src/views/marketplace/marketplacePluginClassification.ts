@@ -13,6 +13,11 @@ function differsFromRegistry(
   );
 }
 
+export interface UpdatablePlugin {
+  installed: PluginManifest;
+  registry: RegistryPlugin;
+}
+
 export function classifyMarketplacePlugins(
   manifests: PluginManifest[],
   registryPlugins: RegistryPlugin[],
@@ -21,10 +26,13 @@ export function classifyMarketplacePlugins(
   localOverrides: Array<{ installed: PluginManifest; registry: RegistryPlugin }>;
   localOverrideIds: Set<string>;
   localPlugins: PluginManifest[];
+  updatable: UpdatablePlugin[];
+  updatableIds: Set<string>;
 } {
   const registryById = new Map(registryPlugins.map((plugin) => [plugin.id, plugin]));
   const localOverrides: Array<{ installed: PluginManifest; registry: RegistryPlugin }> = [];
   const localPlugins: PluginManifest[] = [];
+  const updatable: UpdatablePlugin[] = [];
 
   for (const manifest of manifests) {
     const pluginId = String(manifest.id);
@@ -36,7 +44,27 @@ export function classifyMarketplacePlugins(
       continue;
     }
 
-    if (installSource === "local" || differsFromRegistry(manifest, registry)) {
+    // Plugins explicitly installed from a local file are always local overrides.
+    if (installSource === "local") {
+      localOverrides.push({ installed: manifest, registry });
+      continue;
+    }
+
+    // Registry-installed plugins with a different version are "updatable", not
+    // local overrides.  This fixes the false "local override" badge that appeared
+    // whenever the registry shipped a newer release.
+    if (installSource === "registry") {
+      if (String(manifest.version ?? "") !== registry.version) {
+        updatable.push({ installed: manifest, registry });
+      }
+      // If versions match the plugin is simply "installed" – no special bucket.
+      continue;
+    }
+
+    // No recorded install source (legacy installs).  Fall back to the previous
+    // heuristic: if the metadata differs the plugin is treated as a local
+    // override so the user can reconcile.
+    if (differsFromRegistry(manifest, registry)) {
       localOverrides.push({ installed: manifest, registry });
     }
   }
@@ -49,10 +77,17 @@ export function classifyMarketplacePlugins(
   localPlugins.sort((a, b) =>
     String(a.name ?? a.id).localeCompare(String(b.name ?? b.id)),
   );
+  updatable.sort((a, b) =>
+    String(a.installed.name ?? a.installed.id).localeCompare(
+      String(b.installed.name ?? b.installed.id),
+    ),
+  );
 
   return {
     localOverrides,
     localOverrideIds: new Set(localOverrides.map(({ installed }) => String(installed.id))),
     localPlugins,
+    updatable,
+    updatableIds: new Set(updatable.map(({ installed }) => String(installed.id))),
   };
 }

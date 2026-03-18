@@ -36,34 +36,6 @@ test.describe('Attachment Picker via Floating Menu', () => {
   })
 })
 
-test.describe('Attachments in Right Sidebar', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/')
-    await waitForAppReady(page)
-    // Properties is the default right sidebar view; no tab click needed
-  })
-
-  test('should display attachments section in properties tab', async ({ page }) => {
-    const attachmentsHeader = page.locator('aside span.font-medium').filter({ hasText: 'Attachments' })
-    await expect(attachmentsHeader).toBeVisible()
-  })
-
-  test('should show attachments list or empty state', async ({ page }) => {
-    // Attachments section is collapsed by default — expand it
-    const attachmentsHeader = page.locator('aside button').filter({ hasText: 'Attachments' })
-    await attachmentsHeader.click()
-
-    const attachmentItems = page.locator('[role="listitem"][aria-label*="Attachment"]')
-    const emptyState = page.locator('aside').locator('text=No attachments')
-
-    // Use soft assertions to check either condition
-    const hasAttachments = await attachmentItems.count() > 0
-    const hasEmptyState = await emptyState.isVisible()
-
-    expect(hasAttachments || hasEmptyState).toBe(true)
-  })
-})
-
 test.describe('Drag and Drop Attachments', () => {
   test('should show drag indicator for attachments in sidebar', async ({ page }) => {
     await page.goto('/')

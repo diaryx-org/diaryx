@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::types::PublishedPage;
+use super::types::{PublishOptions, PublishedPage, SiteNavigation};
 
 /// Trait for format-specific publishing behavior.
 ///
@@ -58,6 +58,47 @@ pub trait PublishFormat: Send + Sync {
 
     /// Render all pages into a single combined document.
     fn render_single_document(&self, pages: &[PublishedPage], site_title: &str) -> String;
+
+    /// Render a page with full site context (nav, SEO, feeds).
+    ///
+    /// Default: delegates to `render_page()` ignoring new params.
+    fn render_page_with_context(
+        &self,
+        page: &PublishedPage,
+        site_title: &str,
+        single_file: bool,
+        _site_nav: &SiteNavigation,
+        _seo_meta: &str,
+        _feed_links: &str,
+    ) -> String {
+        self.render_page(page, site_title, single_file)
+    }
+
+    /// Render SEO meta tags for a page. Default: empty string.
+    fn render_seo_meta(
+        &self,
+        _page: &PublishedPage,
+        _site_title: &str,
+        _options: &PublishOptions,
+    ) -> String {
+        String::new()
+    }
+
+    /// Render feed link tags for a page's `<head>`. Default: empty string.
+    fn render_feed_links(&self, _page: &PublishedPage) -> String {
+        String::new()
+    }
+
+    /// Generate supplementary files (sitemap, robots, feeds).
+    ///
+    /// Called after all pages are rendered. Returns `(filename, content)` pairs.
+    fn supplementary_files(
+        &self,
+        _pages: &[PublishedPage],
+        _options: &PublishOptions,
+    ) -> Vec<(String, Vec<u8>)> {
+        vec![]
+    }
 
     /// Static assets to write alongside output files (e.g., CSS for HTML).
     ///

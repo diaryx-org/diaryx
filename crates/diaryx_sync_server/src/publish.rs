@@ -332,6 +332,14 @@ pub async fn publish_workspace_to_r2(
         let renderer = diaryx_core::publish::NoopBodyRenderer;
         let format = diaryx_core::publish::HtmlFormat;
         let publisher = Publisher::new(SyncToAsyncFs::new(RealFileSystem), &renderer, &format);
+        // Derive base_url from custom domain or slug
+        let site_base_url = site
+            .custom_domain
+            .as_deref()
+            .filter(|d| !d.is_empty())
+            .map(|d| format!("https://{}", d))
+            .unwrap_or_else(|| format!("https://sites.diaryx.app/{}/{}", site.slug, audience));
+
         let options = PublishOptions {
             single_file: false,
             title: None,
@@ -341,6 +349,9 @@ pub async fn publish_workspace_to_r2(
             // Server handles attachments via R2 URL rewriting, not file copying
             copy_attachments: false,
             default_audience: default_audience.clone(),
+            base_url: Some(site_base_url),
+            generate_seo: true,
+            generate_feeds: true,
         };
 
         let result = publisher

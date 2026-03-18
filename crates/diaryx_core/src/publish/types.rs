@@ -22,6 +22,12 @@ pub struct PublishOptions {
     /// Audience tag assigned to entries with no explicit or inherited audience.
     /// When None, such entries are private (excluded from exports).
     pub default_audience: Option<String>,
+    /// Base URL for sitemap, canonical URLs, og tags, and feeds.
+    pub base_url: Option<String>,
+    /// Generate sitemap.xml, robots.txt, and SEO meta tags (default true).
+    pub generate_seo: bool,
+    /// Generate feed.xml (Atom) and rss.xml (RSS) feeds (default true).
+    pub generate_feeds: bool,
 }
 
 impl Default for PublishOptions {
@@ -33,6 +39,9 @@ impl Default for PublishOptions {
             force: false,
             copy_attachments: true,
             default_audience: None,
+            base_url: None,
+            generate_seo: true,
+            generate_feeds: true,
         }
     }
 }
@@ -67,6 +76,33 @@ pub struct PublishedPage {
     pub is_root: bool,
     /// Raw frontmatter key-value pairs for metadata pill display
     pub frontmatter: indexmap::IndexMap<String, serde_yaml::Value>,
+    /// Override title shown in navigation (from frontmatter `nav_title`)
+    pub nav_title: Option<String>,
+    /// Sort order among siblings in navigation (from frontmatter `nav_order`)
+    pub nav_order: Option<i32>,
+    /// Whether to hide this page from the navigation tree
+    pub hide_from_nav: bool,
+    /// Whether to hide this page from RSS/Atom feeds
+    pub hide_from_feed: bool,
+}
+
+/// A node in the full site navigation tree.
+#[derive(Debug, Clone, Serialize)]
+pub struct SiteNavNode {
+    pub title: String,
+    pub href: String,
+    pub is_current: bool,
+    pub is_ancestor_of_current: bool,
+    pub children: Vec<SiteNavNode>,
+}
+
+/// Full site navigation context for a specific page.
+#[derive(Debug, Clone, Serialize)]
+pub struct SiteNavigation {
+    /// Full nav tree with current-page marking
+    pub tree: Vec<SiteNavNode>,
+    /// Breadcrumb trail from root to current page
+    pub breadcrumbs: Vec<NavLink>,
 }
 
 /// Result of publishing operation

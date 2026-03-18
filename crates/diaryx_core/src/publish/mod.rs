@@ -24,4 +24,7 @@ pub use fs_content_provider::FilesystemContentProvider;
 pub use html_format::HtmlFormat;
 pub use publish_format::PublishFormat;
 pub use publisher::Publisher;
-pub use types::{NavLink, PublishOptions, PublishResult, PublishedPage};
+pub use publisher::{build_site_nav_tree, nav_for_page};
+pub use types::{
+    NavLink, PublishOptions, PublishResult, PublishedPage, SiteNavNode, SiteNavigation,
+};

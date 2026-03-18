@@ -362,7 +362,7 @@ async function serveStaticPage(
 // by the site-proxy Worker. These must match the reserved list in the
 // sync server's claim_subdomain handler.
 const PASSTHROUGH_SUBDOMAINS = new Set([
-  'www', 'app', 'api', 'mail', 'smtp', 'ftp', 'admin', 'sync', 'site', 'sites',
+  'www', 'app', 'api', 'mail', 'smtp', 'ftp', 'admin', 'sync',
 ]);
 
 /** Check if a host is an infrastructure subdomain that should pass through to origin. */

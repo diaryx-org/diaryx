@@ -424,6 +424,7 @@
           {#each filteredPlugins as plugin}
             {@const installed = installedIds.has(plugin.id)}
             {@const installing = installingIds.has(plugin.id)}
+            {@const hasUpdate = updatableIds.has(plugin.id)}
             <button
               type="button"
               class="w-full text-left rounded-md border p-2.5 transition hover:border-muted-foreground"
@@ -444,7 +445,6 @@
                   {/if}
                 </div>
               {/if}
-              {@const hasUpdate = updatableIds.has(plugin.id)}
               <div class="mt-1.5 flex items-center justify-between gap-2">
                 {#if installed && hasUpdate}
                   {@const updateInfo = updatableByPluginId.get(plugin.id)}

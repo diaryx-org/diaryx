@@ -7,9 +7,6 @@ pub use namespaces::{
     UsageTotals,
 };
 pub use repo::{
-    AccessTokenInfo, AttachmentUploadPart, AttachmentUploadSession, AuthRepo,
-    CompletedAttachmentUploadInfo, DeviceInfo, DueBlobDelete, PasskeyChallengeInfo,
-    PublishedSiteInfo, SessionInfo, ShareSessionInfo, SiteAudienceBuildInfo, TierDefaults,
-    UserInfo, UserStorageUsage, UserTier, WorkspaceAttachmentRefRecord, WorkspaceInfo,
+    AuthRepo, DeviceInfo, PasskeyChallengeInfo, SessionInfo, TierDefaults, UserInfo, UserTier,
 };
 pub use schema::init_database;

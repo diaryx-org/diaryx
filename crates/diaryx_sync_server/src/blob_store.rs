@@ -651,19 +651,6 @@ pub async fn build_blob_store(
     }
 }
 
-pub async fn build_sites_store(
-    config: &crate::config::Config,
-) -> Result<Arc<dyn BlobStore>, String> {
-    if config.is_r2_configured() {
-        let mut r2 = config.r2.clone();
-        r2.bucket = config.sites_r2_bucket.clone();
-        let store = R2BlobStore::new(&r2).await?;
-        Ok(Arc::new(store))
-    } else {
-        Ok(Arc::new(InMemoryBlobStore::new(config.r2.prefix.clone())))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

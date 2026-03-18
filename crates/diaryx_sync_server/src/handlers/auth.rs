@@ -1,5 +1,4 @@
 use crate::auth::{MagicLinkService, PasskeyService, RequireAuth};
-use crate::blob_store::BlobStore;
 use crate::db::AuthRepo;
 use crate::email::EmailService;
 use axum::{
@@ -10,7 +9,6 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -21,10 +19,6 @@ pub struct AuthState {
     pub email_service: Arc<EmailService>,
     pub repo: Arc<AuthRepo>,
     pub passkey_service: Arc<PasskeyService>,
-    /// Path to workspace database files (for cleanup on account deletion)
-    pub workspaces_dir: Option<PathBuf>,
-    /// Attachment blob store (R2/in-memory)
-    pub blob_store: Arc<dyn BlobStore>,
 }
 
 /// Request body for magic link request
@@ -103,18 +97,8 @@ impl ErrorResponse {
 #[derive(Debug, Serialize)]
 pub struct MeResponse {
     pub user: UserResponse,
-    pub workspaces: Vec<WorkspaceResponse>,
     pub devices: Vec<DeviceResponse>,
-    pub workspace_limit: u32,
     pub tier: String,
-    pub published_site_limit: u32,
-    pub attachment_limit_bytes: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct WorkspaceResponse {
-    pub id: String,
-    pub name: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -365,17 +349,6 @@ async fn get_current_user(
     State(state): State<AuthState>,
     RequireAuth(auth): RequireAuth,
 ) -> impl IntoResponse {
-    let workspaces = state
-        .repo
-        .get_user_workspaces(&auth.user.id)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|w| WorkspaceResponse {
-            id: w.id,
-            name: w.name,
-        })
-        .collect();
-
     let devices = state
         .repo
         .get_user_devices(&auth.user.id)
@@ -388,37 +361,18 @@ async fn get_current_user(
         })
         .collect();
 
-    let workspace_limit = state
-        .repo
-        .get_effective_workspace_limit(&auth.user.id)
-        .unwrap_or(crate::db::UserTier::Free.defaults().workspace_limit);
-
     let tier = state
         .repo
         .get_user_tier(&auth.user.id)
         .unwrap_or(crate::db::UserTier::Free);
-
-    let published_site_limit = state
-        .repo
-        .get_effective_published_site_limit(&auth.user.id)
-        .unwrap_or(tier.defaults().published_site_limit);
-
-    let attachment_limit_bytes = state
-        .repo
-        .get_effective_user_attachment_limit(&auth.user.id)
-        .unwrap_or(tier.defaults().attachment_limit_bytes);
 
     Json(MeResponse {
         user: UserResponse {
             id: auth.user.id,
             email: auth.user.email,
         },
-        workspaces,
         devices,
-        workspace_limit,
         tier: tier.as_str().to_string(),
-        published_site_limit,
-        attachment_limit_bytes,
     })
 }
 
@@ -536,22 +490,9 @@ async fn delete_account(
 
     info!("Deleting account for user: {}", user_id);
 
-    // Capture blob keys before deleting the user row (which cascades metadata rows).
-    let blob_keys = match state.repo.list_user_blob_keys(user_id) {
-        Ok(keys) => keys,
-        Err(e) => {
-            error!("Failed to query blob keys for {}: {}", user_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new("Failed to delete account")),
-            )
-                .into_response();
-        }
-    };
-
-    // Delete user from database (returns workspace IDs for file cleanup)
-    let workspace_ids = match state.repo.delete_user(user_id) {
-        Ok(ids) => ids,
+    // Delete user from database (CASCADE deletes namespaces, sessions, etc.)
+    match state.repo.delete_user(user_id) {
+        Ok(_) => {}
         Err(e) => {
             error!("Failed to delete user {}: {}", user_id, e);
             return (
@@ -561,30 +502,6 @@ async fn delete_account(
                 .into_response();
         }
     };
-
-    // Delete workspace database files from disk
-    if let Some(workspaces_dir) = &state.workspaces_dir {
-        for workspace_id in workspace_ids {
-            let db_path = workspaces_dir.join(format!("{}.db", workspace_id));
-            if db_path.exists() {
-                if let Err(e) = std::fs::remove_file(&db_path) {
-                    warn!("Failed to delete workspace file {:?}: {}", db_path, e);
-                } else {
-                    info!("Deleted workspace file: {:?}", db_path);
-                }
-            }
-        }
-    }
-
-    // Delete blob payloads from object storage (best effort).
-    for key in blob_keys {
-        if key.is_empty() {
-            continue;
-        }
-        if let Err(e) = state.blob_store.delete(&key).await {
-            warn!("Failed to delete blob {} for user {}: {}", key, user_id, e);
-        }
-    }
 
     info!("Successfully deleted account for user: {}", user_id);
 

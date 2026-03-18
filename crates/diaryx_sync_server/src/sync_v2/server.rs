@@ -1,161 +1,39 @@
 //! Siphonophore server wrapper for Diaryx cloud service.
 //!
 //! This module wraps the siphonophore Server with Diaryx-specific configuration,
-//! using the CloudSyncHook delegate and DiarySyncHook from the shared crate.
+//! using the GenericNamespaceSyncHook delegate and DiarySyncHook from the shared crate.
 
 use axum::Router;
 use diaryx_sync::hooks::DiarySyncHook;
 use diaryx_sync::protocol::DirtyWorkspaces;
 use diaryx_sync::storage::StorageCache;
-use siphonophore::{Handle, Server};
+use siphonophore::Server;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::info;
 
 use crate::db::{AuthRepo, NamespaceRepo};
 
 use super::generic_hook::GenericNamespaceSyncHook;
-use super::hooks::CloudSyncHook;
-use super::store::WorkspaceStore;
-
-/// State for the sync v2 server, shared with HTTP handlers.
-///
-/// Provides access to the siphonophore Handle for peer counts and broadcasts,
-/// a WorkspaceStore for snapshot operations, and session management.
-#[derive(Clone)]
-pub struct SyncV2State {
-    /// Handle to the siphonophore server for peer counts and broadcasts.
-    pub handle: Handle,
-    /// Workspace store for snapshot export/import and file queries.
-    pub store: Arc<WorkspaceStore>,
-    /// Session code -> workspace ID mapping for peer count lookups and broadcasts.
-    session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
-    /// Tracks last-change timestamp per workspace for git auto-commit.
-    pub dirty_workspaces: DirtyWorkspaces,
-    /// Shared storage cache for git operations.
-    pub storage_cache: Arc<StorageCache>,
-}
-
-impl SyncV2State {
-    /// Get peer count for a session by looking up the workspace and querying siphonophore.
-    pub async fn get_session_peer_count(&self, session_code: &str) -> Option<usize> {
-        let code = session_code.to_uppercase();
-        let workspace_id = self.session_to_workspace.read().await.get(&code)?.clone();
-        let doc_id = format!("workspace:{}", workspace_id);
-        let count = self.handle.get_peer_count(&doc_id).await;
-        if count == 0 { None } else { Some(count) }
-    }
-
-    /// End a session: broadcast session_ended to all connected clients and remove mapping.
-    pub async fn end_session(&self, session_code: &str) {
-        let code = session_code.to_uppercase();
-        let workspace_id = {
-            let mut map = self.session_to_workspace.write().await;
-            map.remove(&code)
-        };
-
-        if let Some(workspace_id) = workspace_id {
-            let doc_id = format!("workspace:{}", workspace_id);
-            let msg = serde_json::json!({"type": "session_ended"}).to_string();
-            self.handle.broadcast_text(&doc_id, msg, None).await;
-            info!("Ended session: {}", code);
-        }
-    }
-
-    /// Register a session-to-workspace mapping.
-    pub async fn register_session(&self, session_code: &str, workspace_id: &str) {
-        self.session_to_workspace
-            .write()
-            .await
-            .insert(session_code.to_uppercase(), workspace_id.to_string());
-    }
-
-    /// Get the workspace ID for a session code.
-    pub async fn get_workspace_for_session(&self, session_code: &str) -> Option<String> {
-        self.session_to_workspace
-            .read()
-            .await
-            .get(&session_code.to_uppercase())
-            .cloned()
-    }
-
-    /// Broadcast a read-only change to all clients connected to a session's workspace.
-    pub async fn broadcast_read_only_changed(&self, session_code: &str, read_only: bool) {
-        let code = session_code.to_uppercase();
-        let workspace_id = {
-            let map = self.session_to_workspace.read().await;
-            map.get(&code).cloned()
-        };
-
-        if let Some(workspace_id) = workspace_id {
-            let doc_id = format!("workspace:{}", workspace_id);
-            let msg = serde_json::json!({
-                "type": "read_only_changed",
-                "read_only": read_only,
-            })
-            .to_string();
-            self.handle.broadcast_text(&doc_id, msg, None).await;
-        }
-    }
-}
 
 /// Wrapper for the siphonophore sync server.
 pub struct SyncV2Server {
     server: Server,
-    storage_cache: Arc<StorageCache>,
-    session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
-    dirty_workspaces: DirtyWorkspaces,
+}
+
+/// State for the sync v2 server, shared with HTTP handlers.
+#[derive(Clone)]
+pub struct SyncV2State {
+    pub handle: siphonophore::Handle,
 }
 
 impl SyncV2Server {
-    /// Create a new sync v2 server with Diaryx hooks.
-    pub fn new(repo: Arc<AuthRepo>, workspaces_dir: PathBuf) -> Self {
-        let storage_cache = Arc::new(StorageCache::new(workspaces_dir));
-        let session_to_workspace = Arc::new(RwLock::new(HashMap::new()));
-        let dirty_workspaces: DirtyWorkspaces = Arc::new(RwLock::new(HashMap::new()));
-
-        let delegate = Arc::new(CloudSyncHook::new(
-            repo,
-            storage_cache.clone(),
-            session_to_workspace.clone(),
-        ));
-
-        let (hook, handle_cell) =
-            DiarySyncHook::new(delegate, storage_cache.clone(), dirty_workspaces.clone());
-        let server = Server::with_hooks(vec![Box::new(hook)]);
-        // Set the handle so the hook can broadcast messages to clients
-        handle_cell.set(server.handle()).ok();
-
-        Self {
-            server,
-            storage_cache,
-            session_to_workspace,
-            dirty_workspaces,
-        }
-    }
-
-    /// Get state for use with HTTP handlers (api.rs, sessions.rs).
-    pub fn state(&self) -> SyncV2State {
-        SyncV2State {
-            handle: self.server.handle(),
-            store: Arc::new(WorkspaceStore::new(self.storage_cache.clone())),
-            session_to_workspace: self.session_to_workspace.clone(),
-            dirty_workspaces: self.dirty_workspaces.clone(),
-            storage_cache: self.storage_cache.clone(),
-        }
-    }
-
     /// Create a new sync server using the generic namespace hook.
     ///
-    /// Uses `GenericNamespaceSyncHook` which authenticates via namespace ownership
-    /// instead of workspace listing. No attachment reconciliation — that's client-driven.
-    pub fn new_generic(
-        repo: Arc<AuthRepo>,
-        ns_repo: Arc<NamespaceRepo>,
-        workspaces_dir: PathBuf,
-    ) -> Self {
+    /// Authenticates via namespace ownership (JWT) or session code (guests).
+    /// No attachment reconciliation — that's client-driven via plugin-sync.
+    pub fn new(repo: Arc<AuthRepo>, ns_repo: Arc<NamespaceRepo>, workspaces_dir: PathBuf) -> Self {
         let storage_cache = Arc::new(StorageCache::new(workspaces_dir));
         let session_to_namespace = Arc::new(RwLock::new(HashMap::new()));
         let dirty_workspaces: DirtyWorkspaces = Arc::new(RwLock::new(HashMap::new()));
@@ -163,19 +41,20 @@ impl SyncV2Server {
         let delegate = Arc::new(GenericNamespaceSyncHook::new(
             repo,
             ns_repo,
-            session_to_namespace.clone(),
+            session_to_namespace,
         ));
 
-        let (hook, handle_cell) =
-            DiarySyncHook::new(delegate, storage_cache.clone(), dirty_workspaces.clone());
+        let (hook, handle_cell) = DiarySyncHook::new(delegate, storage_cache, dirty_workspaces);
         let server = Server::with_hooks(vec![Box::new(hook)]);
         handle_cell.set(server.handle()).ok();
 
-        Self {
-            server,
-            storage_cache,
-            session_to_workspace: session_to_namespace,
-            dirty_workspaces,
+        Self { server }
+    }
+
+    /// Get state for use with HTTP handlers.
+    pub fn state(&self) -> SyncV2State {
+        SyncV2State {
+            handle: self.server.handle(),
         }
     }
 

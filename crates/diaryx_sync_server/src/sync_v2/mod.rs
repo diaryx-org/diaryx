@@ -1,7 +1,7 @@
 //! Y-sync v2 implementation using siphonophore.
 //!
 //! This module provides the sync backend using the siphonophore library,
-//! with cloud-specific authentication and attachment management built
+//! with cloud-specific authentication and namespace management built
 //! on top of the shared `diaryx_sync` protocol engine.
 //!
 //! ## Document Namespacing
@@ -21,21 +21,17 @@
 
 mod generic_hook;
 mod handshake;
-mod hooks;
 mod server;
 mod store;
 
 // Re-export from diaryx_sync (shared protocol types)
 pub use diaryx_sync::protocol::{
-    AuthenticatedUser, ClientControlMessage, DirtyWorkspaces, DocType, HandshakeState,
-    ManifestFileEntry, ServerControlMessage,
+    AuthenticatedUser, ClientControlMessage, DocType, HandshakeState, ManifestFileEntry,
+    ServerControlMessage,
 };
 
 // Re-export from local modules
 pub use generic_hook::GenericNamespaceSyncHook;
 pub use handshake::{ConnectionContext, handle_control_message, perform_handshake};
-pub use hooks::CloudSyncHook;
 pub use server::{SyncV2Server, SyncV2State};
-pub use store::{
-    SnapshotError, SnapshotImportMode, SnapshotImportResult, StorageCache, WorkspaceStore,
-};
+pub use store::StorageCache;

@@ -20,28 +20,10 @@ pub struct Config {
     pub magic_link_expiry_minutes: i64,
     /// CORS allowed origins (comma-separated)
     pub cors_origins: Vec<String>,
-    /// Git auto-commit: minutes of inactivity before committing (default: 30)
-    pub git_quiescence_minutes: u32,
-    /// Git auto-commit: max hours before forcing a commit even with activity (default: 24)
-    pub git_max_staleness_hours: u32,
-    /// Git GC: interval in hours between `git gc --auto` sweeps (default: 24)
-    pub git_gc_interval_hours: u32,
-    /// R2 blob storage configuration for attachment payloads
+    /// R2 blob storage configuration
     pub r2: R2Config,
-    /// Snapshot upload max size in bytes (default: 1 GiB)
-    pub snapshot_upload_max_bytes: usize,
-    /// Enable incremental attachment sync endpoints (default: true)
-    pub attachment_incremental_sync_enabled: bool,
-    /// R2 bucket for published static site artifacts
-    pub sites_r2_bucket: String,
-    /// Base URL for published sites (defaults to APP_BASE_URL)
-    pub sites_base_url: String,
     /// Global HMAC key for audience access tokens (32 bytes)
     pub token_signing_key: Vec<u8>,
-    /// Cloudflare KV namespace ID for domain→slug mapping
-    pub kv_namespace_id: String,
-    /// Cloudflare API token with KV write permissions
-    pub kv_api_token: String,
     /// Optional admin secret for tier management endpoints
     pub admin_secret: Option<String>,
     /// Managed AI proxy configuration.
@@ -117,8 +99,6 @@ pub struct R2Config {
     pub endpoint: Option<String>,
     /// Object key prefix (default: diaryx-sync)
     pub prefix: String,
-    /// Retention days before physically deleting soft-deleted blobs (default: 7)
-    pub gc_retention_days: i64,
 }
 
 impl Config {
@@ -138,7 +118,6 @@ impl Config {
 
         let app_base_url =
             env::var("APP_BASE_URL").unwrap_or_else(|_| "http://localhost:5174".to_string());
-        let sites_base_url = env::var("SITES_BASE_URL").unwrap_or_else(|_| app_base_url.clone());
 
         let email = EmailConfig {
             api_key: env::var("RESEND_API_KEY").unwrap_or_default(),
@@ -163,21 +142,6 @@ impl Config {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let git_quiescence_minutes = env::var("GIT_QUIESCENCE_MINUTES")
-            .unwrap_or_else(|_| "30".to_string())
-            .parse()
-            .unwrap_or(30);
-
-        let git_max_staleness_hours = env::var("GIT_MAX_STALENESS_HOURS")
-            .unwrap_or_else(|_| "24".to_string())
-            .parse()
-            .unwrap_or(24);
-
-        let git_gc_interval_hours = env::var("GIT_GC_INTERVAL_HOURS")
-            .unwrap_or_else(|_| "24".to_string())
-            .parse()
-            .unwrap_or(24);
-
         let r2 = R2Config {
             bucket: env::var("R2_BUCKET").unwrap_or_else(|_| "diaryx-user-data".to_string()),
             account_id: env::var("R2_ACCOUNT_ID").unwrap_or_default(),
@@ -188,21 +152,7 @@ impl Config {
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty()),
             prefix: env::var("R2_PREFIX").unwrap_or_else(|_| "diaryx-sync".to_string()),
-            gc_retention_days: env::var("R2_GC_RETENTION_DAYS")
-                .unwrap_or_else(|_| "7".to_string())
-                .parse()
-                .unwrap_or(7),
         };
-
-        let snapshot_upload_max_bytes = env::var("SNAPSHOT_UPLOAD_MAX_BYTES")
-            .unwrap_or_else(|_| "1073741824".to_string())
-            .parse()
-            .unwrap_or(1073741824);
-        let attachment_incremental_sync_enabled = env::var("ATTACHMENT_INCREMENTAL_SYNC_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .eq_ignore_ascii_case("true");
-        let sites_r2_bucket =
-            env::var("SITES_R2_BUCKET").unwrap_or_else(|_| "diaryx-sites".to_string());
 
         let token_signing_key_raw = env::var("TOKEN_SIGNING_KEY")
             .unwrap_or_else(|_| "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
@@ -221,8 +171,6 @@ impl Config {
             return Err(ConfigError::InvalidTokenSigningKey);
         }
 
-        let kv_namespace_id = env::var("KV_NAMESPACE_ID").unwrap_or_default();
-        let kv_api_token = env::var("KV_API_TOKEN").unwrap_or_default();
         let admin_secret = env::var("ADMIN_SECRET")
             .ok()
             .map(|v| v.trim().to_string())
@@ -294,21 +242,12 @@ impl Config {
             port,
             database_path,
             app_base_url,
-            sites_base_url,
             email,
             session_expiry_days,
             magic_link_expiry_minutes,
             cors_origins,
-            git_quiescence_minutes,
-            git_max_staleness_hours,
-            git_gc_interval_hours,
             r2,
-            snapshot_upload_max_bytes,
-            attachment_incremental_sync_enabled,
-            sites_r2_bucket,
             token_signing_key,
-            kv_namespace_id,
-            kv_api_token,
             admin_secret,
             managed_ai,
             stripe,
@@ -341,13 +280,6 @@ impl Config {
     /// Check if Apple IAP is configured.
     pub fn is_apple_iap_configured(&self) -> bool {
         self.apple_iap.is_some()
-    }
-
-    /// Check if Cloudflare KV is configured for custom domain mappings.
-    pub fn is_kv_configured(&self) -> bool {
-        !self.r2.account_id.is_empty()
-            && !self.kv_namespace_id.is_empty()
-            && !self.kv_api_token.is_empty()
     }
 }
 

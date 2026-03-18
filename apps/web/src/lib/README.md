@@ -186,6 +186,10 @@ keeps typing latency down in long notes.
   whitespace in angle brackets, so uploaded videos and other attachments with
   spaced filenames persist as valid CommonMark embeds instead of degrading to
   plain text on reload.
+- Image nodes support Obsidian-style inline resize via `![alt|WIDTHxHEIGHT](src)`.
+  The image context menu includes a **Resize** submenu with percentage presets
+  (25%, 50%, 75%, 100%) and a custom size prompt. Dimensions are stored as
+  `width`/`height` node attributes and round-trip through markdown.
 - `LeftSidebar.svelte` dismisses the Settings-button tooltip on click so it
   does not remain visible after opening Settings, temporarily suppresses the
   tooltip while Settings is open/closing, and uses controlled tooltip open

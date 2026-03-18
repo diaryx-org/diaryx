@@ -145,7 +145,7 @@ pub enum Commands {
         destination: PathBuf,
 
         /// Output format (markdown, html, docx, epub, pdf, latex, odt, rst).
-        /// Formats other than markdown and html require pandoc to be installed.
+        /// Formats other than markdown and html require the publish plugin.
         #[arg(short = 'F', long, default_value = "markdown")]
         format: String,
 

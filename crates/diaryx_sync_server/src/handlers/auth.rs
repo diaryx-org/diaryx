@@ -4,7 +4,7 @@ use crate::email::EmailService;
 use axum::{
     Router,
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
     routing::{delete, get, post},
 };
@@ -19,6 +19,8 @@ pub struct AuthState {
     pub email_service: Arc<EmailService>,
     pub repo: Arc<AuthRepo>,
     pub passkey_service: Arc<PasskeyService>,
+    /// Session expiry in days, used for cookie Max-Age.
+    pub session_expiry_days: i64,
 }
 
 /// Request body for magic link request
@@ -106,6 +108,22 @@ pub struct DeviceResponse {
     pub id: String,
     pub name: Option<String>,
     pub last_seen_at: String,
+}
+
+/// Session cookie name.
+const SESSION_COOKIE: &str = "diaryx_session";
+
+/// Build a `Set-Cookie` header that sets the session cookie.
+fn set_session_cookie(token: &str, max_age_days: i64) -> String {
+    let max_age_secs = max_age_days * 86400;
+    format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age_secs}"
+    )
+}
+
+/// Build a `Set-Cookie` header that clears the session cookie.
+fn clear_session_cookie() -> String {
+    format!("{SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0")
 }
 
 /// Create auth routes
@@ -233,8 +251,15 @@ async fn verify_magic_link(
     match result {
         Ok(verify_result) => {
             info!("User {} logged in successfully", verify_result.email);
+            let mut headers = HeaderMap::new();
+            if let Ok(cookie) =
+                set_session_cookie(&verify_result.session_token, state.session_expiry_days).parse()
+            {
+                headers.insert(header::SET_COOKIE, cookie);
+            }
             (
                 StatusCode::OK,
+                headers,
                 Json(VerifyResponse {
                     success: true,
                     token: verify_result.session_token,
@@ -298,8 +323,15 @@ async fn verify_code(
                 "User {} logged in via verification code",
                 verify_result.email
             );
+            let mut headers = HeaderMap::new();
+            if let Ok(cookie) =
+                set_session_cookie(&verify_result.session_token, state.session_expiry_days).parse()
+            {
+                headers.insert(header::SET_COOKIE, cookie);
+            }
             (
                 StatusCode::OK,
+                headers,
                 Json(VerifyResponse {
                     success: true,
                     token: verify_result.session_token,
@@ -385,7 +417,12 @@ async fn logout(
         error!("Failed to delete session: {}", e);
     }
 
-    StatusCode::NO_CONTENT
+    let mut headers = HeaderMap::new();
+    if let Ok(cookie) = clear_session_cookie().parse() {
+        headers.insert(header::SET_COOKIE, cookie);
+    }
+
+    (StatusCode::NO_CONTENT, headers)
 }
 
 /// GET /auth/devices - List user's devices
@@ -695,8 +732,15 @@ async fn passkey_auth_finish(
     ) {
         Ok(result) => {
             info!("User {} logged in via passkey", result.email);
+            let mut headers = HeaderMap::new();
+            if let Ok(cookie) =
+                set_session_cookie(&result.session_token, state.session_expiry_days).parse()
+            {
+                headers.insert(header::SET_COOKIE, cookie);
+            }
             (
                 StatusCode::OK,
+                headers,
                 Json(VerifyResponse {
                     success: true,
                     token: result.session_token,

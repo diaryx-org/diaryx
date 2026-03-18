@@ -281,7 +281,7 @@ export class TauriBackend implements Backend {
 
   private async syncRuntimeContext(): Promise<void> {
     const invoke = this.getInvoke();
-    const [{ getAuthState, getToken, getServerUrl }, workspaceRegistry] =
+    const [{ getAuthState, getTokenAsync, getServerUrl }, workspaceRegistry] =
       await Promise.all([
         import("$lib/auth"),
         import("$lib/storage/localWorkspaceRegistry.svelte"),
@@ -299,7 +299,7 @@ export class TauriBackend implements Backend {
     await invoke("set_runtime_context", {
       contextJson: JSON.stringify({
         server_url: getServerUrl() ?? authState.serverUrl ?? null,
-        auth_token: getToken() ?? null,
+        auth_token: (await getTokenAsync()) ?? null,
         tier: authState.tier ?? null,
         guest_mode: await this.isGuestMode(),
         current_workspace: currentWorkspace

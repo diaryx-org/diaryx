@@ -4,6 +4,7 @@ use super::require_namespace_owner;
 use crate::auth::RequireAuth;
 use crate::blob_store::BlobStore;
 use crate::db::{NamespaceRepo, UsageTotals};
+use crate::publish::validate_signed_token;
 use axum::{
     Router,
     body::Bytes,
@@ -13,6 +14,7 @@ use axum::{
     routing::{get, put},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Shared state for object handlers.
@@ -21,6 +23,8 @@ pub struct ObjectState {
     pub ns_repo: Arc<NamespaceRepo>,
     /// Single R2 bucket for all namespace objects.
     pub blob_store: Arc<dyn BlobStore>,
+    /// HMAC-SHA256 key for validating audience access tokens.
+    pub token_signing_key: Vec<u8>,
 }
 
 // ---------------------------------------------------------------------------
@@ -35,6 +39,8 @@ pub struct ObjectMetaResponse {
     pub mime_type: String,
     pub size_bytes: u64,
     pub updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,10 +110,37 @@ async fn put_object(
         .unwrap_or("application/octet-stream")
         .to_string();
 
+    // Optional audience tag via X-Audience header.
+    let audience = headers
+        .get("x-audience")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Validate audience exists if specified.
+    if let Some(ref aud) = audience {
+        if state.ns_repo.get_audience(&ns_id, aud).is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("audience '{}' does not exist", aud) })),
+            )
+                .into_response();
+        }
+    }
+
     let rkey = r2_key(&ns_id, &key);
     let size = body.len() as u64;
 
-    if let Err(e) = state.blob_store.put(&rkey, &body, &mime_type).await {
+    let r2_metadata = audience.as_ref().map(|aud| {
+        let mut m = HashMap::new();
+        m.insert("audience".to_string(), aud.clone());
+        m
+    });
+
+    if let Err(e) = state
+        .blob_store
+        .put(&rkey, &body, &mime_type, r2_metadata.as_ref())
+        .await
+    {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),
@@ -115,9 +148,10 @@ async fn put_object(
             .into_response();
     }
 
-    if let Err(e) = state
-        .ns_repo
-        .upsert_object(&ns_id, &key, &rkey, &mime_type, size)
+    if let Err(e) =
+        state
+            .ns_repo
+            .upsert_object(&ns_id, &key, &rkey, &mime_type, size, audience.as_deref())
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -245,6 +279,7 @@ async fn list_objects(
             mime_type: m.mime_type,
             size_bytes: m.size_bytes,
             updated_at: m.updated_at,
+            audience: m.audience,
         })
         .collect();
 
@@ -274,4 +309,82 @@ async fn get_namespace_usage(
         .ns_repo
         .get_namespace_usage_totals(&auth.user.id, &ns_id);
     Json(UsageResponse::from(totals)).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Public (unauthenticated) object access
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct PublicObjectParams {
+    pub audience_token: Option<String>,
+}
+
+/// Routes for unauthenticated public object access.
+pub fn public_object_routes(state: ObjectState) -> Router {
+    Router::new()
+        .route("/public/{ns_id}/objects/{*key}", get(get_public_object))
+        .with_state(state)
+}
+
+/// GET /public/{ns_id}/objects/{*key} — retrieve an object via audience access control.
+async fn get_public_object(
+    State(state): State<ObjectState>,
+    Path((ns_id, key)): Path<(String, String)>,
+    Query(params): Query<PublicObjectParams>,
+) -> impl IntoResponse {
+    let meta = match state.ns_repo.get_object_meta(&ns_id, &key) {
+        Some(m) => m,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    // Private objects (no audience) are not served publicly.
+    let audience_name = match &meta.audience {
+        Some(a) => a.clone(),
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    // Look up the audience record.
+    let audience = match state.ns_repo.get_audience(&ns_id, &audience_name) {
+        Some(a) => a,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    match audience.access.as_str() {
+        "public" => { /* allowed */ }
+        "token" => {
+            let token_str = match &params.audience_token {
+                Some(t) => t,
+                None => return StatusCode::FORBIDDEN.into_response(),
+            };
+            match validate_signed_token(&state.token_signing_key, token_str) {
+                Some(claims) if claims.slug == ns_id && claims.audience == audience_name => { /* valid */
+                }
+                _ => return StatusCode::FORBIDDEN.into_response(),
+            }
+        }
+        _ => return StatusCode::FORBIDDEN.into_response(), // "private" or unknown
+    }
+
+    // Serve the bytes.
+    let rkey = meta.r2_key.unwrap_or_else(|| r2_key(&ns_id, &key));
+    match state.blob_store.get(&rkey).await {
+        Ok(Some(bytes)) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                meta.mime_type
+                    .parse::<axum::http::HeaderValue>()
+                    .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
+            )],
+            bytes,
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
 }

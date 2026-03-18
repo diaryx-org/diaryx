@@ -2,6 +2,7 @@
 
 use super::require_namespace_owner;
 use crate::auth::RequireAuth;
+use crate::blob_store::BlobStore;
 use crate::db::{AudienceInfo, NamespaceRepo};
 use crate::publish::create_signed_token;
 use axum::{
@@ -13,6 +14,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::warn;
 use uuid::Uuid;
 
 /// Shared state for audience handlers.
@@ -21,6 +23,8 @@ pub struct AudienceState {
     pub ns_repo: Arc<NamespaceRepo>,
     /// HMAC-SHA256 key used to sign audience access tokens.
     pub token_signing_key: Vec<u8>,
+    /// Blob store for writing `_audiences.json` metadata to R2.
+    pub blob_store: Arc<dyn BlobStore>,
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +75,28 @@ pub fn audience_routes(state: AudienceState) -> Router {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Write `ns/{ns_id}/_audiences.json` to R2 with the current audience map.
+/// Best-effort — errors are logged but do not fail the request.
+async fn write_audiences_meta(ns_repo: &NamespaceRepo, blob_store: &dyn BlobStore, ns_id: &str) {
+    let audiences = ns_repo.list_audiences(ns_id);
+    let map: serde_json::Map<String, serde_json::Value> = audiences
+        .into_iter()
+        .map(|a| (a.audience_name, serde_json::Value::String(a.access)))
+        .collect();
+    let json = serde_json::to_vec(&map).unwrap_or_default();
+    let key = format!("ns/{}/_audiences.json", ns_id);
+    if let Err(e) = blob_store.put(&key, &json, "application/json", None).await {
+        warn!(
+            "Failed to write audiences metadata to R2 for {}: {}",
+            ns_id, e
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
@@ -100,6 +126,7 @@ async fn set_audience(
                 .ns_repo
                 .get_audience(&ns_id, &name)
                 .expect("just upserted");
+            write_audiences_meta(&state.ns_repo, &*state.blob_store, &ns_id).await;
             Json(AudienceResponse::from(info)).into_response()
         }
         Err(e) => (
@@ -179,13 +206,20 @@ async fn delete_audience(
 
     match state.ns_repo.get_audience(&ns_id, &name) {
         None => StatusCode::NOT_FOUND.into_response(),
-        Some(_) => match state.ns_repo.delete_audience(&ns_id, &name) {
-            Ok(()) => StatusCode::NO_CONTENT.into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e })),
-            )
-                .into_response(),
-        },
+        Some(_) => {
+            // NULL out audience on objects that reference this audience.
+            let _ = state.ns_repo.clear_objects_audience(&ns_id, &name);
+            match state.ns_repo.delete_audience(&ns_id, &name) {
+                Ok(()) => {
+                    write_audiences_meta(&state.ns_repo, &*state.blob_store, &ns_id).await;
+                    StatusCode::NO_CONTENT.into_response()
+                }
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e })),
+                )
+                    .into_response(),
+            }
+        }
     }
 }

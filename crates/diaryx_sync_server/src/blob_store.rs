@@ -20,7 +20,13 @@ pub trait BlobStore: Send + Sync {
     fn blob_key(&self, user_id: &str, hash: &str) -> String;
     fn prefix(&self) -> &str;
 
-    async fn put(&self, key: &str, bytes: &[u8], mime_type: &str) -> Result<(), String>;
+    async fn put(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        mime_type: &str,
+        metadata: Option<&HashMap<String, String>>,
+    ) -> Result<(), String>;
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, String>;
 
@@ -115,24 +121,36 @@ impl BlobStore for R2BlobStore {
         &self.prefix
     }
 
-    async fn put(&self, key: &str, bytes: &[u8], mime_type: &str) -> Result<(), String> {
-        self.client
+    async fn put(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        mime_type: &str,
+        metadata: Option<&HashMap<String, String>>,
+    ) -> Result<(), String> {
+        let mut req = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
             .content_type(mime_type)
             .content_length(bytes.len() as i64)
-            .body(ByteStream::from(bytes.to_vec()))
-            .send()
-            .await
-            .map_err(|e| {
-                let code = e.code().unwrap_or("unknown");
-                let message = e.message().unwrap_or("unknown");
-                format!(
-                    "R2 put failed for bucket={} key={}: code={} message={} raw={:?}",
-                    self.bucket, key, code, message, e
-                )
-            })?;
+            .body(ByteStream::from(bytes.to_vec()));
+
+        if let Some(meta) = metadata {
+            for (k, v) in meta {
+                req = req.metadata(k, v);
+            }
+        }
+
+        req.send().await.map_err(|e| {
+            let code = e.code().unwrap_or("unknown");
+            let message = e.message().unwrap_or("unknown");
+            format!(
+                "R2 put failed for bucket={} key={}: code={} message={} raw={:?}",
+                self.bucket, key, code, message, e
+            )
+        })?;
         Ok(())
     }
 
@@ -484,7 +502,13 @@ impl BlobStore for InMemoryBlobStore {
         &self.prefix
     }
 
-    async fn put(&self, key: &str, bytes: &[u8], _mime_type: &str) -> Result<(), String> {
+    async fn put(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        _mime_type: &str,
+        _metadata: Option<&HashMap<String, String>>,
+    ) -> Result<(), String> {
         self.blobs
             .lock()
             .map_err(|_| "Failed to lock in-memory blob store".to_string())?
@@ -659,15 +683,15 @@ mod tests {
     async fn in_memory_delete_by_prefix_only_removes_matching_keys() {
         let store = InMemoryBlobStore::new("diaryx-sync");
         store
-            .put("site/a/index.html", b"a", "text/html")
+            .put("site/a/index.html", b"a", "text/html", None)
             .await
             .unwrap();
         store
-            .put("site/a/page.html", b"b", "text/html")
+            .put("site/a/page.html", b"b", "text/html", None)
             .await
             .unwrap();
         store
-            .put("site/b/index.html", b"c", "text/html")
+            .put("site/b/index.html", b"c", "text/html", None)
             .await
             .unwrap();
 

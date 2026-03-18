@@ -32,10 +32,6 @@ pub mod export;
 /// Filesystem abstraction
 pub mod fs;
 
-/// Publish (exports as HTML)
-#[cfg(feature = "publish")]
-pub mod publish;
-
 /// Search (query frontmatter or search content)
 pub mod search;
 
@@ -63,10 +59,6 @@ pub mod workspace_registry;
 
 /// Core data types (FileMetadata, BinaryRef, CrdtStorage trait, history types)
 pub mod types;
-
-/// Native pandoc binary integration for multi-format export (requires `native-pandoc` feature)
-#[cfg(feature = "native-pandoc")]
-pub mod pandoc;
 
 /// Import external formats into Diaryx entries.
 ///

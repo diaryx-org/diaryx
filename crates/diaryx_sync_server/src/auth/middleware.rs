@@ -35,9 +35,14 @@ impl AuthExtractor {
         Self { repo }
     }
 
-    /// Extract authentication from request headers or query parameters
+    /// Extract authentication from request headers, cookies, or query parameters.
+    ///
+    /// Extraction order:
+    /// 1. `Authorization: Bearer <token>` header (Tauri / programmatic clients)
+    /// 2. `Cookie: diaryx_session=<token>` (browser same-origin)
+    /// 3. `?token=<token>` query parameter (legacy / WebSocket fallback)
     pub fn extract_auth(&self, parts: &Parts) -> Option<AuthUser> {
-        // Try Authorization header first
+        // 1. Try Authorization header
         let token = parts
             .headers
             .get("Authorization")
@@ -45,7 +50,21 @@ impl AuthExtractor {
             .and_then(|v| v.strip_prefix("Bearer "))
             .map(|s| s.to_string());
 
-        // Fall back to query parameter
+        // 2. Fall back to cookie
+        let token = token.or_else(|| {
+            parts
+                .headers
+                .get_all("cookie")
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .flat_map(|v| v.split(';'))
+                .map(|c| c.trim())
+                .find(|c| c.starts_with("diaryx_session="))
+                .and_then(|c| c.strip_prefix("diaryx_session="))
+                .map(|s| s.to_string())
+        });
+
+        // 3. Fall back to query parameter
         let token = token.or_else(|| {
             parts.uri.query().and_then(|q| {
                 q.split('&')

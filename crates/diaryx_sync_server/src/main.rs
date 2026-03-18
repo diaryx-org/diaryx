@@ -12,8 +12,9 @@ use diaryx_sync_server::{
     db::{AuthRepo, init_database},
     email::EmailService,
     handlers::{
-        AudienceState, NamespaceState, NsSessionState, ObjectState, ai_routes, audience_routes,
-        auth_routes, namespace_routes, ns_session_routes, object_routes, usage_routes,
+        AudienceState, DomainState, NamespaceState, NsSessionState, ObjectState, ai_routes,
+        audience_routes, auth_routes, domain_auth_route, domain_routes, namespace_routes,
+        ns_session_routes, object_routes, public_object_routes, usage_routes,
     },
     sync_v2::SyncV2Server,
 };
@@ -117,6 +118,7 @@ async fn main() {
         email_service,
         repo: repo.clone(),
         passkey_service,
+        session_expiry_days: config.session_expiry_days,
     };
 
     let ai_state = diaryx_sync_server::handlers::ai::AiState {
@@ -148,10 +150,21 @@ async fn main() {
     let object_state = ObjectState {
         ns_repo: ns_repo.clone(),
         blob_store: blob_store.clone(),
+        token_signing_key: config.token_signing_key.clone(),
     };
     let audience_state = AudienceState {
         ns_repo: ns_repo.clone(),
         token_signing_key: config.token_signing_key.clone(),
+        blob_store: blob_store.clone(),
+    };
+    let domain_state = DomainState {
+        ns_repo: ns_repo.clone(),
+        blob_store: blob_store.clone(),
+        token_signing_key: config.token_signing_key.clone(),
+        http_client: reqwest::Client::new(),
+        cf_account_id: config.r2.account_id.clone(),
+        kv_api_token: config.kv_api_token.clone(),
+        kv_namespace_id: config.kv_namespace_id.clone(),
     };
     let ns_session_state = NsSessionState {
         ns_repo: ns_repo.clone(),
@@ -216,6 +229,7 @@ async fn main() {
             header::CONTENT_TYPE,
             header::CACHE_CONTROL,
             header::PRAGMA,
+            header::COOKIE,
         ])
         .allow_credentials(true)
         .allow_origin(AllowOrigin::list(origins));
@@ -235,6 +249,12 @@ async fn main() {
         .nest("/namespaces/{ns_id}", object_routes(object_state.clone()))
         // Audience routes (mounted under /namespaces/{ns_id})
         .nest("/namespaces/{ns_id}", audience_routes(audience_state))
+        // Domain management routes (mounted under /namespaces/{ns_id})
+        .nest("/namespaces/{ns_id}", domain_routes(domain_state.clone()))
+        // Public (unauthenticated) object access
+        .merge(public_object_routes(object_state.clone()))
+        // Caddy forward_auth endpoint
+        .merge(domain_auth_route(domain_state))
         // Usage metering route (user-level, not namespace-scoped)
         .nest("/usage", usage_routes(object_state))
         // Namespace session routes

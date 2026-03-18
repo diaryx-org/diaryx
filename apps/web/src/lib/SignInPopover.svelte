@@ -49,10 +49,11 @@
 
   // Sign-in state
   let email = $state("");
+  const defaultServerUrl = isTauri() ? "https://sync.diaryx.org" : "/api";
   let serverUrl = $state(
     typeof window !== "undefined"
-      ? localStorage.getItem("diaryx_sync_server_url") || "https://sync.diaryx.org"
-      : "https://sync.diaryx.org"
+      ? localStorage.getItem("diaryx_sync_server_url") || defaultServerUrl
+      : defaultServerUrl
   );
   let showAdvanced = $state(false);
   let verificationSent = $state(false);

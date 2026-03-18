@@ -18,7 +18,7 @@ Authentication handling for the sync server.
 
 - `mod.rs` - Module exports
 - `magic_link.rs` - Magic link token generation and verification
-- `middleware.rs` - Axum middleware for session token authentication
+- `middleware.rs` - Axum middleware for session token authentication (supports Bearer header, `diaryx_session` cookie, and `?token=` query param)
 - `passkey.rs` - WebAuthn/passkey registration and authentication
 
 ## Device limit & replacement

@@ -11,12 +11,12 @@ license-file.workspace = true
 
 [dependencies]
 # Internal crates
-diaryx_core = { workspace = true, features = ["html-publish"] }
+diaryx_core = { workspace = true }
 diaryx_sync = { workspace = true, features = ["server", "git"] }
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
-axum-extra = { version = "0.10", features = ["typed-header"] }
+axum-extra = { version = "0.10", features = ["typed-header", "cookie"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 

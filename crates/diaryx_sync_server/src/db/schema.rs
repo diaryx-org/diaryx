@@ -93,8 +93,11 @@ CREATE TABLE IF NOT EXISTS namespace_objects (
     mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
     size_bytes INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
+    audience TEXT,                         -- NULL = private (owner-only); non-NULL refs namespace_audiences
     PRIMARY KEY (namespace_id, key)
 );
+
+CREATE INDEX IF NOT EXISTS idx_namespace_objects_audience ON namespace_objects(namespace_id, audience);
 
 CREATE INDEX IF NOT EXISTS idx_namespace_objects_ns ON namespace_objects(namespace_id);
 
@@ -107,6 +110,17 @@ CREATE TABLE IF NOT EXISTS namespace_audiences (
 );
 
 CREATE INDEX IF NOT EXISTS idx_namespace_audiences_ns ON namespace_audiences(namespace_id);
+
+-- Custom domain → namespace+audience mapping for Caddy forward_auth.
+CREATE TABLE IF NOT EXISTS custom_domains (
+    domain TEXT PRIMARY KEY,
+    namespace_id TEXT NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
+    audience_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    verified INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_custom_domains_ns ON custom_domains(namespace_id);
 
 -- Usage events for metering (bytes_in, bytes_out, bytes_stored, relay_seconds).
 CREATE TABLE IF NOT EXISTS usage_events (
@@ -306,9 +320,11 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
             mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
             size_bytes INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
+            audience TEXT,
             PRIMARY KEY (namespace_id, key)
         );
         CREATE INDEX IF NOT EXISTS idx_namespace_objects_ns ON namespace_objects(namespace_id);
+        CREATE INDEX IF NOT EXISTS idx_namespace_objects_audience ON namespace_objects(namespace_id, audience);
 
         CREATE TABLE IF NOT EXISTS namespace_audiences (
             namespace_id TEXT NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
@@ -339,6 +355,33 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
         );
         CREATE INDEX IF NOT EXISTS idx_namespace_sessions_owner ON namespace_sessions(owner_user_id);
         CREATE INDEX IF NOT EXISTS idx_namespace_sessions_ns ON namespace_sessions(namespace_id);
+        "#,
+    )?;
+
+    // Forward migration: add audience column to namespace_objects.
+    let has_audience_col: bool = conn
+        .prepare("PRAGMA table_info(namespace_objects)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "audience");
+    if !has_audience_col {
+        conn.execute("ALTER TABLE namespace_objects ADD COLUMN audience TEXT", [])?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_namespace_objects_audience ON namespace_objects(namespace_id, audience);",
+    )?;
+
+    // Forward migration: create custom_domains table if missing.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS custom_domains (
+            domain TEXT PRIMARY KEY,
+            namespace_id TEXT NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
+            audience_name TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            verified INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_custom_domains_ns ON custom_domains(namespace_id);
         "#,
     )?;
 
@@ -410,6 +453,7 @@ mod tests {
         assert!(tables.contains(&"namespace_audiences".to_string()));
         assert!(tables.contains(&"usage_events".to_string()));
         assert!(tables.contains(&"namespace_sessions".to_string()));
+        assert!(tables.contains(&"custom_domains".to_string()));
 
         let user_cols: Vec<String> = conn
             .prepare("PRAGMA table_info(users)")

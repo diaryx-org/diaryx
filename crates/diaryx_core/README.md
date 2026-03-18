@@ -71,9 +71,6 @@ diaryx_core
     │   ├── mod.rs
     │   └── native.rs (Actual filesystem [std::fs] used by Tauri/CLI)
     ├── lib.rs
-    ├── publish (Uses comrak to export to HTML)
-    │   ├── mod.rs
-    │   └── types.rs
     ├── search.rs (Searching by frontmatter or content)
     ├── template.rs (Templating functionality for entry scaffolding)
     ├── test_utils.rs (Feature-gated unit test utility functions)
@@ -541,39 +538,6 @@ let result = diaryx.execute(Command::GetHistory {
     doc_type: "workspace".to_string(),
     doc_name: None,
 });
-```
-
-## Publish
-
-The `publish` module converts markdown files to HTML using [comrak](https://docs.rs/comrak):
-
-```rust,ignore
-use diaryx_core::publish::{Publisher, PublishOptions};
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
-use std::path::Path;
-
-let fs = SyncToAsyncFs::new(RealFileSystem);
-let publisher = Publisher::new(fs);
-
-let options = PublishOptions {
-    include_toc: true,           // Generate table of contents
-    syntax_highlighting: true,   // Highlight code blocks
-    template: None,              // Use default HTML template
-};
-
-// Publish a single file
-let html = futures_lite::future::block_on(
-    publisher.publish_file(Path::new("notes/my-note.md"), &options)
-)?;
-
-// Publish to a specific path
-futures_lite::future::block_on(
-    publisher.publish_to_path(
-        Path::new("notes/my-note.md"),
-        Path::new("output/my-note.html"),
-        &options
-    )
-)?;
 ```
 
 ## Templates

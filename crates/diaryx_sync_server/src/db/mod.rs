@@ -3,8 +3,8 @@ mod repo;
 mod schema;
 
 pub use namespaces::{
-    AudienceInfo, NamespaceInfo, NamespaceObjectMeta, NamespaceRepo, NamespaceSessionInfo,
-    UsageTotals,
+    AudienceInfo, CustomDomainInfo, NamespaceInfo, NamespaceObjectMeta, NamespaceRepo,
+    NamespaceSessionInfo, UsageTotals,
 };
 pub use repo::{
     AuthRepo, DeviceInfo, PasskeyChallengeInfo, SessionInfo, TierDefaults, UserInfo, UserTier,

@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-13T04:18:37Z
+updated: 2026-03-18T14:33:38Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -61,7 +61,6 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Entry module - Entry manipulation functionality - crates/diaryx_core/src/entry/README.md
 │   │       ├── Filesystem module - Filesystem abstraction layer - crates/diaryx_core/src/fs/README.md
 │   │       ├── crates/diaryx_core/src/plugin/README.md
-│   │       ├── Publish module - Format-agnostic publishing pipeline - crates/diaryx_core/src/publish/README.md
 │   │       ├── Utils module - Utility functions for date and path handling - crates/diaryx_core/src/utils/README.md
 │   │       ├── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   │       └── Import module - Import external formats into Diaryx entries - crates/diaryx_core/src/import/README.md

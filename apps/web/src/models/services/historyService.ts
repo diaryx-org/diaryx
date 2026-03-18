@@ -4,7 +4,7 @@
  * Communicates with the sync server's history/commit/restore endpoints.
  */
 
-import { getToken, getServerUrl, getCurrentWorkspace } from '$lib/auth';
+import { getServerUrl, getCurrentWorkspace } from '$lib/auth';
 import { proxyFetch } from '$lib/backend/proxyFetch';
 
 // ============================================================================
@@ -34,12 +34,11 @@ export interface RestoreResponse {
 // API Helpers
 // ============================================================================
 
-function getApiBase(): { serverUrl: string; token: string; workspaceId: string } | null {
+function getApiBase(): { serverUrl: string; workspaceId: string } | null {
   const serverUrl = getServerUrl();
-  const token = getToken();
   const workspace = getCurrentWorkspace();
-  if (!serverUrl || !token || !workspace) return null;
-  return { serverUrl: serverUrl.replace(/\/$/, ''), token, workspaceId: workspace.id };
+  if (!serverUrl || !workspace) return null;
+  return { serverUrl: serverUrl.replace(/\/$/, ''), workspaceId: workspace.id };
 }
 
 async function apiFetch<T>(
@@ -54,7 +53,6 @@ async function apiFetch<T>(
     {
       ...options,
       headers: {
-        Authorization: `Bearer ${base.token}`,
         'Content-Type': 'application/json',
         ...options?.headers,
       },

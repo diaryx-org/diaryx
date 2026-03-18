@@ -4,13 +4,15 @@ description: HTTP route handlers
 part_of: "[README](/crates/diaryx_sync_server/src/README.md)"
 attachments:
   - "[mod.rs](/crates/diaryx_sync_server/src/handlers/mod.rs)"
-  - "[api.rs](/crates/diaryx_sync_server/src/handlers/api.rs)"
   - "[ai.rs](/crates/diaryx_sync_server/src/handlers/ai.rs)"
   - "[auth.rs](/crates/diaryx_sync_server/src/handlers/auth.rs)"
-  - "[sites.rs](/crates/diaryx_sync_server/src/handlers/sites.rs)"
-  - "[sessions.rs](/crates/diaryx_sync_server/src/handlers/sessions.rs)"
+  - "[audiences.rs](/crates/diaryx_sync_server/src/handlers/audiences.rs)"
+  - "[domains.rs](/crates/diaryx_sync_server/src/handlers/domains.rs)"
+  - "[namespaces.rs](/crates/diaryx_sync_server/src/handlers/namespaces.rs)"
+  - "[ns_sessions.rs](/crates/diaryx_sync_server/src/handlers/ns_sessions.rs)"
+  - "[objects.rs](/crates/diaryx_sync_server/src/handlers/objects.rs)"
   - "[stripe.rs](/crates/diaryx_sync_server/src/handlers/stripe.rs)"
-  - "[ws.rs](/crates/diaryx_sync_server/src/handlers/ws.rs)"
+  - "[apple.rs](/crates/diaryx_sync_server/src/handlers/apple.rs)"
 exclude:
   - "*.lock"
 ---
@@ -21,16 +23,18 @@ HTTP route handlers for the sync server API.
 
 ## Files
 
-| File          | Purpose                                               |
-| ------------- | ----------------------------------------------------- |
-| `mod.rs`      | Router setup and middleware                           |
-| `api.rs`      | General API endpoints (status, workspace CRUD)        |
-| `ai.rs`       | Managed AI proxy endpoint (`/api/ai/chat/completions`) |
-| `auth.rs`     | Authentication endpoints (magic-link, verify, logout) |
-| `sites.rs`    | Published site and access-token management endpoints   |
-| `sessions.rs` | Share session management endpoints                    |
-| `stripe.rs`   | Stripe billing endpoints (checkout, portal, webhook)  |
-| `ws.rs`       | WebSocket upgrade and sync handling                   |
+| File              | Purpose                                                       |
+| ----------------- | ------------------------------------------------------------- |
+| `mod.rs`          | Router setup, middleware, `require_namespace_owner` helper     |
+| `ai.rs`           | Managed AI proxy endpoint (`/api/ai/chat/completions`)        |
+| `auth.rs`         | Authentication endpoints (magic-link, verify, logout, cookies) |
+| `audiences.rs`    | Audience visibility management endpoints                      |
+| `domains.rs`      | Custom domain management + Caddy `forward_auth` endpoint      |
+| `namespaces.rs`   | Namespace CRUD endpoints                                      |
+| `ns_sessions.rs`  | Namespace session management endpoints                        |
+| `objects.rs`      | Object store + public object access + usage endpoints         |
+| `stripe.rs`       | Stripe billing endpoints (checkout, portal, webhook)          |
+| `apple.rs`        | Apple IAP receipt verification endpoints                      |
 
 ### Workspace CRUD Endpoints
 
@@ -43,6 +47,8 @@ HTTP route handlers for the sync server API.
 Workspace creation returns `403` when the user's workspace limit is reached, and `409` for duplicate names.
 The per-user workspace limit defaults to the user's tier (Free=1, Plus=10) and can be overridden via `workspace_limit` on the users table.
 The `GET /auth/me` response includes `workspace_limit`, `tier`, `published_site_limit`, and `attachment_limit_bytes`.
+Auth verification endpoints (`/auth/verify`, `/auth/verify-code`, `/auth/passkeys/authenticate/finish`) set an `HttpOnly; Secure; SameSite=Strict` session cookie (`diaryx_session`) alongside the JSON token response. The middleware extracts auth from: (1) `Authorization: Bearer` header, (2) `Cookie: diaryx_session=<token>`, (3) `?token=` query param. The logout endpoint clears the cookie with `Max-Age=0`.
+
 Auth verification also enforces the tier device cap during session creation; Free users can keep up to 2 registered devices and Plus users up to 10. When the limit is reached the `403` response includes a `devices` array with each device's `id`, `name`, and `last_seen_at`. The client can then re-submit the verification request with `replace_device_id` set to the ID of the device to remove, completing sign-in in one step.
 
 ### Snapshot Endpoints
@@ -127,3 +133,28 @@ Only available when `STRIPE_SECRET_KEY` is configured.
 
 - `POST /api/ai/chat/completions` — Authenticated managed AI proxy endpoint (OpenRouter upstream).
 - Requires Plus tier (`plus_required`), validates model against allowlist (`model_not_allowed`), enforces per-user rate limit (`rate_limited`) and monthly quota (`quota_exceeded`), returns `provider_unavailable` for upstream/config failures.
+
+### Namespace Object Endpoints
+
+- `PUT /namespaces/{ns_id}/objects/{*key}` — store bytes (owner, `X-Audience` header sets audience tag)
+- `GET /namespaces/{ns_id}/objects/{*key}` — retrieve bytes (owner)
+- `DELETE /namespaces/{ns_id}/objects/{*key}` — delete object (owner)
+- `GET /namespaces/{ns_id}/objects` — list object metadata (owner)
+
+### Public Object Access
+
+- `GET /public/{ns_id}/objects/{*key}` — unauthenticated object access, checks audience access level. For `token` audiences, pass `?audience_token=<token>`.
+
+### Audience Endpoints
+
+- `PUT /namespaces/{ns_id}/audiences/{name}` — set audience access level (owner)
+- `GET /namespaces/{ns_id}/audiences` — list audiences (owner)
+- `GET /namespaces/{ns_id}/audiences/{name}/token` — generate signed access token (owner)
+- `DELETE /namespaces/{ns_id}/audiences/{name}` — remove audience, NULLs out audience on referencing objects (owner)
+
+### Custom Domain Endpoints
+
+- `PUT /namespaces/{ns_id}/domains/{domain}` — register custom domain (owner, body: `{ audience_name }`)
+- `GET /namespaces/{ns_id}/domains` — list custom domains (owner)
+- `DELETE /namespaces/{ns_id}/domains/{domain}` — remove custom domain (owner)
+- `GET /domain-auth` — Caddy `forward_auth` endpoint (unauthenticated, reads `X-Forwarded-Host` + `X-Forwarded-Uri`)

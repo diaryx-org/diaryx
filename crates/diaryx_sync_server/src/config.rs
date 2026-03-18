@@ -32,6 +32,10 @@ pub struct Config {
     pub stripe: Option<StripeConfig>,
     /// Apple IAP configuration (None if APPLE_IAP_BUNDLE_ID not set)
     pub apple_iap: Option<AppleIapConfig>,
+    /// Cloudflare KV API token for writing domain mappings
+    pub kv_api_token: Option<String>,
+    /// Cloudflare KV namespace ID for domain mappings
+    pub kv_namespace_id: Option<String>,
 }
 
 /// Managed AI proxy configuration.
@@ -237,6 +241,15 @@ impl Config {
             }
         };
 
+        let kv_api_token = env::var("KV_API_TOKEN")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let kv_namespace_id = env::var("KV_NAMESPACE_ID")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+
         Ok(Config {
             host,
             port,
@@ -252,6 +265,8 @@ impl Config {
             managed_ai,
             stripe,
             apple_iap,
+            kv_api_token,
+            kv_namespace_id,
         })
     }
 

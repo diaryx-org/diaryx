@@ -22,7 +22,6 @@ This folder contains Diaryx crates for core features and platform bindings.
 
 - `[diaryx](/crates/diaryx/README.md)`: CLI interface
 - `[diaryx_core](/crates/diaryx_core/README.md)`: Core functions shared across all Diaryx clients
-- `[diaryx_core::publish](/crates/diaryx_core/src/publish/README.md)`: Publishing pipeline — converts workspace markdown to HTML and other publish targets
 - `[diaryx_daily](/crates/diaryx_daily/README.md)`: Shared daily-entry domain logic for plugins
 - `[diaryx_wasm](/crates/diaryx_wasm/README.md)`: WASM version of `diaryx_core` to be used in the web client at `[../apps/web](/apps/web/README.md)`
 - `[diaryx_sync_server](/crates/diaryx_sync_server/README.md)`: Sync server to enable live sync/multi-device sync (soon publishing as well).

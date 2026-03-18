@@ -8,7 +8,6 @@ contents:
   - "[README](/crates/diaryx_core/src/entry/README.md)"
   - "[README](/crates/diaryx_core/src/fs/README.md)"
   - "[README](/crates/diaryx_core/src/plugin/README.md)"
-  - "[README](/crates/diaryx_core/src/publish/README.md)"
   - "[README](/crates/diaryx_core/src/utils/README.md)"
   - "[README](/crates/diaryx_core/src/workspace/README.md)"
   - "[README](/crates/diaryx_core/src/import/README.md)"

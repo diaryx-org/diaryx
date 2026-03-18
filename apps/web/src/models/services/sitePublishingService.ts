@@ -2,7 +2,7 @@
  * Site Publishing Service — API client for workspace site publishing.
  */
 
-import { getToken, getServerUrl } from '$lib/auth';
+import { getServerUrl } from '$lib/auth';
 import { proxyFetch } from '$lib/backend/proxyFetch';
 
 // ============================================================================
@@ -92,13 +92,11 @@ interface CreateTokenResponse {
 // API Helpers
 // ============================================================================
 
-function getApiBase(workspaceId: string): { serverUrl: string; token: string; workspaceId: string } | null {
+function getApiBase(workspaceId: string): { serverUrl: string; workspaceId: string } | null {
   const serverUrl = getServerUrl();
-  const token = getToken();
-  if (!serverUrl || !token || !workspaceId) return null;
+  if (!serverUrl || !workspaceId) return null;
   return {
     serverUrl: serverUrl.replace(/\/$/, ''),
-    token,
     workspaceId,
   };
 }
@@ -196,7 +194,6 @@ async function apiFetch<T>(workspaceId: string, path: string, options?: RequestI
     {
       ...options,
       headers: {
-        Authorization: `Bearer ${base.token}`,
         'Content-Type': 'application/json',
         ...options?.headers,
       },

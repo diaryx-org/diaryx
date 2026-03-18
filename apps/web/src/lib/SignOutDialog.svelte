@@ -24,14 +24,12 @@
     isClearingData = true;
     try {
       // Delete this device from the server while credentials are still valid
-      const token = localStorage.getItem('diaryx_auth_token');
       const deviceId = getDeviceId();
       const serverUrl = localStorage.getItem('diaryx_sync_server_url');
-      if (token && deviceId && serverUrl) {
+      if (deviceId && serverUrl) {
         try {
           await proxyFetch(`${serverUrl}/auth/devices/${deviceId}`, {
             method: 'DELETE',
-            headers: { Authorization: `Bearer ${token}` },
           });
         } catch {
           // Best-effort

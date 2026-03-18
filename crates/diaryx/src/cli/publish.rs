@@ -3,10 +3,31 @@
 use std::path::{Path, PathBuf};
 
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
-use diaryx_core::pandoc;
 use diaryx_core::workspace::Workspace;
 
 use crate::cli::plugin_loader::CliPublishContext;
+
+/// Valid publish output formats.
+const VALID_PUBLISH_FORMATS: &[&str] = &["html", "docx", "epub", "pdf", "latex", "odt", "rst"];
+
+/// Formats that require the publish plugin's converter.
+fn requires_converter(format: &str) -> bool {
+    matches!(format, "docx" | "epub" | "pdf" | "latex" | "odt" | "rst")
+}
+
+/// Get the file extension for a given format.
+fn format_extension(format: &str) -> &str {
+    match format {
+        "html" => "html",
+        "docx" => "docx",
+        "epub" => "epub",
+        "pdf" => "pdf",
+        "latex" => "tex",
+        "odt" => "odt",
+        "rst" => "rst",
+        _ => format,
+    }
+}
 
 /// Helper to run async operations in sync context
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -26,21 +47,15 @@ pub fn handle_publish(
     dry_run: bool,
 ) {
     // Validate format (publish doesn't support "markdown" — it always starts from HTML)
-    let valid_publish_formats = ["html", "docx", "epub", "pdf", "latex", "odt", "rst"];
-    if !valid_publish_formats.contains(&format) {
+    if !VALID_PUBLISH_FORMATS.contains(&format) {
         eprintln!(
             "✗ Unsupported publish format: '{}'. Supported: {}",
             format,
-            valid_publish_formats.join(", ")
+            VALID_PUBLISH_FORMATS.join(", ")
         );
         return;
     }
 
-    // Check pandoc availability for non-HTML formats
-    if pandoc::requires_pandoc(format) && !pandoc::is_pandoc_available() {
-        pandoc::print_install_instructions();
-        return;
-    }
     // Resolve workspace root
     let workspace_root = match resolve_workspace_for_publish(workspace_override) {
         Ok(root) => root,
@@ -75,7 +90,7 @@ pub fn handle_publish(
         println!("Audience: {}", aud);
     }
     if format != "html" {
-        println!("Format: {} (via pandoc)", format);
+        println!("Format: {}", format);
     }
     println!(
         "Output mode: {}",
@@ -145,38 +160,9 @@ pub fn handle_publish(
                 );
             }
 
-            // Post-process with pandoc if a non-HTML format was requested
-            if pandoc::requires_pandoc(format) {
-                println!("Converting to {}...", format);
-                let ext = pandoc::format_extension(format);
-                let mut converted = 0;
-                let mut failed = 0;
-
-                let html_files = if single_file {
-                    vec![destination.clone()]
-                } else {
-                    walkdir_html(&destination)
-                };
-
-                for html_path in &html_files {
-                    let out_path = html_path.with_extension(ext);
-                    match pandoc::convert_file(html_path, &out_path, "html", format, true) {
-                        Ok(()) => {
-                            let _ = std::fs::remove_file(html_path);
-                            converted += 1;
-                        }
-                        Err(e) => {
-                            eprintln!("  ✗ Failed to convert {}: {}", html_path.display(), e);
-                            failed += 1;
-                        }
-                    }
-                }
-
-                if failed == 0 {
-                    println!("✓ Converted {} files to {}", converted, format);
-                } else {
-                    eprintln!("⚠ Converted {} files, {} failed", converted, failed);
-                }
+            // Post-process via publish plugin if a non-HTML format was requested
+            if requires_converter(format) {
+                convert_published_files(&ctx, &destination, format, single_file);
             } else if single_file {
                 println!("  Open {} in a browser to view", destination.display());
             } else {
@@ -187,6 +173,93 @@ pub fn handle_publish(
         Err(e) => {
             eprintln!("✗ Publish failed: {}", e);
         }
+    }
+}
+
+/// Convert published .html files to the target format via the publish plugin.
+fn convert_published_files(
+    ctx: &CliPublishContext,
+    destination: &Path,
+    format: &str,
+    single_file: bool,
+) {
+    println!("Converting to {}...", format);
+    let ext = format_extension(format);
+    let mut converted = 0;
+    let mut failed = 0;
+
+    let html_files = if single_file {
+        vec![destination.to_path_buf()]
+    } else {
+        walkdir_html(destination)
+    };
+
+    for html_path in &html_files {
+        let content = match std::fs::read_to_string(html_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("  ✗ Failed to read {}: {}", html_path.display(), e);
+                failed += 1;
+                continue;
+            }
+        };
+
+        match ctx.cmd(
+            "ConvertFormat",
+            serde_json::json!({
+                "content": content,
+                "from": "html",
+                "to": format,
+            }),
+        ) {
+            Ok(result) => {
+                let out_path = html_path.with_extension(ext);
+                if let Some(binary_b64) = result.get("binary").and_then(|v| v.as_str()) {
+                    use base64::Engine;
+                    match base64::engine::general_purpose::STANDARD.decode(binary_b64) {
+                        Ok(bytes) => {
+                            if let Err(e) = std::fs::write(&out_path, &bytes) {
+                                eprintln!("  ✗ Failed to write {}: {}", out_path.display(), e);
+                                failed += 1;
+                                continue;
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "  ✗ Failed to decode binary output for {}: {}",
+                                html_path.display(),
+                                e
+                            );
+                            failed += 1;
+                            continue;
+                        }
+                    }
+                } else if let Some(text) = result.get("content").and_then(|v| v.as_str()) {
+                    if let Err(e) = std::fs::write(&out_path, text) {
+                        eprintln!("  ✗ Failed to write {}: {}", out_path.display(), e);
+                        failed += 1;
+                        continue;
+                    }
+                } else {
+                    eprintln!("  ✗ Plugin returned no content for {}", html_path.display());
+                    failed += 1;
+                    continue;
+                }
+
+                let _ = std::fs::remove_file(html_path);
+                converted += 1;
+            }
+            Err(e) => {
+                eprintln!("  ✗ Failed to convert {}: {}", html_path.display(), e);
+                failed += 1;
+            }
+        }
+    }
+
+    if failed == 0 {
+        println!("✓ Converted {} files to {}", converted, format);
+    } else {
+        eprintln!("⚠ Converted {} files, {} failed", converted, failed);
     }
 }
 

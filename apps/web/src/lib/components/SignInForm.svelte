@@ -11,7 +11,7 @@
     ChevronDown,
     ChevronUp,
   } from "@lucide/svelte";
-  import { getBackend, createApi } from "$lib/backend";
+  import { getBackend, createApi, isTauri } from "$lib/backend";
   import {
     requestMagicLink,
     verifyMagicLink,
@@ -26,11 +26,12 @@
 
   let { onAuthenticated, compact = false }: Props = $props();
 
+  const defaultServerUrl = isTauri() ? "https://sync.diaryx.org" : "/api";
   let email = $state("");
   let serverUrl = $state(
     typeof window !== "undefined"
-      ? localStorage.getItem("diaryx_sync_server_url") || "https://sync.diaryx.org"
-      : "https://sync.diaryx.org"
+      ? localStorage.getItem("diaryx_sync_server_url") || defaultServerUrl
+      : defaultServerUrl
   );
   let showAdvanced = $state(false);
   let verificationSent = $state(false);

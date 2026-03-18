@@ -22,6 +22,8 @@ pub struct NamespaceObjectMeta {
     pub mime_type: String,
     pub size_bytes: u64,
     pub updated_at: i64,
+    /// Audience tag. `None` = private (owner-only).
+    pub audience: Option<String>,
 }
 
 /// Audience visibility record.
@@ -49,6 +51,16 @@ pub struct UsageTotals {
     pub bytes_in: u64,
     pub bytes_out: u64,
     pub relay_seconds: u64,
+}
+
+/// Custom domain record mapping a domain to a namespace + audience.
+#[derive(Debug, Clone)]
+pub struct CustomDomainInfo {
+    pub domain: String,
+    pub namespace_id: String,
+    pub audience_name: String,
+    pub created_at: i64,
+    pub verified: bool,
 }
 
 /// Repository for namespace-related operations.
@@ -138,19 +150,21 @@ impl NamespaceRepo {
         r2_key: &str,
         mime_type: &str,
         size_bytes: u64,
+        audience: Option<&str>,
     ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().timestamp();
         conn.execute(
-            "INSERT INTO namespace_objects (namespace_id, key, r2_key, data, mime_type, size_bytes, updated_at)
-             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)
+            "INSERT INTO namespace_objects (namespace_id, key, r2_key, data, mime_type, size_bytes, updated_at, audience)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7)
              ON CONFLICT(namespace_id, key) DO UPDATE SET
                r2_key = excluded.r2_key,
                data = NULL,
                mime_type = excluded.mime_type,
                size_bytes = excluded.size_bytes,
-               updated_at = excluded.updated_at",
-            params![namespace_id, key, r2_key, mime_type, size_bytes as i64, now],
+               updated_at = excluded.updated_at,
+               audience = excluded.audience",
+            params![namespace_id, key, r2_key, mime_type, size_bytes as i64, now, audience],
         )
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -159,7 +173,7 @@ impl NamespaceRepo {
     pub fn get_object_meta(&self, namespace_id: &str, key: &str) -> Option<NamespaceObjectMeta> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at
+            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience
              FROM namespace_objects WHERE namespace_id = ?1 AND key = ?2",
             params![namespace_id, key],
             |row| {
@@ -170,6 +184,7 @@ impl NamespaceRepo {
                     mime_type: row.get(3)?,
                     size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
                     updated_at: row.get(5)?,
+                    audience: row.get(6)?,
                 })
             },
         )
@@ -185,7 +200,7 @@ impl NamespaceRepo {
     ) -> Vec<NamespaceObjectMeta> {
         let conn = self.conn.lock().unwrap();
         conn.prepare(
-            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at
+            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience
              FROM namespace_objects WHERE namespace_id = ?1 ORDER BY key LIMIT ?2 OFFSET ?3",
         )
         .and_then(|mut stmt| {
@@ -197,6 +212,7 @@ impl NamespaceRepo {
                     mime_type: row.get(3)?,
                     size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
                     updated_at: row.get(5)?,
+                    audience: row.get(6)?,
                 })
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -211,6 +227,126 @@ impl NamespaceRepo {
             params![namespace_id, key],
         )
         .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    /// List objects belonging to a specific audience.
+    pub fn list_objects_by_audience(
+        &self,
+        namespace_id: &str,
+        audience: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Vec<NamespaceObjectMeta> {
+        let conn = self.conn.lock().unwrap();
+        conn.prepare(
+            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience
+             FROM namespace_objects WHERE namespace_id = ?1 AND audience = ?2 ORDER BY key LIMIT ?3 OFFSET ?4",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(params![namespace_id, audience, limit, offset], |row| {
+                Ok(NamespaceObjectMeta {
+                    namespace_id: row.get(0)?,
+                    key: row.get(1)?,
+                    r2_key: row.get(2)?,
+                    mime_type: row.get(3)?,
+                    size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
+                    updated_at: row.get(5)?,
+                    audience: row.get(6)?,
+                })
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        })
+        .unwrap_or_default()
+    }
+
+    /// NULL out the audience field on all objects referencing a deleted audience.
+    pub fn clear_objects_audience(
+        &self,
+        namespace_id: &str,
+        audience_name: &str,
+    ) -> Result<u64, String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE namespace_objects SET audience = NULL WHERE namespace_id = ?1 AND audience = ?2",
+            params![namespace_id, audience_name],
+        )
+        .map(|changed| changed as u64)
+        .map_err(|e| e.to_string())
+    }
+
+    // -------------------------------------------------------------------------
+    // Custom domains
+    // -------------------------------------------------------------------------
+
+    pub fn upsert_custom_domain(
+        &self,
+        domain: &str,
+        namespace_id: &str,
+        audience_name: &str,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO custom_domains (domain, namespace_id, audience_name, created_at, verified)
+             VALUES (?1, ?2, ?3, ?4, 0)
+             ON CONFLICT(domain) DO UPDATE SET
+               namespace_id = excluded.namespace_id,
+               audience_name = excluded.audience_name",
+            params![domain, namespace_id, audience_name, now],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn get_custom_domain(&self, domain: &str) -> Option<CustomDomainInfo> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT domain, namespace_id, audience_name, created_at, verified
+             FROM custom_domains WHERE domain = ?1",
+            params![domain],
+            |row| {
+                Ok(CustomDomainInfo {
+                    domain: row.get(0)?,
+                    namespace_id: row.get(1)?,
+                    audience_name: row.get(2)?,
+                    created_at: row.get(3)?,
+                    verified: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .unwrap_or(None)
+    }
+
+    pub fn list_custom_domains(&self, namespace_id: &str) -> Vec<CustomDomainInfo> {
+        let conn = self.conn.lock().unwrap();
+        conn.prepare(
+            "SELECT domain, namespace_id, audience_name, created_at, verified
+             FROM custom_domains WHERE namespace_id = ?1 ORDER BY domain",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(params![namespace_id], |row| {
+                Ok(CustomDomainInfo {
+                    domain: row.get(0)?,
+                    namespace_id: row.get(1)?,
+                    audience_name: row.get(2)?,
+                    created_at: row.get(3)?,
+                    verified: row.get(4)?,
+                })
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn delete_custom_domain(&self, domain: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM custom_domains WHERE domain = ?1",
+            params![domain],
+        )
+        .map(|changed| changed > 0)
         .map_err(|e| e.to_string())
     }
 
@@ -502,12 +638,14 @@ mod tests {
             "ns/workspace:abc/README.md",
             "text/markdown",
             42,
+            None,
         )
         .unwrap();
 
         let meta = repo.get_object_meta("workspace:abc", "README.md").unwrap();
         assert_eq!(meta.size_bytes, 42);
         assert_eq!(meta.r2_key.as_deref(), Some("ns/workspace:abc/README.md"));
+        assert!(meta.audience.is_none());
 
         // Upsert updates existing
         repo.upsert_object(
@@ -516,16 +654,96 @@ mod tests {
             "ns/workspace:abc/README.md",
             "text/markdown",
             100,
+            Some("public"),
         )
         .unwrap();
         let meta2 = repo.get_object_meta("workspace:abc", "README.md").unwrap();
         assert_eq!(meta2.size_bytes, 100);
+        assert_eq!(meta2.audience.as_deref(), Some("public"));
 
         let list = repo.list_objects("workspace:abc", 100, 0);
         assert_eq!(list.len(), 1);
 
         repo.delete_object("workspace:abc", "README.md").unwrap();
         assert!(repo.get_object_meta("workspace:abc", "README.md").is_none());
+    }
+
+    #[test]
+    fn object_audience_round_trip() {
+        let repo = make_repo_with_schema();
+        repo.create_namespace("site:x", "u1").unwrap();
+
+        // Private (no audience)
+        repo.upsert_object("site:x", "a.txt", "ns/site:x/a.txt", "text/plain", 10, None)
+            .unwrap();
+        // With audience
+        repo.upsert_object(
+            "site:x",
+            "b.txt",
+            "ns/site:x/b.txt",
+            "text/plain",
+            20,
+            Some("public"),
+        )
+        .unwrap();
+        repo.upsert_object(
+            "site:x",
+            "c.txt",
+            "ns/site:x/c.txt",
+            "text/plain",
+            30,
+            Some("public"),
+        )
+        .unwrap();
+        repo.upsert_object(
+            "site:x",
+            "d.txt",
+            "ns/site:x/d.txt",
+            "text/plain",
+            40,
+            Some("members"),
+        )
+        .unwrap();
+
+        let by_public = repo.list_objects_by_audience("site:x", "public", 100, 0);
+        assert_eq!(by_public.len(), 2);
+
+        let by_members = repo.list_objects_by_audience("site:x", "members", 100, 0);
+        assert_eq!(by_members.len(), 1);
+
+        // clear_objects_audience
+        let cleared = repo.clear_objects_audience("site:x", "public").unwrap();
+        assert_eq!(cleared, 2);
+        let after = repo.list_objects_by_audience("site:x", "public", 100, 0);
+        assert!(after.is_empty());
+        // Objects still exist, just audience is NULL
+        let b = repo.get_object_meta("site:x", "b.txt").unwrap();
+        assert!(b.audience.is_none());
+    }
+
+    #[test]
+    fn custom_domain_crud() {
+        let repo = make_repo_with_schema();
+        repo.create_namespace("site:x", "u1").unwrap();
+
+        repo.upsert_custom_domain("blog.example.com", "site:x", "public")
+            .unwrap();
+        let d = repo.get_custom_domain("blog.example.com").unwrap();
+        assert_eq!(d.namespace_id, "site:x");
+        assert_eq!(d.audience_name, "public");
+        assert!(!d.verified);
+
+        let list = repo.list_custom_domains("site:x");
+        assert_eq!(list.len(), 1);
+
+        // Update audience
+        repo.upsert_custom_domain("blog.example.com", "site:x", "members")
+            .unwrap();
+        let d2 = repo.get_custom_domain("blog.example.com").unwrap();
+        assert_eq!(d2.audience_name, "members");
+
+        assert!(repo.delete_custom_domain("blog.example.com").unwrap());
+        assert!(repo.get_custom_domain("blog.example.com").is_none());
     }
 
     #[test]

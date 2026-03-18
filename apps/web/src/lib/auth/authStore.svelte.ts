@@ -33,6 +33,7 @@ import {
 } from "./webauthnUtils";
 import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
 import { getCurrentWorkspaceId as registryGetCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry.svelte";
+import { isTauri } from "$lib/backend/interface";
 
 function setAuthToken(_token: string | undefined): void {
   // Sync plugin reads token through host callbacks/local auth state.
@@ -168,9 +169,34 @@ export function getUser(): User | null {
   return state.user;
 }
 
+/**
+ * Get the auth token.
+ *
+ * - Browser: returns `null` — the token lives in an HttpOnly cookie that JS
+ *   cannot read. Auth happens automatically via `credentials: 'include'`.
+ * - Tauri: reads the token from Stronghold (async). The synchronous signature
+ *   returns `null`; callers that need the raw token on Tauri should use
+ *   `getTokenAsync()` instead.
+ */
 export function getToken(): string | null {
-  if (typeof localStorage === "undefined") return null;
-  return localStorage.getItem(STORAGE_KEYS.TOKEN);
+  // On browser the HttpOnly cookie is invisible to JS — return null.
+  // On Tauri, proxyFetch auto-injects the Bearer header from Stronghold,
+  // so most callers don't need the raw token.
+  return null;
+}
+
+/**
+ * Async token accessor for Tauri (reads from Stronghold).
+ * On browser, always returns null (cookie-based auth).
+ */
+export async function getTokenAsync(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    const { getCredential } = await import("$lib/credentials");
+    return await getCredential(STORAGE_KEYS.TOKEN);
+  } catch {
+    return null;
+  }
 }
 
 export function getServerUrl(): string | null {
@@ -238,23 +264,31 @@ export function getStorageUsage(): UserStorageUsageResponse | null {
 // ============================================================================
 
 /**
- * Initialize auth state from localStorage.
+ * Initialize auth state.
+ *
+ * - Browser: validates session via cookie (calls `/api/auth/me` with
+ *   `credentials: 'include'` — no token needed).
+ * - Tauri: loads token from Stronghold, validates with server.
  */
 export async function initAuth(): Promise<void> {
   if (typeof localStorage === "undefined") return;
 
   const serverUrl = localStorage.getItem(STORAGE_KEYS.SERVER_URL);
-  const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
   const savedUser = localStorage.getItem(STORAGE_KEYS.USER);
 
   if (serverUrl) {
     state.serverUrl = serverUrl;
     authService = createAuthService(serverUrl);
-    // Note: We do NOT call setCollaborationServer() here.
-    // Sync should only start after token validation succeeds below.
   }
 
-  if (token && serverUrl) {
+  // On Tauri, load token from Stronghold
+  const token = await getTokenAsync();
+
+  // On browser, we don't need a token — the cookie is sent automatically.
+  // We still need to validate the session by calling /auth/me.
+  const hasSession = isTauri() ? !!token : !!serverUrl;
+
+  if (hasSession && serverUrl) {
     state.isLoading = true;
     state.error = null;
 
@@ -269,8 +303,8 @@ export async function initAuth(): Promise<void> {
     }
 
     try {
-      // Validate token with server
-      const me = await authService!.getMe(token);
+      // Validate session with server (cookie or Stronghold token via proxyFetch)
+      const me = await authService!.getMe(token ?? undefined);
       state.user = me.user;
       state.workspaces = me.workspaces;
       state.devices = me.devices;
@@ -281,14 +315,13 @@ export async function initAuth(): Promise<void> {
       state.isAuthenticated = true;
 
       // Update collaboration settings
-      setAuthToken(token);
+      setAuthToken(token ?? undefined);
       const activeWorkspace = getCurrentWorkspace();
       if (activeWorkspace) {
         setCollaborationWorkspaceId(activeWorkspace.id);
       }
 
       // Only re-enable sync if user previously completed sync setup
-      // (not just authenticated). This decouples sign-in from sync.
       const syncWasEnabled = localStorage.getItem('diaryx_sync_enabled') === 'true';
       if (syncWasEnabled) {
         collaborationStore.setEnabled(true);
@@ -300,7 +333,7 @@ export async function initAuth(): Promise<void> {
       await refreshUserStorageUsage();
     } catch (err) {
       if (err instanceof AuthError && err.statusCode === 401) {
-        // Token expired, clear auth state
+        // Session expired, clear auth state
         await logout();
       } else {
         // Network error - keep user logged in with cached data
@@ -389,8 +422,11 @@ export async function verifyMagicLink(token: string, customDeviceName?: string, 
 
     const response = await authService.verifyMagicLink(token, deviceName, replaceDeviceId);
 
-    // Store token
-    localStorage.setItem(STORAGE_KEYS.TOKEN, response.token);
+    // Store token: Stronghold on Tauri, cookie on browser (set by server)
+    if (isTauri()) {
+      const { storeCredential } = await import("$lib/credentials");
+      await storeCredential(STORAGE_KEYS.TOKEN, response.token);
+    }
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(response.user));
 
     // Update state
@@ -441,8 +477,11 @@ export async function verifyCode(
     const deviceName = customDeviceName?.trim() || getDeviceName();
     const response = await authService.verifyCode(code, email, deviceName, replaceDeviceId);
 
-    // Store token
-    localStorage.setItem(STORAGE_KEYS.TOKEN, response.token);
+    // Store token: Stronghold on Tauri, cookie on browser (set by server)
+    if (isTauri()) {
+      const { storeCredential } = await import("$lib/credentials");
+      await storeCredential(STORAGE_KEYS.TOKEN, response.token);
+    }
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(response.user));
 
     // Update state
@@ -476,11 +515,12 @@ export async function verifyCode(
  * Refresh user info from server.
  */
 export async function refreshUserInfo(): Promise<void> {
-  const token = getToken();
-  if (!authService || !token) return;
+  if (!authService) return;
+  const token = await getTokenAsync();
+  // On browser, token is null but cookie auth works via proxyFetch
 
   try {
-    const me = await authService.getMe(token);
+    const me = await authService.getMe(token ?? undefined);
     state.user = me.user;
     state.workspaces = me.workspaces;
     state.devices = me.devices;
@@ -503,15 +543,15 @@ export async function refreshUserInfo(): Promise<void> {
  * Refresh attachment storage usage from server.
  */
 export async function refreshUserStorageUsage(): Promise<void> {
-  const token = getToken();
   const url = state.serverUrl;
-  if (!token || !url || !authService || !state.isAuthenticated) {
+  if (!url || !authService || !state.isAuthenticated) {
     state.storageUsage = null;
     return;
   }
+  const token = await getTokenAsync();
 
   try {
-    state.storageUsage = await authService.getUserStorageUsage(token);
+    state.storageUsage = await authService.getUserStorageUsage(token ?? undefined);
   } catch (err) {
     console.error("[AuthStore] Failed to refresh storage usage:", err);
   }
@@ -537,7 +577,7 @@ export function isSyncEnabled(): boolean {
  * Log out and clear auth state.
  */
 export async function logout(): Promise<void> {
-  const token = getToken();
+  const token = await getTokenAsync();
 
   // Clear local state first
   state.isAuthenticated = false;
@@ -552,7 +592,16 @@ export async function logout(): Promise<void> {
   state.error = null;
   state.storageUsage = null;
 
-  localStorage.removeItem(STORAGE_KEYS.TOKEN);
+  // Clear Stronghold on Tauri
+  if (isTauri()) {
+    try {
+      const { removeCredential } = await import("$lib/credentials");
+      await removeCredential(STORAGE_KEYS.TOKEN);
+    } catch {
+      // Stronghold not available
+    }
+  }
+
   localStorage.removeItem(STORAGE_KEYS.USER);
   localStorage.removeItem('diaryx_sync_enabled');
 
@@ -561,9 +610,9 @@ export async function logout(): Promise<void> {
   setCollaborationWorkspaceId(null);
   collaborationStore.setEnabled(false);
 
-  // Try to logout on server (don't wait for it)
-  if (authService && token) {
-    authService.logout(token).catch(() => {
+  // Try to logout on server (clears cookie on browser, invalidates session)
+  if (authService) {
+    authService.logout(token ?? undefined).catch(() => {
       // Ignore logout errors
     });
   }
@@ -573,10 +622,10 @@ export async function logout(): Promise<void> {
  * Rename a device.
  */
 export async function renameDevice(deviceId: string, newName: string): Promise<void> {
-  const token = getToken();
-  if (!authService || !token) return;
+  const token = await getTokenAsync();
+  if (!authService) return;
 
-  await authService.renameDevice(token, deviceId, newName);
+  await authService.renameDevice(token ?? undefined, deviceId, newName);
   await refreshUserInfo();
 }
 
@@ -584,10 +633,10 @@ export async function renameDevice(deviceId: string, newName: string): Promise<v
  * Delete a device.
  */
 export async function deleteDevice(deviceId: string): Promise<void> {
-  const token = getToken();
-  if (!authService || !token) return;
+  const token = await getTokenAsync();
+  if (!authService) return;
 
-  await authService.deleteDevice(token, deviceId);
+  await authService.deleteDevice(token ?? undefined, deviceId);
   await refreshUserInfo();
 }
 
@@ -596,11 +645,21 @@ export async function deleteDevice(deviceId: string): Promise<void> {
  * This deletes data from the server but preserves local workspace data.
  */
 export async function deleteAccount(): Promise<void> {
-  const token = getToken();
-  if (!authService || !token) return;
+  const token = await getTokenAsync();
+  if (!authService) return;
 
   // Delete server data
-  await authService.deleteAccount(token);
+  await authService.deleteAccount(token ?? undefined);
+
+  // Clear Stronghold on Tauri
+  if (isTauri()) {
+    try {
+      const { removeCredential } = await import("$lib/credentials");
+      await removeCredential(STORAGE_KEYS.TOKEN);
+    } catch {
+      // Stronghold not available
+    }
+  }
 
   // Clear local auth state (but NOT local workspace data)
   state.isAuthenticated = false;
@@ -615,7 +674,6 @@ export async function deleteAccount(): Promise<void> {
   state.error = null;
   state.storageUsage = null;
 
-  localStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.USER);
   localStorage.removeItem('diaryx_sync_enabled');
 
@@ -675,9 +733,9 @@ function getDeviceName(): string {
  * Refreshes the workspace list on success.
  */
 export async function createServerWorkspace(name: string): Promise<Workspace> {
-  const token = getToken();
-  if (!authService || !token) throw new Error("Not authenticated");
-  const ws = await authService.createWorkspace(token, name);
+  const token = await getTokenAsync();
+  if (!authService) throw new Error("Not authenticated");
+  const ws = await authService.createWorkspace(token ?? undefined, name);
   await refreshUserInfo();
   return ws;
 }
@@ -687,9 +745,9 @@ export async function createServerWorkspace(name: string): Promise<Workspace> {
  * Refreshes the workspace list on success.
  */
 export async function renameServerWorkspace(workspaceId: string, newName: string): Promise<void> {
-  const token = getToken();
-  if (!authService || !token) throw new Error("Not authenticated");
-  await authService.renameWorkspace(token, workspaceId, newName);
+  const token = await getTokenAsync();
+  if (!authService) throw new Error("Not authenticated");
+  await authService.renameWorkspace(token ?? undefined, workspaceId, newName);
   await refreshUserInfo();
 }
 
@@ -698,9 +756,9 @@ export async function renameServerWorkspace(workspaceId: string, newName: string
  * Refreshes the workspace list on success.
  */
 export async function deleteServerWorkspace(workspaceId: string): Promise<void> {
-  const token = getToken();
-  if (!authService || !token) throw new Error("Not authenticated");
-  await authService.deleteWorkspace(token, workspaceId);
+  const token = await getTokenAsync();
+  if (!authService) throw new Error("Not authenticated");
+  await authService.deleteWorkspace(token ?? undefined, workspaceId);
   await refreshUserInfo();
   await refreshUserStorageUsage();
 }
@@ -714,9 +772,9 @@ export async function deleteServerWorkspace(workspaceId: string): Promise<void> 
  * Returns the checkout URL for redirect.
  */
 export async function createCheckoutSession(): Promise<string> {
-  const token = getToken();
-  if (!authService || !token) throw new Error("Not authenticated");
-  const { url } = await authService.createCheckoutSession(token);
+  const token = await getTokenAsync();
+  if (!authService) throw new Error("Not authenticated");
+  const { url } = await authService.createCheckoutSession(token ?? undefined);
   return url;
 }
 
@@ -725,9 +783,9 @@ export async function createCheckoutSession(): Promise<string> {
  * Returns the portal URL for redirect.
  */
 export async function createPortalSession(): Promise<string> {
-  const token = getToken();
-  if (!authService || !token) throw new Error("Not authenticated");
-  const { url } = await authService.createPortalSession(token);
+  const token = await getTokenAsync();
+  if (!authService) throw new Error("Not authenticated");
+  const { url } = await authService.createPortalSession(token ?? undefined);
   return url;
 }
 
@@ -743,9 +801,9 @@ export async function verifyAppleTransaction(
   signedTransaction: string,
   productId: string,
 ): Promise<void> {
-  const token = getToken();
-  if (!authService || !token) throw new Error("Not authenticated");
-  await authService.verifyAppleTransaction(token, signedTransaction, productId);
+  const token = await getTokenAsync();
+  if (!authService) throw new Error("Not authenticated");
+  await authService.verifyAppleTransaction(token ?? undefined, signedTransaction, productId);
   await refreshUserInfo();
 }
 
@@ -756,10 +814,10 @@ export async function verifyAppleTransaction(
 export async function restoreApplePurchases(
   signedTransactions: string[],
 ): Promise<{ restored_count: number; tier: string }> {
-  const token = getToken();
-  if (!authService || !token) throw new Error("Not authenticated");
+  const token = await getTokenAsync();
+  if (!authService) throw new Error("Not authenticated");
   const result = await authService.restoreApplePurchases(
-    token,
+    token ?? undefined,
     signedTransactions,
   );
   await refreshUserInfo();
@@ -775,12 +833,12 @@ export async function restoreApplePurchases(
  * Triggers the browser's platform authenticator (Touch ID, Face ID, etc).
  */
 export async function registerPasskey(name: string): Promise<string> {
-  const token = getToken();
-  if (!authService || !token) throw new Error("Not authenticated");
+  const token = await getTokenAsync();
+  if (!authService) throw new Error("Not authenticated");
 
   // 1. Start registration on server
   const { challenge_id, options } =
-    await authService.startPasskeyRegistration(token);
+    await authService.startPasskeyRegistration(token ?? undefined);
 
   // 2. Create credential with browser
   const creationOptions = prepareCreationOptions(options);
@@ -793,7 +851,7 @@ export async function registerPasskey(name: string): Promise<string> {
   // 3. Send credential to server
   const serialized = serializeRegistrationCredential(credential);
   const { id } = await authService.finishPasskeyRegistration(
-    token,
+    token ?? undefined,
     challenge_id,
     name,
     serialized,
@@ -841,7 +899,10 @@ export async function authenticateWithPasskey(
     );
 
     // 4. Same post-login flow as verifyMagicLink
-    localStorage.setItem(STORAGE_KEYS.TOKEN, response.token);
+    if (isTauri()) {
+      const { storeCredential } = await import("$lib/credentials");
+      await storeCredential(STORAGE_KEYS.TOKEN, response.token);
+    }
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(response.user));
 
     state.user = response.user;
@@ -872,10 +933,10 @@ export async function authenticateWithPasskey(
  * List the current user's passkeys.
  */
 export async function listPasskeys(): Promise<PasskeyListItem[]> {
-  const token = getToken();
-  if (!authService || !token) return [];
+  const token = await getTokenAsync();
+  if (!authService) return [];
   try {
-    return await authService.listPasskeys(token);
+    return await authService.listPasskeys(token ?? undefined);
   } catch {
     return [];
   }
@@ -885,9 +946,9 @@ export async function listPasskeys(): Promise<PasskeyListItem[]> {
  * Delete a passkey.
  */
 export async function deletePasskey(id: string): Promise<void> {
-  const token = getToken();
-  if (!authService || !token) throw new Error("Not authenticated");
-  await authService.deletePasskey(token, id);
+  const token = await getTokenAsync();
+  if (!authService) throw new Error("Not authenticated");
+  await authService.deletePasskey(token ?? undefined, id);
 }
 
 // ============================================================================
@@ -899,12 +960,12 @@ export async function deletePasskey(id: string): Promise<void> {
  * Returns null if not authenticated or server URL not configured.
  */
 export async function checkUserHasData(): Promise<UserHasDataResponse | null> {
-  const token = getToken();
   const url = state.serverUrl;
-  if (!token || !url || !authService) return null;
+  if (!url || !authService) return null;
+  const token = await getTokenAsync();
 
   try {
-    return await authService.checkUserHasData(token);
+    return await authService.checkUserHasData(token ?? undefined);
   } catch (err) {
     console.error("[AuthStore] Failed to check user data:", err);
     return null;
@@ -919,13 +980,13 @@ export async function downloadWorkspaceSnapshot(
   includeAttachments = true,
   commitId?: string,
 ): Promise<Blob | null> {
-  const token = getToken();
   const url = state.serverUrl;
-  if (!token || !url || !authService) return null;
+  if (!url || !authService) return null;
+  const token = await getTokenAsync();
 
   try {
     return await authService.downloadWorkspaceSnapshot(
-      token,
+      token ?? undefined,
       workspaceId,
       includeAttachments,
       commitId,
@@ -946,15 +1007,15 @@ export async function uploadWorkspaceSnapshot(
   includeAttachments = true,
   onUploadProgress?: (uploadedBytes: number, totalBytes: number) => void,
 ): Promise<{ files_imported: number } | null> {
-  const token = getToken();
   const url = state.serverUrl;
-  if (!token || !url || !authService) {
+  if (!url || !authService) {
     throw new Error("Not authenticated");
   }
+  const token = await getTokenAsync();
 
   try {
     const result = await authService.uploadWorkspaceSnapshot(
-      token,
+      token ?? undefined,
       workspaceId,
       snapshot,
       mode,
@@ -977,12 +1038,12 @@ export async function initAttachmentUpload(
   workspaceId: string,
   request: InitAttachmentUploadRequest,
 ): Promise<InitAttachmentUploadResponse> {
-  const token = getToken();
   const url = state.serverUrl;
-  if (!token || !url || !authService) {
+  if (!url || !authService) {
     throw new Error("Not authenticated");
   }
-  return authService.initAttachmentUpload(token, workspaceId, request);
+  const token = await getTokenAsync();
+  return authService.initAttachmentUpload(token ?? undefined, workspaceId, request);
 }
 
 /**
@@ -994,12 +1055,12 @@ export async function uploadAttachmentPart(
   partNo: number,
   bytes: ArrayBuffer,
 ): Promise<{ ok: boolean; part_no: number }> {
-  const token = getToken();
   const url = state.serverUrl;
-  if (!token || !url || !authService) {
+  if (!url || !authService) {
     throw new Error("Not authenticated");
   }
-  return authService.uploadAttachmentPart(token, workspaceId, uploadId, partNo, bytes);
+  const token = await getTokenAsync();
+  return authService.uploadAttachmentPart(token ?? undefined, workspaceId, uploadId, partNo, bytes);
 }
 
 /**
@@ -1010,12 +1071,12 @@ export async function completeAttachmentUpload(
   uploadId: string,
   request: CompleteAttachmentUploadRequest,
 ): Promise<CompleteAttachmentUploadResponse> {
-  const token = getToken();
   const url = state.serverUrl;
-  if (!token || !url || !authService) {
+  if (!url || !authService) {
     throw new Error("Not authenticated");
   }
-  const result = await authService.completeAttachmentUpload(token, workspaceId, uploadId, request);
+  const token = await getTokenAsync();
+  const result = await authService.completeAttachmentUpload(token ?? undefined, workspaceId, uploadId, request);
   await refreshUserStorageUsage();
   return result;
 }
@@ -1028,10 +1089,10 @@ export async function downloadAttachment(
   hash: string,
   range?: { start: number; end?: number },
 ): Promise<DownloadAttachmentResponse> {
-  const token = getToken();
   const url = state.serverUrl;
-  if (!token || !url || !authService) {
+  if (!url || !authService) {
     throw new Error("Not authenticated");
   }
-  return authService.downloadAttachment(token, workspaceId, hash, range);
+  const token = await getTokenAsync();
+  return authService.downloadAttachment(token ?? undefined, workspaceId, hash, range);
 }

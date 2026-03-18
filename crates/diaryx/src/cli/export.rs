@@ -4,9 +4,39 @@ use std::path::PathBuf;
 
 use diaryx_core::export::{ExportOptions, ExportPlan, Exporter};
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
-use diaryx_core::pandoc;
 use diaryx_core::workspace::Workspace;
 use std::path::Path;
+
+#[cfg(feature = "plugins")]
+use crate::cli::plugin_loader::CliPublishContext;
+
+/// Supported export formats.
+const SUPPORTED_FORMATS: &[&str] = &[
+    "markdown", "html", "docx", "epub", "pdf", "latex", "odt", "rst",
+];
+
+/// Formats that require the publish plugin's converter.
+fn requires_converter(format: &str) -> bool {
+    matches!(
+        format,
+        "docx" | "epub" | "pdf" | "latex" | "odt" | "rst" | "html"
+    )
+}
+
+/// Get the file extension for a given format.
+fn format_extension(format: &str) -> &str {
+    match format {
+        "markdown" => "md",
+        "html" => "html",
+        "docx" => "docx",
+        "epub" => "epub",
+        "pdf" => "pdf",
+        "latex" => "tex",
+        "odt" => "odt",
+        "rst" => "rst",
+        _ => format,
+    }
+}
 
 /// Helper to run async operations in sync context
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -25,18 +55,12 @@ pub fn handle_export(
     dry_run: bool,
 ) {
     // Validate format
-    if !pandoc::is_supported_format(format) {
+    if !SUPPORTED_FORMATS.contains(&format) {
         eprintln!(
             "✗ Unsupported format: '{}'. Supported: {}",
             format,
-            pandoc::SUPPORTED_FORMATS.join(", ")
+            SUPPORTED_FORMATS.join(", ")
         );
-        return;
-    }
-
-    // Check pandoc availability for formats that need it
-    if pandoc::requires_pandoc(format) && !pandoc::is_pandoc_available() {
-        pandoc::print_install_instructions();
         return;
     }
 
@@ -121,42 +145,111 @@ pub fn handle_export(
         }
     }
 
-    // Post-process with pandoc if a non-markdown format was requested
-    if pandoc::requires_pandoc(format) || format == "html" {
-        println!("Converting to {}...", format);
-        let ext = pandoc::format_extension(format);
-        let mut converted = 0;
-        let mut failed = 0;
-
-        // Walk destination and convert each .md file
-        for entry in walkdir(destination) {
-            let md_path = entry;
-            let out_path = md_path.with_extension(ext);
-
-            match pandoc::convert_file(&md_path, &out_path, "markdown", format, true) {
-                Ok(()) => {
-                    // Remove the original .md file
-                    let _ = std::fs::remove_file(&md_path);
-                    if verbose {
-                        println!("  Converted: {}", out_path.display());
-                    }
-                    converted += 1;
-                }
-                Err(e) => {
-                    eprintln!("  ✗ Failed to convert {}: {}", md_path.display(), e);
-                    failed += 1;
-                }
-            }
+    // Post-process via publish plugin if a non-markdown format was requested
+    if requires_converter(format) {
+        #[cfg(feature = "plugins")]
+        {
+            convert_exported_files(&workspace_root, destination, format, verbose);
         }
-
-        if failed == 0 {
-            println!("✓ Converted {} files to {}", converted, format);
-        } else {
-            eprintln!("⚠ Converted {} files, {} failed", converted, failed);
+        #[cfg(not(feature = "plugins"))]
+        {
+            eprintln!(
+                "✗ Format '{}' requires the plugins feature. Rebuild with --features plugins",
+                format
+            );
+            return;
         }
     }
 
     println!("  Exported to: {}", destination.display());
+}
+
+/// Convert exported .md files to the target format via the publish plugin.
+#[cfg(feature = "plugins")]
+fn convert_exported_files(workspace_root: &Path, destination: &Path, format: &str, verbose: bool) {
+    let ctx = match CliPublishContext::load(workspace_root) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("✗ Failed to load publish plugin: {}", e);
+            return;
+        }
+    };
+
+    println!("Converting to {}...", format);
+    let ext = format_extension(format);
+    let mut converted = 0;
+    let mut failed = 0;
+
+    for md_path in walkdir(destination) {
+        let content = match std::fs::read_to_string(&md_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("  ✗ Failed to read {}: {}", md_path.display(), e);
+                failed += 1;
+                continue;
+            }
+        };
+
+        match ctx.cmd(
+            "ConvertFormat",
+            serde_json::json!({
+                "content": content,
+                "from": "markdown",
+                "to": format,
+            }),
+        ) {
+            Ok(result) => {
+                let out_path = md_path.with_extension(ext);
+                if let Some(binary_b64) = result.get("binary").and_then(|v| v.as_str()) {
+                    use base64::Engine;
+                    match base64::engine::general_purpose::STANDARD.decode(binary_b64) {
+                        Ok(bytes) => {
+                            if let Err(e) = std::fs::write(&out_path, &bytes) {
+                                eprintln!("  ✗ Failed to write {}: {}", out_path.display(), e);
+                                failed += 1;
+                                continue;
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "  ✗ Failed to decode binary output for {}: {}",
+                                md_path.display(),
+                                e
+                            );
+                            failed += 1;
+                            continue;
+                        }
+                    }
+                } else if let Some(text) = result.get("content").and_then(|v| v.as_str()) {
+                    if let Err(e) = std::fs::write(&out_path, text) {
+                        eprintln!("  ✗ Failed to write {}: {}", out_path.display(), e);
+                        failed += 1;
+                        continue;
+                    }
+                } else {
+                    eprintln!("  ✗ Plugin returned no content for {}", md_path.display());
+                    failed += 1;
+                    continue;
+                }
+
+                let _ = std::fs::remove_file(&md_path);
+                if verbose {
+                    println!("  Converted: {}", md_path.with_extension(ext).display());
+                }
+                converted += 1;
+            }
+            Err(e) => {
+                eprintln!("  ✗ Failed to convert {}: {}", md_path.display(), e);
+                failed += 1;
+            }
+        }
+    }
+
+    if failed == 0 {
+        println!("✓ Converted {} files to {}", converted, format);
+    } else {
+        eprintln!("⚠ Converted {} files, {} failed", converted, failed);
+    }
 }
 
 /// Print detailed information about the export plan

@@ -258,14 +258,42 @@
           loading: "lazy",
         },
       }).extend({
+        addAttributes() {
+          return {
+            ...this.parent?.(),
+            width: { default: null },
+            height: { default: null },
+          };
+        },
         renderMarkdown: (node: any) => {
           const src = node.attrs?.src ?? "";
-          const alt = node.attrs?.alt ?? "";
+          let alt = node.attrs?.alt ?? "";
           const title = node.attrs?.title ?? "";
+          const width = node.attrs?.width;
+          const height = node.attrs?.height;
           const formattedSrc = formatMarkdownDestination(src);
+          // Obsidian-style: embed dimensions as |WIDTHxHEIGHT or |WIDTH in alt text
+          if (width) {
+            alt += height ? `|${width}x${height}` : `|${width}`;
+          }
           return title
             ? `![${alt}](${formattedSrc} "${title}")`
             : `![${alt}](${formattedSrc})`;
+        },
+        parseMarkdown: (token: any, h: any) => {
+          const rawAlt = token.text || '';
+          const href = token.href || '';
+          const title = token.title || '';
+          // Parse Obsidian-style dimensions: alt|WIDTHxHEIGHT or alt|WIDTH
+          const dimMatch = rawAlt.match(/^(.*?)\|(\d+)(?:x(\d+))?$/);
+          const attrs: Record<string, any> = {
+            src: href,
+            alt: dimMatch ? dimMatch[1] : rawAlt,
+            title,
+            width: dimMatch ? parseInt(dimMatch[2]) : null,
+            height: dimMatch && dimMatch[3] ? parseInt(dimMatch[3]) : null,
+          };
+          return h.createNode('image', attrs);
         },
         addNodeView() {
           // Capture entryPath and api from the outer scope (Editor props)
@@ -353,6 +381,9 @@
               img.loading = "lazy";
               img.className = HTMLAttributes.class || "editor-image";
               if (title) img.title = title;
+              // Apply stored dimensions
+              if (node.attrs.width) img.style.width = `${node.attrs.width}px`;
+              if (node.attrs.height) img.style.height = `${node.attrs.height}px`;
               if (isLocalPath && epApi) {
                 const cached = getBlobUrl(src);
                 if (cached) {
@@ -485,6 +516,93 @@
                   item.action();
                 });
                 menu.appendChild(btn);
+              }
+
+              // Resize submenu (images only)
+              if (!isAudio && !isVideo) {
+                const resizeContainer = document.createElement("div");
+                resizeContainer.className = "editor-media-menu-submenu-container";
+
+                const resizeBtn = document.createElement("button");
+                resizeBtn.type = "button";
+                resizeBtn.className = "editor-media-menu-item editor-media-menu-item--submenu";
+                resizeBtn.innerHTML = 'Resize <span class="editor-media-menu-arrow">&#9656;</span>';
+
+                const submenu = document.createElement("div");
+                submenu.className = "editor-media-submenu";
+
+                function applyResize(w: number | null, h: number | null) {
+                  removeMenu();
+                  const pos = getPos();
+                  if (pos != null) {
+                    viewEditor.chain().focus()
+                      .command(({ tr }) => {
+                        tr.setNodeMarkup(pos, undefined, { ...node.attrs, width: w, height: h });
+                        return true;
+                      }).run();
+                  }
+                }
+
+                const imgEl = mediaEl as HTMLImageElement;
+                const presets = [
+                  { label: "25%", factor: 0.25 },
+                  { label: "50%", factor: 0.5 },
+                  { label: "75%", factor: 0.75 },
+                  { label: "100% (original)", factor: 1 },
+                ];
+
+                for (const preset of presets) {
+                  const presetBtn = document.createElement("button");
+                  presetBtn.type = "button";
+                  presetBtn.className = "editor-media-menu-item";
+                  presetBtn.textContent = preset.label;
+                  presetBtn.addEventListener("mousedown", (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const natW = imgEl.naturalWidth;
+                    if (preset.factor === 1) {
+                      // Reset to original — clear stored dimensions
+                      applyResize(null, null);
+                    } else if (natW) {
+                      applyResize(Math.round(natW * preset.factor), null);
+                    }
+                  });
+                  submenu.appendChild(presetBtn);
+                }
+
+                // Custom size option
+                const customBtn = document.createElement("button");
+                customBtn.type = "button";
+                customBtn.className = "editor-media-menu-item";
+                customBtn.textContent = "Custom\u2026";
+                customBtn.addEventListener("mousedown", (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const currentW = node.attrs.width || imgEl.naturalWidth || "";
+                  const input = window.prompt(
+                    "Enter size (width or widthxheight):",
+                    String(currentW),
+                  );
+                  if (input !== null) {
+                    const sizeMatch = input.trim().match(/^(\d+)(?:x(\d+))?$/);
+                    if (sizeMatch) {
+                      const w = parseInt(sizeMatch[1]);
+                      const h = sizeMatch[2] ? parseInt(sizeMatch[2]) : null;
+                      applyResize(w, h);
+                    }
+                  }
+                });
+                submenu.appendChild(customBtn);
+
+                resizeContainer.appendChild(resizeBtn);
+                resizeContainer.appendChild(submenu);
+                // Insert resize before the last item (Delete)
+                const deleteBtn = menu.lastElementChild;
+                if (deleteBtn) {
+                  menu.insertBefore(resizeContainer, deleteBtn);
+                } else {
+                  menu.appendChild(resizeContainer);
+                }
               }
 
               // Position at click point, flip above if not enough space below
@@ -1558,6 +1676,42 @@
   :global(.editor-media-menu-item:hover) {
     background: var(--accent);
     color: var(--accent-foreground);
+  }
+
+  :global(.editor-media-menu-item--submenu) {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  :global(.editor-media-menu-arrow) {
+    font-size: 10px;
+    opacity: 0.6;
+    margin-left: 8px;
+  }
+
+  :global(.editor-media-menu-submenu-container) {
+    position: relative;
+  }
+
+  :global(.editor-media-submenu) {
+    display: none;
+    position: absolute;
+    left: 100%;
+    top: 0;
+    min-width: 130px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--popover);
+    color: var(--popover-foreground);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    padding: 4px;
+    flex-direction: column;
+    z-index: 51;
+  }
+
+  :global(.editor-media-menu-submenu-container:hover > .editor-media-submenu) {
+    display: flex;
   }
 
   /* Footnote ref styles */

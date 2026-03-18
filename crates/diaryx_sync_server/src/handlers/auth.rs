@@ -1,5 +1,5 @@
 use crate::auth::{MagicLinkService, PasskeyService, RequireAuth};
-use crate::db::AuthRepo;
+use crate::db::{AuthRepo, NamespaceRepo};
 use crate::email::EmailService;
 use axum::{
     Router,
@@ -18,9 +18,12 @@ pub struct AuthState {
     pub magic_link_service: Arc<MagicLinkService>,
     pub email_service: Arc<EmailService>,
     pub repo: Arc<AuthRepo>,
+    pub ns_repo: Arc<NamespaceRepo>,
     pub passkey_service: Arc<PasskeyService>,
     /// Session expiry in days, used for cookie Max-Age.
     pub session_expiry_days: i64,
+    /// Whether to set the `Secure` flag on session cookies.
+    pub secure_cookies: bool,
 }
 
 /// Request body for magic link request
@@ -99,8 +102,18 @@ impl ErrorResponse {
 #[derive(Debug, Serialize)]
 pub struct MeResponse {
     pub user: UserResponse,
+    pub workspaces: Vec<WorkspaceResponse>,
     pub devices: Vec<DeviceResponse>,
     pub tier: String,
+    pub workspace_limit: u32,
+    pub published_site_limit: u32,
+    pub attachment_limit_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceResponse {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,16 +127,24 @@ pub struct DeviceResponse {
 const SESSION_COOKIE: &str = "diaryx_session";
 
 /// Build a `Set-Cookie` header that sets the session cookie.
-fn set_session_cookie(token: &str, max_age_days: i64) -> String {
+fn set_session_cookie(token: &str, max_age_days: i64, secure: bool) -> String {
     let max_age_secs = max_age_days * 86400;
-    format!(
-        "{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age_secs}"
-    )
+    if secure {
+        format!(
+            "{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age_secs}"
+        )
+    } else {
+        format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age_secs}")
+    }
 }
 
 /// Build a `Set-Cookie` header that clears the session cookie.
-fn clear_session_cookie() -> String {
-    format!("{SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0")
+fn clear_session_cookie(secure: bool) -> String {
+    if secure {
+        format!("{SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0")
+    } else {
+        format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+    }
 }
 
 /// Create auth routes
@@ -252,8 +273,12 @@ async fn verify_magic_link(
         Ok(verify_result) => {
             info!("User {} logged in successfully", verify_result.email);
             let mut headers = HeaderMap::new();
-            if let Ok(cookie) =
-                set_session_cookie(&verify_result.session_token, state.session_expiry_days).parse()
+            if let Ok(cookie) = set_session_cookie(
+                &verify_result.session_token,
+                state.session_expiry_days,
+                state.secure_cookies,
+            )
+            .parse()
             {
                 headers.insert(header::SET_COOKIE, cookie);
             }
@@ -324,8 +349,12 @@ async fn verify_code(
                 verify_result.email
             );
             let mut headers = HeaderMap::new();
-            if let Ok(cookie) =
-                set_session_cookie(&verify_result.session_token, state.session_expiry_days).parse()
+            if let Ok(cookie) = set_session_cookie(
+                &verify_result.session_token,
+                state.session_expiry_days,
+                state.secure_cookies,
+            )
+            .parse()
             {
                 headers.insert(header::SET_COOKIE, cookie);
             }
@@ -393,18 +422,46 @@ async fn get_current_user(
         })
         .collect();
 
-    let tier = state
-        .repo
-        .get_user_tier(&auth.user.id)
+    let user_info = state.repo.get_user(&auth.user.id).ok().flatten();
+    let tier = user_info
+        .as_ref()
+        .map(|u| u.tier)
         .unwrap_or(crate::db::UserTier::Free);
+    let defaults = tier.defaults();
+
+    let workspace_limit = user_info
+        .as_ref()
+        .and_then(|u| u.workspace_limit)
+        .unwrap_or(defaults.workspace_limit);
+    let published_site_limit = user_info
+        .as_ref()
+        .and_then(|u| u.published_site_limit)
+        .unwrap_or(defaults.published_site_limit);
+    let attachment_limit_bytes = user_info
+        .as_ref()
+        .and_then(|u| u.attachment_limit_bytes)
+        .unwrap_or(defaults.attachment_limit_bytes);
+
+    let namespaces = state.ns_repo.list_namespaces(&auth.user.id, 100, 0);
+    let workspaces = namespaces
+        .into_iter()
+        .map(|ns| WorkspaceResponse {
+            id: ns.id.clone(),
+            name: ns.id,
+        })
+        .collect();
 
     Json(MeResponse {
         user: UserResponse {
             id: auth.user.id,
             email: auth.user.email,
         },
+        workspaces,
         devices,
         tier: tier.as_str().to_string(),
+        workspace_limit,
+        published_site_limit,
+        attachment_limit_bytes,
     })
 }
 
@@ -418,7 +475,7 @@ async fn logout(
     }
 
     let mut headers = HeaderMap::new();
-    if let Ok(cookie) = clear_session_cookie().parse() {
+    if let Ok(cookie) = clear_session_cookie(state.secure_cookies).parse() {
         headers.insert(header::SET_COOKIE, cookie);
     }
 
@@ -733,8 +790,12 @@ async fn passkey_auth_finish(
         Ok(result) => {
             info!("User {} logged in via passkey", result.email);
             let mut headers = HeaderMap::new();
-            if let Ok(cookie) =
-                set_session_cookie(&result.session_token, state.session_expiry_days).parse()
+            if let Ok(cookie) = set_session_cookie(
+                &result.session_token,
+                state.session_expiry_days,
+                state.secure_cookies,
+            )
+            .parse()
             {
                 headers.insert(header::SET_COOKIE, cookie);
             }

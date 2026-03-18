@@ -20,40 +20,49 @@ type AuthResult = {
   earlyResponse?: Response;
 };
 
-// Namespace audience metadata: { audience_name: access_level }
-type NamespaceMeta = Record<string, string>;
-
 // KV domain mapping written by the sync server.
 type DomainMapping = { namespace_id: string; audience_name: string };
 
+// KV subdomain mapping: subdomain → namespace + optional default audience.
+type SubdomainMapping = { namespace_id: string; default_audience?: string };
+
 const META_TTL_MS = 60_000;
 const metaCache = new Map<string, { expiresAt: number; value: SiteMeta | null }>();
-const nsMetaCache = new Map<string, { expiresAt: number; value: NamespaceMeta | null }>();
+
+const SITE_DOMAIN = 'diaryx.org';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // Custom domain support: check KV for namespace-backed domain first,
-    // then fall back to legacy X-Custom-Domain header routing.
+    // Subdomain routing: {name}.diaryx.org → namespace
+    // For infrastructure subdomains (app, sync, etc.), pass through to origin.
+    const host = url.hostname;
+    if (isPassthroughSubdomain(host)) {
+      return fetch(request);
+    }
+    const subdomainMapping = await resolveSubdomain(host, env);
+    if (subdomainMapping) {
+      return serveSubdomainSite(request, env, subdomainMapping, url);
+    }
+
+    // Custom domain support: X-Custom-Domain is set by an upstream proxy
+    // (e.g. Caddy) that has already validated the domain.
+    // Skip for /ns/ routes — those always use standard namespace routing.
     const customDomain = request.headers.get('X-Custom-Domain');
-    const forwardedHost = request.headers.get('X-Forwarded-Host');
-    const nsDomainHost = forwardedHost ?? customDomain;
-    if (nsDomainHost) {
-      // Try namespace-backed domain via KV.
-      const mapping = await resolveNamespaceDomain(nsDomainHost, env);
+    if (customDomain && !url.pathname.startsWith('/ns/')) {
+      // Try namespace-backed domain via KV first.
+      const mapping = await resolveNamespaceDomain(customDomain, env);
       if (mapping) {
         return serveNamespaceCustomDomain(request, env, mapping, url);
       }
 
-      // Fall back to legacy slug-based custom domain.
-      if (customDomain) {
-        const secret = request.headers.get('X-Proxy-Secret');
-        if (secret !== env.TOKEN_SIGNING_KEY) {
-          return forbidden('Invalid proxy request.');
-        }
-        return serveCustomDomain(request, env, customDomain, url);
+      // Fall back to legacy slug-based custom domain (requires proxy secret).
+      const secret = request.headers.get('X-Proxy-Secret');
+      if (secret !== env.TOKEN_SIGNING_KEY) {
+        return forbidden('Invalid proxy request.');
       }
+      return serveCustomDomain(request, env, customDomain, url);
     }
 
     // Standard routing
@@ -349,6 +358,43 @@ async function serveStaticPage(
 // Namespace object serving
 // ---------------------------------------------------------------------------
 
+// Subdomains that belong to other services and should never be handled
+// by the site-proxy Worker. These must match the reserved list in the
+// sync server's claim_subdomain handler.
+const PASSTHROUGH_SUBDOMAINS = new Set([
+  'www', 'app', 'api', 'mail', 'smtp', 'ftp', 'admin', 'sync', 'site', 'sites',
+]);
+
+/** Check if a host is an infrastructure subdomain that should pass through to origin. */
+function isPassthroughSubdomain(host: string): boolean {
+  const suffix = `.${SITE_DOMAIN}`;
+  if (!host.endsWith(suffix)) return false;
+  const name = host.slice(0, -suffix.length);
+  return PASSTHROUGH_SUBDOMAINS.has(name.toLowerCase());
+}
+
+/** Extract subdomain from host and look up namespace mapping in KV. */
+async function resolveSubdomain(host: string, env: Env): Promise<SubdomainMapping | null> {
+  // Match {name}.diaryx.org but not bare diaryx.org
+  const suffix = `.${SITE_DOMAIN}`;
+  if (!host.endsWith(suffix)) return null;
+  const name = host.slice(0, -suffix.length);
+  if (!name || name.includes('.')) return null;
+
+  // Don't intercept infrastructure subdomains.
+  if (PASSTHROUGH_SUBDOMAINS.has(name.toLowerCase())) return null;
+
+  const raw = await env.KV.get(`subdomain:${name.toLowerCase()}`);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<SubdomainMapping>;
+    if (typeof parsed.namespace_id === 'string') {
+      return parsed as SubdomainMapping;
+    }
+  } catch {}
+  return null;
+}
+
 /** Resolve a custom domain to a namespace mapping via KV. */
 async function resolveNamespaceDomain(hostname: string, env: Env): Promise<DomainMapping | null> {
   const raw = await env.KV.get(`domain:${hostname.toLowerCase()}`);
@@ -362,40 +408,16 @@ async function resolveNamespaceDomain(hostname: string, env: Env): Promise<Domai
   return null;
 }
 
-/** Fetch and cache namespace audience metadata from R2. */
-async function getNamespaceMeta(nsId: string, env: Env): Promise<NamespaceMeta | null> {
-  const now = Date.now();
-  const cached = nsMetaCache.get(nsId);
-  if (cached && cached.expiresAt > now) {
-    return cached.value;
-  }
-
-  const key = `ns/${nsId}/_audiences.json`;
-  const object = await env.ATTACHMENTS_BUCKET.get(key);
-  if (!object) {
-    nsMetaCache.set(nsId, { expiresAt: now + META_TTL_MS, value: null });
-    return null;
-  }
-
-  try {
-    const parsed = (await object.json()) as Record<string, unknown>;
-    const meta: NamespaceMeta = {};
-    for (const [name, access] of Object.entries(parsed)) {
-      if (typeof access === 'string') {
-        meta[name] = access;
-      }
-    }
-    nsMetaCache.set(nsId, { expiresAt: now + META_TTL_MS, value: meta });
-    return meta;
-  } catch {
-    nsMetaCache.set(nsId, { expiresAt: now + META_TTL_MS, value: null });
-    return null;
-  }
-}
 
 /**
  * Check namespace audience access and return the object if allowed.
- * Returns an early Response on auth failure, or null + the R2 object on success.
+ *
+ * Access control is derived from R2 object custom metadata:
+ * - `audience`: the audience name this object belongs to
+ * - `access`: the access level (`public`, `token`, or `private`)
+ *
+ * These are set by the sync server at upload time, so no sidecar
+ * `_audiences.json` file is needed.
  */
 async function checkNamespaceAccess(
   request: Request,
@@ -410,25 +432,16 @@ async function checkNamespaceAccess(
     return notFound();
   }
 
-  // Read audience from R2 custom metadata.
+  // Read audience and access level from R2 custom metadata.
   const objectAudience = object.customMetadata?.audience;
-  if (!objectAudience) {
-    // No audience = private, not publicly accessible.
+  const accessLevel = object.customMetadata?.access;
+  if (!objectAudience || !accessLevel) {
+    // No audience/access metadata = private, not publicly accessible.
     return notFound();
   }
 
   // If serving via custom domain, object must match the domain's audience.
   if (allowedAudience && objectAudience !== allowedAudience) {
-    return notFound();
-  }
-
-  // Look up audience access level.
-  const nsMeta = await getNamespaceMeta(nsId, env);
-  if (!nsMeta) {
-    return notFound();
-  }
-  const accessLevel = nsMeta[objectAudience];
-  if (!accessLevel) {
     return notFound();
   }
 
@@ -494,6 +507,80 @@ async function serveNamespaceRoute(
   const r2Key = `ns/${nsId}/${objectPath}`;
 
   return checkNamespaceAccess(request, url, env, nsId, r2Key);
+}
+
+/** Handle subdomain requests — serves the whole namespace, access control per-object.
+ *
+ * Audience resolution order:
+ * 1. `?audience=` query parameter
+ * 2. Audience prefix already in the path (e.g. `/family/page.html`)
+ * 3. `default_audience` from the KV subdomain mapping
+ * 4. Try to find any audience that has the requested file
+ */
+async function serveSubdomainSite(
+  request: Request,
+  env: Env,
+  mapping: SubdomainMapping,
+  url: URL,
+): Promise<Response> {
+  // Canonicalize root to "/" with trailing slash.
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments.length === 0 && !url.pathname.endsWith('/')) {
+    const canonicalUrl = new URL(url.toString());
+    canonicalUrl.pathname = '/';
+    // Preserve query params (e.g. ?audience=)
+    canonicalUrl.search = url.search;
+    return new Response(null, { status: 302, headers: { Location: canonicalUrl.toString() } });
+  }
+
+  const nsId = mapping.namespace_id;
+  let objectPath = segments.map((s) => decodeURIComponent(s)).join('/');
+  if (!objectPath) {
+    objectPath = 'index.html';
+  }
+
+  // Check for ?audience= query param override.
+  const queryAudience = url.searchParams.get('audience');
+
+  // If an explicit audience is given, prepend it to the path.
+  if (queryAudience) {
+    const audiencedPath = `${queryAudience}/${objectPath}`;
+    const r2Key = `ns/${nsId}/${audiencedPath}`;
+    let response = await checkNamespaceAccess(request, url, env, nsId, r2Key);
+    if (response.status === 404 && !audiencedPath.endsWith('/index.html')) {
+      const fallback = `${audiencedPath.replace(/\/$/, '')}/index.html`;
+      response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`);
+    }
+    return response;
+  }
+
+  // Try the path as-is first (may already include audience prefix like /family/page.html).
+  const directKey = `ns/${nsId}/${objectPath}`;
+  let response = await checkNamespaceAccess(request, url, env, nsId, directKey);
+  if (response.status !== 404) return response;
+
+  // Try with default_audience prefix.
+  if (mapping.default_audience) {
+    const audiencedPath = `${mapping.default_audience}/${objectPath}`;
+    const r2Key = `ns/${nsId}/${audiencedPath}`;
+    response = await checkNamespaceAccess(request, url, env, nsId, r2Key);
+    if (response.status !== 404) return response;
+    // index.html fallback with audience prefix
+    if (!audiencedPath.endsWith('/index.html')) {
+      const fallback = `${audiencedPath.replace(/\/$/, '')}/index.html`;
+      response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`);
+      if (response.status !== 404) return response;
+    }
+  }
+
+  // index.html fallback without audience prefix (for direct paths).
+  if (!objectPath.endsWith('/index.html')) {
+    const fallback = `${objectPath.replace(/\/$/, '')}/index.html`;
+    response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`);
+    if (response.status !== 404) return response;
+  }
+
+  return notFound();
 }
 
 /** Handle custom domain requests backed by namespace objects. */

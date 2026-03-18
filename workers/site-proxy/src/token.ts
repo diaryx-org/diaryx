@@ -27,13 +27,13 @@ export async function validateSignedToken(
 
   const key = await crypto.subtle.importKey(
     'raw',
-    keyBytes,
+    keyBytes.buffer as ArrayBuffer,
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['verify'],
   );
 
-  const isValid = await crypto.subtle.verify('HMAC', key, signatureBytes, payloadBytes);
+  const isValid = await crypto.subtle.verify('HMAC', key, signatureBytes.buffer as ArrayBuffer, payloadBytes.buffer as ArrayBuffer);
   if (!isValid) {
     return null;
   }

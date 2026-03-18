@@ -117,8 +117,10 @@ async fn main() {
         magic_link_service,
         email_service,
         repo: repo.clone(),
+        ns_repo: ns_repo.clone(),
         passkey_service,
         session_expiry_days: config.session_expiry_days,
+        secure_cookies: config.secure_cookies,
     };
 
     let ai_state = diaryx_sync_server::handlers::ai::AiState {
@@ -230,6 +232,7 @@ async fn main() {
             header::CACHE_CONTROL,
             header::PRAGMA,
             header::COOKIE,
+            header::HeaderName::from_static("x-audience"),
         ])
         .allow_credentials(true)
         .allow_origin(AllowOrigin::list(origins));

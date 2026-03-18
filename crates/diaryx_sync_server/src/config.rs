@@ -32,6 +32,9 @@ pub struct Config {
     pub stripe: Option<StripeConfig>,
     /// Apple IAP configuration (None if APPLE_IAP_BUNDLE_ID not set)
     pub apple_iap: Option<AppleIapConfig>,
+    /// Whether to set the `Secure` flag on session cookies.
+    /// Derived from `app_base_url`: true when it starts with `https://`.
+    pub secure_cookies: bool,
     /// Cloudflare KV API token for writing domain mappings
     pub kv_api_token: Option<String>,
     /// Cloudflare KV namespace ID for domain mappings
@@ -250,6 +253,8 @@ impl Config {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
 
+        let secure_cookies = app_base_url.starts_with("https://");
+
         Ok(Config {
             host,
             port,
@@ -261,6 +266,7 @@ impl Config {
             cors_origins,
             r2,
             token_signing_key,
+            secure_cookies,
             admin_secret,
             managed_ai,
             stripe,

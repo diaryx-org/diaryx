@@ -298,6 +298,35 @@ function normalizeWorkspaceRoot(path: string | null | undefined): string | null 
   return trimmed;
 }
 
+/**
+ * Resolve a workspace directory path to its root index file.
+ *
+ * Uses the backend's `FindRootIndex` command which finds the `.md` file with
+ * `contents` but no `part_of` — the canonical root index detection from
+ * `diaryx_core::workspace::Workspace::find_root_index_in_dir`.
+ *
+ * Falls back to the original path if resolution fails.
+ */
+async function resolveWorkspaceRootIndex(dirPath: string): Promise<string> {
+  try {
+    const backend = getBackendSync();
+    const response: any = await backend.execute({
+      type: "FindRootIndex",
+      params: { directory: dirPath },
+    });
+    const resolved = response?.data;
+    if (typeof resolved === "string" && resolved.trim()) {
+      const result = resolved.trim().replace(/^\.\/+/, "");
+      console.debug("[extism] resolveWorkspaceRootIndex:", dirPath, "→", result);
+      return result;
+    }
+    console.warn("[extism] resolveWorkspaceRootIndex: no data in response", response);
+  } catch (e) {
+    console.warn("[extism] resolveWorkspaceRootIndex failed:", e);
+  }
+  return dirPath;
+}
+
 function readPluginWorkspaceId(
   runtime: Record<string, unknown>,
   pluginId: string,
@@ -359,6 +388,12 @@ async function buildBrowserPluginInitPayload(pluginId: string): Promise<Record<s
     } catch {
       workspaceRoot = null;
     }
+  }
+
+  // Resolve directory-only paths (e.g. ".") to the actual root index file
+  // so plugins get a valid file path for reading/writing workspace config.
+  if (workspaceRoot && !workspaceRoot.endsWith(".md")) {
+    workspaceRoot = await resolveWorkspaceRootIndex(workspaceRoot);
   }
 
   return {
@@ -748,6 +783,21 @@ async function requirePermission(
       }),
     );
   }
+
+  // All plugins may access the sync server without explicit permission.
+  // The server authenticates via session cookies, so this is safe.
+  if (permType === "http_requests") {
+    try {
+      const authModule = await import("$lib/auth");
+      const serverUrl = authModule.getServerUrl();
+      if (serverUrl) {
+        const serverOrigin = new URL(serverUrl).origin;
+        const targetOrigin = new URL(target).origin;
+        if (targetOrigin === serverOrigin) return;
+      }
+    } catch {}
+  }
+
   await checkBrowserPermission(opts, permType, target);
 }
 
@@ -1035,10 +1085,24 @@ function buildHostFunctions(
               : null;
           let resp: Response;
           try {
+            // Include credentials (cookies) for same-origin and sync server
+            // requests, but not for third-party CDNs (which reject credentials
+            // when Access-Control-Allow-Origin is wildcard).
+            const requestUrl = new URL(input.url);
+            const isSameOrigin = requestUrl.origin === globalThis.location?.origin;
+            let isServerUrl = false;
+            try {
+              const authModule = await import("$lib/auth");
+              const sUrl = authModule.getServerUrl();
+              if (sUrl) isServerUrl = requestUrl.origin === new URL(sUrl).origin;
+            } catch {}
+            const credentials = isSameOrigin || isServerUrl ? "include" as const : "omit" as const;
+
             resp = await fetch(input.url, {
               method: input.method,
               headers: input.headers,
               body: fetchBody,
+              credentials,
               signal: abortController?.signal,
             });
           } finally {

@@ -22,12 +22,11 @@
     Settings2,
     ShieldOff,
     Tags,
-    Trash2,
     Upload,
   } from '@lucide/svelte';
-  import { sitePublishingStore } from '@/models/stores/sitePublishingStore.svelte';
+  import * as browserPlugins from '$lib/plugins/browserPluginManager.svelte';
   import { showError, showSuccess, showInfo } from '@/models/services/toastService';
-  import { getAuthState } from '$lib/auth';
+  import { getAuthState, getServerUrl } from '$lib/auth';
   import UpgradeBanner from '$lib/components/UpgradeBanner.svelte';
 
   interface Props {
@@ -41,33 +40,75 @@
   const colorStore = getAudienceColorStore();
   const configStore = getWorkspaceConfigStore();
 
-  let site = $derived(sitePublishingStore.site);
-  let error = $derived(sitePublishingStore.error);
-  let hasDefaultWorkspace = $derived(sitePublishingStore.hasDefaultWorkspace);
-  let defaultWorkspaceId = $derived(sitePublishingStore.defaultWorkspaceId);
-  let workspaceName = $derived(sitePublishingStore.defaultWorkspaceName);
-  let isConfigured = $derived(sitePublishingStore.isConfigured);
+  // ---- Plugin command helper (same pattern as ExportDialog) ----
+
+  function normalizeToObject(value: any): any {
+    if (value instanceof Map) {
+      const obj: Record<string, any> = {};
+      for (const [k, v] of value.entries()) {
+        obj[k] = normalizeToObject(v);
+      }
+      return obj;
+    }
+    if (Array.isArray(value)) {
+      return value.map(normalizeToObject);
+    }
+    return value;
+  }
+
+  async function executePublishCommand<T = any>(
+    command: string,
+    params: Record<string, any> = {},
+  ): Promise<T> {
+    if (!api) throw new Error('Publish API unavailable');
+
+    const browserPublish = browserPlugins.getPlugin('diaryx.publish');
+    if (browserPublish) {
+      const result = await browserPlugins.dispatchCommand('diaryx.publish', command, params);
+      if (!result.success) {
+        throw new Error(result.error ?? `Publish command failed: ${command}`);
+      }
+      return normalizeToObject(result.data) as T;
+    }
+
+    const data = await api.executePluginCommand('diaryx.publish', command, params as any);
+    return normalizeToObject(data) as T;
+  }
+
+  // ---- State ----
+
   let authState = $derived(getAuthState());
   let isAuthenticated = $derived(authState.isAuthenticated);
-
-  let isLoading = $derived(sitePublishingStore.isLoading);
-  let isPublishing = $derived(sitePublishingStore.isPublishing);
-  let isCreatingSite = $derived(sitePublishingStore.isCreatingSite);
-  let isCreatingToken = $derived(sitePublishingStore.isCreatingToken);
-  let isRevokingToken = $derived(sitePublishingStore.isRevokingToken);
-  let lastCreatedAccessUrl = $derived(sitePublishingStore.lastCreatedAccessUrl);
-  let tokens = $derived(sitePublishingStore.tokens);
+  let serverUrl = $derived(getServerUrl() ?? '');
 
   // Workspace root path from tree (for getAvailableAudiences)
   let rootPath = $derived(workspaceStore.tree?.path ?? null);
   let defaultAudience = $derived(configStore.config?.default_audience ?? null);
+  let hasDefaultWorkspace = $derived(rootPath !== null);
+
+  // Plugin-backed state
+  let namespaceId = $state<string | null>(null);
+  let subdomain = $state<string | null>(null);
+  let error = $state<string | null>(null);
+
+  // Loading flags
+  let isLoading = $state(false);
+  let isPublishing = $state(false);
+  let isCreatingNamespace = $state(false);
+  let isClaimingSubdomain = $state(false);
+  let isCreatingToken = $state(false);
+  let lastCreatedAccessUrl = $state<string | null>(null);
+
+  // Subdomain input
+  let showSubdomainInput = $state(false);
+  let subdomainInput = $state('');
 
   // Audience states: audience name -> { state, access_method }
   type AudienceState = 'unpublished' | 'public' | 'access-control';
   interface AudienceConfig { state: AudienceState; access_method?: string }
   let audienceStates = $state<Record<string, AudienceConfig>>({});
   let availableAudiences = $state<string[]>([]);
-  let initializedWorkspaceId = $state<string | null>(null);
+  let initializedRootPath = $state<string | null>(null);
 
   // Manage audiences modal
   let showManageAudiences = $state(false);
@@ -81,19 +122,19 @@
   let accessDialogAudience = $state<string | null>(null);
   let accessDialogState = $state<AudienceState>('unpublished');
   let accessDialogMethod = $state<string>('access-key');
-  let tokenExpiresPreset = $state('7d');
   let copiedAccessUrl = $state(false);
-  let copiedTokenId = $state<string | null>(null);
+  let copiedSiteUrl = $state(false);
 
-  let siteSlug = $derived.by(() => {
-    if (site?.slug) return site.slug;
-    if (!workspaceName) return null;
-    return workspaceName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-  });
+  let isConfigured = $derived(namespaceId !== null);
 
   let siteUrl = $derived.by(() => {
-    if (!siteSlug) return null;
-    return `site.diaryx.org/${siteSlug}`;
+    if (!namespaceId) return null;
+    if (subdomain) return `https://${subdomain}.diaryx.org`;
+    const base = `https://diaryx.org/ns/${namespaceId}`;
+    // Show URL for first published audience
+    const firstPublished = Object.entries(audienceStates).find(([, c]) => c.state !== 'unpublished');
+    if (firstPublished) return `${base}/${firstPublished[0]}/index.html`;
+    return base;
   });
 
   // Combine explicit audience tags + default audience into a unified list
@@ -119,24 +160,18 @@
     hasDefaultWorkspace
     && !isPublishing
     && !isLoading
-    && !isCreatingSite
+    && !isCreatingNamespace
     && isAuthenticated
     && hasPublishingAccess
     && publishedAudienceCount > 0
   );
 
-  // Tokens for the currently-open dialog audience
-  let dialogAudienceTokens = $derived(
-    accessDialogAudience
-      ? tokens.filter(t => t.audience === accessDialogAudience)
-      : []
-  );
+  // ---- Effects ----
 
   $effect(() => {
-    if (!defaultWorkspaceId || initializedWorkspaceId === defaultWorkspaceId) return;
-    initializedWorkspaceId = defaultWorkspaceId;
-    sitePublishingStore.load(defaultWorkspaceId);
-    loadAudienceStates();
+    if (!rootPath || initializedRootPath === rootPath) return;
+    initializedRootPath = rootPath;
+    loadPublishConfig();
   });
 
   // Load workspace config when rootPath becomes available
@@ -151,6 +186,32 @@
     if (rootPath) loadAudiences();
   });
 
+  // ---- Data loading ----
+
+  async function loadPublishConfig() {
+    if (!api) return;
+    isLoading = true;
+    error = null;
+    try {
+      const config = await executePublishCommand<{
+        namespace_id?: string | null;
+        subdomain?: string | null;
+        audience_states?: Record<string, AudienceConfig>;
+      }>('GetPublishConfig', {});
+      console.debug('[PublishingPanel] GetPublishConfig response:', config);
+      namespaceId = config.namespace_id ?? null;
+      subdomain = config.subdomain ?? null;
+      audienceStates = config.audience_states ?? {};
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to load publish config';
+      namespaceId = null;
+      subdomain = null;
+      audienceStates = {};
+    } finally {
+      isLoading = false;
+    }
+  }
+
   async function loadAudiences() {
     if (!api || !rootPath) return;
     try {
@@ -158,35 +219,6 @@
       for (const name of availableAudiences) colorStore.assignColor(name);
     } catch {
       availableAudiences = [];
-    }
-  }
-
-  function audienceStatesStorageKey(): string {
-    return `diaryx-audience-publish-states:${defaultWorkspaceId ?? 'default'}`;
-  }
-
-  function loadAudienceStates() {
-    try {
-      const raw = localStorage.getItem(audienceStatesStorageKey());
-      if (raw) {
-        audienceStates = JSON.parse(raw) as Record<string, AudienceConfig>;
-      }
-    } catch {
-      audienceStates = {};
-    }
-  }
-
-  function saveAudienceState(audience: string, config: AudienceConfig) {
-    if (config.state === 'unpublished') {
-      const { [audience]: _, ...rest } = audienceStates;
-      audienceStates = rest;
-    } else {
-      audienceStates = { ...audienceStates, [audience]: config };
-    }
-    try {
-      localStorage.setItem(audienceStatesStorageKey(), JSON.stringify(audienceStates));
-    } catch {
-      showError('Failed to save audience state', 'Publishing');
     }
   }
 
@@ -198,87 +230,143 @@
     return audience === defaultAudience && !availableAudiences.includes(audience);
   }
 
+  // ---- Access dialog ----
+
   function openAccessDialog(audience: string) {
     const config = getAudienceState(audience);
     accessDialogAudience = audience;
     accessDialogState = config.state;
     accessDialogMethod = config.access_method ?? 'access-key';
     accessDialogOpen = true;
-    sitePublishingStore.clearLastCreatedAccessUrl();
+    lastCreatedAccessUrl = null;
   }
 
-  function handleSaveAccessDialog() {
+  async function handleSaveAccessDialog() {
     if (!accessDialogAudience) return;
     const config: AudienceConfig = {
       state: accessDialogState,
       access_method: accessDialogState === 'access-control' ? accessDialogMethod : undefined,
     };
-    saveAudienceState(accessDialogAudience, config);
+    try {
+      await executePublishCommand('SetAudiencePublishState', {
+        audience: accessDialogAudience,
+        server_url: serverUrl,
+        config: {
+          state: config.state,
+          access_method: config.access_method,
+        },
+      });
+      if (config.state === 'unpublished') {
+        const { [accessDialogAudience]: _, ...rest } = audienceStates;
+        audienceStates = rest;
+      } else {
+        audienceStates = { ...audienceStates, [accessDialogAudience]: config };
+      }
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Failed to save audience state', 'Publishing');
+    }
     accessDialogOpen = false;
   }
 
+  // ---- Publish ----
+
   async function handlePublish() {
-    // Auto-create site if not configured
-    if (!isConfigured && siteSlug) {
-      const created = await sitePublishingStore.create({
-        slug: siteSlug,
-        enabled: true,
-        auto_publish: true,
-      });
-      if (!created) {
-        showError(sitePublishingStore.error ?? 'Failed to create site', 'Publishing');
+    error = null;
+
+    // Auto-create namespace if not configured
+    if (!isConfigured) {
+      isCreatingNamespace = true;
+      try {
+        const result = await executePublishCommand<{ namespace_id: string }>(
+          'CreateNamespace',
+          { server_url: serverUrl },
+        );
+        namespaceId = result.namespace_id;
+      } catch (e) {
+        showError(e instanceof Error ? e.message : 'Failed to create namespace', 'Publishing');
+        isCreatingNamespace = false;
         return;
+      } finally {
+        isCreatingNamespace = false;
       }
     }
 
-    // Publish all non-unpublished audiences
-    const audiencesToPublish = Object.entries(audienceStates)
-      .filter(([, c]) => c.state !== 'unpublished')
-      .map(([name]) => name);
-
-    if (audiencesToPublish.length === 0) {
-      showError('No audiences are set to publish.', 'Publishing');
-      return;
-    }
-
-    // Publish each audience individually (server accepts one audience per request)
-    let allOk = true;
-    for (const audience of audiencesToPublish) {
-      const ok = await sitePublishingStore.publishNow(audience);
-      if (!ok) {
-        showError(sitePublishingStore.error ?? `Failed to publish audience "${audience}"`, 'Publishing');
-        allOk = false;
-        break;
-      }
-    }
-    if (allOk) {
-      showSuccess('Site published');
+    // Publish via plugin — single call, plugin loops audiences
+    isPublishing = true;
+    try {
+      const result = await executePublishCommand<{
+        audiences_published: string[];
+        files_uploaded: number;
+        files_deleted: number;
+      }>('PublishToNamespace', {
+        namespace_id: namespaceId,
+        server_url: serverUrl,
+      });
+      showSuccess(`Published ${result.audiences_published.length} audience(s)`);
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Publish failed', 'Publishing');
+    } finally {
+      isPublishing = false;
     }
   }
+
+  // ---- Access token ----
 
   async function handleCreateToken() {
-    if (!accessDialogAudience || !site) return;
-    const expiresIn = tokenExpiresPreset === 'none' ? null : tokenExpiresPreset;
-    const created = await sitePublishingStore.createToken({
-      audience: accessDialogAudience,
-      expires_in: expiresIn,
-    });
-    if (created) {
-      showSuccess('Access token created');
-      if (sitePublishingStore.lastCreatedAccessUrl) {
-        showInfo('Copy the access URL now. It is only shown once.');
-      }
-    } else {
-      showError(sitePublishingStore.error ?? 'Failed to create token', 'Publishing');
+    if (!accessDialogAudience || !isConfigured) return;
+    isCreatingToken = true;
+    try {
+      const result = await executePublishCommand<{ token: string; access_url: string }>(
+        'CreateAccessToken',
+        { server_url: serverUrl, audience: accessDialogAudience },
+      );
+      lastCreatedAccessUrl = result.access_url;
+      showSuccess('Access link generated');
+      showInfo('Copy the access URL now. It is only shown once.');
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Failed to create token', 'Publishing');
+    } finally {
+      isCreatingToken = false;
     }
   }
 
-  async function handleRevokeToken(tokenId: string) {
-    if (!confirm('Revoke this token?')) return;
-    const revoked = await sitePublishingStore.revokeToken(tokenId);
-    if (revoked) showSuccess('Token revoked');
-    else showError(sitePublishingStore.error ?? 'Failed to revoke token', 'Publishing');
+  // ---- Subdomain ----
+
+  async function handleClaimSubdomain() {
+    const value = subdomainInput.trim().toLowerCase();
+    if (!value || !isConfigured) return;
+    isClaimingSubdomain = true;
+    try {
+      // Use first published audience as default
+      const firstPublished = Object.entries(audienceStates).find(([, c]) => c.state !== 'unpublished');
+      await executePublishCommand('ClaimSubdomain', {
+        server_url: serverUrl,
+        subdomain: value,
+        default_audience: firstPublished?.[0],
+      });
+      subdomain = value;
+      showSubdomainInput = false;
+      subdomainInput = '';
+      showSuccess(`Subdomain claimed: ${value}.diaryx.org`);
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Failed to claim subdomain', 'Publishing');
+    } finally {
+      isClaimingSubdomain = false;
+    }
   }
+
+  async function handleReleaseSubdomain() {
+    if (!isConfigured || !subdomain) return;
+    try {
+      await executePublishCommand('ReleaseSubdomain', { server_url: serverUrl });
+      subdomain = null;
+      showSuccess('Subdomain released');
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Failed to release subdomain', 'Publishing');
+    }
+  }
+
+  // ---- Default audience ----
 
   async function handleSetDefaultAudience() {
     const value = defaultAudienceInput.trim();
@@ -290,16 +378,17 @@
     templateContextStore.bumpAudiencesVersion();
   }
 
-  async function copyText(value: string, mode: 'access-url' | 'token-id', tokenId?: string) {
+  // ---- Clipboard ----
+
+  async function copyToClipboard(value: string, flag: 'access-url' | 'site-url') {
     try {
       await navigator.clipboard.writeText(value);
-      if (mode === 'access-url') {
+      if (flag === 'access-url') {
         copiedAccessUrl = true;
         setTimeout(() => { copiedAccessUrl = false; }, 1800);
-      }
-      if (mode === 'token-id' && tokenId) {
-        copiedTokenId = tokenId;
-        setTimeout(() => { copiedTokenId = null; }, 1800);
+      } else {
+        copiedSiteUrl = true;
+        setTimeout(() => { copiedSiteUrl = false; }, 1800);
       }
     } catch {
       showError('Copy failed. Check browser clipboard permissions.', 'Publishing');
@@ -359,9 +448,88 @@
     <div class="space-y-1">
       <h3 class="font-medium text-sm">Publish as a site</h3>
       {#if siteUrl}
-        <p class="text-xs text-muted-foreground font-mono">{siteUrl}</p>
+        <div class="flex items-center gap-1.5">
+          <p class="text-xs text-muted-foreground font-mono truncate flex-1">{siteUrl}</p>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-6 shrink-0"
+            onclick={() => copyToClipboard(siteUrl!, 'site-url')}
+            aria-label="Copy site URL"
+          >
+            {#if copiedSiteUrl}
+              <Check class="size-3" />
+            {:else}
+              <Copy class="size-3" />
+            {/if}
+          </Button>
+        </div>
       {/if}
     </div>
+
+    <!-- Subdomain -->
+    {#if isConfigured}
+      {#if subdomain}
+        <div class="flex items-center gap-2 text-xs">
+          <span class="text-muted-foreground">Subdomain:</span>
+          <span class="font-mono font-medium">{subdomain}.diaryx.org</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-6 text-xs text-muted-foreground ml-auto px-2"
+            onclick={handleReleaseSubdomain}
+          >
+            Release
+          </Button>
+        </div>
+      {:else if showSubdomainInput}
+        <div class="space-y-1.5">
+          <p class="text-xs text-muted-foreground">Choose a subdomain for your site</p>
+          <div class="flex gap-2 items-center">
+            <Input
+              type="text"
+              bind:value={subdomainInput}
+              placeholder="my-site"
+              class="h-8 text-xs flex-1 font-mono"
+              onkeydown={(e) => { if (e.key === 'Enter') handleClaimSubdomain(); }}
+            />
+            <span class="text-xs text-muted-foreground shrink-0">.diaryx.org</span>
+          </div>
+          <div class="flex gap-2">
+            <Button
+              variant="default"
+              size="sm"
+              class="h-7 text-xs"
+              onclick={handleClaimSubdomain}
+              disabled={subdomainInput.trim().length < 3 || isClaimingSubdomain}
+            >
+              {#if isClaimingSubdomain}
+                <Loader2 class="size-3 mr-1 animate-spin" />
+              {/if}
+              Claim
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-7 text-xs"
+              onclick={() => { showSubdomainInput = false; }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      {:else}
+        <Button
+          variant="outline"
+          size="sm"
+          class="w-full text-xs"
+          onclick={() => { showSubdomainInput = true; }}
+        >
+          <Globe class="size-3.5 mr-1.5" />
+          Set custom subdomain
+        </Button>
+      {/if}
+    {/if}
 
     <!-- Audience list or empty state -->
     {#if !hasAnyAudience}
@@ -478,9 +646,9 @@
         {#if isPublishing}
           <Loader2 class="size-4 mr-2 animate-spin" />
           Publishing...
-        {:else if isCreatingSite}
+        {:else if isCreatingNamespace}
           <Loader2 class="size-4 mr-2 animate-spin" />
-          Setting up site...
+          Setting up namespace...
         {:else}
           <Upload class="size-4 mr-2" />
           Publish
@@ -489,12 +657,6 @@
           {/if}
         {/if}
       </Button>
-
-      {#if site?.last_published_at}
-        <p class="text-[11px] text-muted-foreground text-center">
-          Last published {new Date(site.last_published_at * 1000).toLocaleString()}
-        </p>
-      {/if}
     {/if}
   {/if}
 </div>
@@ -561,38 +723,22 @@
             </NativeSelect>
           </div>
 
-          {#if accessDialogMethod === 'access-key' && site}
+          {#if accessDialogMethod === 'access-key' && isConfigured}
             <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <p class="text-xs font-medium text-muted-foreground">Access Tokens</p>
-              </div>
-
-              <div class="space-y-1.5">
-                <label for="token-expires" class="text-xs text-muted-foreground">New token expires</label>
-                <div class="flex gap-2">
-                  <NativeSelect id="token-expires" bind:value={tokenExpiresPreset} class="flex-1 h-8 text-xs">
-                    <option value="none">Never</option>
-                    <option value="10m">10 minutes</option>
-                    <option value="1d">1 day</option>
-                    <option value="7d">7 days</option>
-                    <option value="30d">30 days</option>
-                  </NativeSelect>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    class="h-8 text-xs shrink-0"
-                    onclick={handleCreateToken}
-                    disabled={isCreatingToken}
-                  >
-                    {#if isCreatingToken}
-                      <Loader2 class="size-3.5 mr-1 animate-spin" />
-                    {:else}
-                      <KeyRound class="size-3.5 mr-1" />
-                    {/if}
-                    Create
-                  </Button>
-                </div>
-              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                class="w-full h-8 text-xs"
+                onclick={handleCreateToken}
+                disabled={isCreatingToken}
+              >
+                {#if isCreatingToken}
+                  <Loader2 class="size-3.5 mr-1 animate-spin" />
+                {:else}
+                  <KeyRound class="size-3.5 mr-1" />
+                {/if}
+                Generate Access Link
+              </Button>
 
               {#if lastCreatedAccessUrl}
                 <Alert.Root class="py-2 border border-primary/30 bg-secondary">
@@ -604,7 +750,7 @@
                         variant="outline"
                         size="sm"
                         class="h-7 text-xs"
-                        onclick={() => copyText(lastCreatedAccessUrl!, 'access-url')}
+                        onclick={() => copyToClipboard(lastCreatedAccessUrl!, 'access-url')}
                       >
                         {#if copiedAccessUrl}
                           <Check class="size-3.5 mr-1" /> Copied
@@ -616,7 +762,7 @@
                         variant="ghost"
                         size="sm"
                         class="h-7 text-xs"
-                        onclick={() => sitePublishingStore.clearLastCreatedAccessUrl()}
+                        onclick={() => { lastCreatedAccessUrl = null; }}
                       >
                         Dismiss
                       </Button>
@@ -624,48 +770,9 @@
                   </Alert.Description>
                 </Alert.Root>
               {/if}
-
-              {#if dialogAudienceTokens.length === 0}
-                <p class="text-xs text-muted-foreground">No active tokens for this audience.</p>
-              {:else}
-                <div class="space-y-1">
-                  {#each dialogAudienceTokens as token (token.id)}
-                    <div class="flex items-center justify-between gap-2 rounded border border-border bg-background px-2 py-1.5">
-                      <div class="min-w-0">
-                        <p class="text-[11px] text-muted-foreground">
-                          Expires: {token.expires_at ? new Date(token.expires_at * 1000).toLocaleDateString() : 'Never'}
-                        </p>
-                      </div>
-                      <div class="flex items-center gap-1 shrink-0">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="size-6"
-                          onclick={() => copyText(token.id, 'token-id', token.id)}
-                        >
-                          {#if copiedTokenId === token.id}
-                            <Check class="size-3" />
-                          {:else}
-                            <Copy class="size-3" />
-                          {/if}
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          size="icon"
-                          class="size-6"
-                          onclick={() => handleRevokeToken(token.id)}
-                          disabled={isRevokingToken}
-                        >
-                          <Trash2 class="size-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
             </div>
-          {:else if accessDialogMethod === 'access-key' && !site}
-            <p class="text-xs text-muted-foreground">Publish the site first to manage access tokens.</p>
+          {:else if accessDialogMethod === 'access-key' && !isConfigured}
+            <p class="text-xs text-muted-foreground">Publish the site first to generate access links.</p>
           {/if}
         </div>
       {/if}

@@ -55,6 +55,20 @@ pub struct DomainResponse {
     pub verified: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ClaimSubdomainRequest {
+    pub subdomain: String,
+    #[serde(default)]
+    pub default_audience: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubdomainResponse {
+    pub subdomain: String,
+    pub namespace_id: String,
+    pub url: String,
+}
+
 // ---------------------------------------------------------------------------
 // KV sync helpers
 // ---------------------------------------------------------------------------
@@ -120,6 +134,73 @@ async fn kv_delete_domain(state: &DomainState, hostname: &str) {
     }
 }
 
+/// Write a subdomain→namespace mapping to Cloudflare KV (best-effort).
+async fn kv_put_subdomain(
+    state: &DomainState,
+    subdomain: &str,
+    namespace_id: &str,
+    default_audience: Option<&str>,
+) {
+    let (Some(token), Some(kv_id)) = (&state.kv_api_token, &state.kv_namespace_id) else {
+        return;
+    };
+    if state.cf_account_id.is_empty() {
+        return;
+    }
+
+    let url = format!(
+        "https://api.cloudflare.com/client/v4/accounts/{}/storage/kv/namespaces/{}/values/subdomain:{}",
+        state.cf_account_id,
+        kv_id,
+        subdomain.to_lowercase()
+    );
+    let mut body = serde_json::json!({
+        "namespace_id": namespace_id,
+    });
+    if let Some(aud) = default_audience {
+        body["default_audience"] = serde_json::Value::String(aud.to_string());
+    }
+
+    if let Err(e) = state
+        .http_client
+        .put(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+    {
+        warn!("Failed to write subdomain '{}' to KV: {}", subdomain, e);
+    }
+}
+
+/// Delete a subdomain mapping from Cloudflare KV (best-effort).
+async fn kv_delete_subdomain(state: &DomainState, subdomain: &str) {
+    let (Some(token), Some(kv_id)) = (&state.kv_api_token, &state.kv_namespace_id) else {
+        return;
+    };
+    if state.cf_account_id.is_empty() {
+        return;
+    }
+
+    let url = format!(
+        "https://api.cloudflare.com/client/v4/accounts/{}/storage/kv/namespaces/{}/values/subdomain:{}",
+        state.cf_account_id,
+        kv_id,
+        subdomain.to_lowercase()
+    );
+
+    if let Err(e) = state
+        .http_client
+        .delete(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        warn!("Failed to delete subdomain '{}' from KV: {}", subdomain, e);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Owner management routes (mounted under /namespaces/{ns_id})
 // ---------------------------------------------------------------------------
@@ -131,6 +212,7 @@ pub fn domain_routes(state: DomainState) -> Router {
             "/domains/{domain}",
             put(register_domain).delete(remove_domain),
         )
+        .route("/subdomain", put(claim_subdomain).delete(release_subdomain))
         .with_state(state)
 }
 
@@ -239,6 +321,106 @@ async fn remove_domain(
             )
                 .into_response(),
         },
+    }
+}
+
+/// PUT /namespaces/{ns_id}/subdomain — claim a subdomain for this namespace.
+async fn claim_subdomain(
+    State(state): State<DomainState>,
+    RequireAuth(auth): RequireAuth,
+    Path(ns_id): Path<String>,
+    Json(req): Json<ClaimSubdomainRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
+        return resp;
+    }
+
+    let subdomain = req.subdomain.to_lowercase();
+
+    // Validate subdomain format: alphanumeric + hyphens, 3-63 chars, no leading/trailing hyphens
+    if subdomain.len() < 3
+        || subdomain.len() > 63
+        || !subdomain
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        || subdomain.starts_with('-')
+        || subdomain.ends_with('-')
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid subdomain. Use 3-63 alphanumeric characters and hyphens." })),
+        )
+            .into_response();
+    }
+
+    // Reserved subdomains
+    let reserved = [
+        "www", "api", "app", "mail", "smtp", "ftp", "ns", "admin", "sync", "site", "sites",
+    ];
+    if reserved.contains(&subdomain.as_str()) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "This subdomain is reserved." })),
+        )
+            .into_response();
+    }
+
+    // Check if subdomain is already taken (via custom_domains table, using subdomain as domain)
+    let domain_key = format!("{}.diaryx.org", subdomain);
+    if let Some(existing) = state.ns_repo.get_custom_domain(&domain_key) {
+        if existing.namespace_id != ns_id {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": "This subdomain is already taken." })),
+            )
+                .into_response();
+        }
+    }
+
+    // Store using existing custom_domains table (audience_name = "*" for whole-namespace)
+    match state.ns_repo.upsert_custom_domain(&domain_key, &ns_id, "*") {
+        Ok(()) => {
+            kv_put_subdomain(&state, &subdomain, &ns_id, req.default_audience.as_deref()).await;
+
+            Json(SubdomainResponse {
+                subdomain: subdomain.clone(),
+                namespace_id: ns_id,
+                url: format!("https://{}.diaryx.org", subdomain),
+            })
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /namespaces/{ns_id}/subdomain — release the subdomain for this namespace.
+async fn release_subdomain(
+    State(state): State<DomainState>,
+    RequireAuth(auth): RequireAuth,
+    Path(ns_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
+        return resp;
+    }
+
+    // Find the subdomain for this namespace
+    let domains = state.ns_repo.list_custom_domains(&ns_id);
+    let subdomain_domain = domains
+        .iter()
+        .find(|d| d.audience_name == "*" && d.domain.ends_with(".diaryx.org"));
+
+    match subdomain_domain {
+        Some(d) => {
+            let subdomain = d.domain.trim_end_matches(".diaryx.org");
+            kv_delete_subdomain(&state, subdomain).await;
+            let _ = state.ns_repo.delete_custom_domain(&d.domain);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 

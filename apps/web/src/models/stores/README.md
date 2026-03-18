@@ -6,7 +6,6 @@ attachments:
   - '[index.ts](/apps/web/src/models/stores/index.ts)'
   - '[collaborationStore.svelte.ts](/apps/web/src/models/stores/collaborationStore.svelte.ts)'
   - '[entryStore.svelte.ts](/apps/web/src/models/stores/entryStore.svelte.ts)'
-  - '[sitePublishingStore.svelte.ts](/apps/web/src/models/stores/sitePublishingStore.svelte.ts)'
   - '[pluginStore.svelte.ts](/apps/web/src/models/stores/pluginStore.svelte.ts)'
   - '[permissionStore.svelte.ts](/apps/web/src/models/stores/permissionStore.svelte.ts)'
   - '[uiStore.svelte.ts](/apps/web/src/models/stores/uiStore.svelte.ts)'
@@ -26,7 +25,6 @@ Svelte stores for reactive application state.
 |------|---------|
 | `collaborationStore.svelte.ts` | Sync/session status state (status/progress/error) used by generic plugin-driven UI surfaces. |
 | `entryStore.svelte.ts` | Current entry + dirty/saving state. |
-| `sitePublishingStore.svelte.ts` | Publishing state for site config, publish actions, and token lifecycle. |
 | `pluginStore.svelte.ts` | Plugin manifest aggregation and derived UI contribution selectors (settings/sidebar/toolbar/status/commands/providers), including compatibility selectors for legacy provider/block-picker surfaces and `InlineMark` editor insert commands. |
 | `permissionStore.svelte.ts` | Runtime plugin permission checks, pending request queue, session cache, and root-frontmatter persistence hooks. Plugin storage remains sandboxed per plugin and is treated as allowed-by-default to match the native host. |
 | `uiStore.svelte.ts` | Dialog/sidebar state and UI toggles. |

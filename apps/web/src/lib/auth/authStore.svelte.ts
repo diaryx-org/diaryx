@@ -204,6 +204,7 @@ export function getServerUrl(): string | null {
 }
 
 export function getDefaultWorkspace(): Workspace | null {
+  if (!state.workspaces) return null;
   if (state.activeWorkspaceId) {
     const active = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
     if (active) return active;
@@ -224,7 +225,7 @@ export function getDefaultWorkspace(): Workspace | null {
  */
 export function getCurrentWorkspace(): Workspace | null {
   const currentId = state.activeWorkspaceId;
-  if (currentId) {
+  if (currentId && state.workspaces) {
     const ws = state.workspaces.find(w => w.id === currentId);
     if (ws) return ws;
   }

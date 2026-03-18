@@ -133,6 +133,9 @@ async fn put_object(
     let r2_metadata = audience.as_ref().map(|aud| {
         let mut m = HashMap::new();
         m.insert("audience".to_string(), aud.clone());
+        if let Some(info) = state.ns_repo.get_audience(&ns_id, aud) {
+            m.insert("access".to_string(), info.access);
+        }
         m
     });
 

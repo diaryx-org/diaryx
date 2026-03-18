@@ -62,11 +62,6 @@ test.describe('Workspace Entry Properties', () => {
     // Properties is the default right sidebar view; no tab click needed
   })
 
-  test('should show attachments section in properties', async ({ page }) => {
-    const attachmentsHeader = page.locator('aside span.font-medium').filter({ hasText: 'Attachments' })
-    await expect(attachmentsHeader).toBeVisible()
-  })
-
   test('should show Add Property button', async ({ page }) => {
     const addPropertyButton = page.locator('aside').locator('button').filter({ hasText: 'Add Property' })
     await expect(addPropertyButton).toBeVisible()

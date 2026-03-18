@@ -4,7 +4,7 @@ use super::require_namespace_owner;
 use crate::auth::RequireAuth;
 use crate::blob_store::BlobStore;
 use crate::db::{AudienceInfo, NamespaceRepo};
-use crate::publish::create_signed_token;
+use crate::tokens::create_signed_token;
 use axum::{
     Router,
     extract::{Path, State},

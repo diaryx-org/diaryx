@@ -88,7 +88,7 @@ cargo run -p diaryx_sync_server
 
 #### Request Magic Link
 
-```
+```text
 POST /auth/magic-link
 Content-Type: application/json
 
@@ -106,7 +106,7 @@ Response:
 
 #### Verify Magic Link
 
-```
+```text
 GET /auth/verify?token=XXX&device_name=My%20Device
 ```
 
@@ -125,7 +125,7 @@ Response:
 
 #### Get Current User
 
-```
+```text
 GET /auth/me
 Authorization: Bearer <session_token>
 ```
@@ -136,21 +136,21 @@ device returns `403` until an existing device is removed with
 
 #### Logout
 
-```
+```text
 POST /auth/logout
 Authorization: Bearer <session_token>
 ```
 
 #### List Devices
 
-```
+```text
 GET /auth/devices
 Authorization: Bearer <session_token>
 ```
 
 #### Delete Device
 
-```
+```text
 DELETE /auth/devices/{device_id}
 Authorization: Bearer <session_token>
 ```
@@ -159,7 +159,7 @@ Authorization: Bearer <session_token>
 
 #### Server Status
 
-```
+```text
 GET /api/status
 ```
 
@@ -176,14 +176,14 @@ Response:
 
 #### List Workspaces
 
-```
+```text
 GET /api/workspaces
 Authorization: Bearer <session_token>
 ```
 
 #### Download Workspace Snapshot
 
-```
+```text
 GET /api/workspaces/{workspace_id}/snapshot?include_attachments=true|false
 Authorization: Bearer <session_token>
 ```
@@ -193,7 +193,7 @@ attachment binaries resolved from blob storage.
 
 #### Upload Workspace Snapshot
 
-```
+```text
 POST /api/workspaces/{workspace_id}/snapshot?mode=replace|merge&include_attachments=true|false
 Authorization: Bearer <session_token>
 Content-Type: application/zip
@@ -207,7 +207,7 @@ Response:
 
 #### User Attachment Storage Usage
 
-```
+```text
 GET /api/user/storage
 Authorization: Bearer <session_token>
 ```
@@ -230,7 +230,7 @@ Response:
 
 #### Managed AI Proxy
 
-```
+```text
 POST /api/ai/chat/completions
 Authorization: Bearer <session_token>
 Content-Type: application/json
@@ -248,7 +248,7 @@ Behavior:
 
 #### Incremental Attachment Upload (Resumable)
 
-```
+```text
 POST /api/workspaces/{workspace_id}/attachments/uploads
 Authorization: Bearer <session_token>
 Content-Type: application/json
@@ -258,7 +258,7 @@ Initializes or resumes a multipart attachment upload session.
 If an upload fits in a single part, the server uses a direct object upload path
 internally (no remote multipart session is created).
 
-```
+```text
 PUT /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/parts/{part_no}
 Authorization: Bearer <session_token>
 Content-Type: application/octet-stream
@@ -266,7 +266,7 @@ Content-Type: application/octet-stream
 
 Uploads one part for a multipart session.
 
-```
+```text
 POST /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/complete
 Authorization: Bearer <session_token>
 Content-Type: application/json
@@ -289,7 +289,7 @@ or completion returns:
 
 #### Attachment Download by Hash
 
-```
+```text
 GET /api/workspaces/{workspace_id}/attachments/{hash}
 Authorization: Bearer <session_token>
 Range: bytes=start-end (optional)
@@ -299,7 +299,7 @@ Returns attachment bytes for hashes referenced by the workspace.
 
 #### Published Site Management
 
-```
+```text
 POST   /api/workspaces/{workspace_id}/site
 GET    /api/workspaces/{workspace_id}/site
 DELETE /api/workspaces/{workspace_id}/site
@@ -324,7 +324,7 @@ These endpoints are only available when `STRIPE_SECRET_KEY` is configured.
 
 #### Create Checkout Session
 
-```
+```text
 POST /api/stripe/checkout
 Authorization: Bearer <session_token>
 ```
@@ -335,7 +335,7 @@ Redirects user to Stripe's hosted checkout page for upgrading to Plus.
 
 #### Create Customer Portal Session
 
-```
+```text
 POST /api/stripe/portal
 Authorization: Bearer <session_token>
 ```
@@ -346,7 +346,7 @@ Redirects user to Stripe's customer portal for managing billing, payment methods
 
 #### Stripe Webhook
 
-```
+```text
 POST /api/stripe/webhook
 Stripe-Signature: <signature>
 ```
@@ -355,7 +355,7 @@ Handles `checkout.session.completed`, `customer.subscription.updated`, and `cust
 
 #### Get Stripe Config
 
-```
+```text
 GET /api/stripe/config
 ```
 
@@ -367,7 +367,7 @@ These endpoints are only available when `APPLE_IAP_BUNDLE_ID` is configured. The
 
 #### Verify Transaction
 
-```
+```text
 POST /api/apple/verify-receipt
 Authorization: Bearer <session_token>
 Content-Type: application/json
@@ -381,7 +381,7 @@ Verifies the JWS signature against Apple Root CA-G3, validates the subscription 
 
 #### Restore Purchases
 
-```
+```text
 POST /api/apple/restore
 Authorization: Bearer <session_token>
 Content-Type: application/json
@@ -395,7 +395,7 @@ Verifies multiple transactions from a restore flow. Required by App Store Review
 
 #### App Store Server Webhook
 
-```
+```text
 POST /api/apple/webhook
 ```
 
@@ -407,7 +407,7 @@ Share sessions allow real-time collaboration with guests who don't need accounts
 
 #### Create Live Share Session
 
-```
+```text
 POST /api/share/sessions
 Authorization: Bearer <session_token>
 Content-Type: application/json
@@ -427,7 +427,7 @@ Response:
 
 #### Get Live Share Session Info
 
-```
+```text
 GET /api/share/sessions/{code}
 ```
 
@@ -444,7 +444,7 @@ Response:
 
 #### Update Live Share Session (toggle read-only)
 
-```
+```text
 PATCH /api/share/sessions/{code}
 Authorization: Bearer <session_token>
 Content-Type: application/json
@@ -454,7 +454,7 @@ Content-Type: application/json
 
 #### End Live Share Session
 
-```
+```text
 DELETE /api/share/sessions/{code}
 Authorization: Bearer <session_token>
 ```
@@ -474,13 +474,13 @@ This separation prevents large file bodies from bloating the workspace CRDT.
 
 ##### Authenticated (multi-device)
 
-```
+```text
 GET /sync?doc=workspace_id&token=session_token
 ```
 
 ##### Session Guest
 
-```
+```text
 GET /sync?session=XXXXXXXX-XXXXXXXX&guest_id=guest-123
 ```
 
@@ -488,13 +488,13 @@ GET /sync?session=XXXXXXXX-XXXXXXXX&guest_id=guest-123
 
 ##### Authenticated (multi-device)
 
-```
+```text
 GET /sync?doc=workspace_id&file=path/to/file.md&token=session_token
 ```
 
 ##### Session Guest
 
-```
+```text
 GET /sync?session=XXXXXXXX-XXXXXXXX&file=path/to/file.md&guest_id=guest-123
 ```
 
@@ -502,7 +502,7 @@ The WebSocket connection uses the Y-sync protocol (compatible with y-protocols).
 
 ## Architecture
 
-```
+```text
 ┌─────────────────┐                    ┌─────────────────────────┐
 │   Web/Tauri     │◄──── WS (metadata) │  diaryx_sync_server     │
 │   Client        │◄──── WS (body 1)   │  (Rust + axum)          │

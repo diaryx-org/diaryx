@@ -2,10 +2,13 @@ use crate::db::{AuthRepo, NamespaceRepo};
 use async_trait::async_trait;
 use diaryx_server::domain::{
     AudienceInfo as CoreAudienceInfo, CustomDomainInfo as CoreCustomDomainInfo,
-    DeviceInfo as CoreDeviceInfo, NamespaceInfo as CoreNamespaceInfo, UserInfo as CoreUserInfo,
+    DeviceInfo as CoreDeviceInfo, NamespaceInfo as CoreNamespaceInfo,
+    NamespaceSessionInfo as CoreNamespaceSessionInfo, UserInfo as CoreUserInfo,
     UserTier as CoreUserTier,
 };
-use diaryx_server::ports::{AuthStore, DomainMappingCache, NamespaceStore, ServerCoreError};
+use diaryx_server::ports::{
+    AuthStore, DomainMappingCache, NamespaceStore, ServerCoreError, SessionStore,
+};
 use serde_json::json;
 use std::sync::Arc;
 use tracing::warn;
@@ -142,6 +145,115 @@ impl NamespaceStore for NativeNamespaceStore {
     async fn delete_custom_domain(&self, domain: &str) -> Result<bool, ServerCoreError> {
         self.repo
             .delete_custom_domain(domain)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn create_namespace(
+        &self,
+        namespace_id: &str,
+        owner_user_id: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .create_namespace(namespace_id, owner_user_id)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn delete_namespace(&self, namespace_id: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .delete_namespace(namespace_id)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn upsert_audience(
+        &self,
+        namespace_id: &str,
+        audience_name: &str,
+        access: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .upsert_audience(namespace_id, audience_name, access)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn list_audiences(
+        &self,
+        namespace_id: &str,
+    ) -> Result<Vec<CoreAudienceInfo>, ServerCoreError> {
+        Ok(self
+            .repo
+            .list_audiences(namespace_id)
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    async fn delete_audience(
+        &self,
+        namespace_id: &str,
+        audience_name: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .delete_audience(namespace_id, audience_name)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn clear_objects_audience(
+        &self,
+        namespace_id: &str,
+        audience_name: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .clear_objects_audience(namespace_id, audience_name)
+            .map(|_| ())
+            .map_err(ServerCoreError::from)
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeSessionStore {
+    repo: Arc<NamespaceRepo>,
+}
+
+impl NativeSessionStore {
+    pub fn new(repo: Arc<NamespaceRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl SessionStore for NativeSessionStore {
+    async fn create_session(
+        &self,
+        namespace_id: &str,
+        owner_user_id: &str,
+        read_only: bool,
+        expires_at: Option<i64>,
+    ) -> Result<String, ServerCoreError> {
+        self.repo
+            .create_session(namespace_id, owner_user_id, read_only, expires_at)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn get_session(
+        &self,
+        code: &str,
+    ) -> Result<Option<CoreNamespaceSessionInfo>, ServerCoreError> {
+        Ok(self.repo.get_session(code).map(Into::into))
+    }
+
+    async fn update_session_read_only(
+        &self,
+        code: &str,
+        read_only: bool,
+    ) -> Result<bool, ServerCoreError> {
+        self.repo
+            .update_session_read_only(code, read_only)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn delete_session(&self, code: &str) -> Result<bool, ServerCoreError> {
+        self.repo
+            .delete_session(code)
             .map_err(ServerCoreError::from)
     }
 }
@@ -361,6 +473,19 @@ impl From<crate::db::AudienceInfo> for CoreAudienceInfo {
     }
 }
 
+impl From<crate::db::NamespaceSessionInfo> for CoreNamespaceSessionInfo {
+    fn from(value: crate::db::NamespaceSessionInfo) -> Self {
+        Self {
+            code: value.code,
+            namespace_id: value.namespace_id,
+            owner_user_id: value.owner_user_id,
+            read_only: value.read_only,
+            created_at: value.created_at,
+            expires_at: value.expires_at,
+        }
+    }
+}
+
 impl From<crate::db::CustomDomainInfo> for CoreCustomDomainInfo {
     fn from(value: crate::db::CustomDomainInfo) -> Self {
         Self {
@@ -375,11 +500,15 @@ impl From<crate::db::CustomDomainInfo> for CoreCustomDomainInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore};
+    use super::{
+        NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore, NativeSessionStore,
+    };
     use crate::db::{AuthRepo, NamespaceRepo, init_database};
     use diaryx_server::ports::DomainMappingCache;
     use diaryx_server::use_cases::current_user::CurrentUserService;
     use diaryx_server::use_cases::domains::DomainService;
+    use diaryx_server::use_cases::namespaces::NamespaceService;
+    use diaryx_server::use_cases::sessions::SessionService;
     use rusqlite::Connection;
     use std::sync::Arc;
 
@@ -447,6 +576,70 @@ mod tests {
             .remove_domain("workspace:test", "blog.example.com")
             .await
             .expect("domain removed");
+    }
+
+    #[tokio::test]
+    async fn native_namespace_store_supports_namespace_service_use_case() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        init_database(&conn).expect("schema");
+
+        let repo = Arc::new(AuthRepo::new(conn));
+        let ns_repo = Arc::new(NamespaceRepo::new(repo.connection()));
+
+        let user_id = repo
+            .get_or_create_user("user@example.com")
+            .expect("user created");
+
+        let namespace_store = NativeNamespaceStore::new(ns_repo);
+        let service = NamespaceService::new(&namespace_store);
+
+        let ns = service
+            .create(&user_id, Some("workspace:test"))
+            .await
+            .expect("namespace created");
+        assert_eq!(ns.id, "workspace:test");
+
+        let fetched = service.get("workspace:test", &user_id).await.expect("get");
+        assert_eq!(fetched.owner_user_id, user_id);
+
+        service
+            .delete("workspace:test", &user_id)
+            .await
+            .expect("deleted");
+    }
+
+    #[tokio::test]
+    async fn native_session_store_supports_session_service_use_case() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        init_database(&conn).expect("schema");
+
+        let repo = Arc::new(AuthRepo::new(conn));
+        let ns_repo = Arc::new(NamespaceRepo::new(repo.connection()));
+
+        let user_id = repo
+            .get_or_create_user("user@example.com")
+            .expect("user created");
+        ns_repo
+            .create_namespace("workspace:test", &user_id)
+            .expect("namespace created");
+
+        let namespace_store = NativeNamespaceStore::new(ns_repo.clone());
+        let session_store = NativeSessionStore::new(ns_repo);
+        let service = SessionService::new(&namespace_store, &session_store);
+
+        let session = service
+            .create("workspace:test", &user_id, false)
+            .await
+            .expect("session created");
+        assert_eq!(session.namespace_id, "workspace:test");
+
+        let fetched = service.get(&session.code).await.expect("get");
+        assert_eq!(fetched.namespace_id, "workspace:test");
+
+        service
+            .delete(&session.code, &user_id)
+            .await
+            .expect("deleted");
     }
 
     #[tokio::test]

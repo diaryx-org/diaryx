@@ -1,5 +1,6 @@
 use crate::domain::{
-    AudienceInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo, UserInfo, UserTier,
+    AudienceInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo, NamespaceSessionInfo, UserInfo,
+    UserTier,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -124,6 +125,55 @@ pub trait NamespaceStore: Send + Sync {
         audience_name: &str,
     ) -> Result<(), ServerCoreError>;
     async fn delete_custom_domain(&self, domain: &str) -> Result<bool, ServerCoreError>;
+
+    async fn create_namespace(
+        &self,
+        namespace_id: &str,
+        owner_user_id: &str,
+    ) -> Result<(), ServerCoreError>;
+    async fn delete_namespace(&self, namespace_id: &str) -> Result<(), ServerCoreError>;
+
+    async fn upsert_audience(
+        &self,
+        namespace_id: &str,
+        audience_name: &str,
+        access: &str,
+    ) -> Result<(), ServerCoreError>;
+    async fn list_audiences(
+        &self,
+        namespace_id: &str,
+    ) -> Result<Vec<AudienceInfo>, ServerCoreError>;
+    async fn delete_audience(
+        &self,
+        namespace_id: &str,
+        audience_name: &str,
+    ) -> Result<(), ServerCoreError>;
+    async fn clear_objects_audience(
+        &self,
+        namespace_id: &str,
+        audience_name: &str,
+    ) -> Result<(), ServerCoreError>;
+}
+
+#[async_trait]
+pub trait SessionStore: Send + Sync {
+    async fn create_session(
+        &self,
+        namespace_id: &str,
+        owner_user_id: &str,
+        read_only: bool,
+        expires_at: Option<i64>,
+    ) -> Result<String, ServerCoreError>;
+    async fn get_session(
+        &self,
+        code: &str,
+    ) -> Result<Option<NamespaceSessionInfo>, ServerCoreError>;
+    async fn update_session_read_only(
+        &self,
+        code: &str,
+        read_only: bool,
+    ) -> Result<bool, ServerCoreError>;
+    async fn delete_session(&self, code: &str) -> Result<bool, ServerCoreError>;
 }
 
 #[async_trait]

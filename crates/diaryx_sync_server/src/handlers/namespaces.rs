@@ -1,7 +1,6 @@
 //! Namespace CRUD handlers — `POST/GET/DELETE /namespaces`.
 
 use crate::auth::RequireAuth;
-use crate::db::{NamespaceInfo, NamespaceRepo};
 use axum::{
     Router,
     extract::{Path, Query, State},
@@ -9,14 +8,16 @@ use axum::{
     response::{IntoResponse, Json},
     routing::{get, post},
 };
+use diaryx_server::domain::NamespaceInfo;
+use diaryx_server::ports::{NamespaceStore, ServerCoreError};
+use diaryx_server::use_cases::namespaces::NamespaceService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// Shared state for namespace handlers.
 #[derive(Clone)]
 pub struct NamespaceState {
-    pub ns_repo: Arc<NamespaceRepo>,
+    pub namespace_store: Arc<dyn NamespaceStore>,
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +59,30 @@ pub fn namespace_routes(state: NamespaceState) -> Router {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn status_for_core_error(err: &ServerCoreError) -> StatusCode {
+    match err {
+        ServerCoreError::InvalidInput(_) | ServerCoreError::Conflict(_) => StatusCode::CONFLICT,
+        ServerCoreError::NotFound(_) => StatusCode::NOT_FOUND,
+        ServerCoreError::PermissionDenied(_) => StatusCode::FORBIDDEN,
+        ServerCoreError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+        ServerCoreError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        ServerCoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn core_error_response(err: ServerCoreError) -> axum::response::Response {
+    let status = status_for_core_error(&err);
+    (
+        status,
+        Json(serde_json::json!({ "error": err.to_string() })),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
@@ -67,18 +92,11 @@ async fn create_namespace(
     RequireAuth(auth): RequireAuth,
     Json(req): Json<CreateNamespaceRequest>,
 ) -> impl IntoResponse {
-    let id = req.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let service = NamespaceService::new(state.namespace_store.as_ref());
 
-    match state.ns_repo.create_namespace(&id, &auth.user.id) {
-        Ok(()) => {
-            let ns = state.ns_repo.get_namespace(&id).expect("just inserted");
-            (StatusCode::CREATED, Json(NamespaceResponse::from(ns))).into_response()
-        }
-        Err(e) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
+    match service.create(&auth.user.id, req.id.as_deref()).await {
+        Ok(ns) => (StatusCode::CREATED, Json(NamespaceResponse::from(ns))).into_response(),
+        Err(e) => core_error_response(e),
     }
 }
 
@@ -101,14 +119,21 @@ async fn list_namespaces(
     RequireAuth(auth): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> impl IntoResponse {
-    let limit = pagination.limit.min(500);
-    let namespaces: Vec<NamespaceResponse> = state
-        .ns_repo
-        .list_namespaces(&auth.user.id, limit, pagination.offset)
-        .into_iter()
-        .map(NamespaceResponse::from)
-        .collect();
-    Json(namespaces)
+    let service = NamespaceService::new(state.namespace_store.as_ref());
+
+    match service
+        .list(&auth.user.id, pagination.limit, pagination.offset)
+        .await
+    {
+        Ok(namespaces) => {
+            let response: Vec<NamespaceResponse> = namespaces
+                .into_iter()
+                .map(NamespaceResponse::from)
+                .collect();
+            Json(response).into_response()
+        }
+        Err(e) => core_error_response(e),
+    }
 }
 
 /// GET /namespaces/{id} — get a single namespace (must be owned by the caller).
@@ -117,12 +142,11 @@ async fn get_namespace(
     RequireAuth(auth): RequireAuth,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match state.ns_repo.get_namespace(&id) {
-        Some(ns) if ns.owner_user_id == auth.user.id => {
-            Json(NamespaceResponse::from(ns)).into_response()
-        }
-        Some(_) => StatusCode::FORBIDDEN.into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
+    let service = NamespaceService::new(state.namespace_store.as_ref());
+
+    match service.get(&id, &auth.user.id).await {
+        Ok(ns) => Json(NamespaceResponse::from(ns)).into_response(),
+        Err(e) => core_error_response(e),
     }
 }
 
@@ -132,19 +156,10 @@ async fn delete_namespace(
     RequireAuth(auth): RequireAuth,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ns = match state.ns_repo.get_namespace(&id) {
-        Some(ns) => ns,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
-    if ns.owner_user_id != auth.user.id {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    match state.ns_repo.delete_namespace(&id) {
+    let service = NamespaceService::new(state.namespace_store.as_ref());
+
+    match service.delete(&id, &auth.user.id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
+        Err(e) => core_error_response(e),
     }
 }

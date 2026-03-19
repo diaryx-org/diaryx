@@ -324,6 +324,24 @@ mod tests {
                 .remove(domain)
                 .is_some())
         }
+        async fn create_namespace(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn delete_namespace(&self, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn upsert_audience(&self, _: &str, _: &str, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn list_audiences(&self, _: &str) -> Result<Vec<AudienceInfo>, ServerCoreError> {
+            Ok(vec![])
+        }
+        async fn delete_audience(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn clear_objects_audience(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
     }
 
     #[derive(Default)]

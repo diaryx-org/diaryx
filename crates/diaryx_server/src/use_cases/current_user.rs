@@ -168,6 +168,27 @@ mod tests {
         async fn delete_custom_domain(&self, _domain: &str) -> Result<bool, ServerCoreError> {
             Ok(false)
         }
+        async fn create_namespace(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn delete_namespace(&self, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn upsert_audience(&self, _: &str, _: &str, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn list_audiences(
+            &self,
+            _: &str,
+        ) -> Result<Vec<crate::domain::AudienceInfo>, ServerCoreError> {
+            Ok(vec![])
+        }
+        async fn delete_audience(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn clear_objects_audience(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]

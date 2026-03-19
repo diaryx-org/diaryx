@@ -5,7 +5,9 @@ use axum::{
     routing::get,
 };
 use diaryx_sync_server::{
-    adapters::{NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore},
+    adapters::{
+        NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore, NativeSessionStore,
+    },
     auth::{AuthExtractor, MagicLinkService, PasskeyService},
     blob_store::{BlobStore, build_blob_store},
     config::Config,
@@ -156,9 +158,11 @@ async fn main() {
         );
     }
 
+    let session_store = Arc::new(NativeSessionStore::new(ns_repo.clone()));
+
     // Namespace / object / audience states
     let namespace_state = NamespaceState {
-        ns_repo: ns_repo.clone(),
+        namespace_store: namespace_store.clone(),
     };
     let object_state = ObjectState {
         ns_repo: ns_repo.clone(),
@@ -166,7 +170,7 @@ async fn main() {
         token_signing_key: config.token_signing_key.clone(),
     };
     let audience_state = AudienceState {
-        ns_repo: ns_repo.clone(),
+        namespace_store: namespace_store.clone(),
         token_signing_key: config.token_signing_key.clone(),
         blob_store: blob_store.clone(),
     };
@@ -178,7 +182,8 @@ async fn main() {
         token_signing_key: config.token_signing_key.clone(),
     };
     let ns_session_state = NsSessionState {
-        ns_repo: ns_repo.clone(),
+        namespace_store: namespace_state.namespace_store.clone(),
+        session_store,
     };
 
     // Create Stripe state (if configured)

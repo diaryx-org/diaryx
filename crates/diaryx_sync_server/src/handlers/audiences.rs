@@ -1,9 +1,6 @@
 //! Audience visibility handlers — `PUT/GET/DELETE /namespaces/{id}/audiences/{name}`.
 
-use super::require_namespace_owner;
 use crate::auth::RequireAuth;
-use crate::blob_store::BlobStore;
-use crate::db::{AudienceInfo, NamespaceRepo};
 use crate::tokens::create_signed_token;
 use axum::{
     Router,
@@ -12,15 +9,17 @@ use axum::{
     response::{IntoResponse, Json},
     routing::{get, put},
 };
+use diaryx_server::domain::AudienceInfo;
+use diaryx_server::ports::{BlobStore, NamespaceStore, ServerCoreError};
+use diaryx_server::use_cases::audiences::AudienceService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::warn;
 use uuid::Uuid;
 
 /// Shared state for audience handlers.
 #[derive(Clone)]
 pub struct AudienceState {
-    pub ns_repo: Arc<NamespaceRepo>,
+    pub namespace_store: Arc<dyn NamespaceStore>,
     /// HMAC-SHA256 key used to sign audience access tokens.
     pub token_signing_key: Vec<u8>,
     /// Blob store for writing `_audiences.json` metadata to R2.
@@ -78,22 +77,25 @@ pub fn audience_routes(state: AudienceState) -> Router {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Write `ns/{ns_id}/_audiences.json` to R2 with the current audience map.
-/// Best-effort — errors are logged but do not fail the request.
-async fn write_audiences_meta(ns_repo: &NamespaceRepo, blob_store: &dyn BlobStore, ns_id: &str) {
-    let audiences = ns_repo.list_audiences(ns_id);
-    let map: serde_json::Map<String, serde_json::Value> = audiences
-        .into_iter()
-        .map(|a| (a.audience_name, serde_json::Value::String(a.access)))
-        .collect();
-    let json = serde_json::to_vec(&map).unwrap_or_default();
-    let key = format!("ns/{}/_audiences.json", ns_id);
-    if let Err(e) = blob_store.put(&key, &json, "application/json", None).await {
-        warn!(
-            "Failed to write audiences metadata to R2 for {}: {}",
-            ns_id, e
-        );
+fn status_for_core_error(err: &ServerCoreError) -> StatusCode {
+    match err {
+        ServerCoreError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+        ServerCoreError::Conflict(_) => StatusCode::CONFLICT,
+        ServerCoreError::NotFound(_) => StatusCode::NOT_FOUND,
+        ServerCoreError::PermissionDenied(_) => StatusCode::FORBIDDEN,
+        ServerCoreError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+        ServerCoreError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        ServerCoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
+}
+
+fn core_error_response(err: ServerCoreError) -> axum::response::Response {
+    let status = status_for_core_error(&err);
+    (
+        status,
+        Json(serde_json::json!({ "error": err.to_string() })),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -107,33 +109,11 @@ async fn set_audience(
     Path((ns_id, name)): Path<(String, String)>,
     Json(req): Json<SetAudienceRequest>,
 ) -> impl IntoResponse {
-    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
-        return resp;
-    }
+    let service = AudienceService::new(state.namespace_store.as_ref(), state.blob_store.as_ref());
 
-    let access = req.access.as_str();
-    if !matches!(access, "public" | "token" | "private") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "access must be 'public', 'token', or 'private'" })),
-        )
-            .into_response();
-    }
-
-    match state.ns_repo.upsert_audience(&ns_id, &name, access) {
-        Ok(()) => {
-            let info = state
-                .ns_repo
-                .get_audience(&ns_id, &name)
-                .expect("just upserted");
-            write_audiences_meta(&state.ns_repo, &*state.blob_store, &ns_id).await;
-            Json(AudienceResponse::from(info)).into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+    match service.set(&ns_id, &name, &req.access, &auth.user.id).await {
+        Ok(info) => Json(AudienceResponse::from(info)).into_response(),
+        Err(e) => core_error_response(e),
     }
 }
 
@@ -143,18 +123,16 @@ async fn list_audiences(
     RequireAuth(auth): RequireAuth,
     Path(ns_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
-        return resp;
+    let service = AudienceService::new(state.namespace_store.as_ref(), state.blob_store.as_ref());
+
+    match service.list(&ns_id, &auth.user.id).await {
+        Ok(audiences) => {
+            let response: Vec<AudienceResponse> =
+                audiences.into_iter().map(AudienceResponse::from).collect();
+            Json(response).into_response()
+        }
+        Err(e) => core_error_response(e),
     }
-
-    let audiences: Vec<AudienceResponse> = state
-        .ns_repo
-        .list_audiences(&ns_id)
-        .into_iter()
-        .map(AudienceResponse::from)
-        .collect();
-
-    Json(audiences).into_response()
 }
 
 /// GET /namespaces/{ns_id}/audiences/{name}/token — generate a signed access token.
@@ -163,18 +141,13 @@ async fn get_audience_token(
     RequireAuth(auth): RequireAuth,
     Path((ns_id, name)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
-        return resp;
-    }
+    let service = AudienceService::new(state.namespace_store.as_ref(), state.blob_store.as_ref());
 
-    match state.ns_repo.get_audience(&ns_id, &name) {
-        None => StatusCode::NOT_FOUND.into_response(),
-        Some(audience) if audience.access == "public" => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "audience is public; no token needed" })),
-        )
-            .into_response(),
-        Some(_) => {
+    match service
+        .require_token_eligible(&ns_id, &name, &auth.user.id)
+        .await
+    {
+        Ok(_) => {
             let token_id = Uuid::new_v4().to_string();
             match create_signed_token(
                 &state.token_signing_key,
@@ -191,6 +164,7 @@ async fn get_audience_token(
                     .into_response(),
             }
         }
+        Err(e) => core_error_response(e),
     }
 }
 
@@ -200,26 +174,10 @@ async fn delete_audience(
     RequireAuth(auth): RequireAuth,
     Path((ns_id, name)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
-        return resp;
-    }
+    let service = AudienceService::new(state.namespace_store.as_ref(), state.blob_store.as_ref());
 
-    match state.ns_repo.get_audience(&ns_id, &name) {
-        None => StatusCode::NOT_FOUND.into_response(),
-        Some(_) => {
-            // NULL out audience on objects that reference this audience.
-            let _ = state.ns_repo.clear_objects_audience(&ns_id, &name);
-            match state.ns_repo.delete_audience(&ns_id, &name) {
-                Ok(()) => {
-                    write_audiences_meta(&state.ns_repo, &*state.blob_store, &ns_id).await;
-                    StatusCode::NO_CONTENT.into_response()
-                }
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
-                )
-                    .into_response(),
-            }
-        }
+    match service.delete(&ns_id, &name, &auth.user.id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => core_error_response(e),
     }
 }

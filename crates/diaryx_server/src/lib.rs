@@ -15,5 +15,5 @@ pub use domain::{
 pub use ports::{
     AiProvider, AppleReceiptVerifier, AuthStore, BillingProvider, BlobStore, Clock,
     DomainMappingCache, JobSink, Mailer, MultipartCompletedPart, NamespaceStore, RateLimitStore,
-    ServerCoreError, TokenClaims, TokenSigner,
+    ServerCoreError, SessionStore, TokenClaims, TokenSigner,
 };

@@ -15,6 +15,7 @@
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
   import { mergeRuntimePluginConfig } from "$lib/plugins/pluginRuntimeConfig";
   import { getLegacyBuiltinFields } from "$lib/components/pluginBuiltinCompat";
+  import { createNamespaceContext } from "$lib/namespace/namespaceContext.svelte";
 
   interface Props {
     pluginId: PluginId;
@@ -25,6 +26,13 @@
   }
 
   let { pluginId, component, api, entry = null, onHostAction }: Props = $props();
+
+  // Create namespace context for any declarative panel that may contain
+  // namespace host widgets. Lightweight — no work until a widget mounts.
+  const nsCtx = createNamespaceContext();
+  $effect(() => {
+    nsCtx.init(api, () => onHostAction?.({ type: 'open-add-workspace' }));
+  });
 
   let config = $state<Record<string, JsonValue>>({});
   let legacyBuiltinFields = $derived(

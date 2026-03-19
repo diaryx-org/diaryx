@@ -267,6 +267,7 @@ pub fn load_plugin_from_wasm(
         ws_bridge: host_context.ws_bridge.clone(),
         plugin_command_bridge: host_context.plugin_command_bridge.clone(),
         runtime_context_provider: host_context.runtime_context_provider.clone(),
+        namespace_provider: host_context.namespace_provider.clone(),
     });
 
     let mut builder = PluginBuilder::new(extism_manifest).with_wasi(true);
@@ -339,6 +340,7 @@ fn load_single_plugin(
         ws_bridge: host_context.ws_bridge.clone(),
         plugin_command_bridge: host_context.plugin_command_bridge.clone(),
         runtime_context_provider: host_context.runtime_context_provider.clone(),
+        namespace_provider: host_context.namespace_provider.clone(),
     });
 
     let mut builder = PluginBuilder::new(extism_manifest).with_wasi(true);

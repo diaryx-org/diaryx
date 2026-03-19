@@ -8,7 +8,27 @@ export function getLegacyBuiltinFields(componentId: string): SettingsField[] | n
   return [
     {
       type: "HostWidget",
-      widget_id: "publish.site-panel",
+      widget_id: "namespace.guard",
+    },
+    {
+      type: "HostWidget",
+      widget_id: "namespace.site-url",
+    },
+    {
+      type: "HostWidget",
+      widget_id: "namespace.subdomain",
+    },
+    {
+      type: "HostWidget",
+      widget_id: "namespace.custom-domains",
+    },
+    {
+      type: "HostWidget",
+      widget_id: "namespace.audiences",
+    },
+    {
+      type: "HostWidget",
+      widget_id: "namespace.publish-button",
     },
     {
       type: "Section",

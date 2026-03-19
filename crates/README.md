@@ -4,6 +4,7 @@ description: Cargo crates for Diaryx
 author: adammharris
 contents:
   - "[Diaryx CLI README](/crates/diaryx/README.md)"
+  - "[Diaryx Server README](/crates/diaryx_server/README.md)"
   - "[Diaryx Core README](/crates/diaryx_core/README.md)"
   - "[Diaryx Daily README](/crates/diaryx_daily/README.md)"
   - "[Diaryx Core Publish README](/crates/diaryx_core/src/publish/README.md)"
@@ -21,6 +22,7 @@ part_of: "[README](/README.md)"
 This folder contains Diaryx crates for core features and platform bindings.
 
 - `[diaryx](/crates/diaryx/README.md)`: CLI interface
+- `[diaryx_server](/crates/diaryx_server/README.md)`: Platform-agnostic server core and adapter contracts
 - `[diaryx_core](/crates/diaryx_core/README.md)`: Core functions shared across all Diaryx clients
 - `[diaryx_daily](/crates/diaryx_daily/README.md)`: Shared daily-entry domain logic for plugins
 - `[diaryx_wasm](/crates/diaryx_wasm/README.md)`: WASM version of `diaryx_core` to be used in the web client at `[../apps/web](/apps/web/README.md)`

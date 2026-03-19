@@ -19,4 +19,4 @@ are rendered through plugin iframe contributions.
 
 | File | Purpose |
 | --- | --- |
-| `PublishingPanel.svelte` | Site publishing panel used by publish surfaces. |
+| `PublishingPanel.svelte` | Thin composition wrapper composing namespace components from `$lib/namespace/`. |

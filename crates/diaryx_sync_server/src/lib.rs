@@ -12,6 +12,7 @@
 //! - **Persistent storage**: SQLite-based storage for user data and CRDT state
 //! - **Generic namespace API**: Namespace-scoped object store, audiences, and sessions
 
+pub mod adapters;
 pub mod auth;
 pub mod blob_store;
 pub mod config;

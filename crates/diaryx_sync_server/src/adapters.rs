@@ -1,0 +1,470 @@
+use crate::db::{AuthRepo, NamespaceRepo};
+use async_trait::async_trait;
+use diaryx_server::domain::{
+    AudienceInfo as CoreAudienceInfo, CustomDomainInfo as CoreCustomDomainInfo,
+    DeviceInfo as CoreDeviceInfo, NamespaceInfo as CoreNamespaceInfo, UserInfo as CoreUserInfo,
+    UserTier as CoreUserTier,
+};
+use diaryx_server::ports::{AuthStore, DomainMappingCache, NamespaceStore, ServerCoreError};
+use serde_json::json;
+use std::sync::Arc;
+use tracing::warn;
+
+#[derive(Clone)]
+pub struct NativeAuthStore {
+    repo: Arc<AuthRepo>,
+}
+
+impl NativeAuthStore {
+    pub fn new(repo: Arc<AuthRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl AuthStore for NativeAuthStore {
+    async fn get_user(&self, user_id: &str) -> Result<Option<CoreUserInfo>, ServerCoreError> {
+        self.repo
+            .get_user(user_id)
+            .map(|user| user.map(Into::into))
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn list_user_devices(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<CoreDeviceInfo>, ServerCoreError> {
+        self.repo
+            .get_user_devices(user_id)
+            .map(|devices| devices.into_iter().map(Into::into).collect())
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn rename_device(
+        &self,
+        device_id: &str,
+        new_name: &str,
+    ) -> Result<bool, ServerCoreError> {
+        self.repo
+            .rename_device(device_id, new_name)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn delete_device(&self, device_id: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .delete_device(device_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn get_user_tier(&self, user_id: &str) -> Result<CoreUserTier, ServerCoreError> {
+        self.repo
+            .get_user_tier(user_id)
+            .map(Into::into)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeNamespaceStore {
+    repo: Arc<NamespaceRepo>,
+}
+
+impl NativeNamespaceStore {
+    pub fn new(repo: Arc<NamespaceRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl NamespaceStore for NativeNamespaceStore {
+    async fn get_namespace(
+        &self,
+        namespace_id: &str,
+    ) -> Result<Option<CoreNamespaceInfo>, ServerCoreError> {
+        Ok(self.repo.get_namespace(namespace_id).map(Into::into))
+    }
+
+    async fn list_namespaces(
+        &self,
+        owner_user_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<CoreNamespaceInfo>, ServerCoreError> {
+        Ok(self
+            .repo
+            .list_namespaces(owner_user_id, limit, offset)
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    async fn get_audience(
+        &self,
+        namespace_id: &str,
+        audience_name: &str,
+    ) -> Result<Option<CoreAudienceInfo>, ServerCoreError> {
+        Ok(self
+            .repo
+            .get_audience(namespace_id, audience_name)
+            .map(Into::into))
+    }
+
+    async fn get_custom_domain(
+        &self,
+        domain: &str,
+    ) -> Result<Option<CoreCustomDomainInfo>, ServerCoreError> {
+        Ok(self.repo.get_custom_domain(domain).map(Into::into))
+    }
+
+    async fn list_custom_domains(
+        &self,
+        namespace_id: &str,
+    ) -> Result<Vec<CoreCustomDomainInfo>, ServerCoreError> {
+        Ok(self
+            .repo
+            .list_custom_domains(namespace_id)
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    async fn upsert_custom_domain(
+        &self,
+        domain: &str,
+        namespace_id: &str,
+        audience_name: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .upsert_custom_domain(domain, namespace_id, audience_name)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn delete_custom_domain(&self, domain: &str) -> Result<bool, ServerCoreError> {
+        self.repo
+            .delete_custom_domain(domain)
+            .map_err(ServerCoreError::from)
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeDomainMappingCache {
+    http_client: reqwest::Client,
+    cf_account_id: String,
+    kv_api_token: Option<String>,
+    kv_namespace_id: Option<String>,
+}
+
+impl NativeDomainMappingCache {
+    pub fn new(
+        http_client: reqwest::Client,
+        cf_account_id: impl Into<String>,
+        kv_api_token: Option<String>,
+        kv_namespace_id: Option<String>,
+    ) -> Self {
+        Self {
+            http_client,
+            cf_account_id: cf_account_id.into(),
+            kv_api_token,
+            kv_namespace_id,
+        }
+    }
+
+    fn kv_value_url(&self, key: &str) -> Option<String> {
+        let token = self.kv_api_token.as_ref()?;
+        let namespace_id = self.kv_namespace_id.as_ref()?;
+        if self.cf_account_id.is_empty() || token.is_empty() || namespace_id.is_empty() {
+            return None;
+        }
+
+        Some(format!(
+            "https://api.cloudflare.com/client/v4/accounts/{}/storage/kv/namespaces/{}/values/{}",
+            self.cf_account_id, namespace_id, key
+        ))
+    }
+
+    async fn put_value(&self, key: &str, body: serde_json::Value, context: &str) {
+        let Some(url) = self.kv_value_url(key) else {
+            return;
+        };
+        let Some(token) = &self.kv_api_token else {
+            return;
+        };
+
+        match self
+            .http_client
+            .put(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(response) if !response.status().is_success() => {
+                warn!(
+                    "Failed to sync {} to Cloudflare KV: status={}",
+                    context,
+                    response.status()
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                warn!("Failed to sync {} to Cloudflare KV: {}", context, err);
+            }
+        }
+    }
+
+    async fn delete_value(&self, key: &str, context: &str) {
+        let Some(url) = self.kv_value_url(key) else {
+            return;
+        };
+        let Some(token) = &self.kv_api_token else {
+            return;
+        };
+
+        match self
+            .http_client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(response) if !response.status().is_success() => {
+                warn!(
+                    "Failed to delete {} from Cloudflare KV: status={}",
+                    context,
+                    response.status()
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                warn!("Failed to delete {} from Cloudflare KV: {}", context, err);
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl DomainMappingCache for NativeDomainMappingCache {
+    async fn put_domain(
+        &self,
+        hostname: &str,
+        namespace_id: &str,
+        audience_name: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.put_value(
+            &format!("domain:{}", hostname),
+            json!({
+                "namespace_id": namespace_id,
+                "audience_name": audience_name,
+            }),
+            &format!("domain '{}'", hostname),
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn delete_domain(&self, hostname: &str) -> Result<(), ServerCoreError> {
+        self.delete_value(
+            &format!("domain:{}", hostname),
+            &format!("domain '{}'", hostname),
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn put_subdomain(
+        &self,
+        subdomain: &str,
+        namespace_id: &str,
+        default_audience: Option<&str>,
+    ) -> Result<(), ServerCoreError> {
+        let mut body = json!({
+            "namespace_id": namespace_id,
+        });
+        if let Some(default_audience) = default_audience {
+            body["default_audience"] = serde_json::Value::String(default_audience.to_string());
+        }
+
+        self.put_value(
+            &format!("subdomain:{}", subdomain.to_lowercase()),
+            body,
+            &format!("subdomain '{}'", subdomain),
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn delete_subdomain(&self, subdomain: &str) -> Result<(), ServerCoreError> {
+        self.delete_value(
+            &format!("subdomain:{}", subdomain.to_lowercase()),
+            &format!("subdomain '{}'", subdomain),
+        )
+        .await;
+        Ok(())
+    }
+}
+
+impl From<crate::db::UserTier> for CoreUserTier {
+    fn from(value: crate::db::UserTier) -> Self {
+        match value {
+            crate::db::UserTier::Free => CoreUserTier::Free,
+            crate::db::UserTier::Plus => CoreUserTier::Plus,
+        }
+    }
+}
+
+impl From<crate::db::UserInfo> for CoreUserInfo {
+    fn from(value: crate::db::UserInfo) -> Self {
+        Self {
+            id: value.id,
+            email: value.email,
+            created_at: value.created_at,
+            last_login_at: value.last_login_at,
+            attachment_limit_bytes: value.attachment_limit_bytes,
+            workspace_limit: value.workspace_limit,
+            tier: value.tier.into(),
+            published_site_limit: value.published_site_limit,
+        }
+    }
+}
+
+impl From<crate::db::DeviceInfo> for CoreDeviceInfo {
+    fn from(value: crate::db::DeviceInfo) -> Self {
+        Self {
+            id: value.id,
+            user_id: value.user_id,
+            name: value.name,
+            user_agent: value.user_agent,
+            created_at: value.created_at,
+            last_seen_at: value.last_seen_at,
+        }
+    }
+}
+
+impl From<crate::db::NamespaceInfo> for CoreNamespaceInfo {
+    fn from(value: crate::db::NamespaceInfo) -> Self {
+        Self {
+            id: value.id,
+            owner_user_id: value.owner_user_id,
+            created_at: value.created_at,
+        }
+    }
+}
+
+impl From<crate::db::AudienceInfo> for CoreAudienceInfo {
+    fn from(value: crate::db::AudienceInfo) -> Self {
+        Self {
+            namespace_id: value.namespace_id,
+            audience_name: value.audience_name,
+            access: value.access,
+        }
+    }
+}
+
+impl From<crate::db::CustomDomainInfo> for CoreCustomDomainInfo {
+    fn from(value: crate::db::CustomDomainInfo) -> Self {
+        Self {
+            domain: value.domain,
+            namespace_id: value.namespace_id,
+            audience_name: value.audience_name,
+            created_at: value.created_at,
+            verified: value.verified,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore};
+    use crate::db::{AuthRepo, NamespaceRepo, init_database};
+    use diaryx_server::ports::DomainMappingCache;
+    use diaryx_server::use_cases::current_user::CurrentUserService;
+    use diaryx_server::use_cases::domains::DomainService;
+    use rusqlite::Connection;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn native_adapters_support_current_user_use_case() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        init_database(&conn).expect("schema");
+
+        let repo = Arc::new(AuthRepo::new(conn));
+        let ns_repo = Arc::new(NamespaceRepo::new(repo.connection()));
+
+        let user_id = repo
+            .get_or_create_user("user@example.com")
+            .expect("user created");
+        repo.create_device(&user_id, Some("Laptop"), Some("test-agent"))
+            .expect("device created");
+        ns_repo
+            .create_namespace("workspace:test", &user_id)
+            .expect("namespace created");
+
+        let auth_store = NativeAuthStore::new(repo);
+        let namespace_store = NativeNamespaceStore::new(ns_repo);
+        let service = CurrentUserService::new(&auth_store, &namespace_store);
+
+        let context = service
+            .load(&user_id, "fallback@example.com")
+            .await
+            .expect("current user loaded");
+
+        assert_eq!(context.user.email, "user@example.com");
+        assert_eq!(context.devices.len(), 1);
+        assert_eq!(context.namespaces.len(), 1);
+        assert_eq!(context.namespaces[0].id, "workspace:test");
+    }
+
+    #[tokio::test]
+    async fn native_namespace_store_supports_domain_service_use_case() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        init_database(&conn).expect("schema");
+
+        let repo = Arc::new(AuthRepo::new(conn));
+        let ns_repo = Arc::new(NamespaceRepo::new(repo.connection()));
+
+        let user_id = repo
+            .get_or_create_user("user@example.com")
+            .expect("user created");
+        ns_repo
+            .create_namespace("workspace:test", &user_id)
+            .expect("namespace created");
+        ns_repo
+            .upsert_audience("workspace:test", "public", "public")
+            .expect("audience created");
+
+        let namespace_store = NativeNamespaceStore::new(ns_repo);
+        let cache = NativeDomainMappingCache::new(reqwest::Client::new(), "", None, None);
+        let service = DomainService::new(&namespace_store, &cache);
+
+        let domain = service
+            .register_domain("workspace:test", "blog.example.com", "public")
+            .await
+            .expect("domain registered");
+        assert_eq!(domain.audience_name, "public");
+
+        service
+            .remove_domain("workspace:test", "blog.example.com")
+            .await
+            .expect("domain removed");
+    }
+
+    #[tokio::test]
+    async fn native_domain_mapping_cache_is_a_noop_without_cloudflare_config() {
+        let cache = NativeDomainMappingCache::new(reqwest::Client::new(), "", None, None);
+
+        cache
+            .put_domain("blog.example.com", "ns_123", "public")
+            .await
+            .expect("no-op put");
+        cache
+            .put_subdomain("notes", "ns_123", Some("public"))
+            .await
+            .expect("no-op put");
+        cache
+            .delete_domain("blog.example.com")
+            .await
+            .expect("no-op delete");
+        cache.delete_subdomain("notes").await.expect("no-op delete");
+    }
+}

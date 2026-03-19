@@ -6,63 +6,14 @@ use aws_sdk_s3::config::{RequestChecksumCalculation, ResponseChecksumValidation}
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier};
 use aws_smithy_types::byte_stream::ByteStream;
+use diaryx_server::ports::ServerCoreError;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone)]
-pub struct MultipartCompletedPart {
-    pub part_no: u32,
-    pub etag: String,
-}
+pub use diaryx_server::ports::{BlobStore, MultipartCompletedPart};
 
-#[async_trait]
-pub trait BlobStore: Send + Sync {
-    fn blob_key(&self, user_id: &str, hash: &str) -> String;
-    fn prefix(&self) -> &str;
-
-    async fn put(
-        &self,
-        key: &str,
-        bytes: &[u8],
-        mime_type: &str,
-        metadata: Option<&HashMap<String, String>>,
-    ) -> Result<(), String>;
-
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, String>;
-
-    async fn delete(&self, key: &str) -> Result<(), String>;
-
-    async fn exists(&self, key: &str) -> Result<bool, String>;
-
-    async fn init_multipart(&self, key: &str, mime_type: &str) -> Result<String, String>;
-
-    async fn upload_part(
-        &self,
-        key: &str,
-        multipart_id: &str,
-        part_no: u32,
-        bytes: &[u8],
-    ) -> Result<String, String>;
-
-    async fn complete_multipart(
-        &self,
-        key: &str,
-        multipart_id: &str,
-        parts: &[MultipartCompletedPart],
-    ) -> Result<(), String>;
-
-    async fn abort_multipart(&self, key: &str, multipart_id: &str) -> Result<(), String>;
-
-    async fn get_range(
-        &self,
-        key: &str,
-        range_start: u64,
-        range_end: u64,
-    ) -> Result<Option<Vec<u8>>, String>;
-
-    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<String>, String>;
-
-    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, String>;
+fn internal_error(message: impl Into<String>) -> ServerCoreError {
+    ServerCoreError::internal(message.into())
 }
 
 #[derive(Clone)]
@@ -73,7 +24,7 @@ pub struct R2BlobStore {
 }
 
 impl R2BlobStore {
-    pub async fn new(config: &R2Config) -> Result<Self, String> {
+    pub async fn new(config: &R2Config) -> Result<Self, ServerCoreError> {
         let endpoint = config
             .endpoint
             .clone()
@@ -127,7 +78,7 @@ impl BlobStore for R2BlobStore {
         bytes: &[u8],
         mime_type: &str,
         metadata: Option<&HashMap<String, String>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ServerCoreError> {
         let mut req = self
             .client
             .put_object()
@@ -144,17 +95,19 @@ impl BlobStore for R2BlobStore {
         }
 
         req.send().await.map_err(|e| {
-            let code = e.code().unwrap_or("unknown");
-            let message = e.message().unwrap_or("unknown");
-            format!(
+            internal_error(format!(
                 "R2 put failed for bucket={} key={}: code={} message={} raw={:?}",
-                self.bucket, key, code, message, e
-            )
+                self.bucket,
+                key,
+                e.code().unwrap_or("unknown"),
+                e.message().unwrap_or("unknown"),
+                e
+            ))
         })?;
         Ok(())
     }
 
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ServerCoreError> {
         let response = self
             .client
             .get_object()
@@ -165,11 +118,9 @@ impl BlobStore for R2BlobStore {
 
         match response {
             Ok(out) => {
-                let body = out
-                    .body
-                    .collect()
-                    .await
-                    .map_err(|e| format!("R2 get body failed for {}: {}", key, e))?;
+                let body = out.body.collect().await.map_err(|e| {
+                    internal_error(format!("R2 get body failed for {}: {}", key, e))
+                })?;
                 Ok(Some(body.into_bytes().to_vec()))
             }
             Err(e) => {
@@ -177,18 +128,20 @@ impl BlobStore for R2BlobStore {
                 if msg.contains("NoSuchKey") || msg.contains("404") || msg.contains("Not Found") {
                     Ok(None)
                 } else {
-                    let code = e.code().unwrap_or("unknown");
-                    let message = e.message().unwrap_or("unknown");
-                    Err(format!(
+                    Err(internal_error(format!(
                         "R2 get failed for bucket={} key={}: code={} message={} raw={:?}",
-                        self.bucket, key, code, message, e
-                    ))
+                        self.bucket,
+                        key,
+                        e.code().unwrap_or("unknown"),
+                        e.message().unwrap_or("unknown"),
+                        e
+                    )))
                 }
             }
         }
     }
 
-    async fn delete(&self, key: &str) -> Result<(), String> {
+    async fn delete(&self, key: &str) -> Result<(), ServerCoreError> {
         self.client
             .delete_object()
             .bucket(&self.bucket)
@@ -196,17 +149,19 @@ impl BlobStore for R2BlobStore {
             .send()
             .await
             .map_err(|e| {
-                let code = e.code().unwrap_or("unknown");
-                let message = e.message().unwrap_or("unknown");
-                format!(
+                internal_error(format!(
                     "R2 delete failed for bucket={} key={}: code={} message={} raw={:?}",
-                    self.bucket, key, code, message, e
-                )
+                    self.bucket,
+                    key,
+                    e.code().unwrap_or("unknown"),
+                    e.message().unwrap_or("unknown"),
+                    e
+                ))
             })?;
         Ok(())
     }
 
-    async fn exists(&self, key: &str) -> Result<bool, String> {
+    async fn exists(&self, key: &str) -> Result<bool, ServerCoreError> {
         let result = self
             .client
             .head_object()
@@ -222,18 +177,20 @@ impl BlobStore for R2BlobStore {
                 if msg.contains("NoSuchKey") || msg.contains("404") || msg.contains("Not Found") {
                     Ok(false)
                 } else {
-                    let code = e.code().unwrap_or("unknown");
-                    let message = e.message().unwrap_or("unknown");
-                    Err(format!(
+                    Err(internal_error(format!(
                         "R2 exists failed for bucket={} key={}: code={} message={} raw={:?}",
-                        self.bucket, key, code, message, e
-                    ))
+                        self.bucket,
+                        key,
+                        e.code().unwrap_or("unknown"),
+                        e.message().unwrap_or("unknown"),
+                        e
+                    )))
                 }
             }
         }
     }
 
-    async fn init_multipart(&self, key: &str, mime_type: &str) -> Result<String, String> {
+    async fn init_multipart(&self, key: &str, mime_type: &str) -> Result<String, ServerCoreError> {
         let response = self
             .client
             .create_multipart_upload()
@@ -243,17 +200,19 @@ impl BlobStore for R2BlobStore {
             .send()
             .await
             .map_err(|e| {
-                let code = e.code().unwrap_or("unknown");
-                let message = e.message().unwrap_or("unknown");
-                format!(
+                internal_error(format!(
                     "R2 multipart init failed for bucket={} key={}: code={} message={} raw={:?}",
-                    self.bucket, key, code, message, e
-                )
+                    self.bucket,
+                    key,
+                    e.code().unwrap_or("unknown"),
+                    e.message().unwrap_or("unknown"),
+                    e
+                ))
             })?;
 
         response
             .upload_id
-            .ok_or_else(|| "R2 multipart init missing upload_id".to_string())
+            .ok_or_else(|| internal_error("R2 multipart init missing upload_id"))
     }
 
     async fn upload_part(
@@ -262,7 +221,7 @@ impl BlobStore for R2BlobStore {
         multipart_id: &str,
         part_no: u32,
         bytes: &[u8],
-    ) -> Result<String, String> {
+    ) -> Result<String, ServerCoreError> {
         let response = self
             .client
             .upload_part()
@@ -275,17 +234,20 @@ impl BlobStore for R2BlobStore {
             .send()
             .await
             .map_err(|e| {
-                let code = e.code().unwrap_or("unknown");
-                let message = e.message().unwrap_or("unknown");
-                format!(
+                internal_error(format!(
                     "R2 multipart part upload failed for bucket={} key={} part={}: code={} message={} raw={:?}",
-                    self.bucket, key, part_no, code, message, e
-                )
+                    self.bucket,
+                    key,
+                    part_no,
+                    e.code().unwrap_or("unknown"),
+                    e.message().unwrap_or("unknown"),
+                    e
+                ))
             })?;
 
-        response
-            .e_tag
-            .ok_or_else(|| format!("R2 multipart upload part {} missing etag", part_no))
+        response.e_tag.ok_or_else(|| {
+            internal_error(format!("R2 multipart upload part {} missing etag", part_no))
+        })
     }
 
     async fn complete_multipart(
@@ -293,7 +255,7 @@ impl BlobStore for R2BlobStore {
         key: &str,
         multipart_id: &str,
         parts: &[MultipartCompletedPart],
-    ) -> Result<(), String> {
+    ) -> Result<(), ServerCoreError> {
         let completed_parts = parts
             .iter()
             .map(|part| {
@@ -316,17 +278,19 @@ impl BlobStore for R2BlobStore {
             .send()
             .await
             .map_err(|e| {
-                let code = e.code().unwrap_or("unknown");
-                let message = e.message().unwrap_or("unknown");
-                format!(
+                internal_error(format!(
                     "R2 multipart complete failed for bucket={} key={}: code={} message={} raw={:?}",
-                    self.bucket, key, code, message, e
-                )
+                    self.bucket,
+                    key,
+                    e.code().unwrap_or("unknown"),
+                    e.message().unwrap_or("unknown"),
+                    e
+                ))
             })?;
         Ok(())
     }
 
-    async fn abort_multipart(&self, key: &str, multipart_id: &str) -> Result<(), String> {
+    async fn abort_multipart(&self, key: &str, multipart_id: &str) -> Result<(), ServerCoreError> {
         self.client
             .abort_multipart_upload()
             .bucket(&self.bucket)
@@ -335,12 +299,14 @@ impl BlobStore for R2BlobStore {
             .send()
             .await
             .map_err(|e| {
-                let code = e.code().unwrap_or("unknown");
-                let message = e.message().unwrap_or("unknown");
-                format!(
+                internal_error(format!(
                     "R2 multipart abort failed for bucket={} key={}: code={} message={} raw={:?}",
-                    self.bucket, key, code, message, e
-                )
+                    self.bucket,
+                    key,
+                    e.code().unwrap_or("unknown"),
+                    e.message().unwrap_or("unknown"),
+                    e
+                ))
             })?;
         Ok(())
     }
@@ -350,7 +316,7 @@ impl BlobStore for R2BlobStore {
         key: &str,
         range_start: u64,
         range_end: u64,
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<Vec<u8>>, ServerCoreError> {
         let response = self
             .client
             .get_object()
@@ -362,11 +328,9 @@ impl BlobStore for R2BlobStore {
 
         match response {
             Ok(out) => {
-                let body = out
-                    .body
-                    .collect()
-                    .await
-                    .map_err(|e| format!("R2 get range body failed for {}: {}", key, e))?;
+                let body = out.body.collect().await.map_err(|e| {
+                    internal_error(format!("R2 get range body failed for {}: {}", key, e))
+                })?;
                 Ok(Some(body.into_bytes().to_vec()))
             }
             Err(e) => {
@@ -374,18 +338,20 @@ impl BlobStore for R2BlobStore {
                 if msg.contains("NoSuchKey") || msg.contains("404") || msg.contains("Not Found") {
                     Ok(None)
                 } else {
-                    let code = e.code().unwrap_or("unknown");
-                    let message = e.message().unwrap_or("unknown");
-                    Err(format!(
+                    Err(internal_error(format!(
                         "R2 get range failed for bucket={} key={}: code={} message={} raw={:?}",
-                        self.bucket, key, code, message, e
-                    ))
+                        self.bucket,
+                        key,
+                        e.code().unwrap_or("unknown"),
+                        e.message().unwrap_or("unknown"),
+                        e
+                    )))
                 }
             }
         }
     }
 
-    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<String>, String> {
+    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<String>, ServerCoreError> {
         let mut keys = Vec::new();
         let mut continuation: Option<String> = None;
 
@@ -400,12 +366,14 @@ impl BlobStore for R2BlobStore {
             }
 
             let response = req.send().await.map_err(|e| {
-                let code = e.code().unwrap_or("unknown");
-                let message = e.message().unwrap_or("unknown");
-                format!(
+                internal_error(format!(
                     "R2 list failed for bucket={} prefix={}: code={} message={} raw={:?}",
-                    self.bucket, prefix, code, message, e
-                )
+                    self.bucket,
+                    prefix,
+                    e.code().unwrap_or("unknown"),
+                    e.message().unwrap_or("unknown"),
+                    e
+                ))
             })?;
 
             for object in response.contents() {
@@ -427,7 +395,7 @@ impl BlobStore for R2BlobStore {
         Ok(keys)
     }
 
-    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, String> {
+    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, ServerCoreError> {
         let keys = self.list_by_prefix(prefix).await?;
         if keys.is_empty() {
             return Ok(0);
@@ -437,17 +405,16 @@ impl BlobStore for R2BlobStore {
         for chunk in keys.chunks(1000) {
             let mut objects = Vec::with_capacity(chunk.len());
             for key in chunk {
-                let object = ObjectIdentifier::builder()
-                    .key(key)
-                    .build()
-                    .map_err(|e| format!("R2 delete object identifier build failed: {}", e))?;
+                let object = ObjectIdentifier::builder().key(key).build().map_err(|e| {
+                    internal_error(format!("R2 delete object identifier build failed: {}", e))
+                })?;
                 objects.push(object);
             }
 
             let delete = Delete::builder()
                 .set_objects(Some(objects))
                 .build()
-                .map_err(|e| format!("R2 delete request build failed: {}", e))?;
+                .map_err(|e| internal_error(format!("R2 delete request build failed: {}", e)))?;
 
             self.client
                 .delete_objects()
@@ -456,12 +423,14 @@ impl BlobStore for R2BlobStore {
                 .send()
                 .await
                 .map_err(|e| {
-                    let code = e.code().unwrap_or("unknown");
-                    let message = e.message().unwrap_or("unknown");
-                    format!(
+                    internal_error(format!(
                         "R2 delete-by-prefix failed for bucket={} prefix={}: code={} message={} raw={:?}",
-                        self.bucket, prefix, code, message, e
-                    )
+                        self.bucket,
+                        prefix,
+                        e.code().unwrap_or("unknown"),
+                        e.message().unwrap_or("unknown"),
+                        e
+                    ))
                 })?;
             deleted += chunk.len();
         }
@@ -508,44 +477,48 @@ impl BlobStore for InMemoryBlobStore {
         bytes: &[u8],
         _mime_type: &str,
         _metadata: Option<&HashMap<String, String>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ServerCoreError> {
         self.blobs
             .lock()
-            .map_err(|_| "Failed to lock in-memory blob store".to_string())?
+            .map_err(|_| internal_error("Failed to lock in-memory blob store"))?
             .insert(key.to_string(), bytes.to_vec());
         Ok(())
     }
 
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ServerCoreError> {
         Ok(self
             .blobs
             .lock()
-            .map_err(|_| "Failed to lock in-memory blob store".to_string())?
+            .map_err(|_| internal_error("Failed to lock in-memory blob store"))?
             .get(key)
             .cloned())
     }
 
-    async fn delete(&self, key: &str) -> Result<(), String> {
+    async fn delete(&self, key: &str) -> Result<(), ServerCoreError> {
         self.blobs
             .lock()
-            .map_err(|_| "Failed to lock in-memory blob store".to_string())?
+            .map_err(|_| internal_error("Failed to lock in-memory blob store"))?
             .remove(key);
         Ok(())
     }
 
-    async fn exists(&self, key: &str) -> Result<bool, String> {
+    async fn exists(&self, key: &str) -> Result<bool, ServerCoreError> {
         Ok(self
             .blobs
             .lock()
-            .map_err(|_| "Failed to lock in-memory blob store".to_string())?
+            .map_err(|_| internal_error("Failed to lock in-memory blob store"))?
             .contains_key(key))
     }
 
-    async fn init_multipart(&self, _key: &str, _mime_type: &str) -> Result<String, String> {
+    async fn init_multipart(
+        &self,
+        _key: &str,
+        _mime_type: &str,
+    ) -> Result<String, ServerCoreError> {
         let upload_id = uuid::Uuid::new_v4().to_string();
         self.multipart
             .lock()
-            .map_err(|_| "Failed to lock in-memory multipart store".to_string())?
+            .map_err(|_| internal_error("Failed to lock in-memory multipart store"))?
             .insert(upload_id.clone(), HashMap::new());
         Ok(upload_id)
     }
@@ -556,14 +529,14 @@ impl BlobStore for InMemoryBlobStore {
         multipart_id: &str,
         part_no: u32,
         bytes: &[u8],
-    ) -> Result<String, String> {
+    ) -> Result<String, ServerCoreError> {
         let mut sessions = self
             .multipart
             .lock()
-            .map_err(|_| "Failed to lock in-memory multipart store".to_string())?;
-        let parts = sessions
-            .get_mut(multipart_id)
-            .ok_or_else(|| format!("Unknown multipart session: {}", multipart_id))?;
+            .map_err(|_| internal_error("Failed to lock in-memory multipart store"))?;
+        let parts = sessions.get_mut(multipart_id).ok_or_else(|| {
+            internal_error(format!("Unknown multipart session: {}", multipart_id))
+        })?;
         parts.insert(part_no, bytes.to_vec());
         Ok(format!("inmem-etag-{}-{}", multipart_id, part_no))
     }
@@ -573,14 +546,14 @@ impl BlobStore for InMemoryBlobStore {
         key: &str,
         multipart_id: &str,
         parts: &[MultipartCompletedPart],
-    ) -> Result<(), String> {
+    ) -> Result<(), ServerCoreError> {
         let mut sessions = self
             .multipart
             .lock()
-            .map_err(|_| "Failed to lock in-memory multipart store".to_string())?;
-        let stored = sessions
-            .remove(multipart_id)
-            .ok_or_else(|| format!("Unknown multipart session: {}", multipart_id))?;
+            .map_err(|_| internal_error("Failed to lock in-memory multipart store"))?;
+        let stored = sessions.remove(multipart_id).ok_or_else(|| {
+            internal_error(format!("Unknown multipart session: {}", multipart_id))
+        })?;
         drop(sessions);
 
         let mut ordered = parts.to_vec();
@@ -589,21 +562,21 @@ impl BlobStore for InMemoryBlobStore {
         for part in ordered {
             let chunk = stored
                 .get(&part.part_no)
-                .ok_or_else(|| format!("Missing part {}", part.part_no))?;
+                .ok_or_else(|| internal_error(format!("Missing part {}", part.part_no)))?;
             bytes.extend_from_slice(chunk);
         }
 
         self.blobs
             .lock()
-            .map_err(|_| "Failed to lock in-memory blob store".to_string())?
+            .map_err(|_| internal_error("Failed to lock in-memory blob store"))?
             .insert(key.to_string(), bytes);
         Ok(())
     }
 
-    async fn abort_multipart(&self, _key: &str, multipart_id: &str) -> Result<(), String> {
+    async fn abort_multipart(&self, _key: &str, multipart_id: &str) -> Result<(), ServerCoreError> {
         self.multipart
             .lock()
-            .map_err(|_| "Failed to lock in-memory multipart store".to_string())?
+            .map_err(|_| internal_error("Failed to lock in-memory multipart store"))?
             .remove(multipart_id);
         Ok(())
     }
@@ -613,11 +586,11 @@ impl BlobStore for InMemoryBlobStore {
         key: &str,
         range_start: u64,
         range_end: u64,
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<Vec<u8>>, ServerCoreError> {
         let blobs = self
             .blobs
             .lock()
-            .map_err(|_| "Failed to lock in-memory blob store".to_string())?;
+            .map_err(|_| internal_error("Failed to lock in-memory blob store"))?;
         let Some(bytes) = blobs.get(key) else {
             return Ok(None);
         };
@@ -634,11 +607,11 @@ impl BlobStore for InMemoryBlobStore {
         Ok(Some(bytes[start..=end].to_vec()))
     }
 
-    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<String>, String> {
+    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<String>, ServerCoreError> {
         let blobs = self
             .blobs
             .lock()
-            .map_err(|_| "Failed to lock in-memory blob store".to_string())?;
+            .map_err(|_| internal_error("Failed to lock in-memory blob store"))?;
         Ok(blobs
             .keys()
             .filter(|k| k.starts_with(prefix))
@@ -646,11 +619,11 @@ impl BlobStore for InMemoryBlobStore {
             .collect())
     }
 
-    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, String> {
+    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, ServerCoreError> {
         let mut blobs = self
             .blobs
             .lock()
-            .map_err(|_| "Failed to lock in-memory blob store".to_string())?;
+            .map_err(|_| internal_error("Failed to lock in-memory blob store"))?;
         let keys: Vec<String> = blobs
             .keys()
             .filter(|k| k.starts_with(prefix))
@@ -666,7 +639,7 @@ impl BlobStore for InMemoryBlobStore {
 
 pub async fn build_blob_store(
     config: &crate::config::Config,
-) -> Result<Arc<dyn BlobStore>, String> {
+) -> Result<Arc<dyn BlobStore>, ServerCoreError> {
     if config.is_r2_configured() {
         let store = R2BlobStore::new(&config.r2).await?;
         Ok(Arc::new(store))

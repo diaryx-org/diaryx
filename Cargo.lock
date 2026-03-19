@@ -2277,6 +2277,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx_server"
+version = "1.4.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "diaryx_sync"
 version = "1.4.0"
 dependencies = [
@@ -2325,6 +2337,7 @@ dependencies = [
  "dashmap",
  "diaryx-siphonophore",
  "diaryx_core",
+ "diaryx_server",
  "diaryx_sync",
  "dotenvy",
  "futures",
@@ -2333,6 +2346,7 @@ dependencies = [
  "jsonwebtoken",
  "kameo",
  "mime_guess",
+ "openssl",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "rusqlite",
@@ -5383,6 +5397,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
+name = "openssl-src"
+version = "300.5.5+3.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f1787d533e03597a7934fd0a765f0d28e94ecc5fb7789f8053b1e699a56f709"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "openssl-sys"
 version = "0.9.112"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5390,6 +5413,7 @@ checksum = "57d55af3b3e226502be1526dfdba67ab0e9c96fc293004e79576b2b9edb0dbdb"
 dependencies = [
  "cc",
  "libc",
+ "openssl-src",
  "pkg-config",
  "vcpkg",
 ]

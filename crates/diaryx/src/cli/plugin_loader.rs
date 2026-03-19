@@ -409,6 +409,7 @@ fn create_host_context(
         ws_bridge,
         plugin_command_bridge: Arc::new(diaryx_extism::NoopPluginCommandBridge),
         runtime_context_provider: Arc::new(CliRuntimeContextProvider::new(workspace_root)),
+        namespace_provider: Arc::new(diaryx_extism::NoopNamespaceProvider),
     })
 }
 

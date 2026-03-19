@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "deploy": "vite build && bunx wrangler deploy",
+    "deploy": "bun run build && bunx wrangler deploy",
     "build": "bun run build:wasm && vite build",
     "build:wasm": "bash ../../scripts/build-wasm.sh",
     "preview": "vite preview",
@@ -88,6 +88,6 @@
     "vite-plugin-wasm": "^3.6.0",
     "vitest": "^4.1.0",
     "wasm-pack": "^0.14.0",
-    "wrangler": "^4.73.0"
+    "wrangler": "^4.75.0"
   }
 }

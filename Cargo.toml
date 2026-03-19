@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/diaryx_server",
     "crates/diaryx_core",
     "crates/diaryx",
     "crates/diaryx_wasm",
@@ -31,6 +32,7 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "std"
 indexmap = { version = "2.0", features = ["serde"] }
 
 # Internal crates - version must match workspace.package.version for publishing
+diaryx_server = { path = "crates/diaryx_server", version = "1.4.0" }
 diaryx_core = { path = "crates/diaryx_core", version = "1.4.0" }
 diaryx_daily = { path = "crates/diaryx_daily", version = "1.3.0" }
 diaryx_sync = { path = "crates/diaryx_sync", version = "1.4.0" }

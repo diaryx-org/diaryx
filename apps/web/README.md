@@ -8,6 +8,7 @@ audience:
 part_of: "[README](/apps/README.md)"
 contents:
   - "[README](/apps/web/src/README.md)"
+  - "[README](/apps/web/worker/README.md)"
   - "[Marketplace Dist](/apps/web/marketplace-dist/README.md)"
   - "[Tiptap Custom Extensions](/apps/web/docs/tiptap-custom-extensions.md)"
 attachments:
@@ -43,6 +44,16 @@ bun run build
 
 The app uses a backend abstraction (`src/lib/backend`) so feature code can run
 against WASM or Tauri with the same interface.
+
+Browser-hosted cloud traffic now routes through the Cloudflare Worker in
+`worker/`, which serves the SPA from Workers Static Assets and handles the
+same-origin `/api/*` proxy before asset serving. The Worker keeps auth
+same-origin, normalizes the public sync URL to `/api/ns/{namespace_id}/sync`,
+and preserves the legacy `/api/sync2` compatibility path during migration.
+
+Production deploys attach this Worker directly to the `app.diaryx.org` custom
+domain via Wrangler routes, disable `workers.dev`, and keep Preview URLs
+enabled for branch/testing workflows.
 
 ### Plugin-Owned Sync
 

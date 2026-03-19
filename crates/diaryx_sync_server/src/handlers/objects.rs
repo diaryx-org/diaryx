@@ -146,7 +146,7 @@ async fn put_object(
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
+            Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response();
     }
@@ -158,7 +158,7 @@ async fn put_object(
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
+            Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response();
     }
@@ -212,7 +212,7 @@ async fn get_object(
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
+            Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
     }
@@ -237,7 +237,7 @@ async fn delete_object(
     if let Err(e) = state.blob_store.delete(&rkey).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
+            Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response();
     }
@@ -386,7 +386,7 @@ async fn get_public_object(
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
+            Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
     }

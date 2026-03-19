@@ -8,6 +8,8 @@ use axum::{
     response::{IntoResponse, Json},
     routing::{delete, get, post},
 };
+use diaryx_server::ports::{AuthStore, NamespaceStore, ServerCoreError};
+use diaryx_server::use_cases::current_user::CurrentUserService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -19,6 +21,8 @@ pub struct AuthState {
     pub email_service: Arc<EmailService>,
     pub repo: Arc<AuthRepo>,
     pub ns_repo: Arc<NamespaceRepo>,
+    pub auth_store: Arc<dyn AuthStore>,
+    pub namespace_store: Arc<dyn NamespaceStore>,
     pub passkey_service: Arc<PasskeyService>,
     /// Session expiry in days, used for cookie Max-Age.
     pub session_expiry_days: i64,
@@ -95,6 +99,17 @@ impl ErrorResponse {
             error: error.into(),
             devices: None,
         }
+    }
+}
+
+fn status_for_core_error(error: &ServerCoreError) -> StatusCode {
+    match error {
+        ServerCoreError::InvalidInput(_) | ServerCoreError::Conflict(_) => StatusCode::BAD_REQUEST,
+        ServerCoreError::NotFound(_) => StatusCode::NOT_FOUND,
+        ServerCoreError::PermissionDenied(_) => StatusCode::FORBIDDEN,
+        ServerCoreError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+        ServerCoreError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        ServerCoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -410,59 +425,52 @@ async fn get_current_user(
     State(state): State<AuthState>,
     RequireAuth(auth): RequireAuth,
 ) -> impl IntoResponse {
-    let devices = state
-        .repo
-        .get_user_devices(&auth.user.id)
-        .unwrap_or_default()
+    let service =
+        CurrentUserService::new(state.auth_store.as_ref(), state.namespace_store.as_ref());
+    let context = match service.load(&auth.user.id, &auth.user.email).await {
+        Ok(context) => context,
+        Err(err) => {
+            error!("Failed to load current user context: {}", err);
+            return (
+                status_for_core_error(&err),
+                Json(ErrorResponse::new(err.to_string())),
+            )
+                .into_response();
+        }
+    };
+
+    let devices = context
+        .devices
         .into_iter()
-        .map(|d| DeviceResponse {
-            id: d.id,
-            name: d.name,
-            last_seen_at: d.last_seen_at.to_rfc3339(),
+        .map(|device| DeviceResponse {
+            id: device.id,
+            name: device.name,
+            last_seen_at: device.last_seen_at.to_rfc3339(),
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    let user_info = state.repo.get_user(&auth.user.id).ok().flatten();
-    let tier = user_info
-        .as_ref()
-        .map(|u| u.tier)
-        .unwrap_or(crate::db::UserTier::Free);
-    let defaults = tier.defaults();
-
-    let workspace_limit = user_info
-        .as_ref()
-        .and_then(|u| u.workspace_limit)
-        .unwrap_or(defaults.workspace_limit);
-    let published_site_limit = user_info
-        .as_ref()
-        .and_then(|u| u.published_site_limit)
-        .unwrap_or(defaults.published_site_limit);
-    let attachment_limit_bytes = user_info
-        .as_ref()
-        .and_then(|u| u.attachment_limit_bytes)
-        .unwrap_or(defaults.attachment_limit_bytes);
-
-    let namespaces = state.ns_repo.list_namespaces(&auth.user.id, 100, 0);
-    let workspaces = namespaces
+    let workspaces = context
+        .namespaces
         .into_iter()
         .map(|ns| WorkspaceResponse {
             id: ns.id.clone(),
             name: ns.id,
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     Json(MeResponse {
         user: UserResponse {
             id: auth.user.id,
-            email: auth.user.email,
+            email: context.user.email,
         },
         workspaces,
         devices,
-        tier: tier.as_str().to_string(),
-        workspace_limit,
-        published_site_limit,
-        attachment_limit_bytes,
+        tier: context.user.tier.as_str().to_string(),
+        workspace_limit: context.limits.workspace_limit,
+        published_site_limit: context.limits.published_site_limit,
+        attachment_limit_bytes: context.limits.attachment_limit_bytes,
     })
+    .into_response()
 }
 
 /// POST /auth/logout - Log out (delete session)
@@ -488,8 +496,9 @@ async fn list_devices(
     RequireAuth(auth): RequireAuth,
 ) -> impl IntoResponse {
     let devices = state
-        .repo
-        .get_user_devices(&auth.user.id)
+        .auth_store
+        .list_user_devices(&auth.user.id)
+        .await
         .unwrap_or_default()
         .into_iter()
         .map(|d| DeviceResponse {
@@ -517,8 +526,9 @@ async fn rename_device(
 ) -> impl IntoResponse {
     // Verify the device belongs to the user
     let devices = state
-        .repo
-        .get_user_devices(&auth.user.id)
+        .auth_store
+        .list_user_devices(&auth.user.id)
+        .await
         .unwrap_or_default();
 
     if !devices.iter().any(|d| d.id == device_id) {
@@ -534,7 +544,7 @@ async fn rename_device(
             .into_response();
     }
 
-    match state.repo.rename_device(&device_id, &name) {
+    match state.auth_store.rename_device(&device_id, &name).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
@@ -552,8 +562,9 @@ async fn delete_device(
 ) -> impl IntoResponse {
     // Verify the device belongs to the user
     let devices = state
-        .repo
-        .get_user_devices(&auth.user.id)
+        .auth_store
+        .list_user_devices(&auth.user.id)
+        .await
         .unwrap_or_default();
 
     let owns_device = devices.iter().any(|d| d.id == device_id);
@@ -567,7 +578,7 @@ async fn delete_device(
         return StatusCode::BAD_REQUEST;
     }
 
-    if let Err(e) = state.repo.delete_device(&device_id) {
+    if let Err(e) = state.auth_store.delete_device(&device_id).await {
         error!("Failed to delete device: {}", e);
         return StatusCode::INTERNAL_SERVER_ERROR;
     }

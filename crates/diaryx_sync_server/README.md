@@ -19,6 +19,17 @@ exclude:
 
 A Rust-based multi-device sync server for Diaryx with magic link authentication.
 
+## Architecture
+
+`diaryx_sync_server` is the native runtime adapter for the platform-agnostic
+[`diaryx_server`](/crates/diaryx_server/README.md) crate. Shared business rules
+are moving into that core crate while this package continues to own the Axum
+HTTP layer, SQLite repositories, and the current Rust sync engine.
+
+For browser traffic, Cloudflare now normalizes the public sync path to
+`https://app.diaryx.org/api/ns/{namespace_id}/sync`, while the current Rust
+origin remains behind that proxy during the migration.
+
 ## Features
 
 - **Magic link authentication**: Passwordless login via email

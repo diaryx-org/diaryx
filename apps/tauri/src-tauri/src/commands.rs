@@ -675,6 +675,7 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
         ws_bridge: ws_bridge.clone(),
         plugin_command_bridge: Arc::new(TauriPluginCommandBridge { app: app.clone() }),
         runtime_context_provider: Arc::new(TauriRuntimeContextProvider { app: app.clone() }),
+        namespace_provider: Arc::new(diaryx_extism::NoopNamespaceProvider),
     });
     let mut adapters = Vec::new();
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
@@ -945,6 +946,7 @@ pub async fn install_user_plugin<R: Runtime>(
         ws_bridge: Arc::new(diaryx_extism::NoopWebSocketBridge),
         plugin_command_bridge: Arc::new(diaryx_extism::NoopPluginCommandBridge),
         runtime_context_provider: Arc::new(diaryx_extism::NoopRuntimeContextProvider),
+        namespace_provider: Arc::new(diaryx_extism::NoopNamespaceProvider),
     });
 
     log::info!(

@@ -29,7 +29,7 @@ HTTP route handlers for the sync server API.
 | `ai.rs`           | Managed AI proxy endpoint (`/api/ai/chat/completions`)        |
 | `auth.rs`         | Authentication endpoints (magic-link, verify, logout, cookies) |
 | `audiences.rs`    | Audience visibility management endpoints                      |
-| `domains.rs`      | Custom domain management + Caddy `forward_auth` endpoint      |
+| `domains.rs`      | Custom domain management + Caddy `forward_auth` endpoint, with registration flows delegated to shared `diaryx_server` use cases |
 | `namespaces.rs`   | Namespace CRUD endpoints                                      |
 | `ns_sessions.rs`  | Namespace session management endpoints                        |
 | `objects.rs`      | Object store + public object access + usage endpoints         |
@@ -157,4 +157,10 @@ Only available when `STRIPE_SECRET_KEY` is configured.
 - `PUT /namespaces/{ns_id}/domains/{domain}` — register custom domain (owner, body: `{ audience_name }`)
 - `GET /namespaces/{ns_id}/domains` — list custom domains (owner)
 - `DELETE /namespaces/{ns_id}/domains/{domain}` — remove custom domain (owner)
+- `PUT /namespaces/{ns_id}/subdomain` — claim `https://{subdomain}.diaryx.org` and sync the edge cache (owner, body: `{ subdomain, default_audience? }`)
+- `DELETE /namespaces/{ns_id}/subdomain` — release the namespace's Diaryx subdomain and remove the edge cache entry (owner)
 - `GET /domain-auth` — Caddy `forward_auth` endpoint (unauthenticated, reads `X-Forwarded-Host` + `X-Forwarded-Uri`)
+
+The domain mutation routes now call shared Rust core flows that validate
+audiences/labels, update `custom_domains`, and invoke the `DomainMappingCache`
+port so native and future cloud adapters can share the same behavior.

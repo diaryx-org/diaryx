@@ -11,6 +11,7 @@ contents:
   - "[README](/apps/web/src/lib/history/README.md)"
   - "[README](/apps/web/src/lib/hooks/README.md)"
   - "[README](/apps/web/src/lib/marketplace/README.md)"
+  - "[README](/apps/web/src/lib/namespace/README.md)"
   - "[README](/apps/web/src/lib/publish/README.md)"
   - "[README](/apps/web/src/lib/settings/README.md)"
   - "[README](/apps/web/src/lib/share/README.md)"
@@ -56,6 +57,7 @@ Shared libraries, components, and utilities for the web application.
 | `history/`     | Version history components                                             |
 | `hooks/`       | Svelte hooks                                                           |
 | `marketplace/` | Marketplace asset registry/apply logic (themes, typographies, bundles) |
+| `namespace/`   | Namespace management services and host-side UI components               |
 | `publish/`     | Publishing and export components                                       |
 | `settings/`    | Settings panel components                                              |
 | `share/`       | Share session components                                               |

@@ -5,6 +5,7 @@ use axum::{
     routing::get,
 };
 use diaryx_sync_server::{
+    adapters::{NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore},
     auth::{AuthExtractor, MagicLinkService, PasskeyService},
     blob_store::{BlobStore, build_blob_store},
     config::Config,
@@ -104,6 +105,14 @@ async fn main() {
 
     // Create namespace repo (shared connection from AuthRepo)
     let ns_repo = Arc::new(NamespaceRepo::new(repo.connection()));
+    let auth_store = Arc::new(NativeAuthStore::new(repo.clone()));
+    let namespace_store = Arc::new(NativeNamespaceStore::new(ns_repo.clone()));
+    let domain_mapping_cache = Arc::new(NativeDomainMappingCache::new(
+        reqwest::Client::new(),
+        config.r2.account_id.clone(),
+        config.kv_api_token.clone(),
+        config.kv_namespace_id.clone(),
+    ));
 
     // Create sync server (GenericNamespaceSyncHook)
     let sync_server = SyncV2Server::new(repo.clone(), ns_repo.clone(), workspaces_dir);
@@ -118,6 +127,8 @@ async fn main() {
         email_service,
         repo: repo.clone(),
         ns_repo: ns_repo.clone(),
+        auth_store,
+        namespace_store: namespace_store.clone(),
         passkey_service,
         session_expiry_days: config.session_expiry_days,
         secure_cookies: config.secure_cookies,
@@ -161,12 +172,10 @@ async fn main() {
     };
     let domain_state = DomainState {
         ns_repo: ns_repo.clone(),
+        namespace_store,
+        domain_mapping_cache,
         blob_store: blob_store.clone(),
         token_signing_key: config.token_signing_key.clone(),
-        http_client: reqwest::Client::new(),
-        cf_account_id: config.r2.account_id.clone(),
-        kv_api_token: config.kv_api_token.clone(),
-        kv_namespace_id: config.kv_namespace_id.clone(),
     };
     let ns_session_state = NsSessionState {
         ns_repo: ns_repo.clone(),

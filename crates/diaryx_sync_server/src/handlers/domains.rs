@@ -7,16 +7,18 @@
 
 use super::require_namespace_owner;
 use crate::auth::RequireAuth;
-use crate::blob_store::BlobStore;
 use crate::db::NamespaceRepo;
 use crate::tokens::validate_signed_token;
 use axum::{
     Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
+    response::{IntoResponse, Json, Response},
     routing::{get, put},
 };
+use diaryx_server::domain::CustomDomainInfo as CoreCustomDomainInfo;
+use diaryx_server::ports::{BlobStore, DomainMappingCache, NamespaceStore, ServerCoreError};
+use diaryx_server::use_cases::domains::DomainService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::warn;
@@ -25,16 +27,10 @@ use tracing::warn;
 #[derive(Clone)]
 pub struct DomainState {
     pub ns_repo: Arc<NamespaceRepo>,
+    pub namespace_store: Arc<dyn NamespaceStore>,
+    pub domain_mapping_cache: Arc<dyn DomainMappingCache>,
     pub blob_store: Arc<dyn BlobStore>,
     pub token_signing_key: Vec<u8>,
-    /// HTTP client for Cloudflare KV REST API calls.
-    pub http_client: reqwest::Client,
-    /// Cloudflare account ID (reused from R2 config).
-    pub cf_account_id: String,
-    /// Cloudflare KV API token.
-    pub kv_api_token: Option<String>,
-    /// Cloudflare KV namespace ID for domain mappings.
-    pub kv_namespace_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -69,136 +65,36 @@ pub struct SubdomainResponse {
     pub url: String,
 }
 
-// ---------------------------------------------------------------------------
-// KV sync helpers
-// ---------------------------------------------------------------------------
-
-/// Write a domain→namespace mapping to Cloudflare KV (best-effort).
-async fn kv_put_domain(
-    state: &DomainState,
-    hostname: &str,
-    namespace_id: &str,
-    audience_name: &str,
-) {
-    let (Some(token), Some(kv_id)) = (&state.kv_api_token, &state.kv_namespace_id) else {
-        return;
-    };
-    if state.cf_account_id.is_empty() {
-        return;
-    }
-
-    let url = format!(
-        "https://api.cloudflare.com/client/v4/accounts/{}/storage/kv/namespaces/{}/values/domain:{}",
-        state.cf_account_id, kv_id, hostname
-    );
-    let body = serde_json::json!({
-        "namespace_id": namespace_id,
-        "audience_name": audience_name,
-    });
-
-    if let Err(e) = state
-        .http_client
-        .put(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-    {
-        warn!("Failed to write domain '{}' to KV: {}", hostname, e);
+impl From<CoreCustomDomainInfo> for DomainResponse {
+    fn from(value: CoreCustomDomainInfo) -> Self {
+        Self {
+            domain: value.domain,
+            namespace_id: value.namespace_id,
+            audience_name: value.audience_name,
+            created_at: value.created_at,
+            verified: value.verified,
+        }
     }
 }
 
-/// Delete a domain mapping from Cloudflare KV (best-effort).
-async fn kv_delete_domain(state: &DomainState, hostname: &str) {
-    let (Some(token), Some(kv_id)) = (&state.kv_api_token, &state.kv_namespace_id) else {
-        return;
-    };
-    if state.cf_account_id.is_empty() {
-        return;
-    }
-
-    let url = format!(
-        "https://api.cloudflare.com/client/v4/accounts/{}/storage/kv/namespaces/{}/values/domain:{}",
-        state.cf_account_id, kv_id, hostname
-    );
-
-    if let Err(e) = state
-        .http_client
-        .delete(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-    {
-        warn!("Failed to delete domain '{}' from KV: {}", hostname, e);
+fn status_for_core_error(error: &ServerCoreError) -> StatusCode {
+    match error {
+        ServerCoreError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+        ServerCoreError::NotFound(_) => StatusCode::NOT_FOUND,
+        ServerCoreError::PermissionDenied(_) => StatusCode::FORBIDDEN,
+        ServerCoreError::Conflict(_) => StatusCode::CONFLICT,
+        ServerCoreError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+        ServerCoreError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        ServerCoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
-/// Write a subdomain→namespace mapping to Cloudflare KV (best-effort).
-async fn kv_put_subdomain(
-    state: &DomainState,
-    subdomain: &str,
-    namespace_id: &str,
-    default_audience: Option<&str>,
-) {
-    let (Some(token), Some(kv_id)) = (&state.kv_api_token, &state.kv_namespace_id) else {
-        return;
-    };
-    if state.cf_account_id.is_empty() {
-        return;
-    }
-
-    let url = format!(
-        "https://api.cloudflare.com/client/v4/accounts/{}/storage/kv/namespaces/{}/values/subdomain:{}",
-        state.cf_account_id,
-        kv_id,
-        subdomain.to_lowercase()
-    );
-    let mut body = serde_json::json!({
-        "namespace_id": namespace_id,
-    });
-    if let Some(aud) = default_audience {
-        body["default_audience"] = serde_json::Value::String(aud.to_string());
-    }
-
-    if let Err(e) = state
-        .http_client
-        .put(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-    {
-        warn!("Failed to write subdomain '{}' to KV: {}", subdomain, e);
-    }
-}
-
-/// Delete a subdomain mapping from Cloudflare KV (best-effort).
-async fn kv_delete_subdomain(state: &DomainState, subdomain: &str) {
-    let (Some(token), Some(kv_id)) = (&state.kv_api_token, &state.kv_namespace_id) else {
-        return;
-    };
-    if state.cf_account_id.is_empty() {
-        return;
-    }
-
-    let url = format!(
-        "https://api.cloudflare.com/client/v4/accounts/{}/storage/kv/namespaces/{}/values/subdomain:{}",
-        state.cf_account_id,
-        kv_id,
-        subdomain.to_lowercase()
-    );
-
-    if let Err(e) = state
-        .http_client
-        .delete(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-    {
-        warn!("Failed to delete subdomain '{}' from KV: {}", subdomain, e);
-    }
+fn core_error_response(error: ServerCoreError) -> Response {
+    (
+        status_for_core_error(&error),
+        Json(serde_json::json!({ "error": error.to_string() })),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -227,46 +123,16 @@ async fn register_domain(
         return resp;
     }
 
-    // Validate audience exists.
-    if state
-        .ns_repo
-        .get_audience(&ns_id, &req.audience_name)
-        .is_none()
+    let service = DomainService::new(
+        state.namespace_store.as_ref(),
+        state.domain_mapping_cache.as_ref(),
+    );
+    match service
+        .register_domain(&ns_id, &domain, &req.audience_name)
+        .await
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("audience '{}' does not exist", req.audience_name) })),
-        )
-            .into_response();
-    }
-
-    match state
-        .ns_repo
-        .upsert_custom_domain(&domain, &ns_id, &req.audience_name)
-    {
-        Ok(()) => {
-            let info = state
-                .ns_repo
-                .get_custom_domain(&domain)
-                .expect("just upserted");
-
-            // Sync to Cloudflare KV (best-effort).
-            kv_put_domain(&state, &domain, &ns_id, &req.audience_name).await;
-
-            Json(DomainResponse {
-                domain: info.domain,
-                namespace_id: info.namespace_id,
-                audience_name: info.audience_name,
-                created_at: info.created_at,
-                verified: info.verified,
-            })
-            .into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
+        Ok(info) => Json(DomainResponse::from(info)).into_response(),
+        Err(error) => core_error_response(error),
     }
 }
 
@@ -280,20 +146,16 @@ async fn list_domains(
         return resp;
     }
 
-    let domains: Vec<DomainResponse> = state
-        .ns_repo
-        .list_custom_domains(&ns_id)
-        .into_iter()
-        .map(|d| DomainResponse {
-            domain: d.domain,
-            namespace_id: d.namespace_id,
-            audience_name: d.audience_name,
-            created_at: d.created_at,
-            verified: d.verified,
-        })
-        .collect();
-
-    Json(domains).into_response()
+    match state.namespace_store.list_custom_domains(&ns_id).await {
+        Ok(domains) => Json(
+            domains
+                .into_iter()
+                .map(DomainResponse::from)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(error) => core_error_response(error),
+    }
 }
 
 /// DELETE /namespaces/{ns_id}/domains/{domain} — remove a custom domain.
@@ -306,21 +168,13 @@ async fn remove_domain(
         return resp;
     }
 
-    match state.ns_repo.get_custom_domain(&domain) {
-        None => StatusCode::NOT_FOUND.into_response(),
-        Some(d) if d.namespace_id != ns_id => StatusCode::NOT_FOUND.into_response(),
-        Some(_) => match state.ns_repo.delete_custom_domain(&domain) {
-            Ok(_) => {
-                // Remove from Cloudflare KV (best-effort).
-                kv_delete_domain(&state, &domain).await;
-                StatusCode::NO_CONTENT.into_response()
-            }
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e })),
-            )
-                .into_response(),
-        },
+    let service = DomainService::new(
+        state.namespace_store.as_ref(),
+        state.domain_mapping_cache.as_ref(),
+    );
+    match service.remove_domain(&ns_id, &domain).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => core_error_response(error),
     }
 }
 
@@ -335,65 +189,21 @@ async fn claim_subdomain(
         return resp;
     }
 
-    let subdomain = req.subdomain.to_lowercase();
-
-    // Validate subdomain format: alphanumeric + hyphens, 3-63 chars, no leading/trailing hyphens
-    if subdomain.len() < 3
-        || subdomain.len() > 63
-        || !subdomain
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-        || subdomain.starts_with('-')
-        || subdomain.ends_with('-')
+    let service = DomainService::new(
+        state.namespace_store.as_ref(),
+        state.domain_mapping_cache.as_ref(),
+    );
+    match service
+        .claim_subdomain(&ns_id, &req.subdomain, req.default_audience.as_deref())
+        .await
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid subdomain. Use 3-63 alphanumeric characters and hyphens." })),
-        )
-            .into_response();
-    }
-
-    // Reserved subdomains
-    let reserved = [
-        "www", "api", "app", "mail", "smtp", "ftp", "ns", "admin", "sync", "site", "sites",
-    ];
-    if reserved.contains(&subdomain.as_str()) {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": "This subdomain is reserved." })),
-        )
-            .into_response();
-    }
-
-    // Check if subdomain is already taken (via custom_domains table, using subdomain as domain)
-    let domain_key = format!("{}.diaryx.org", subdomain);
-    if let Some(existing) = state.ns_repo.get_custom_domain(&domain_key) {
-        if existing.namespace_id != ns_id {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": "This subdomain is already taken." })),
-            )
-                .into_response();
-        }
-    }
-
-    // Store using existing custom_domains table (audience_name = "*" for whole-namespace)
-    match state.ns_repo.upsert_custom_domain(&domain_key, &ns_id, "*") {
-        Ok(()) => {
-            kv_put_subdomain(&state, &subdomain, &ns_id, req.default_audience.as_deref()).await;
-
-            Json(SubdomainResponse {
-                subdomain: subdomain.clone(),
-                namespace_id: ns_id,
-                url: format!("https://{}.diaryx.org", subdomain),
-            })
-            .into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
+        Ok(claimed) => Json(SubdomainResponse {
+            subdomain: claimed.subdomain.clone(),
+            namespace_id: claimed.namespace_id,
+            url: format!("https://{}.diaryx.org", claimed.subdomain),
+        })
+        .into_response(),
+        Err(error) => core_error_response(error),
     }
 }
 
@@ -407,20 +217,13 @@ async fn release_subdomain(
         return resp;
     }
 
-    // Find the subdomain for this namespace
-    let domains = state.ns_repo.list_custom_domains(&ns_id);
-    let subdomain_domain = domains
-        .iter()
-        .find(|d| d.audience_name == "*" && d.domain.ends_with(".diaryx.org"));
-
-    match subdomain_domain {
-        Some(d) => {
-            let subdomain = d.domain.trim_end_matches(".diaryx.org");
-            kv_delete_subdomain(&state, subdomain).await;
-            let _ = state.ns_repo.delete_custom_domain(&d.domain);
-            StatusCode::NO_CONTENT.into_response()
-        }
-        None => StatusCode::NOT_FOUND.into_response(),
+    let service = DomainService::new(
+        state.namespace_store.as_ref(),
+        state.domain_mapping_cache.as_ref(),
+    );
+    match service.release_subdomain(&ns_id).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => core_error_response(error),
     }
 }
 
@@ -436,7 +239,41 @@ pub struct DomainAuthParams {
 pub fn domain_auth_route(state: DomainState) -> Router {
     Router::new()
         .route("/domain-auth", get(domain_auth))
+        .route("/domain-check", get(domain_check))
         .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// Caddy on-demand TLS `ask` endpoint (unauthenticated)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct DomainCheckParams {
+    pub domain: Option<String>,
+}
+
+/// GET /domain-check?domain=example.com — Caddy on-demand TLS validation.
+///
+/// Returns 200 if the domain is registered in the `custom_domains` table,
+/// 404 otherwise. Caddy uses this to decide whether to provision a TLS
+/// certificate for an incoming hostname.
+async fn domain_check(
+    State(state): State<DomainState>,
+    Query(params): Query<DomainCheckParams>,
+) -> impl IntoResponse {
+    let domain = match params.domain {
+        Some(d) if !d.is_empty() => d,
+        _ => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state.namespace_store.get_custom_domain(&domain).await {
+        Ok(Some(_)) => StatusCode::OK.into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            warn!("Failed to resolve domain '{}': {}", domain, error);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 /// GET /domain-auth — Caddy `forward_auth` endpoint.
@@ -527,7 +364,7 @@ async fn domain_auth(
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
+            Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
     }

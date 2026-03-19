@@ -1,0 +1,27 @@
+name: 'Setup Web Environment'
+description: 'Checkout, install Nix, download WASM + bindings artifacts, and install web dependencies'
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+
+    - uses: DeterminateSystems/nix-installer-action@main
+
+    - uses: DeterminateSystems/magic-nix-cache-action@main
+
+    - name: Download WASM artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: wasm-package
+        path: apps/web/src/lib/wasm/
+
+    - name: Download bindings artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ts-bindings
+        path: crates/diaryx_core/bindings/
+
+    - name: Install dependencies
+      shell: bash
+      run: cd apps/web && nix develop --command bun install

@@ -217,7 +217,6 @@
               llvmPackages.lld
               openssl.dev
               binaryen
-              just
             ];
 
             # Add libiconv for macOS host build scripts

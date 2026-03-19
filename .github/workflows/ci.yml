@@ -145,24 +145,7 @@ jobs:
     needs: [changes, build-wasm]
     if: needs.changes.outputs.web == 'true'
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-
-      - name: Download WASM artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm-package
-          path: apps/web/src/lib/wasm/
-
-      - name: Download bindings artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ts-bindings
-          path: crates/diaryx_core/bindings/
-
-      - name: Install dependencies
-        run: cd apps/web && nix develop --command bun install
+      - uses: ./.github/actions/setup-web
 
       - name: Type check
         run: cd apps/web && nix develop --command bun run check
@@ -187,24 +170,7 @@ jobs:
     needs: [web, build-wasm, changes]
     if: needs.changes.outputs.web == 'true'
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-
-      - name: Download WASM artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm-package
-          path: apps/web/src/lib/wasm/
-
-      - name: Download bindings artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ts-bindings
-          path: crates/diaryx_core/bindings/
-
-      - name: Install dependencies
-        run: cd apps/web && nix develop --command bun install
+      - uses: ./.github/actions/setup-web
 
       - name: Install Playwright browsers
         run: cd apps/web && nix develop --command bunx playwright install --with-deps chromium
@@ -295,39 +261,21 @@ jobs:
     permissions:
       id-token: write
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download WASM artifact
         uses: actions/download-artifact@v4
         with:
           name: wasm-package
           path: wasm-output/
 
-      - uses: actions/setup-node@v4
+      - name: Publish
+        uses: ./.github/actions/publish-wasm-npm
         with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-
-      - name: Patch package.json for npm
-        working-directory: wasm-output
-        run: |
-          BASE_VERSION=$(jq -r '.version' package.json)
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-
-          jq '.name = "@diaryx/wasm"' package.json > tmp.json && mv tmp.json package.json
-          jq '.files = ["diaryx_wasm.js", "diaryx_wasm_bg.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]' package.json > tmp.json && mv tmp.json package.json
-
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "NPM_TAG=latest" >> $GITHUB_ENV
-          else
-            jq --arg v "${BASE_VERSION}-dev.${SHORT_SHA}" '.version = $v' package.json > tmp.json && mv tmp.json package.json
-            echo "NPM_TAG=dev" >> $GITHUB_ENV
-          fi
-
-          echo "Publishing version: $(jq -r '.version' package.json) with tag: ${NPM_TAG:-pending}"
-          cat package.json
-
-      - name: Publish to npm
-        working-directory: wasm-output
-        run: npm publish --provenance --access public --tag ${{ env.NPM_TAG }}
+          package-name: '@diaryx/wasm'
+          working-directory: wasm-output
+          files: '["diaryx_wasm.js", "diaryx_wasm_bg.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]'
+          node-auth-token: ${{ secrets.NPM_TOKEN }}
 
   publish-wasm-node-npm:
     name: Publish WASM Node to npm
@@ -349,33 +297,13 @@ jobs:
       - name: Build WASM (Node.js, no browser features)
         run: wasm-pack build crates/diaryx_wasm --target web --no-default-features
 
-      - uses: actions/setup-node@v4
+      - name: Publish
+        uses: ./.github/actions/publish-wasm-npm
         with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-
-      - name: Patch package.json for npm
-        working-directory: crates/diaryx_wasm/pkg
-        run: |
-          BASE_VERSION=$(jq -r '.version' package.json)
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-
-          jq '.name = "@diaryx/wasm-node"' package.json > tmp.json && mv tmp.json package.json
-          jq '.files = ["diaryx_wasm_bg.wasm", "diaryx_wasm.js", "diaryx_wasm_bg.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]' package.json > tmp.json && mv tmp.json package.json
-
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "NPM_TAG=latest" >> $GITHUB_ENV
-          else
-            jq --arg v "${BASE_VERSION}-dev.${SHORT_SHA}" '.version = $v' package.json > tmp.json && mv tmp.json package.json
-            echo "NPM_TAG=dev" >> $GITHUB_ENV
-          fi
-
-          echo "Publishing version: $(jq -r '.version' package.json) with tag: ${NPM_TAG:-pending}"
-          cat package.json
-
-      - name: Publish to npm
-        working-directory: crates/diaryx_wasm/pkg
-        run: npm publish --provenance --access public --tag ${{ env.NPM_TAG }}
+          package-name: '@diaryx/wasm-node'
+          working-directory: crates/diaryx_wasm/pkg
+          files: '["diaryx_wasm_bg.wasm", "diaryx_wasm.js", "diaryx_wasm_bg.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]'
+          node-auth-token: ${{ secrets.NPM_TOKEN }}
 
   # ── Deploy ───────────────────────────────────────────────────────────────
 

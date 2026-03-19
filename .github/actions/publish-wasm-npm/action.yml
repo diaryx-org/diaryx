@@ -1,0 +1,47 @@
+name: 'Publish WASM to npm'
+description: 'Patch package.json and publish a WASM package to npm'
+
+inputs:
+  package-name:
+    description: 'Scoped npm package name (e.g., @diaryx/wasm)'
+    required: true
+  working-directory:
+    description: 'Directory containing the package to publish'
+    required: true
+  files:
+    description: 'JSON array of files to include (e.g., ["a.js", "b.wasm"])'
+    required: true
+  node-auth-token:
+    description: 'npm auth token'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24
+        registry-url: https://registry.npmjs.org
+
+    - name: Patch package.json and publish
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.node-auth-token }}
+      run: |
+        BASE_VERSION=$(jq -r '.version' package.json)
+        SHORT_SHA="${GITHUB_SHA:0:7}"
+
+        jq --arg name "${{ inputs.package-name }}" '.name = $name' package.json > tmp.json && mv tmp.json package.json
+        jq --argjson files '${{ inputs.files }}' '.files = $files' package.json > tmp.json && mv tmp.json package.json
+
+        if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          NPM_TAG=latest
+        else
+          jq --arg v "${BASE_VERSION}-dev.${SHORT_SHA}" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+          NPM_TAG=dev
+        fi
+
+        echo "Publishing $(jq -r '.version' package.json) as ${NPM_TAG}"
+        cat package.json
+        npm publish --provenance --access public --tag "${NPM_TAG}"

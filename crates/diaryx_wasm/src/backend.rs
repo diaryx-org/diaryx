@@ -28,7 +28,6 @@
 //! ## Special Methods
 //!
 //! A few methods are kept outside the command API for specific reasons:
-//! - `getConfig` / `saveConfig`: WASM-specific config stored in root frontmatter
 //! - `readBinary` / `writeBinary`: Efficient Uint8Array handling without base64 overhead
 
 use std::cell::RefCell;
@@ -40,12 +39,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use diaryx_core::diaryx::Diaryx;
-use diaryx_core::frontmatter;
 use diaryx_core::fs::{
     AsyncFileSystem, CallbackRegistry, EventEmittingFs, FileSystemEvent, InMemoryFileSystem,
     SyncToAsyncFs,
 };
-use diaryx_core::workspace::Workspace;
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
@@ -92,210 +89,40 @@ impl Clone for StorageBackend {
     }
 }
 
-// Implement AsyncFileSystem by delegating to inner type
+/// Generates a delegating `AsyncFileSystem` method for `StorageBackend`.
+/// Each invocation expands to a `fn` that matches on the enum and forwards to the inner impl.
+macro_rules! delegate_fs {
+    // method(arg1: Type1, arg2: Type2, ...) -> ReturnType
+    ($method:ident($($arg:ident : $ty:ty),*) -> $ret:ty) => {
+        fn $method<'a>(&'a self, $($arg: &'a $ty),*) -> diaryx_core::fs::BoxFuture<'a, $ret> {
+            match self {
+                #[cfg(feature = "browser")]
+                StorageBackend::Opfs(fs) => fs.$method($($arg),*),
+                #[cfg(feature = "browser")]
+                StorageBackend::IndexedDb(fs) => fs.$method($($arg),*),
+                #[cfg(feature = "browser")]
+                StorageBackend::Fsa(fs) => fs.$method($($arg),*),
+                StorageBackend::InMemory(fs) => fs.$method($($arg),*),
+                StorageBackend::JsAsync(fs) => fs.$method($($arg),*),
+            }
+        }
+    };
+}
+
 impl AsyncFileSystem for StorageBackend {
-    fn read_to_string<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> diaryx_core::fs::BoxFuture<'a, IoResult<String>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.read_to_string(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.read_to_string(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.read_to_string(path),
-            StorageBackend::InMemory(fs) => fs.read_to_string(path),
-            StorageBackend::JsAsync(fs) => fs.read_to_string(path),
-        }
-    }
-
-    fn write_file<'a>(
-        &'a self,
-        path: &'a Path,
-        content: &'a str,
-    ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.write_file(path, content),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.write_file(path, content),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.write_file(path, content),
-            StorageBackend::InMemory(fs) => fs.write_file(path, content),
-            StorageBackend::JsAsync(fs) => fs.write_file(path, content),
-        }
-    }
-
-    fn create_new<'a>(
-        &'a self,
-        path: &'a Path,
-        content: &'a str,
-    ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.create_new(path, content),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.create_new(path, content),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.create_new(path, content),
-            StorageBackend::InMemory(fs) => fs.create_new(path, content),
-            StorageBackend::JsAsync(fs) => fs.create_new(path, content),
-        }
-    }
-
-    fn delete_file<'a>(&'a self, path: &'a Path) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.delete_file(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.delete_file(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.delete_file(path),
-            StorageBackend::InMemory(fs) => fs.delete_file(path),
-            StorageBackend::JsAsync(fs) => fs.delete_file(path),
-        }
-    }
-
-    fn list_md_files<'a>(
-        &'a self,
-        dir: &'a Path,
-    ) -> diaryx_core::fs::BoxFuture<'a, IoResult<Vec<PathBuf>>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.list_md_files(dir),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.list_md_files(dir),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.list_md_files(dir),
-            StorageBackend::InMemory(fs) => fs.list_md_files(dir),
-            StorageBackend::JsAsync(fs) => fs.list_md_files(dir),
-        }
-    }
-
-    fn exists<'a>(&'a self, path: &'a Path) -> diaryx_core::fs::BoxFuture<'a, bool> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.exists(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.exists(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.exists(path),
-            StorageBackend::InMemory(fs) => fs.exists(path),
-            StorageBackend::JsAsync(fs) => fs.exists(path),
-        }
-    }
-
-    fn create_dir_all<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.create_dir_all(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.create_dir_all(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.create_dir_all(path),
-            StorageBackend::InMemory(fs) => fs.create_dir_all(path),
-            StorageBackend::JsAsync(fs) => fs.create_dir_all(path),
-        }
-    }
-
-    fn is_dir<'a>(&'a self, path: &'a Path) -> diaryx_core::fs::BoxFuture<'a, bool> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.is_dir(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.is_dir(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.is_dir(path),
-            StorageBackend::InMemory(fs) => fs.is_dir(path),
-            StorageBackend::JsAsync(fs) => fs.is_dir(path),
-        }
-    }
-
-    fn move_file<'a>(
-        &'a self,
-        from: &'a Path,
-        to: &'a Path,
-    ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.move_file(from, to),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.move_file(from, to),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.move_file(from, to),
-            StorageBackend::InMemory(fs) => fs.move_file(from, to),
-            StorageBackend::JsAsync(fs) => fs.move_file(from, to),
-        }
-    }
-
-    fn read_binary<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> diaryx_core::fs::BoxFuture<'a, IoResult<Vec<u8>>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.read_binary(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.read_binary(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.read_binary(path),
-            StorageBackend::InMemory(fs) => fs.read_binary(path),
-            StorageBackend::JsAsync(fs) => fs.read_binary(path),
-        }
-    }
-
-    fn write_binary<'a>(
-        &'a self,
-        path: &'a Path,
-        content: &'a [u8],
-    ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.write_binary(path, content),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.write_binary(path, content),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.write_binary(path, content),
-            StorageBackend::InMemory(fs) => fs.write_binary(path, content),
-            StorageBackend::JsAsync(fs) => fs.write_binary(path, content),
-        }
-    }
-
-    fn list_files<'a>(
-        &'a self,
-        dir: &'a Path,
-    ) -> diaryx_core::fs::BoxFuture<'a, IoResult<Vec<PathBuf>>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.list_files(dir),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.list_files(dir),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.list_files(dir),
-            StorageBackend::InMemory(fs) => fs.list_files(dir),
-            StorageBackend::JsAsync(fs) => fs.list_files(dir),
-        }
-    }
-
-    fn get_modified_time<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> diaryx_core::fs::BoxFuture<'a, Option<i64>> {
-        match self {
-            #[cfg(feature = "browser")]
-            StorageBackend::Opfs(fs) => fs.get_modified_time(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::IndexedDb(fs) => fs.get_modified_time(path),
-            #[cfg(feature = "browser")]
-            StorageBackend::Fsa(fs) => fs.get_modified_time(path),
-            StorageBackend::InMemory(fs) => fs.get_modified_time(path),
-            StorageBackend::JsAsync(fs) => fs.get_modified_time(path),
-        }
-    }
+    delegate_fs!(read_to_string(path: Path) -> IoResult<String>);
+    delegate_fs!(write_file(path: Path, content: str) -> IoResult<()>);
+    delegate_fs!(create_new(path: Path, content: str) -> IoResult<()>);
+    delegate_fs!(delete_file(path: Path) -> IoResult<()>);
+    delegate_fs!(list_md_files(dir: Path) -> IoResult<Vec<PathBuf>>);
+    delegate_fs!(exists(path: Path) -> bool);
+    delegate_fs!(create_dir_all(path: Path) -> IoResult<()>);
+    delegate_fs!(is_dir(path: Path) -> bool);
+    delegate_fs!(move_file(from: Path, to: Path) -> IoResult<()>);
+    delegate_fs!(read_binary(path: Path) -> IoResult<Vec<u8>>);
+    delegate_fs!(write_binary(path: Path, content: [u8]) -> IoResult<()>);
+    delegate_fs!(list_files(dir: Path) -> IoResult<Vec<PathBuf>>);
+    delegate_fs!(get_modified_time(path: Path) -> Option<i64>);
 }
 
 // ============================================================================
@@ -595,169 +422,6 @@ impl DiaryxBackend {
         // Convert response to JsValue
         serde_wasm_bindgen::to_value(&result)
             .map_err(|e| JsValue::from_str(&format!("Failed to serialize response: {}", e)))
-    }
-
-    // ========================================================================
-    // Config (WASM-specific - stored in root index frontmatter)
-    // ========================================================================
-
-    /// Get the current configuration from root index frontmatter.
-    /// Config keys are stored as `diaryx_*` properties.
-    #[wasm_bindgen(js_name = "getConfig")]
-    pub fn get_config(&self) -> Promise {
-        let fs = self.fs.clone();
-
-        future_to_promise(async move {
-            let ws = Workspace::new(&*fs);
-
-            // Find root index - try current directory first ("." for FSA mode)
-            let root_path = ws
-                .find_root_index_in_dir(Path::new("."))
-                .await
-                .ok()
-                .flatten();
-
-            // Fallback: try "workspace" directory for OPFS mode
-            let root_path = match root_path {
-                Some(p) => Some(p),
-                None => ws
-                    .find_root_index_in_dir(Path::new("workspace"))
-                    .await
-                    .ok()
-                    .flatten(),
-            };
-
-            let root_path = match root_path {
-                Some(p) => p,
-                None => {
-                    // Return default config if no root found
-                    let default = r#"{"default_workspace":"."}"#;
-                    return js_sys::JSON::parse(default)
-                        .map_err(|e| JsValue::from_str(&format!("JSON error: {:?}", e)));
-                }
-            };
-
-            // Read frontmatter from root index
-            match ws.parse_index(&root_path).await {
-                Ok(index) => {
-                    // Extract diaryx_* keys from extra
-                    let mut config = serde_json::Map::new();
-
-                    // Set default_workspace to root index's directory
-                    if let Some(parent) = root_path.parent() {
-                        let ws_path = if parent.as_os_str().is_empty() {
-                            "."
-                        } else {
-                            &parent.to_string_lossy()
-                        };
-                        config.insert(
-                            "default_workspace".to_string(),
-                            serde_json::Value::String(ws_path.to_string()),
-                        );
-                    }
-
-                    // Extract diaryx_* keys
-                    for (key, value) in &index.frontmatter.extra {
-                        if let Some(config_key) = key.strip_prefix("diaryx_") {
-                            // Convert serde_yaml::Value to serde_json::Value
-                            if let Ok(json_str) = serde_yaml::to_string(value) {
-                                if let Ok(json_val) =
-                                    serde_json::from_str::<serde_json::Value>(&json_str)
-                                {
-                                    config.insert(config_key.to_string(), json_val);
-                                }
-                            }
-                        }
-                    }
-
-                    let config_obj = serde_json::Value::Object(config);
-                    let config_str = serde_json::to_string(&config_obj)
-                        .map_err(|e| JsValue::from_str(&format!("JSON error: {:?}", e)))?;
-
-                    js_sys::JSON::parse(&config_str)
-                        .map_err(|e| JsValue::from_str(&format!("JSON parse error: {:?}", e)))
-                }
-                Err(_) => {
-                    // Return default config
-                    let default = r#"{"default_workspace":"."}"#;
-                    js_sys::JSON::parse(default)
-                        .map_err(|e| JsValue::from_str(&format!("JSON error: {:?}", e)))
-                }
-            }
-        })
-    }
-
-    /// Save configuration to root index frontmatter.
-    /// Config keys are stored as `diaryx_*` properties.
-    #[wasm_bindgen(js_name = "saveConfig")]
-    pub fn save_config(&self, config_js: JsValue) -> Promise {
-        let fs = self.fs.clone();
-
-        future_to_promise(async move {
-            let ws = Workspace::new(&*fs);
-
-            // Find root index
-            let root_path = ws
-                .find_root_index_in_dir(Path::new("."))
-                .await
-                .ok()
-                .flatten();
-
-            // Fallback: try "workspace" directory for OPFS mode
-            let root_path = match root_path {
-                Some(p) => Some(p),
-                None => ws
-                    .find_root_index_in_dir(Path::new("workspace"))
-                    .await
-                    .ok()
-                    .flatten(),
-            };
-
-            let root_path = match root_path {
-                Some(p) if fs.exists(&p).await => p,
-                _ => return Err(JsValue::from_str("No root index found to save config")),
-            };
-
-            // Parse config from JS
-            let config_str = js_sys::JSON::stringify(&config_js)
-                .map_err(|e| JsValue::from_str(&format!("Failed to stringify config: {:?}", e)))?;
-            let config: serde_json::Map<String, serde_json::Value> =
-                serde_json::from_str(&String::from(config_str))
-                    .map_err(|e| JsValue::from_str(&format!("Invalid config JSON: {:?}", e)))?;
-
-            // Read current file
-            let content = fs
-                .read_to_string(&root_path)
-                .await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-            // Parse frontmatter
-            let mut parsed = frontmatter::parse_or_empty(&content)
-                .map_err(|e| JsValue::from_str(&format!("Failed to parse frontmatter: {:?}", e)))?;
-
-            // Update diaryx_* keys (skip default_workspace as it's derived)
-            for (key, value) in config {
-                if key != "default_workspace" {
-                    let yaml_key = format!("diaryx_{}", key);
-                    // Convert JSON value to YAML
-                    let yaml_str = serde_json::to_string(&value)
-                        .map_err(|e| JsValue::from_str(&format!("JSON error: {:?}", e)))?;
-                    let yaml_val: serde_yaml::Value = serde_yaml::from_str(&yaml_str)
-                        .map_err(|e| JsValue::from_str(&format!("YAML error: {:?}", e)))?;
-                    parsed.frontmatter.insert(yaml_key, yaml_val);
-                }
-            }
-
-            // Serialize and write back
-            let new_content = frontmatter::serialize(&parsed.frontmatter, &parsed.body)
-                .map_err(|e| JsValue::from_str(&format!("Failed to serialize: {:?}", e)))?;
-
-            fs.write_file(&root_path, &new_content)
-                .await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-            Ok(JsValue::UNDEFINED)
-        })
     }
 
     // ========================================================================

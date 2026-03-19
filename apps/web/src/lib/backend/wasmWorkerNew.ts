@@ -5,7 +5,6 @@
  * eliminating the need for InMemoryFileSystem and JS↔WASM sync.
  *
  * All operations use the unified `execute()` command API, except:
- * - `getConfig` / `saveConfig`: WASM-specific config stored in root frontmatter
  * - `readBinary` / `writeBinary`: Efficient Uint8Array handling (no base64 overhead)
  */
 
@@ -468,18 +467,6 @@ export const workerApi = {
     console.warn(
       "[WasmWorker] Events are forwarded via MessagePort, not off()",
     );
-  },
-
-  // =========================================================================
-  // Config (kept as native calls - WASM-specific frontmatter storage)
-  // =========================================================================
-
-  async getConfig(): Promise<any> {
-    return getBackend().getConfig();
-  },
-
-  async saveConfig(config: any): Promise<void> {
-    return getBackend().saveConfig(config);
   },
 
   // =========================================================================

@@ -11,6 +11,7 @@ attachments:
 - '[use_cases/namespaces.rs](/crates/diaryx_server/src/use_cases/namespaces.rs)'
 - '[use_cases/audiences.rs](/crates/diaryx_server/src/use_cases/audiences.rs)'
 - '[use_cases/sessions.rs](/crates/diaryx_server/src/use_cases/sessions.rs)'
+- '[use_cases/objects.rs](/crates/diaryx_server/src/use_cases/objects.rs)'
 exclude:
 - '*.lock'
 ---
@@ -25,5 +26,6 @@ The core is split into:
 - `use_cases/namespaces.rs` - portable namespace CRUD with ownership verification
 - `use_cases/audiences.rs` - portable audience CRUD with access validation and `_audiences.json` blob metadata writing
 - `use_cases/sessions.rs` - portable namespace session CRUD with ownership verification
+- `use_cases/objects.rs` - portable object store CRUD (put/get/delete/list) with ownership checks, audience validation, blob operations, usage recording, and public access resolution
 
 No module in this crate depends on Axum, Cloudflare Worker bindings, or SQLite.

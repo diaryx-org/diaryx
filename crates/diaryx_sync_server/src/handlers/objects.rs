@@ -1,9 +1,6 @@
 //! Object store handlers — `PUT/GET/DELETE/LIST /namespaces/{id}/objects`.
 
-use super::require_namespace_owner;
 use crate::auth::RequireAuth;
-use crate::blob_store::BlobStore;
-use crate::db::{NamespaceRepo, UsageTotals};
 use crate::tokens::validate_signed_token;
 use axum::{
     Router,
@@ -13,14 +10,17 @@ use axum::{
     response::{IntoResponse, Json},
     routing::{get, put},
 };
+use diaryx_server::domain::{ObjectMeta, UsageTotals};
+use diaryx_server::ports::{BlobStore, NamespaceStore, ObjectMetaStore, ServerCoreError};
+use diaryx_server::use_cases::objects::ObjectService;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Shared state for object handlers.
 #[derive(Clone)]
 pub struct ObjectState {
-    pub ns_repo: Arc<NamespaceRepo>,
+    pub namespace_store: Arc<dyn NamespaceStore>,
+    pub object_meta_store: Arc<dyn ObjectMetaStore>,
     /// Single R2 bucket for all namespace objects.
     pub blob_store: Arc<dyn BlobStore>,
     /// HMAC-SHA256 key for validating audience access tokens.
@@ -41,6 +41,20 @@ pub struct ObjectMetaResponse {
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
+}
+
+impl From<ObjectMeta> for ObjectMetaResponse {
+    fn from(m: ObjectMeta) -> Self {
+        Self {
+            namespace_id: m.namespace_id,
+            key: m.key,
+            r2_key: m.blob_key,
+            mime_type: m.mime_type,
+            size_bytes: m.size_bytes,
+            updated_at: m.updated_at,
+            audience: m.audience,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -83,9 +97,33 @@ pub fn usage_routes(state: ObjectState) -> Router {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Derive the R2 key for a namespace object.
-fn r2_key(namespace_id: &str, key: &str) -> String {
-    format!("ns/{}/{}", namespace_id, key)
+fn status_for_core_error(err: &ServerCoreError) -> StatusCode {
+    match err {
+        ServerCoreError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+        ServerCoreError::Conflict(_) => StatusCode::CONFLICT,
+        ServerCoreError::NotFound(_) => StatusCode::NOT_FOUND,
+        ServerCoreError::PermissionDenied(_) => StatusCode::FORBIDDEN,
+        ServerCoreError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+        ServerCoreError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        ServerCoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn core_error_response(err: ServerCoreError) -> axum::response::Response {
+    let status = status_for_core_error(&err);
+    (
+        status,
+        Json(serde_json::json!({ "error": err.to_string() })),
+    )
+        .into_response()
+}
+
+fn make_service(state: &ObjectState) -> ObjectService<'_> {
+    ObjectService::new(
+        state.namespace_store.as_ref(),
+        state.object_meta_store.as_ref(),
+        state.blob_store.as_ref(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -100,79 +138,26 @@ async fn put_object(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
-        return resp;
-    }
-
     let mime_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string();
+        .unwrap_or("application/octet-stream");
 
-    // Optional audience tag via X-Audience header.
-    let audience = headers
-        .get("x-audience")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+    let audience = headers.get("x-audience").and_then(|v| v.to_str().ok());
 
-    // Validate audience exists if specified.
-    if let Some(ref aud) = audience {
-        if state.ns_repo.get_audience(&ns_id, aud).is_none() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("audience '{}' does not exist", aud) })),
-            )
-                .into_response();
-        }
-    }
+    let service = make_service(&state);
 
-    let rkey = r2_key(&ns_id, &key);
-    let size = body.len() as u64;
-
-    let r2_metadata = audience.as_ref().map(|aud| {
-        let mut m = HashMap::new();
-        m.insert("audience".to_string(), aud.clone());
-        if let Some(info) = state.ns_repo.get_audience(&ns_id, aud) {
-            m.insert("access".to_string(), info.access);
-        }
-        m
-    });
-
-    if let Err(e) = state
-        .blob_store
-        .put(&rkey, &body, &mime_type, r2_metadata.as_ref())
+    match service
+        .put(&ns_id, &key, mime_type, &body, audience, &auth.user.id)
         .await
     {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "key": result.key, "size_bytes": result.size_bytes })),
         )
-            .into_response();
+            .into_response(),
+        Err(e) => core_error_response(e),
     }
-
-    if let Err(e) =
-        state
-            .ns_repo
-            .upsert_object(&ns_id, &key, &rkey, &mime_type, size, audience.as_deref())
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    // Record bytes_in usage (fire-and-forget; errors are non-fatal).
-    let _ = state
-        .ns_repo
-        .record_usage(&auth.user.id, "bytes_in", size, Some(&ns_id));
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "key": key, "size_bytes": size })),
-    )
-        .into_response()
 }
 
 /// GET /namespaces/{ns_id}/objects/{*key} — retrieve bytes by key.
@@ -181,40 +166,22 @@ async fn get_object(
     RequireAuth(auth): RequireAuth,
     Path((ns_id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
-        return resp;
-    }
+    let service = make_service(&state);
 
-    let meta = match state.ns_repo.get_object_meta(&ns_id, &key) {
-        Some(m) => m,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
-
-    let rkey = meta.r2_key.unwrap_or_else(|| r2_key(&ns_id, &key));
-    match state.blob_store.get(&rkey).await {
-        Ok(Some(bytes)) => {
-            let size = bytes.len() as u64;
-            let _ = state
-                .ns_repo
-                .record_usage(&auth.user.id, "bytes_out", size, Some(&ns_id));
-            (
-                StatusCode::OK,
-                [(
-                    axum::http::header::CONTENT_TYPE,
-                    meta.mime_type
-                        .parse::<axum::http::HeaderValue>()
-                        .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
-                )],
-                bytes,
-            )
-                .into_response()
-        }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+    match service.get(&ns_id, &key, &auth.user.id).await {
+        Ok(result) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                result
+                    .mime_type
+                    .parse::<axum::http::HeaderValue>()
+                    .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
+            )],
+            result.bytes,
         )
             .into_response(),
+        Err(e) => core_error_response(e),
     }
 }
 
@@ -224,26 +191,12 @@ async fn delete_object(
     RequireAuth(auth): RequireAuth,
     Path((ns_id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
-        return resp;
+    let service = make_service(&state);
+
+    match service.delete(&ns_id, &key, &auth.user.id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => core_error_response(e),
     }
-
-    let meta = match state.ns_repo.get_object_meta(&ns_id, &key) {
-        Some(m) => m,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
-
-    let rkey = meta.r2_key.unwrap_or_else(|| r2_key(&ns_id, &key));
-    if let Err(e) = state.blob_store.delete(&rkey).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    let _ = state.ns_repo.delete_object(&ns_id, &key);
-    StatusCode::NO_CONTENT.into_response()
 }
 
 /// Pagination query parameters.
@@ -266,27 +219,19 @@ async fn list_objects(
     Path(ns_id): Path<String>,
     Query(pagination): Query<PaginationParams>,
 ) -> impl IntoResponse {
-    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
-        return resp;
+    let service = make_service(&state);
+
+    match service
+        .list(&ns_id, pagination.limit, pagination.offset, &auth.user.id)
+        .await
+    {
+        Ok(objects) => {
+            let response: Vec<ObjectMetaResponse> =
+                objects.into_iter().map(ObjectMetaResponse::from).collect();
+            Json(response).into_response()
+        }
+        Err(e) => core_error_response(e),
     }
-
-    let limit = pagination.limit.min(500);
-    let objects: Vec<ObjectMetaResponse> = state
-        .ns_repo
-        .list_objects(&ns_id, limit, pagination.offset)
-        .into_iter()
-        .map(|m| ObjectMetaResponse {
-            namespace_id: m.namespace_id,
-            key: m.key,
-            r2_key: m.r2_key,
-            mime_type: m.mime_type,
-            size_bytes: m.size_bytes,
-            updated_at: m.updated_at,
-            audience: m.audience,
-        })
-        .collect();
-
-    Json(objects).into_response()
 }
 
 /// GET /usage — return aggregated usage totals for the authenticated user.
@@ -294,8 +239,12 @@ async fn get_usage(
     State(state): State<ObjectState>,
     RequireAuth(auth): RequireAuth,
 ) -> impl IntoResponse {
-    let totals = state.ns_repo.get_usage_totals(&auth.user.id);
-    Json(UsageResponse::from(totals))
+    let service = make_service(&state);
+
+    match service.get_usage(&auth.user.id).await {
+        Ok(totals) => Json(UsageResponse::from(totals)).into_response(),
+        Err(e) => core_error_response(e),
+    }
 }
 
 /// GET /namespaces/{ns_id}/usage — return usage totals scoped to a namespace.
@@ -304,14 +253,12 @@ async fn get_namespace_usage(
     RequireAuth(auth): RequireAuth,
     Path(ns_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
-        return resp;
-    }
+    let service = make_service(&state);
 
-    let totals = state
-        .ns_repo
-        .get_namespace_usage_totals(&auth.user.id, &ns_id);
-    Json(UsageResponse::from(totals)).into_response()
+    match service.get_namespace_usage(&ns_id, &auth.user.id).await {
+        Ok(totals) => Json(UsageResponse::from(totals)).into_response(),
+        Err(e) => core_error_response(e),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -336,24 +283,16 @@ async fn get_public_object(
     Path((ns_id, key)): Path<(String, String)>,
     Query(params): Query<PublicObjectParams>,
 ) -> impl IntoResponse {
-    let meta = match state.ns_repo.get_object_meta(&ns_id, &key) {
-        Some(m) => m,
-        None => return StatusCode::NOT_FOUND.into_response(),
+    let service = make_service(&state);
+
+    // Resolve access level via the portable service.
+    let access = match service.resolve_public_access(&ns_id, &key).await {
+        Ok(a) => a,
+        Err(e) => return core_error_response(e),
     };
 
-    // Private objects (no audience) are not served publicly.
-    let audience_name = match &meta.audience {
-        Some(a) => a.clone(),
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
-
-    // Look up the audience record.
-    let audience = match state.ns_repo.get_audience(&ns_id, &audience_name) {
-        Some(a) => a,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
-
-    match audience.access.as_str() {
+    // Enforce access control.
+    match access.access.as_str() {
         "public" => { /* allowed */ }
         "token" => {
             let token_str = match &params.audience_token {
@@ -361,7 +300,8 @@ async fn get_public_object(
                 None => return StatusCode::FORBIDDEN.into_response(),
             };
             match validate_signed_token(&state.token_signing_key, token_str) {
-                Some(claims) if claims.slug == ns_id && claims.audience == audience_name => { /* valid */
+                Some(claims) if claims.slug == ns_id && claims.audience == access.audience_name => {
+                    /* valid */
                 }
                 _ => return StatusCode::FORBIDDEN.into_response(),
             }
@@ -369,25 +309,23 @@ async fn get_public_object(
         _ => return StatusCode::FORBIDDEN.into_response(), // "private" or unknown
     }
 
-    // Serve the bytes.
-    let rkey = meta.r2_key.unwrap_or_else(|| r2_key(&ns_id, &key));
-    match state.blob_store.get(&rkey).await {
-        Ok(Some(bytes)) => (
+    // Fetch and serve the blob.
+    match service
+        .fetch_blob(&ns_id, &key, access.meta.blob_key.as_deref())
+        .await
+    {
+        Ok(result) => (
             StatusCode::OK,
             [(
                 axum::http::header::CONTENT_TYPE,
-                meta.mime_type
+                result
+                    .mime_type
                     .parse::<axum::http::HeaderValue>()
                     .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
             )],
-            bytes,
+            result.bytes,
         )
             .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => core_error_response(e),
     }
 }

@@ -282,7 +282,6 @@ fn dispatch_core_command(cli: Cli) -> bool {
             plugin_manager::handle_plugin_command(command);
             true
         }
-
         Commands::Nav { path, depth } => {
             let current_dir = std::env::current_dir().unwrap_or_default();
             let config = Config::load().ok();

@@ -3,11 +3,11 @@ use async_trait::async_trait;
 use diaryx_server::domain::{
     AudienceInfo as CoreAudienceInfo, CustomDomainInfo as CoreCustomDomainInfo,
     DeviceInfo as CoreDeviceInfo, NamespaceInfo as CoreNamespaceInfo,
-    NamespaceSessionInfo as CoreNamespaceSessionInfo, UserInfo as CoreUserInfo,
-    UserTier as CoreUserTier,
+    NamespaceSessionInfo as CoreNamespaceSessionInfo, ObjectMeta as CoreObjectMeta,
+    UsageTotals as CoreUsageTotals, UserInfo as CoreUserInfo, UserTier as CoreUserTier,
 };
 use diaryx_server::ports::{
-    AuthStore, DomainMappingCache, NamespaceStore, ServerCoreError, SessionStore,
+    AuthStore, DomainMappingCache, NamespaceStore, ObjectMetaStore, ServerCoreError, SessionStore,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -413,6 +413,113 @@ impl DomainMappingCache for NativeDomainMappingCache {
         )
         .await;
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeObjectMetaStore {
+    repo: Arc<NamespaceRepo>,
+}
+
+impl NativeObjectMetaStore {
+    pub fn new(repo: Arc<NamespaceRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl ObjectMetaStore for NativeObjectMetaStore {
+    async fn upsert_object(
+        &self,
+        namespace_id: &str,
+        key: &str,
+        blob_key: &str,
+        mime_type: &str,
+        size_bytes: u64,
+        audience: Option<&str>,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .upsert_object(namespace_id, key, blob_key, mime_type, size_bytes, audience)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn get_object_meta(
+        &self,
+        namespace_id: &str,
+        key: &str,
+    ) -> Result<Option<CoreObjectMeta>, ServerCoreError> {
+        Ok(self.repo.get_object_meta(namespace_id, key).map(Into::into))
+    }
+
+    async fn list_objects(
+        &self,
+        namespace_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<CoreObjectMeta>, ServerCoreError> {
+        Ok(self
+            .repo
+            .list_objects(namespace_id, limit, offset)
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    async fn delete_object(&self, namespace_id: &str, key: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .delete_object(namespace_id, key)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn record_usage(
+        &self,
+        user_id: &str,
+        event_type: &str,
+        amount: u64,
+        namespace_id: Option<&str>,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .record_usage(user_id, event_type, amount, namespace_id)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn get_usage_totals(&self, user_id: &str) -> Result<CoreUsageTotals, ServerCoreError> {
+        Ok(self.repo.get_usage_totals(user_id).into())
+    }
+
+    async fn get_namespace_usage_totals(
+        &self,
+        user_id: &str,
+        namespace_id: &str,
+    ) -> Result<CoreUsageTotals, ServerCoreError> {
+        Ok(self
+            .repo
+            .get_namespace_usage_totals(user_id, namespace_id)
+            .into())
+    }
+}
+
+impl From<crate::db::NamespaceObjectMeta> for CoreObjectMeta {
+    fn from(value: crate::db::NamespaceObjectMeta) -> Self {
+        Self {
+            namespace_id: value.namespace_id,
+            key: value.key,
+            blob_key: value.r2_key,
+            mime_type: value.mime_type,
+            size_bytes: value.size_bytes,
+            updated_at: value.updated_at,
+            audience: value.audience,
+        }
+    }
+}
+
+impl From<crate::db::UsageTotals> for CoreUsageTotals {
+    fn from(value: crate::db::UsageTotals) -> Self {
+        Self {
+            bytes_in: value.bytes_in,
+            bytes_out: value.bytes_out,
+            relay_seconds: value.relay_seconds,
+        }
     }
 }
 

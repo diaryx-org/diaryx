@@ -6,7 +6,8 @@ use axum::{
 };
 use diaryx_sync_server::{
     adapters::{
-        NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore, NativeSessionStore,
+        NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore, NativeObjectMetaStore,
+        NativeSessionStore,
     },
     auth::{AuthExtractor, MagicLinkService, PasskeyService},
     blob_store::{BlobStore, build_blob_store},
@@ -159,13 +160,15 @@ async fn main() {
     }
 
     let session_store = Arc::new(NativeSessionStore::new(ns_repo.clone()));
+    let object_meta_store = Arc::new(NativeObjectMetaStore::new(ns_repo.clone()));
 
     // Namespace / object / audience states
     let namespace_state = NamespaceState {
         namespace_store: namespace_store.clone(),
     };
     let object_state = ObjectState {
-        ns_repo: ns_repo.clone(),
+        namespace_store: namespace_store.clone(),
+        object_meta_store,
         blob_store: blob_store.clone(),
         token_signing_key: config.token_signing_key.clone(),
     };

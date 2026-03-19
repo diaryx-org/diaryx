@@ -145,6 +145,42 @@ Interactively browse your workspace hierarchy with a TUI:
 - `diaryx nav .` - Start from current directory's index
 - `diaryx nav notes/` - Start from a specific subdirectory
 
+Quickly navigate your workspace hierarchy with fuzzy search:
+
+```bash
+> diaryx nav
+Navigate to: █
+  README - A diaryx workspace
+  ├── notes - Personal notes
+  │   ├── meeting-notes
+  │   └── ideas - Random ideas and thoughts
+  └── projects - Active projects
+      └── client-a - Client A project
+
+# Type to filter, arrows/j/k to navigate, Enter to open in $EDITOR
+```
+
+### Navigation Options
+
+- `diaryx nav .` - Start from current directory's index
+- `diaryx nav notes/` - Start from a specific subdirectory
+- `diaryx nav --print` - Print selected path instead of opening
+- `diaryx nav --absolute` - Print absolute path (for scripting)
+- `diaryx nav --properties title,path` - Show specific properties
+- `diaryx nav --depth 2` - Limit tree depth
+
+### Shell Integration
+
+```bash
+# cd to selected entry's directory
+cd "$(dirname "$(diaryx nav --absolute)")"
+
+# Open in VS Code
+code "$(diaryx nav --absolute)"
+
+# Alias for quick access
+alias dn='diaryx nav'
+```
 ## Workspace Validation
 
 Diaryx can validate your workspace to find broken links and other issues:

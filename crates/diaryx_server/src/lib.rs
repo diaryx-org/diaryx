@@ -10,10 +10,11 @@ pub mod use_cases;
 
 pub use domain::{
     AudienceInfo, CurrentUserContext, CustomDomainInfo, DeviceInfo, NamespaceInfo,
-    NamespaceSessionInfo, TierDefaults, UserInfo, UserTier,
+    NamespaceSessionInfo, ObjectMeta, PublicObjectAccess, TierDefaults, UsageTotals, UserInfo,
+    UserTier,
 };
 pub use ports::{
     AiProvider, AppleReceiptVerifier, AuthStore, BillingProvider, BlobStore, Clock,
-    DomainMappingCache, JobSink, Mailer, MultipartCompletedPart, NamespaceStore, RateLimitStore,
-    ServerCoreError, SessionStore, TokenClaims, TokenSigner,
+    DomainMappingCache, JobSink, Mailer, MultipartCompletedPart, NamespaceStore, ObjectMetaStore,
+    RateLimitStore, ServerCoreError, SessionStore, TokenClaims, TokenSigner,
 };

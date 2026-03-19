@@ -1,6 +1,6 @@
 use crate::domain::{
-    AudienceInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo, NamespaceSessionInfo, UserInfo,
-    UserTier,
+    AudienceInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo, NamespaceSessionInfo, ObjectMeta,
+    UsageTotals, UserInfo, UserTier,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -174,6 +174,44 @@ pub trait SessionStore: Send + Sync {
         read_only: bool,
     ) -> Result<bool, ServerCoreError>;
     async fn delete_session(&self, code: &str) -> Result<bool, ServerCoreError>;
+}
+
+#[async_trait]
+pub trait ObjectMetaStore: Send + Sync {
+    async fn upsert_object(
+        &self,
+        namespace_id: &str,
+        key: &str,
+        blob_key: &str,
+        mime_type: &str,
+        size_bytes: u64,
+        audience: Option<&str>,
+    ) -> Result<(), ServerCoreError>;
+    async fn get_object_meta(
+        &self,
+        namespace_id: &str,
+        key: &str,
+    ) -> Result<Option<ObjectMeta>, ServerCoreError>;
+    async fn list_objects(
+        &self,
+        namespace_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<ObjectMeta>, ServerCoreError>;
+    async fn delete_object(&self, namespace_id: &str, key: &str) -> Result<(), ServerCoreError>;
+    async fn record_usage(
+        &self,
+        user_id: &str,
+        event_type: &str,
+        amount: u64,
+        namespace_id: Option<&str>,
+    ) -> Result<(), ServerCoreError>;
+    async fn get_usage_totals(&self, user_id: &str) -> Result<UsageTotals, ServerCoreError>;
+    async fn get_namespace_usage_totals(
+        &self,
+        user_id: &str,
+        namespace_id: &str,
+    ) -> Result<UsageTotals, ServerCoreError>;
 }
 
 #[async_trait]

@@ -112,6 +112,36 @@ pub struct CustomDomainInfo {
     pub verified: bool,
 }
 
+/// Metadata for an object stored in a namespace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectMeta {
+    pub namespace_id: String,
+    pub key: String,
+    /// Blob store key (e.g. R2 object key), or `None` for inline objects.
+    pub blob_key: Option<String>,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub updated_at: i64,
+    /// Audience tag. `None` = private (owner-only).
+    pub audience: Option<String>,
+}
+
+/// Aggregated usage totals for a user.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsageTotals {
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub relay_seconds: u64,
+}
+
+/// Resolved public access info for an object.
+#[derive(Debug, Clone)]
+pub struct PublicObjectAccess {
+    pub meta: ObjectMeta,
+    pub access: String,
+    pub audience_name: String,
+}
+
 /// Portable result of "load current user context".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurrentUserContext {

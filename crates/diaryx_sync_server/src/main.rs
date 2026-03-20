@@ -6,8 +6,8 @@ use axum::{
 };
 use diaryx_sync_server::{
     adapters::{
-        NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore, NativeObjectMetaStore,
-        NativeSessionStore,
+        NativeAuthSessionStore, NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore,
+        NativeObjectMetaStore, NativeSessionStore, NativeUserStore,
     },
     auth::{AuthExtractor, MagicLinkService, PasskeyService},
     blob_store::{BlobStore, build_blob_store},
@@ -79,7 +79,8 @@ async fn main() {
         config.clone(),
         magic_link_service.clone(),
     ));
-    let auth_extractor = AuthExtractor::new(repo.clone());
+    let auth_session_store = Arc::new(NativeAuthSessionStore::new(repo.clone()));
+    let user_store = Arc::new(NativeUserStore::new(repo.clone()));
     let blob_store: Arc<dyn BlobStore> = match build_blob_store(config.as_ref()).await {
         Ok(store) => {
             if config.is_r2_configured() {
@@ -124,14 +125,16 @@ async fn main() {
     // Create shared rate limiter
     let rate_limiter = diaryx_sync_server::rate_limit::RateLimiter::new();
 
+    let auth_extractor = AuthExtractor::new(auth_store.clone(), auth_session_store.clone());
+
     // Create handler states
     let auth_state = diaryx_sync_server::handlers::auth::AuthState {
         magic_link_service,
         email_service,
-        repo: repo.clone(),
-        ns_repo: ns_repo.clone(),
         auth_store,
         namespace_store: namespace_store.clone(),
+        session_store: auth_session_store,
+        user_store: user_store.clone(),
         passkey_service,
         session_expiry_days: config.session_expiry_days,
         secure_cookies: config.secure_cookies,
@@ -194,6 +197,7 @@ async fn main() {
         info!("Stripe billing: enabled (price={})", stripe_config.price_id);
         let stripe_state = diaryx_sync_server::handlers::stripe::StripeState {
             repo: repo.clone(),
+            user_store: user_store.clone(),
             config: stripe_config,
             app_base_url: config.app_base_url.clone(),
         };
@@ -218,6 +222,7 @@ async fn main() {
         }
         let apple_state = diaryx_sync_server::handlers::apple::AppleIapState {
             repo: repo.clone(),
+            user_store: user_store.clone(),
             config: apple_config,
         };
         Some(diaryx_sync_server::handlers::apple::apple_iap_routes(

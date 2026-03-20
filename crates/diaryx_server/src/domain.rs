@@ -75,6 +75,23 @@ pub struct DeviceInfo {
     pub last_seen_at: DateTime<Utc>,
 }
 
+/// Authenticated session record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthSessionInfo {
+    pub token: String,
+    pub user_id: String,
+    pub device_id: String,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Result of validating an auth session — the user and session together.
+#[derive(Debug, Clone)]
+pub struct AuthContext {
+    pub session: AuthSessionInfo,
+    pub user: UserInfo,
+}
+
 /// Namespace metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamespaceInfo {

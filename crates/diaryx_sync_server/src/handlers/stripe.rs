@@ -1,6 +1,6 @@
 use crate::auth::RequireAuth;
 use crate::config::StripeConfig;
-use crate::db::{AuthRepo, UserTier};
+use crate::db::AuthRepo;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -9,6 +9,8 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use diaryx_server::UserTier;
+use diaryx_server::ports::UserStore;
 use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha2::Sha256;
@@ -22,6 +24,7 @@ use tracing::{error, info, warn};
 #[derive(Clone)]
 pub struct StripeState {
     pub repo: Arc<AuthRepo>,
+    pub user_store: Arc<dyn UserStore>,
     pub config: StripeConfig,
     pub app_base_url: String,
 }
@@ -225,13 +228,13 @@ async fn handle_webhook(
 
     match event_type {
         "checkout.session.completed" => {
-            handle_checkout_completed(&state, data_object);
+            handle_checkout_completed(&state, data_object).await;
         }
         "customer.subscription.updated" => {
-            handle_subscription_updated(&state, data_object);
+            handle_subscription_updated(&state, data_object).await;
         }
         "customer.subscription.deleted" => {
-            handle_subscription_deleted(&state, data_object);
+            handle_subscription_deleted(&state, data_object).await;
         }
         other => {
             info!("Unhandled Stripe event: {}", other);
@@ -320,7 +323,7 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 // Webhook event handlers
 // ============================================================================
 
-fn handle_checkout_completed(state: &StripeState, data: &serde_json::Value) {
+async fn handle_checkout_completed(state: &StripeState, data: &serde_json::Value) {
     let customer_id = match data["customer"].as_str() {
         Some(id) => id,
         None => {
@@ -354,13 +357,17 @@ fn handle_checkout_completed(state: &StripeState, data: &serde_json::Value) {
     }
 
     // Upgrade to Plus
-    match state.repo.set_user_tier(&user_id, UserTier::Plus) {
+    match state
+        .user_store
+        .set_user_tier(&user_id, UserTier::Plus)
+        .await
+    {
         Ok(_) => info!("User {} upgraded to Plus via checkout", user_id),
         Err(e) => error!("Failed to upgrade user {} to Plus: {}", user_id, e),
     }
 }
 
-fn handle_subscription_updated(state: &StripeState, data: &serde_json::Value) {
+async fn handle_subscription_updated(state: &StripeState, data: &serde_json::Value) {
     let customer_id = match data["customer"].as_str() {
         Some(id) => id,
         None => {
@@ -390,7 +397,7 @@ fn handle_subscription_updated(state: &StripeState, data: &serde_json::Value) {
         _ => UserTier::Free,
     };
 
-    match state.repo.set_user_tier(&user_id, tier) {
+    match state.user_store.set_user_tier(&user_id, tier).await {
         Ok(_) => info!(
             "User {} tier set to {} (subscription status: {})",
             user_id,
@@ -401,7 +408,7 @@ fn handle_subscription_updated(state: &StripeState, data: &serde_json::Value) {
     }
 }
 
-fn handle_subscription_deleted(state: &StripeState, data: &serde_json::Value) {
+async fn handle_subscription_deleted(state: &StripeState, data: &serde_json::Value) {
     let customer_id = match data["customer"].as_str() {
         Some(id) => id,
         None => {
@@ -426,7 +433,11 @@ fn handle_subscription_deleted(state: &StripeState, data: &serde_json::Value) {
     };
 
     // Downgrade to Free
-    match state.repo.set_user_tier(&user_id, UserTier::Free) {
+    match state
+        .user_store
+        .set_user_tier(&user_id, UserTier::Free)
+        .await
+    {
         Ok(_) => info!("User {} downgraded to Free (subscription deleted)", user_id),
         Err(e) => error!("Failed to downgrade user {}: {}", user_id, e),
     }

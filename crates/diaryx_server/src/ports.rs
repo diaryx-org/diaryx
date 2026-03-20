@@ -1,8 +1,7 @@
 use crate::domain::{
-    AudienceInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo, NamespaceSessionInfo, ObjectMeta,
-    UsageTotals, UserInfo, UserTier,
+    AudienceInfo, AuthSessionInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo,
+    NamespaceSessionInfo, ObjectMeta, UsageTotals, UserInfo, UserTier,
 };
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -83,7 +82,8 @@ pub struct TokenClaims {
     pub extra: HashMap<String, String>,
 }
 
-#[async_trait]
+crate::cfg_async_trait! {
+
 pub trait AuthStore: Send + Sync {
     async fn get_user(&self, user_id: &str) -> Result<Option<UserInfo>, ServerCoreError>;
     async fn list_user_devices(&self, user_id: &str) -> Result<Vec<DeviceInfo>, ServerCoreError>;
@@ -93,7 +93,97 @@ pub trait AuthStore: Send + Sync {
     async fn get_user_tier(&self, user_id: &str) -> Result<UserTier, ServerCoreError>;
 }
 
-#[async_trait]
+pub trait AuthSessionStore: Send + Sync {
+    async fn validate_session(
+        &self,
+        token: &str,
+    ) -> Result<Option<AuthSessionInfo>, ServerCoreError>;
+    async fn create_auth_session(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        expires_at_unix: i64,
+    ) -> Result<String, ServerCoreError>;
+    async fn delete_session(&self, token: &str) -> Result<(), ServerCoreError>;
+    async fn update_device_last_seen(&self, device_id: &str) -> Result<(), ServerCoreError>;
+}
+
+pub trait MagicLinkStore: Send + Sync {
+    /// Create a magic token + 6-digit code for the given email.
+    /// Returns (token, code).
+    async fn create_magic_token(
+        &self,
+        email: &str,
+        expires_at_unix: i64,
+    ) -> Result<(String, String), ServerCoreError>;
+    /// Check whether a magic-link token is valid without consuming it.
+    /// Returns the associated email on success.
+    async fn peek_magic_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<String>, ServerCoreError>;
+    /// Mark a magic-link token as consumed.
+    async fn consume_magic_token(&self, token: &str) -> Result<(), ServerCoreError>;
+    /// Check whether a magic code is valid without consuming it.
+    /// Returns the associated email on success.
+    async fn peek_magic_code(
+        &self,
+        code: &str,
+        email: &str,
+    ) -> Result<Option<String>, ServerCoreError>;
+    /// Mark a magic code as consumed.
+    async fn consume_magic_code(
+        &self,
+        code: &str,
+        email: &str,
+    ) -> Result<(), ServerCoreError>;
+    /// Count magic tokens created for an email since the given unix timestamp.
+    async fn count_recent_magic_tokens(
+        &self,
+        email: &str,
+        since_unix: i64,
+    ) -> Result<u64, ServerCoreError>;
+}
+
+pub trait UserStore: Send + Sync {
+    /// Get or create a user by email. Returns the user ID.
+    async fn get_or_create_user(
+        &self,
+        email: &str,
+    ) -> Result<String, ServerCoreError>;
+    /// Update the user's last login timestamp.
+    async fn update_last_login(&self, user_id: &str) -> Result<(), ServerCoreError>;
+    /// Delete a user and all associated data.
+    async fn delete_user(&self, user_id: &str) -> Result<(), ServerCoreError>;
+    /// Get the effective device limit for a user (per-user override or tier default).
+    async fn get_effective_device_limit(&self, user_id: &str) -> Result<u32, ServerCoreError>;
+    /// Set the user's billing tier.
+    async fn set_user_tier(
+        &self,
+        user_id: &str,
+        tier: UserTier,
+    ) -> Result<(), ServerCoreError>;
+}
+
+pub trait DeviceStore: Send + Sync {
+    /// Create a new device for a user. Returns the device ID.
+    async fn create_device(
+        &self,
+        user_id: &str,
+        name: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<String, ServerCoreError>;
+    /// Count registered devices for a user.
+    async fn count_user_devices(&self, user_id: &str) -> Result<u32, ServerCoreError>;
+    /// List devices for a user.
+    async fn list_user_devices(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<DeviceInfo>, ServerCoreError>;
+    /// Delete a device (and its sessions).
+    async fn delete_device(&self, device_id: &str) -> Result<(), ServerCoreError>;
+}
+
 pub trait NamespaceStore: Send + Sync {
     async fn get_namespace(
         &self,
@@ -155,7 +245,6 @@ pub trait NamespaceStore: Send + Sync {
     ) -> Result<(), ServerCoreError>;
 }
 
-#[async_trait]
 pub trait SessionStore: Send + Sync {
     async fn create_session(
         &self,
@@ -176,7 +265,6 @@ pub trait SessionStore: Send + Sync {
     async fn delete_session(&self, code: &str) -> Result<bool, ServerCoreError>;
 }
 
-#[async_trait]
 pub trait ObjectMetaStore: Send + Sync {
     async fn upsert_object(
         &self,
@@ -214,7 +302,6 @@ pub trait ObjectMetaStore: Send + Sync {
     ) -> Result<UsageTotals, ServerCoreError>;
 }
 
-#[async_trait]
 pub trait BlobStore: Send + Sync {
     fn blob_key(&self, user_id: &str, hash: &str) -> String;
     fn prefix(&self) -> &str;
@@ -254,12 +341,6 @@ pub trait BlobStore: Send + Sync {
     async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, ServerCoreError>;
 }
 
-pub trait TokenSigner: Send + Sync {
-    fn sign(&self, claims: &TokenClaims) -> Result<String, ServerCoreError>;
-    fn validate(&self, token: &str) -> Result<TokenClaims, ServerCoreError>;
-}
-
-#[async_trait]
 pub trait Mailer: Send + Sync {
     async fn send_magic_link(
         &self,
@@ -269,7 +350,6 @@ pub trait Mailer: Send + Sync {
     ) -> Result<(), ServerCoreError>;
 }
 
-#[async_trait]
 pub trait RateLimitStore: Send + Sync {
     async fn check_and_increment(
         &self,
@@ -280,7 +360,6 @@ pub trait RateLimitStore: Send + Sync {
     ) -> Result<bool, ServerCoreError>;
 }
 
-#[async_trait]
 pub trait DomainMappingCache: Send + Sync {
     async fn put_domain(
         &self,
@@ -298,27 +377,30 @@ pub trait DomainMappingCache: Send + Sync {
     async fn delete_subdomain(&self, subdomain: &str) -> Result<(), ServerCoreError>;
 }
 
-#[async_trait]
 pub trait BillingProvider: Send + Sync {
     async fn create_checkout_url(&self, user_id: &str) -> Result<String, ServerCoreError>;
     async fn create_portal_url(&self, user_id: &str) -> Result<String, ServerCoreError>;
 }
 
-#[async_trait]
 pub trait AppleReceiptVerifier: Send + Sync {
     async fn verify_transaction(&self, signed_payload: &str) -> Result<Value, ServerCoreError>;
 }
 
-#[async_trait]
 pub trait AiProvider: Send + Sync {
     async fn chat_completion(&self, request: Value) -> Result<Value, ServerCoreError>;
 }
 
-pub trait Clock: Send + Sync {
-    fn now_unix(&self) -> i64;
-}
-
-#[async_trait]
 pub trait JobSink: Send + Sync {
     async fn enqueue(&self, kind: &str, payload: Value) -> Result<(), ServerCoreError>;
+}
+
+} // cfg_async_trait!
+
+pub trait TokenSigner: Send + Sync {
+    fn sign(&self, claims: &TokenClaims) -> Result<String, ServerCoreError>;
+    fn validate(&self, token: &str) -> Result<TokenClaims, ServerCoreError>;
+}
+
+pub trait Clock: Send + Sync {
+    fn now_unix(&self) -> i64;
 }

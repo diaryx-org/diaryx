@@ -115,7 +115,6 @@ mod tests {
     use super::SessionService;
     use crate::domain::{AudienceInfo, CustomDomainInfo, NamespaceInfo, NamespaceSessionInfo};
     use crate::ports::{NamespaceStore, ServerCoreError, SessionStore};
-    use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -124,7 +123,7 @@ mod tests {
         namespaces: Mutex<HashMap<String, NamespaceInfo>>,
     }
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl NamespaceStore for TestNamespaceStore {
         async fn get_namespace(
             &self,
@@ -189,6 +188,7 @@ mod tests {
             Ok(false)
         }
     }
+    }
 
     #[derive(Default)]
     struct TestSessionStore {
@@ -196,7 +196,7 @@ mod tests {
         next_code: Mutex<u32>,
     }
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl SessionStore for TestSessionStore {
         async fn create_session(
             &self,
@@ -245,6 +245,7 @@ mod tests {
         async fn delete_session(&self, code: &str) -> Result<bool, ServerCoreError> {
             Ok(self.sessions.lock().unwrap().remove(code).is_some())
         }
+    }
     }
 
     fn make_stores(owner: &str, ns_id: &str) -> (TestNamespaceStore, TestSessionStore) {

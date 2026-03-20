@@ -225,7 +225,6 @@ mod tests {
     };
     use crate::domain::{AudienceInfo, CustomDomainInfo, NamespaceInfo};
     use crate::ports::{DomainMappingCache, NamespaceStore, ServerCoreError};
-    use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -235,7 +234,7 @@ mod tests {
         domains: Mutex<HashMap<String, CustomDomainInfo>>,
     }
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl NamespaceStore for TestNamespaceStore {
         async fn get_namespace(
             &self,
@@ -343,6 +342,7 @@ mod tests {
             Ok(())
         }
     }
+    }
 
     #[derive(Default)]
     struct TestDomainMappingCache {
@@ -350,7 +350,7 @@ mod tests {
         deletes: Mutex<Vec<String>>,
     }
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl DomainMappingCache for TestDomainMappingCache {
         async fn put_domain(
             &self,
@@ -395,6 +395,7 @@ mod tests {
                 .push(format!("subdomain:{}", subdomain));
             Ok(())
         }
+    }
     }
 
     #[test]

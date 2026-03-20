@@ -60,13 +60,12 @@ mod tests {
     use super::CurrentUserService;
     use crate::domain::{DeviceInfo, NamespaceInfo, UserInfo, UserTier};
     use crate::ports::{AuthStore, NamespaceStore, ServerCoreError};
-    use async_trait::async_trait;
     use chrono::{TimeZone, Utc};
 
     struct TestAuthStore;
     struct TestNamespaceStore;
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl AuthStore for TestAuthStore {
         async fn get_user(&self, user_id: &str) -> Result<Option<UserInfo>, ServerCoreError> {
             Ok(Some(UserInfo {
@@ -111,8 +110,9 @@ mod tests {
             Ok(UserTier::Plus)
         }
     }
+    }
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl NamespaceStore for TestNamespaceStore {
         async fn get_namespace(
             &self,
@@ -189,6 +189,7 @@ mod tests {
         async fn clear_objects_audience(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
             Ok(())
         }
+    }
     }
 
     #[tokio::test]

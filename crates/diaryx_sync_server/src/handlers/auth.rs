@@ -1,5 +1,4 @@
 use crate::auth::{MagicLinkService, PasskeyService, RequireAuth};
-use crate::db::{AuthRepo, NamespaceRepo};
 use crate::email::EmailService;
 use axum::{
     Router,
@@ -8,7 +7,9 @@ use axum::{
     response::{IntoResponse, Json},
     routing::{delete, get, post},
 };
-use diaryx_server::ports::{AuthStore, NamespaceStore, ServerCoreError};
+use diaryx_server::ports::{
+    AuthSessionStore, AuthStore, NamespaceStore, ServerCoreError, UserStore,
+};
 use diaryx_server::use_cases::current_user::CurrentUserService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -19,10 +20,10 @@ use tracing::{error, info, warn};
 pub struct AuthState {
     pub magic_link_service: Arc<MagicLinkService>,
     pub email_service: Arc<EmailService>,
-    pub repo: Arc<AuthRepo>,
-    pub ns_repo: Arc<NamespaceRepo>,
     pub auth_store: Arc<dyn AuthStore>,
     pub namespace_store: Arc<dyn NamespaceStore>,
+    pub session_store: Arc<dyn AuthSessionStore>,
+    pub user_store: Arc<dyn UserStore>,
     pub passkey_service: Arc<PasskeyService>,
     /// Session expiry in days, used for cookie Max-Age.
     pub session_expiry_days: i64,
@@ -203,7 +204,7 @@ async fn request_magic_link(
     }
 
     // Request magic link
-    let (token, code) = match state.magic_link_service.request_magic_link(&email) {
+    let (token, code) = match state.magic_link_service.request_magic_link(&email).await {
         Ok(result) => result,
         Err(crate::auth::MagicLinkError::RateLimited) => {
             warn!("Rate limited magic link request for {}", email);
@@ -277,12 +278,15 @@ async fn verify_magic_link(
     State(state): State<AuthState>,
     Query(query): Query<VerifyQuery>,
 ) -> impl IntoResponse {
-    let result = state.magic_link_service.verify_magic_link(
-        &query.token,
-        query.device_name.as_deref(),
-        None, // Could extract user-agent from headers
-        query.replace_device_id.as_deref(),
-    );
+    let result = state
+        .magic_link_service
+        .verify_magic_link(
+            &query.token,
+            query.device_name.as_deref(),
+            None, // Could extract user-agent from headers
+            query.replace_device_id.as_deref(),
+        )
+        .await;
 
     match result {
         Ok(verify_result) => {
@@ -349,13 +353,16 @@ async fn verify_code(
     State(state): State<AuthState>,
     Json(body): Json<VerifyCodeRequest>,
 ) -> impl IntoResponse {
-    let result = state.magic_link_service.verify_code(
-        &body.code,
-        &body.email,
-        body.device_name.as_deref(),
-        None,
-        body.replace_device_id.as_deref(),
-    );
+    let result = state
+        .magic_link_service
+        .verify_code(
+            &body.code,
+            &body.email,
+            body.device_name.as_deref(),
+            None,
+            body.replace_device_id.as_deref(),
+        )
+        .await;
 
     match result {
         Ok(verify_result) => {
@@ -478,7 +485,11 @@ async fn logout(
     State(state): State<AuthState>,
     RequireAuth(auth): RequireAuth,
 ) -> impl IntoResponse {
-    if let Err(e) = state.repo.delete_session(&auth.session.token) {
+    if let Err(e) = state
+        .session_store
+        .delete_session(&auth.session.token)
+        .await
+    {
         error!("Failed to delete session: {}", e);
     }
 
@@ -596,17 +607,14 @@ async fn delete_account(
     info!("Deleting account for user: {}", user_id);
 
     // Delete user from database (CASCADE deletes namespaces, sessions, etc.)
-    match state.repo.delete_user(user_id) {
-        Ok(_) => {}
-        Err(e) => {
-            error!("Failed to delete user {}: {}", user_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new("Failed to delete account")),
-            )
-                .into_response();
-        }
-    };
+    if let Err(e) = state.user_store.delete_user(user_id).await {
+        error!("Failed to delete user {}: {}", user_id, e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new("Failed to delete account")),
+        )
+            .into_response();
+    }
 
     info!("Successfully deleted account for user: {}", user_id);
 
@@ -791,13 +799,17 @@ async fn passkey_auth_finish(
         }
     };
 
-    match state.passkey_service.finish_any_authentication(
-        &body.challenge_id,
-        &credential,
-        body.device_name.as_deref(),
-        None,
-        body.replace_device_id.as_deref(),
-    ) {
+    match state
+        .passkey_service
+        .finish_any_authentication(
+            &body.challenge_id,
+            &credential,
+            body.device_name.as_deref(),
+            None,
+            body.replace_device_id.as_deref(),
+        )
+        .await
+    {
         Ok(result) => {
             info!("User {} logged in via passkey", result.email);
             let mut headers = HeaderMap::new();

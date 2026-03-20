@@ -234,7 +234,7 @@ impl PasskeyService {
     }
 
     /// Complete passkey authentication — produces a session.
-    pub fn finish_authentication(
+    pub async fn finish_authentication(
         &self,
         challenge_id: &str,
         credential: &PublicKeyCredential,
@@ -255,10 +255,11 @@ impl PasskeyService {
             user_agent,
             replace_device_id,
         )
+        .await
     }
 
     /// Internal: complete email-scoped passkey auth given an already-consumed challenge.
-    fn finish_authentication_with_challenge(
+    async fn finish_authentication_with_challenge(
         &self,
         challenge: PasskeyChallengeInfo,
         credential: &PublicKeyCredential,
@@ -297,6 +298,7 @@ impl PasskeyService {
         // Create session via the shared helper
         self.magic_link_service
             .create_session_for_email(&challenge.email, device_name, user_agent, replace_device_id)
+            .await
             .map_err(map_session_error)
     }
 
@@ -355,7 +357,7 @@ impl PasskeyService {
     }
 
     /// Complete discoverable authentication — identifies the user from the credential.
-    pub fn finish_discoverable_authentication(
+    pub async fn finish_discoverable_authentication(
         &self,
         challenge_id: &str,
         credential: &PublicKeyCredential,
@@ -376,10 +378,11 @@ impl PasskeyService {
             user_agent,
             replace_device_id,
         )
+        .await
     }
 
     /// Internal: complete discoverable auth given an already-consumed challenge.
-    fn finish_discoverable_with_challenge(
+    async fn finish_discoverable_with_challenge(
         &self,
         challenge: PasskeyChallengeInfo,
         credential: &PublicKeyCredential,
@@ -444,11 +447,12 @@ impl PasskeyService {
         // Create session via the shared helper
         self.magic_link_service
             .create_session_for_email(&user.email, device_name, user_agent, replace_device_id)
+            .await
             .map_err(map_session_error)
     }
 
     /// Unified finish that dispatches based on the challenge type stored in DB.
-    pub fn finish_any_authentication(
+    pub async fn finish_any_authentication(
         &self,
         challenge_id: &str,
         credential: &PublicKeyCredential,
@@ -463,20 +467,26 @@ impl PasskeyService {
             .ok_or(PasskeyError::ChallengeNotFound)?;
 
         match challenge.challenge_type.as_str() {
-            "authentication" => self.finish_authentication_with_challenge(
-                challenge,
-                credential,
-                device_name,
-                user_agent,
-                replace_device_id,
-            ),
-            "discoverable_authentication" => self.finish_discoverable_with_challenge(
-                challenge,
-                credential,
-                device_name,
-                user_agent,
-                replace_device_id,
-            ),
+            "authentication" => {
+                self.finish_authentication_with_challenge(
+                    challenge,
+                    credential,
+                    device_name,
+                    user_agent,
+                    replace_device_id,
+                )
+                .await
+            }
+            "discoverable_authentication" => {
+                self.finish_discoverable_with_challenge(
+                    challenge,
+                    credential,
+                    device_name,
+                    user_agent,
+                    replace_device_id,
+                )
+                .await
+            }
             _ => Err(PasskeyError::ChallengeNotFound),
         }
     }

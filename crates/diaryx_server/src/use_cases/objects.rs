@@ -288,7 +288,6 @@ mod tests {
     use crate::ports::{
         BlobStore, MultipartCompletedPart, NamespaceStore, ObjectMetaStore, ServerCoreError,
     };
-    use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -298,7 +297,7 @@ mod tests {
         audiences: Mutex<HashMap<(String, String), AudienceInfo>>,
     }
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl NamespaceStore for TestNamespaceStore {
         async fn get_namespace(
             &self,
@@ -368,6 +367,7 @@ mod tests {
             Ok(false)
         }
     }
+    }
 
     #[derive(Default)]
     struct TestObjectMetaStore {
@@ -375,7 +375,7 @@ mod tests {
         usage: Mutex<Vec<(String, String, u64)>>,
     }
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl ObjectMetaStore for TestObjectMetaStore {
         async fn upsert_object(
             &self,
@@ -463,13 +463,14 @@ mod tests {
             Ok(UsageTotals::default())
         }
     }
+    }
 
     #[derive(Default)]
     struct TestBlobStore {
         blobs: Mutex<HashMap<String, Vec<u8>>>,
     }
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl BlobStore for TestBlobStore {
         fn blob_key(&self, _: &str, _: &str) -> String {
             String::new()
@@ -537,6 +538,7 @@ mod tests {
         async fn delete_by_prefix(&self, _: &str) -> Result<usize, ServerCoreError> {
             Ok(0)
         }
+    }
     }
 
     fn make_stores() -> (TestNamespaceStore, TestObjectMetaStore, TestBlobStore) {

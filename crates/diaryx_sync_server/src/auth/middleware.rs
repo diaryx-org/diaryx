@@ -1,21 +1,35 @@
-use crate::db::{AuthRepo, SessionInfo, UserInfo};
+use diaryx_server::domain::{AuthContext, AuthSessionInfo, UserInfo};
+use diaryx_server::ports::{AuthSessionStore, AuthStore};
+use diaryx_server::use_cases::auth::{SessionValidationService, extract_token};
+
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
 };
 use std::sync::Arc;
 
-/// Authenticated user extracted from request
+/// Authenticated user extracted from request.
+/// Uses the portable core types directly.
 #[derive(Debug, Clone)]
 pub struct AuthUser {
-    pub session: SessionInfo,
+    pub session: AuthSessionInfo,
     pub user: UserInfo,
 }
 
-/// Extension trait for extracting auth from requests
+impl From<AuthContext> for AuthUser {
+    fn from(ctx: AuthContext) -> Self {
+        Self {
+            session: ctx.session,
+            user: ctx.user,
+        }
+    }
+}
+
+/// Extension holding the trait objects needed for session validation.
 #[derive(Clone)]
 pub struct AuthExtractor {
-    pub repo: Arc<AuthRepo>,
+    auth_store: Arc<dyn AuthStore>,
+    session_store: Arc<dyn AuthSessionStore>,
 }
 
 /// Extractor for optional authentication
@@ -31,60 +45,42 @@ pub struct OptionalAuth(pub Option<AuthUser>);
 pub struct RequireAuth(pub AuthUser);
 
 impl AuthExtractor {
-    pub fn new(repo: Arc<AuthRepo>) -> Self {
-        Self { repo }
+    pub fn new(auth_store: Arc<dyn AuthStore>, session_store: Arc<dyn AuthSessionStore>) -> Self {
+        Self {
+            auth_store,
+            session_store,
+        }
     }
 
     /// Extract authentication from request headers, cookies, or query parameters.
-    ///
-    /// Extraction order:
-    /// 1. `Authorization: Bearer <token>` header (Tauri / programmatic clients)
-    /// 2. `Cookie: diaryx_session=<token>` (browser same-origin)
-    /// 3. `?token=<token>` query parameter (legacy / WebSocket fallback)
-    pub fn extract_auth(&self, parts: &Parts) -> Option<AuthUser> {
-        // 1. Try Authorization header
-        let token = parts
+    pub async fn extract_auth(&self, parts: &Parts) -> Option<AuthUser> {
+        let authorization = parts
             .headers
             .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(|s| s.to_string());
+            .and_then(|v| v.to_str().ok());
 
-        // 2. Fall back to cookie
-        let token = token.or_else(|| {
-            parts
+        // Collect all cookie header values into a single semicolon-separated string
+        let cookie_header: Option<String> = {
+            let cookies: Vec<&str> = parts
                 .headers
                 .get_all("cookie")
                 .iter()
                 .filter_map(|v| v.to_str().ok())
-                .flat_map(|v| v.split(';'))
-                .map(|c| c.trim())
-                .find(|c| c.starts_with("diaryx_session="))
-                .and_then(|c| c.strip_prefix("diaryx_session="))
-                .map(|s| s.to_string())
-        });
+                .collect();
+            if cookies.is_empty() {
+                None
+            } else {
+                Some(cookies.join("; "))
+            }
+        };
 
-        // 3. Fall back to query parameter
-        let token = token.or_else(|| {
-            parts.uri.query().and_then(|q| {
-                q.split('&')
-                    .find(|p| p.starts_with("token="))
-                    .map(|p| p.strip_prefix("token=").unwrap_or("").to_string())
-            })
-        });
+        let query = parts.uri.query();
 
-        let token = token?;
+        let token = extract_token(authorization, cookie_header.as_deref(), query)?;
 
-        // Validate session
-        let session = self.repo.validate_session(&token).ok()??;
-
-        // Update device last seen
-        let _ = self.repo.update_device_last_seen(&session.device_id);
-
-        // Get user info
-        let user = self.repo.get_user(&session.user_id).ok()??;
-
-        Some(AuthUser { session, user })
+        let service =
+            SessionValidationService::new(self.auth_store.as_ref(), self.session_store.as_ref());
+        service.validate(&token).await.ok().map(AuthUser::from)
     }
 }
 
@@ -95,14 +91,13 @@ where
     type Rejection = (StatusCode, &'static str);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Get the AuthExtractor from extensions
         let extractor = parts
             .extensions
             .get::<AuthExtractor>()
             .cloned()
             .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Auth not configured"))?;
 
-        Ok(OptionalAuth(extractor.extract_auth(parts)))
+        Ok(OptionalAuth(extractor.extract_auth(parts).await))
     }
 }
 
@@ -124,17 +119,16 @@ where
 
 /// Extract token from WebSocket upgrade request query parameters
 pub fn extract_token_from_query(query: Option<&str>) -> Option<String> {
-    query.and_then(|q| {
-        q.split('&')
-            .find(|p| p.starts_with("token="))
-            .map(|p| p.strip_prefix("token=").unwrap_or("").to_string())
-    })
+    extract_token(None, None, query)
 }
 
-/// Validate a token and return the auth user
-pub fn validate_token(repo: &AuthRepo, token: &str) -> Option<AuthUser> {
-    let session = repo.validate_session(token).ok()??;
-    let _ = repo.update_device_last_seen(&session.device_id);
-    let user = repo.get_user(&session.user_id).ok()??;
-    Some(AuthUser { session, user })
+/// Validate a token and return the auth user.
+/// Convenience for non-middleware contexts (e.g., WebSocket upgrade).
+pub async fn validate_token(
+    auth_store: &dyn AuthStore,
+    session_store: &dyn AuthSessionStore,
+    token: &str,
+) -> Option<AuthUser> {
+    let service = SessionValidationService::new(auth_store, session_store);
+    service.validate(token).await.ok().map(AuthUser::from)
 }

@@ -1,13 +1,15 @@
 use crate::db::{AuthRepo, NamespaceRepo};
 use async_trait::async_trait;
 use diaryx_server::domain::{
-    AudienceInfo as CoreAudienceInfo, CustomDomainInfo as CoreCustomDomainInfo,
-    DeviceInfo as CoreDeviceInfo, NamespaceInfo as CoreNamespaceInfo,
-    NamespaceSessionInfo as CoreNamespaceSessionInfo, ObjectMeta as CoreObjectMeta,
-    UsageTotals as CoreUsageTotals, UserInfo as CoreUserInfo, UserTier as CoreUserTier,
+    AudienceInfo as CoreAudienceInfo, AuthSessionInfo as CoreAuthSessionInfo,
+    CustomDomainInfo as CoreCustomDomainInfo, DeviceInfo as CoreDeviceInfo,
+    NamespaceInfo as CoreNamespaceInfo, NamespaceSessionInfo as CoreNamespaceSessionInfo,
+    ObjectMeta as CoreObjectMeta, UsageTotals as CoreUsageTotals, UserInfo as CoreUserInfo,
+    UserTier as CoreUserTier,
 };
 use diaryx_server::ports::{
-    AuthStore, DomainMappingCache, NamespaceStore, ObjectMetaStore, ServerCoreError, SessionStore,
+    AuthSessionStore, AuthStore, DeviceStore, DomainMappingCache, MagicLinkStore, NamespaceStore,
+    ObjectMetaStore, ServerCoreError, SessionStore, UserStore,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -64,6 +66,236 @@ impl AuthStore for NativeAuthStore {
             .get_user_tier(user_id)
             .map(Into::into)
             .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeAuthSessionStore {
+    repo: Arc<AuthRepo>,
+}
+
+impl NativeAuthSessionStore {
+    pub fn new(repo: Arc<AuthRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl AuthSessionStore for NativeAuthSessionStore {
+    async fn validate_session(
+        &self,
+        token: &str,
+    ) -> Result<Option<CoreAuthSessionInfo>, ServerCoreError> {
+        self.repo
+            .validate_session(token)
+            .map(|opt| opt.map(Into::into))
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn create_auth_session(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        expires_at_unix: i64,
+    ) -> Result<String, ServerCoreError> {
+        let expires_at =
+            chrono::DateTime::from_timestamp(expires_at_unix, 0).unwrap_or_else(chrono::Utc::now);
+        self.repo
+            .create_session(user_id, device_id, expires_at)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn delete_session(&self, token: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .delete_session(token)
+            .map(|_| ())
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn update_device_last_seen(&self, device_id: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .update_device_last_seen(device_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeMagicLinkStore {
+    repo: Arc<AuthRepo>,
+}
+
+impl NativeMagicLinkStore {
+    pub fn new(repo: Arc<AuthRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl MagicLinkStore for NativeMagicLinkStore {
+    async fn create_magic_token(
+        &self,
+        email: &str,
+        expires_at_unix: i64,
+    ) -> Result<(String, String), ServerCoreError> {
+        let expires_at =
+            chrono::DateTime::from_timestamp(expires_at_unix, 0).unwrap_or_else(chrono::Utc::now);
+        self.repo
+            .create_magic_token(email, expires_at)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn peek_magic_token(&self, token: &str) -> Result<Option<String>, ServerCoreError> {
+        self.repo
+            .peek_magic_token(token)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn consume_magic_token(&self, token: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .consume_magic_token(token)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn peek_magic_code(
+        &self,
+        code: &str,
+        email: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        self.repo
+            .peek_magic_code(code, email)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn consume_magic_code(&self, code: &str, email: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .consume_magic_code(code, email)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn count_recent_magic_tokens(
+        &self,
+        email: &str,
+        since_unix: i64,
+    ) -> Result<u64, ServerCoreError> {
+        let since =
+            chrono::DateTime::from_timestamp(since_unix, 0).unwrap_or_else(chrono::Utc::now);
+        self.repo
+            .count_recent_magic_tokens(email, since)
+            .map(|c| c.max(0) as u64)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeUserStore {
+    repo: Arc<AuthRepo>,
+}
+
+impl NativeUserStore {
+    pub fn new(repo: Arc<AuthRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl UserStore for NativeUserStore {
+    async fn get_or_create_user(&self, email: &str) -> Result<String, ServerCoreError> {
+        self.repo
+            .get_or_create_user(email)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn update_last_login(&self, user_id: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .update_last_login(user_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn delete_user(&self, user_id: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .delete_user(user_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn get_effective_device_limit(&self, user_id: &str) -> Result<u32, ServerCoreError> {
+        self.repo
+            .get_effective_device_limit(user_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn set_user_tier(
+        &self,
+        user_id: &str,
+        tier: diaryx_server::UserTier,
+    ) -> Result<(), ServerCoreError> {
+        let db_tier = match tier {
+            diaryx_server::UserTier::Free => crate::db::UserTier::Free,
+            diaryx_server::UserTier::Plus => crate::db::UserTier::Plus,
+        };
+        self.repo
+            .set_user_tier(user_id, db_tier)
+            .map(|_| ())
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeDeviceStore {
+    repo: Arc<AuthRepo>,
+}
+
+impl NativeDeviceStore {
+    pub fn new(repo: Arc<AuthRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl DeviceStore for NativeDeviceStore {
+    async fn create_device(
+        &self,
+        user_id: &str,
+        name: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<String, ServerCoreError> {
+        self.repo
+            .create_device(user_id, name, user_agent)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn count_user_devices(&self, user_id: &str) -> Result<u32, ServerCoreError> {
+        self.repo
+            .count_user_devices(user_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn list_user_devices(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<diaryx_server::DeviceInfo>, ServerCoreError> {
+        self.repo
+            .get_user_devices(user_id)
+            .map(|devices| devices.into_iter().map(Into::into).collect())
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn delete_device(&self, device_id: &str) -> Result<(), ServerCoreError> {
+        self.repo
+            .delete_device(device_id)
+            .map(|_| ())
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+}
+
+impl From<crate::db::SessionInfo> for CoreAuthSessionInfo {
+    fn from(value: crate::db::SessionInfo) -> Self {
+        Self {
+            token: value.token,
+            user_id: value.user_id,
+            device_id: value.device_id,
+            expires_at: value.expires_at,
+            created_at: value.created_at,
+        }
     }
 }
 

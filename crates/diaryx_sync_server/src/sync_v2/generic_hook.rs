@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::auth::validate_token;
+use crate::auth::validate_token_sync;
 use crate::db::{AuthRepo, NamespaceRepo, UserTier};
 
 /// Maximum number of guests per namespace session.
@@ -55,7 +55,7 @@ impl GenericNamespaceSyncHook {
         token: &str,
         doc_type: &DocType,
     ) -> Result<AuthenticatedUser, String> {
-        let auth = validate_token(&self.repo, token).ok_or("Invalid or expired token")?;
+        let auth = validate_token_sync(&self.repo, token).ok_or("Invalid or expired token")?;
 
         let namespace_id = doc_type.workspace_id();
 

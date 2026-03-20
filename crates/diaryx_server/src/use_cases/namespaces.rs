@@ -89,7 +89,6 @@ mod tests {
     use super::NamespaceService;
     use crate::domain::{AudienceInfo, CustomDomainInfo, NamespaceInfo};
     use crate::ports::{NamespaceStore, ServerCoreError};
-    use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -98,7 +97,7 @@ mod tests {
         namespaces: Mutex<HashMap<String, NamespaceInfo>>,
     }
 
-    #[async_trait]
+    crate::cfg_async_trait! {
     impl NamespaceStore for TestNamespaceStore {
         async fn get_namespace(
             &self,
@@ -191,6 +190,7 @@ mod tests {
         async fn clear_objects_audience(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
             Ok(())
         }
+    }
     }
 
     #[tokio::test]

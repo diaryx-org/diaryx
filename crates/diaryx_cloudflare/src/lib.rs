@@ -1,5 +1,7 @@
 pub mod adapters;
+pub mod config;
 mod handlers;
+mod tokens;
 
 use worker::*;
 
@@ -7,9 +9,14 @@ use worker::*;
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
 
+    // Handle CORS preflight
+    if req.method() == Method::Options {
+        return cors_preflight(&env);
+    }
+
     let router = Router::new();
 
-    router
+    let result = router
         // Health
         .get("/", |_, _| Response::ok("Diaryx Cloudflare Worker"))
         .get("/health", |_, _| Response::ok("OK"))
@@ -44,6 +51,40 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         // Usage
         .get_async("/usage", handlers::get_usage)
         // Run
-        .run(req, env)
-        .await
+        .run(req, env.clone())
+        .await?;
+
+    // Add CORS headers to every response
+    add_cors_headers(result, &env)
+}
+
+fn cors_preflight(env: &Env) -> Result<Response> {
+    let origins = config::cors_origins(env);
+    let allow_origin = origins.first().cloned().unwrap_or_else(|| "*".to_string());
+
+    let headers = Headers::new();
+    headers.set("Access-Control-Allow-Origin", &allow_origin)?;
+    headers.set(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    )?;
+    headers.set(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type, Cache-Control, Pragma, Cookie, X-Audience",
+    )?;
+    headers.set("Access-Control-Allow-Credentials", "true")?;
+    headers.set("Access-Control-Max-Age", "86400")?;
+
+    Ok(Response::empty()?.with_status(204).with_headers(headers))
+}
+
+fn add_cors_headers(mut response: Response, env: &Env) -> Result<Response> {
+    let origins = config::cors_origins(env);
+    let allow_origin = origins.first().cloned().unwrap_or_else(|| "*".to_string());
+
+    let headers = response.headers_mut();
+    headers.set("Access-Control-Allow-Origin", &allow_origin)?;
+    headers.set("Access-Control-Allow-Credentials", "true")?;
+
+    Ok(response)
 }

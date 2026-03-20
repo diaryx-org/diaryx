@@ -2216,14 +2216,17 @@ name = "diaryx_cloudflare"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "console_error_panic_hook",
  "diaryx_server",
  "getrandom 0.2.17",
+ "hmac",
  "rand 0.8.5",
  "serde",
  "serde_json",
  "serde_qs 0.13.0",
+ "sha2",
  "uuid",
  "worker",
 ]

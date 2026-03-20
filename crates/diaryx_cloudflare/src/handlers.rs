@@ -1,14 +1,11 @@
 //! Thin HTTP handlers that wire CF Worker requests to portable services.
-//!
-//! Each handler:
-//! 1. Extracts bindings from the environment
-//! 2. Builds the portable service
-//! 3. Calls the service
-//! 4. Maps the Result to an HTTP Response
 
 use crate::adapters::d1::*;
 use crate::adapters::r2::R2BlobStore;
-use diaryx_server::ports::ServerCoreError;
+use crate::adapters::resend::ResendMailer;
+use crate::config;
+use crate::tokens::validate_audience_token;
+use diaryx_server::ports::{Mailer, ServerCoreError};
 use diaryx_server::use_cases::auth::{
     AuthConfig, AuthenticationService, SessionValidationService, extract_token,
 };
@@ -44,8 +41,24 @@ fn bucket(ctx: &RouteContext<()>) -> Result<Bucket> {
     ctx.env.bucket("OBJECTS")
 }
 
-fn kv(ctx: &RouteContext<()>) -> Result<kv::KvStore> {
-    ctx.env.kv("DOMAINS")
+fn auth_cfg(ctx: &RouteContext<()>) -> AuthConfig {
+    config::auth_config(&ctx.env)
+}
+
+fn signing_key(ctx: &RouteContext<()>) -> Vec<u8> {
+    config::token_signing_key(&ctx.env)
+}
+
+/// Build a Set-Cookie header value for a session token.
+fn set_session_cookie(token: &str, env: &Env) -> String {
+    let max_age_secs = config::session_expiry_days(env) * 86400;
+    if config::secure_cookies(env) {
+        format!(
+            "diaryx_session={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age_secs}"
+        )
+    } else {
+        format!("diaryx_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age_secs}")
+    }
 }
 
 /// Authenticate the request, returning the user ID on success.
@@ -65,12 +78,12 @@ async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> Result<String> {
     .ok_or_else(|| Error::from("Authentication required"))?;
 
     let service = SessionValidationService::new(&auth_store, &session_store);
-    let ctx = service
+    let auth_ctx = service
         .validate(&token)
         .await
         .map_err(|e| Error::from(e.to_string()))?;
 
-    Ok(ctx.user.id)
+    Ok(auth_ctx.user.id)
 }
 
 // ---------------------------------------------------------------------------
@@ -188,9 +201,9 @@ pub async fn get_object(req: Request, ctx: RouteContext<()>) -> Result<Response>
 
     match service.get(ns_id, key, &user_id).await {
         Ok(result) => {
-            let headers = Headers::new();
-            headers.set("content-type", &result.mime_type)?;
-            Ok(Response::from_bytes(result.bytes)?.with_headers(headers))
+            let mut resp = Response::from_bytes(result.bytes)?;
+            resp.headers_mut().set("content-type", &result.mime_type)?;
+            Ok(resp)
         }
         Err(e) => error_response(e),
     }
@@ -214,7 +227,7 @@ pub async fn delete_object(req: Request, ctx: RouteContext<()>) -> Result<Respon
     }
 }
 
-pub async fn get_public_object(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?;
@@ -230,11 +243,27 @@ pub async fn get_public_object(_req: Request, ctx: RouteContext<()>) -> Result<R
         Err(e) => return error_response(e),
     };
 
+    // Enforce access control
     match access.access.as_str() {
         "public" => {}
         "token" => {
-            // TODO: validate audience token from query param
-            return Response::empty().map(|r| r.with_status(403));
+            let url = req.url()?;
+            let token_str = url
+                .query_pairs()
+                .find(|(k, _)| k == "audience_token")
+                .map(|(_, v)| v.to_string());
+
+            let key_bytes = signing_key(&ctx);
+            let valid = token_str
+                .as_deref()
+                .and_then(|t| validate_audience_token(&key_bytes, t))
+                .is_some_and(|claims| {
+                    claims.slug == *ns_id && claims.audience == access.audience_name
+                });
+
+            if !valid {
+                return Response::empty().map(|r| r.with_status(403));
+            }
         }
         _ => return Response::empty().map(|r| r.with_status(403)),
     }
@@ -244,9 +273,9 @@ pub async fn get_public_object(_req: Request, ctx: RouteContext<()>) -> Result<R
         .await
     {
         Ok(result) => {
-            let headers = Headers::new();
-            headers.set("content-type", &result.mime_type)?;
-            Ok(Response::from_bytes(result.bytes)?.with_headers(headers))
+            let mut resp = Response::from_bytes(result.bytes)?;
+            resp.headers_mut().set("content-type", &result.mime_type)?;
+            Ok(resp)
         }
         Err(e) => error_response(e),
     }
@@ -442,7 +471,14 @@ pub async fn logout(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         .await
         .map_err(|e| Error::from(e.to_string()))?;
 
-    Response::empty().map(|r| r.with_status(204))
+    let mut resp = Response::empty()?.with_status(204);
+    let clear_cookie = if config::secure_cookies(&ctx.env) {
+        "diaryx_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0"
+    } else {
+        "diaryx_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+    };
+    resp.headers_mut().set("Set-Cookie", clear_cookie)?;
+    Ok(resp)
 }
 
 #[derive(Deserialize)]
@@ -452,32 +488,51 @@ struct MagicLinkBody {
 
 pub async fn request_magic_link(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let body: MagicLinkBody = req.json().await?;
+    let cfg = auth_cfg(&ctx);
 
     let ml_store = D1MagicLinkStore::new(db(&ctx)?);
     let user_store = D1UserStore::new(db(&ctx)?);
     let device_store = D1DeviceStore::new(db(&ctx)?);
     let session_store = D1AuthSessionStore::new(db(&ctx)?);
-    let config = AuthConfig::default();
 
-    let service = AuthenticationService::new(
-        &ml_store,
-        &user_store,
-        &device_store,
-        &session_store,
-        &config,
-    );
+    let service =
+        AuthenticationService::new(&ml_store, &user_store, &device_store, &session_store, &cfg);
 
-    match service.request_magic_link(&body.email).await {
-        Ok((token, code)) => Response::from_json(&serde_json::json!({
+    let (token, code) = match service.request_magic_link(&body.email).await {
+        Ok(result) => result,
+        Err(e) => {
+            return Response::from_json(&serde_json::json!({ "error": e.to_string() }))
+                .map(|r| r.with_status(400));
+        }
+    };
+
+    let app_url = config::app_base_url(&ctx.env);
+    let magic_link_url = format!("{}?token={}", app_url, token);
+
+    // Try to send email via Resend
+    if let Some(mailer) = config::mailer(&ctx.env, cfg.magic_link_expiry_minutes) {
+        if let Err(e) = mailer
+            .send_magic_link(&body.email, &magic_link_url, &code)
+            .await
+        {
+            return Response::from_json(
+                &serde_json::json!({ "error": format!("Failed to send email: {}", e) }),
+            )
+            .map(|r| r.with_status(500));
+        }
+
+        Response::from_json(&serde_json::json!({
             "success": true,
             "message": "Check your email for a sign-in link.",
-            // In production, don't return these — send via email instead.
-            // Included here for development/testing.
-            "dev_link": format!("?token={}", token),
+        }))
+    } else {
+        // Dev mode: return the link and code directly
+        Response::from_json(&serde_json::json!({
+            "success": true,
+            "message": "Email not configured. Use the dev link below.",
+            "dev_link": magic_link_url,
             "dev_code": code,
-        })),
-        Err(e) => Response::from_json(&serde_json::json!({ "error": e.to_string() }))
-            .map(|r| r.with_status(400)),
+        }))
     }
 }
 
@@ -492,20 +547,15 @@ pub async fn verify_magic_link(req: Request, ctx: RouteContext<()>) -> Result<Re
     let url = req.url()?;
     let query: VerifyQuery =
         serde_qs::from_str(url.query().unwrap_or("")).map_err(|e| Error::from(e.to_string()))?;
+    let cfg = auth_cfg(&ctx);
 
     let ml_store = D1MagicLinkStore::new(db(&ctx)?);
     let user_store = D1UserStore::new(db(&ctx)?);
     let device_store = D1DeviceStore::new(db(&ctx)?);
     let session_store = D1AuthSessionStore::new(db(&ctx)?);
-    let config = AuthConfig::default();
 
-    let service = AuthenticationService::new(
-        &ml_store,
-        &user_store,
-        &device_store,
-        &session_store,
-        &config,
-    );
+    let service =
+        AuthenticationService::new(&ml_store, &user_store, &device_store, &session_store, &cfg);
 
     match service
         .verify_magic_link(
@@ -516,11 +566,16 @@ pub async fn verify_magic_link(req: Request, ctx: RouteContext<()>) -> Result<Re
         )
         .await
     {
-        Ok(result) => Response::from_json(&serde_json::json!({
-            "success": true,
-            "token": result.session_token,
-            "user": { "id": result.user_id, "email": result.email },
-        })),
+        Ok(result) => {
+            let cookie = set_session_cookie(&result.session_token, &ctx.env);
+            let mut resp = Response::from_json(&serde_json::json!({
+                "success": true,
+                "token": result.session_token,
+                "user": { "id": result.user_id, "email": result.email },
+            }))?;
+            resp.headers_mut().set("Set-Cookie", &cookie)?;
+            Ok(resp)
+        }
         Err(e) => Response::from_json(&serde_json::json!({ "error": e.to_string() }))
             .map(|r| r.with_status(400)),
     }
@@ -536,20 +591,15 @@ struct VerifyCodeBody {
 
 pub async fn verify_code(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let body: VerifyCodeBody = req.json().await?;
+    let cfg = auth_cfg(&ctx);
 
     let ml_store = D1MagicLinkStore::new(db(&ctx)?);
     let user_store = D1UserStore::new(db(&ctx)?);
     let device_store = D1DeviceStore::new(db(&ctx)?);
     let session_store = D1AuthSessionStore::new(db(&ctx)?);
-    let config = AuthConfig::default();
 
-    let service = AuthenticationService::new(
-        &ml_store,
-        &user_store,
-        &device_store,
-        &session_store,
-        &config,
-    );
+    let service =
+        AuthenticationService::new(&ml_store, &user_store, &device_store, &session_store, &cfg);
 
     match service
         .verify_code(
@@ -561,11 +611,16 @@ pub async fn verify_code(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
         )
         .await
     {
-        Ok(result) => Response::from_json(&serde_json::json!({
-            "success": true,
-            "token": result.session_token,
-            "user": { "id": result.user_id, "email": result.email },
-        })),
+        Ok(result) => {
+            let cookie = set_session_cookie(&result.session_token, &ctx.env);
+            let mut resp = Response::from_json(&serde_json::json!({
+                "success": true,
+                "token": result.session_token,
+                "user": { "id": result.user_id, "email": result.email },
+            }))?;
+            resp.headers_mut().set("Set-Cookie", &cookie)?;
+            Ok(resp)
+        }
         Err(e) => Response::from_json(&serde_json::json!({ "error": e.to_string() }))
             .map(|r| r.with_status(400)),
     }

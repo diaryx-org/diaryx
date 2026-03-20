@@ -17,6 +17,9 @@ async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "js"] }
 rand = "0.8"
 getrandom = { version = "0.2", features = ["js"] }
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
 console_error_panic_hook = "0.1"
 
 [lib]

@@ -579,8 +579,6 @@ export class WorkerBackendNew implements Backend {
   // Proxy methods - delegate to worker (legacy, will be deprecated)
   // =========================================================================
 
-  saveConfig = (config: any) => this.remote!.saveConfig(config);
-
   // CrdtFs control
   setCrdtEnabled = (enabled: boolean) => this.remote!.setCrdtEnabled(enabled);
   isCrdtEnabled = () => this.remote!.isCrdtEnabled();

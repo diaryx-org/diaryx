@@ -66,7 +66,7 @@ pub struct Config {
     // ========================================================================
     // Sync configuration
     // ========================================================================
-    /// Sync server URL (e.g., "https://sync.diaryx.org")
+    /// Sync server URL (e.g., "https://app.diaryx.org/api")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_server_url: Option<String>,
 

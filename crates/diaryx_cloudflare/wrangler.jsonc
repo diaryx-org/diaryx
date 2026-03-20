@@ -18,12 +18,14 @@
 		"EMAIL_FROM_ADDRESS": "noreply@signin.diaryx.org",
 		"MAGIC_LINK_EXPIRY_MINUTES": "15",
 		"SESSION_EXPIRY_DAYS": "30",
-		"SECURE_COOKIES": "true"
+		"SECURE_COOKIES": "true",
+		"CF_ZONE_ID": "acb726023b2d5fcd83c0490314bb19f1"
 	},
 
 	// Secrets (set via `npx wrangler secret put <NAME>`):
 	// - TOKEN_SIGNING_KEY
 	// - RESEND_API_KEY
+	// - CF_API_TOKEN  (Cloudflare API token with Custom Hostnames permission for the SaaS zone)
 
 	"d1_databases": [
 		{
@@ -35,16 +37,23 @@
 	],
 	"r2_buckets": [
 		{
-			"bucket_name": "diaryx-objects",
+			"bucket_name": "diaryx-user-data",
 			"binding": "diaryx_objects",
 			"remote": true
 		}
 	],
 	"kv_namespaces": [
 		{
-			"binding": "DOMAINS",
-			"id": "38a69e7da4874c2a944130ba9c8ebdec",
+			"binding": "diaryx_domain_mapping",
+			"id": "92891768520a46e883f4eb111c02b4d8",
 			"remote": true
 		}
-	]
+	],
+
+	"observability": {
+    "logs": {
+      "enabled": false,
+      "invocation_logs": true
+    }
+  }
 }

@@ -16,13 +16,12 @@
       "custom_domain": true
     }
   ],
-  // Uncomment after deploying diaryx-api:
-  // "services": [
-  //   {
-  //     "binding": "API",
-  //     "service": "diaryx-api"
-  //   }
-  // ],
+  "services": [
+    {
+      "binding": "API",
+      "service": "diaryx-api"
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "CDN",

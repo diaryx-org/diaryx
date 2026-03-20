@@ -2,7 +2,7 @@
  * Native HTTP proxy for iOS CORS bypass.
  *
  * On iOS, WKWebView enforces CORS and blocks requests from tauri://localhost
- * to external origins like sync.diaryx.org. This module routes HTTP requests
+ * to external origins like app.diaryx.org. This module routes HTTP requests
  * through a Tauri command that uses reqwest natively, bypassing CORS.
  *
  * In browser environments, delegates to the native fetch() API.

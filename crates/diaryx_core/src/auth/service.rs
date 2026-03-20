@@ -601,7 +601,7 @@ mod tests {
                     .to_string(),
             }]);
             let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://sync.diaryx.org".to_string(),
+                server_url: "https://app.diaryx.org/api".to_string(),
                 session_token: None,
                 email: Some("user@example.com".to_string()),
                 workspace_id: None,
@@ -625,7 +625,7 @@ mod tests {
                     .to_string(),
             }]);
             let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://sync.diaryx.org".to_string(),
+                server_url: "https://app.diaryx.org/api".to_string(),
                 session_token: None,
                 email: None,
                 workspace_id: None,
@@ -648,7 +648,7 @@ mod tests {
                 body: r#"{"error":"expired"}"#.to_string(),
             }]);
             let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://sync.diaryx.org".to_string(),
+                server_url: "https://app.diaryx.org/api".to_string(),
                 session_token: None,
                 email: None,
                 workspace_id: None,
@@ -670,7 +670,7 @@ mod tests {
                 body: "{}".to_string(),
             }]);
             let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://sync.diaryx.org".to_string(),
+                server_url: "https://app.diaryx.org/api".to_string(),
                 session_token: Some("tok".to_string()),
                 email: Some("user@example.com".to_string()),
                 workspace_id: None,
@@ -700,7 +700,7 @@ mod tests {
                 .to_string(),
             }]);
             let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://sync.diaryx.org".to_string(),
+                server_url: "https://app.diaryx.org/api".to_string(),
                 session_token: Some("tok".to_string()),
                 email: None,
                 workspace_id: None,
@@ -722,7 +722,7 @@ mod tests {
                 body: "Unauthorized".to_string(),
             }]);
             let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://sync.diaryx.org".to_string(),
+                server_url: "https://app.diaryx.org/api".to_string(),
                 session_token: Some("expired-tok".to_string()),
                 email: None,
                 workspace_id: None,

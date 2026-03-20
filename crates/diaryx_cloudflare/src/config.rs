@@ -77,6 +77,22 @@ pub fn mailer(env: &Env, magic_link_expiry_minutes: i64) -> Option<ResendMailer>
     ))
 }
 
+/// Cloudflare zone ID for the SaaS zone (used for custom hostname management).
+pub fn cf_zone_id(env: &Env) -> Option<String> {
+    env.var("CF_ZONE_ID")
+        .ok()
+        .map(|v| v.to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Cloudflare API token with Custom Hostnames permission.
+pub fn cf_api_token(env: &Env) -> Option<String> {
+    env.secret("CF_API_TOKEN")
+        .ok()
+        .map(|v| v.to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Read CORS allowed origins.
 pub fn cors_origins(env: &Env) -> Vec<String> {
     env.var("CORS_ORIGINS")

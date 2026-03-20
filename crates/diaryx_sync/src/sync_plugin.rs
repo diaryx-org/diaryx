@@ -235,7 +235,7 @@ fn sync_plugin_manifest() -> PluginManifest {
                             key: "server_url".into(),
                             label: "Server URL".into(),
                             description: Some("Automatically configured when you sign in.".into()),
-                            placeholder: Some("https://sync.diaryx.org".into()),
+                            placeholder: Some("https://app.diaryx.org/api".into()),
                         },
                         SettingsField::Button {
                             label: "Check Status".into(),

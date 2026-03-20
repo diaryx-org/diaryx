@@ -46,7 +46,7 @@ use diaryx_core::fs::{AsyncFileSystem, FileSystemEvent};
 /// Configuration for the sync client.
 #[derive(Debug, Clone)]
 pub struct SyncClientConfig {
-    /// Base server URL (e.g., "https://sync.diaryx.org").
+    /// Base server URL (e.g., "https://app.diaryx.org/api").
     pub server_url: String,
     /// Workspace ID to sync.
     pub workspace_id: String,

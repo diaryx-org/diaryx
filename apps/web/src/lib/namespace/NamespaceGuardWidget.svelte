@@ -42,7 +42,7 @@
       Sign in and ensure your default workspace is available.
     </p>
   </div>
-{:else if ctx.isLoading && !ctx.isConfigured}
+{:else if ctx.isLoading}
   <div class="flex items-center justify-center py-8">
     <Loader2 class="size-5 animate-spin text-muted-foreground" />
   </div>
@@ -59,7 +59,7 @@
       Open Account Setup
     </Button>
   </div>
-{:else if ctx.authState.publishedSiteLimit === 0 && !ctx.isConfigured}
+{:else if !ctx.hasPublishingAccess}
   <UpgradeBanner
     feature="Publishing"
     description="This account does not include website publishing."

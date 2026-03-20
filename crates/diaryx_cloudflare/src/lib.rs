@@ -26,6 +26,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/api/namespaces/:id", handlers::get_namespace)
         .delete_async("/api/namespaces/:id", handlers::delete_namespace)
         // Objects
+        .get_async("/api/namespaces/:ns_id/objects", handlers::list_objects)
         .put_async("/api/namespaces/:ns_id/objects/*key", handlers::put_object)
         .get_async("/api/namespaces/:ns_id/objects/*key", handlers::get_object)
         .delete_async(
@@ -46,6 +47,25 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .delete_async(
             "/api/namespaces/:ns_id/audiences/:name",
             handlers::delete_audience,
+        )
+        // Domains
+        .get_async("/api/namespaces/:ns_id/domains", handlers::list_domains)
+        .put_async(
+            "/api/namespaces/:ns_id/domains/:domain",
+            handlers::register_domain,
+        )
+        .delete_async(
+            "/api/namespaces/:ns_id/domains/:domain",
+            handlers::remove_domain,
+        )
+        // Subdomains
+        .put_async(
+            "/api/namespaces/:ns_id/subdomain",
+            handlers::claim_subdomain,
+        )
+        .delete_async(
+            "/api/namespaces/:ns_id/subdomain",
+            handlers::release_subdomain,
         )
         // Sessions
         .post_async("/api/sessions", handlers::create_session)

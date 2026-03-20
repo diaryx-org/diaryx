@@ -822,6 +822,11 @@ function buildHostFunctions(
   transport: BrowserSyncTransportController,
   opts?: HostFunctionOptions,
 ) {
+  /** Encode a key that may contain `/` for use in a URL path, encoding each segment individually. */
+  function encodeKeyPath(key: string): string {
+    return key.split("/").map(encodeURIComponent).join("/");
+  }
+
   async function getNamespaceServerBase(): Promise<string> {
     const authModule = await import("$lib/auth");
     const serverUrl = authModule.getServerUrl();
@@ -1415,7 +1420,7 @@ function buildHostFunctions(
           }
           await namespaceFetch(
             "PUT",
-            `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeURIComponent(input.key)}`,
+            `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeKeyPath(input.key)}`,
             {
               headers: {
                 "Content-Type": input.mime_type,
@@ -1437,7 +1442,7 @@ function buildHostFunctions(
           if (!input) return cp.store(JSON.stringify({ error: "no input" }));
           await namespaceFetch(
             "DELETE",
-            `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeURIComponent(input.key)}`,
+            `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeKeyPath(input.key)}`,
             {},
             [404],
           );

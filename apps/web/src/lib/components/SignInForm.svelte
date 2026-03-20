@@ -26,7 +26,7 @@
 
   let { onAuthenticated, compact = false }: Props = $props();
 
-  const defaultServerUrl = isTauri() ? "https://sync.diaryx.org" : "/api";
+  const defaultServerUrl = isTauri() ? "https://app.diaryx.org/api" : "/api";
   let email = $state("");
   let serverUrl = $state(
     typeof window !== "undefined"
@@ -178,7 +178,7 @@
             id="signin-server-url"
             type="text"
             bind:value={serverUrl}
-            placeholder="https://sync.diaryx.org"
+            placeholder="https://app.diaryx.org/api"
             disabled={isSending || isValidating}
           />
         </div>

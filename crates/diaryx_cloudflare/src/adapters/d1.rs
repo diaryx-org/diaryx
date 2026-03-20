@@ -20,6 +20,12 @@ fn e(err: impl std::fmt::Display) -> ServerCoreError {
     ServerCoreError::internal(err.to_string())
 }
 
+/// Convert an i64 timestamp to a D1-compatible JsValue.
+/// D1 does not support bigint; cast to f64 (safe for Unix timestamps).
+fn ts(epoch: i64) -> worker::wasm_bindgen::JsValue {
+    worker::wasm_bindgen::JsValue::from_f64(epoch as f64)
+}
+
 // ---------------------------------------------------------------------------
 // NamespaceStore
 // ---------------------------------------------------------------------------
@@ -97,7 +103,7 @@ impl NamespaceStore for D1NamespaceStore {
         let now = chrono::Utc::now().timestamp();
         self.db
             .prepare("INSERT INTO namespaces (id, owner_user_id, created_at) VALUES (?1, ?2, ?3)")
-            .bind(&[namespace_id.into(), owner_user_id.into(), now.into()])
+            .bind(&[namespace_id.into(), owner_user_id.into(), ts(now)])
             .map_err(e)?
             .run()
             .await
@@ -303,7 +309,7 @@ impl NamespaceStore for D1NamespaceStore {
                    namespace_id = excluded.namespace_id, \
                    audience_name = excluded.audience_name",
             )
-            .bind(&[domain.into(), namespace_id.into(), audience_name.into(), now.into()])
+            .bind(&[domain.into(), namespace_id.into(), audience_name.into(), ts(now)])
             .map_err(e)?
             .run()
             .await
@@ -351,7 +357,7 @@ impl AuthSessionStore for D1AuthSessionStore {
                 "SELECT token, user_id, device_id, expires_at, created_at \
                  FROM auth_sessions WHERE token = ?1 AND expires_at > ?2",
             )
-            .bind(&[token.into(), now.into()])
+            .bind(&[token.into(), ts(now)])
             .map_err(e)?
             .first::<serde_json::Value>(None)
             .await
@@ -389,8 +395,8 @@ impl AuthSessionStore for D1AuthSessionStore {
                 token.as_str().into(),
                 user_id.into(),
                 device_id.into(),
-                expires_at_unix.into(),
-                now.into(),
+                ts(expires_at_unix),
+                ts(now),
             ])
             .map_err(e)?
             .run()
@@ -414,7 +420,7 @@ impl AuthSessionStore for D1AuthSessionStore {
         let now = chrono::Utc::now().timestamp();
         self.db
             .prepare("UPDATE devices SET last_seen_at = ?1 WHERE id = ?2")
-            .bind(&[now.into(), device_id.into()])
+            .bind(&[ts(now), device_id.into()])
             .map_err(e)?
             .run()
             .await
@@ -584,7 +590,7 @@ impl ObjectMetaStore for D1ObjectMetaStore {
             )
             .bind(&[
                 namespace_id.into(), key.into(), blob_key.into(),
-                mime_type.into(), (size_bytes as i64).into(), now.into(),
+                mime_type.into(), ts(size_bytes as i64), ts(now),
                 audience.unwrap_or("").into(),
             ])
             .map_err(e)?
@@ -688,9 +694,9 @@ impl ObjectMetaStore for D1ObjectMetaStore {
             .bind(&[
                 user_id.into(),
                 event_type.into(),
-                (amount as i64).into(),
+                ts(amount as i64),
                 namespace_id.unwrap_or("").into(),
-                now.into(),
+                ts(now),
             ])
             .map_err(e)?
             .run()
@@ -813,8 +819,8 @@ impl SessionStore for D1SessionStore {
                 namespace_id.into(),
                 owner_user_id.into(),
                 read_only.into(),
-                now.into(),
-                expires_at.unwrap_or(0).into(),
+                ts(now),
+                ts(expires_at.unwrap_or(0)),
             ])
             .map_err(e)?
             .run()
@@ -835,7 +841,7 @@ impl SessionStore for D1SessionStore {
                  FROM namespace_sessions \
                  WHERE code = ?1 AND (expires_at IS NULL OR expires_at = 0 OR expires_at > ?2)",
             )
-            .bind(&[code.into(), now.into()])
+            .bind(&[code.into(), ts(now)])
             .map_err(e)?
             .first::<serde_json::Value>(None)
             .await
@@ -914,8 +920,8 @@ impl MagicLinkStore for D1MagicLinkStore {
                 token.as_str().into(),
                 email.into(),
                 code.as_str().into(),
-                expires_at_unix.into(),
-                now.into(),
+                ts(expires_at_unix),
+                ts(now),
             ])
             .map_err(e)?
             .run()
@@ -931,7 +937,7 @@ impl MagicLinkStore for D1MagicLinkStore {
             .prepare(
                 "SELECT email FROM magic_tokens WHERE token = ?1 AND used = 0 AND expires_at > ?2",
             )
-            .bind(&[token.into(), now.into()])
+            .bind(&[token.into(), ts(now)])
             .map_err(e)?
             .first::<serde_json::Value>(None)
             .await
@@ -962,7 +968,7 @@ impl MagicLinkStore for D1MagicLinkStore {
                 "SELECT token FROM magic_tokens \
                  WHERE code = ?1 AND email = ?2 AND used = 0 AND expires_at > ?3",
             )
-            .bind(&[code.into(), email.into(), now.into()])
+            .bind(&[code.into(), email.into(), ts(now)])
             .map_err(e)?
             .first::<serde_json::Value>(None)
             .await
@@ -992,7 +998,7 @@ impl MagicLinkStore for D1MagicLinkStore {
                 "SELECT COUNT(*) as cnt FROM magic_tokens \
                  WHERE email = ?1 AND created_at > ?2",
             )
-            .bind(&[email.into(), since_unix.into()])
+            .bind(&[email.into(), ts(since_unix)])
             .map_err(e)?
             .first::<serde_json::Value>(None)
             .await
@@ -1037,7 +1043,7 @@ impl UserStore for D1UserStore {
         let now = chrono::Utc::now().timestamp();
         self.db
             .prepare("INSERT INTO users (id, email, created_at, tier) VALUES (?1, ?2, ?3, 'free')")
-            .bind(&[user_id.as_str().into(), email.into(), now.into()])
+            .bind(&[user_id.as_str().into(), email.into(), ts(now)])
             .map_err(e)?
             .run()
             .await
@@ -1049,7 +1055,7 @@ impl UserStore for D1UserStore {
         let now = chrono::Utc::now().timestamp();
         self.db
             .prepare("UPDATE users SET last_login_at = ?1 WHERE id = ?2")
-            .bind(&[now.into(), user_id.into()])
+            .bind(&[ts(now), user_id.into()])
             .map_err(e)?
             .run()
             .await
@@ -1130,8 +1136,8 @@ impl DeviceStore for D1DeviceStore {
                 user_id.into(),
                 name.unwrap_or("").into(),
                 user_agent.unwrap_or("").into(),
-                now.into(),
-                now.into(),
+                ts(now),
+                ts(now),
             ])
             .map_err(e)?
             .run()

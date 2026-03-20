@@ -25,6 +25,7 @@
     }
   },
   "routes": [
-    { "pattern": "*.diaryx.org/*", "zone_name": "diaryx.org" }
+    { "pattern": "*.diaryx.org/*", "zone_name": "diaryx.org" },
+    { "pattern": "*/*", "zone_name": "diaryx.org" }
   ]
 }

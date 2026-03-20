@@ -46,23 +46,35 @@ export default {
       return serveSubdomainSite(request, env, subdomainMapping, url);
     }
 
-    // Custom domain support: X-Custom-Domain is set by an upstream proxy
-    // (e.g. Caddy) that has already validated the domain.
+    // Custom domain support — two paths:
+    // 1. Cloudflare for SaaS: the Host header IS the custom domain (no proxy header needed).
+    // 2. Legacy Caddy proxy: X-Custom-Domain header is set by the upstream proxy.
     // Skip for /ns/ routes — those always use standard namespace routing.
-    const customDomain = request.headers.get('X-Custom-Domain');
-    if (customDomain && !url.pathname.startsWith('/ns/')) {
-      // Try namespace-backed domain via KV first.
-      const mapping = await resolveNamespaceDomain(customDomain, env);
-      if (mapping) {
-        return serveNamespaceCustomDomain(request, env, mapping, url);
+    if (!url.pathname.startsWith('/ns/')) {
+      // Try the Host header as a custom domain (Cloudflare for SaaS path).
+      // This applies when the host is not *.diaryx.org (subdomainMapping was null above).
+      if (!host.endsWith(`.${SITE_DOMAIN}`) && host !== SITE_DOMAIN) {
+        const mapping = await resolveNamespaceDomain(host, env);
+        if (mapping) {
+          return serveNamespaceCustomDomain(request, env, mapping, url);
+        }
       }
 
-      // Fall back to legacy slug-based custom domain (requires proxy secret).
-      const secret = request.headers.get('X-Proxy-Secret');
-      if (secret !== env.TOKEN_SIGNING_KEY) {
-        return forbidden('Invalid proxy request.');
+      // Legacy Caddy proxy path: X-Custom-Domain header.
+      const customDomain = request.headers.get('X-Custom-Domain');
+      if (customDomain) {
+        const mapping = await resolveNamespaceDomain(customDomain, env);
+        if (mapping) {
+          return serveNamespaceCustomDomain(request, env, mapping, url);
+        }
+
+        // Fall back to legacy slug-based custom domain (requires proxy secret).
+        const secret = request.headers.get('X-Proxy-Secret');
+        if (secret !== env.TOKEN_SIGNING_KEY) {
+          return forbidden('Invalid proxy request.');
+        }
+        return serveCustomDomain(request, env, customDomain, url);
       }
-      return serveCustomDomain(request, env, customDomain, url);
     }
 
     // Standard routing
@@ -362,7 +374,7 @@ async function serveStaticPage(
 // by the site-proxy Worker. These must match the reserved list in the
 // sync server's claim_subdomain handler.
 const PASSTHROUGH_SUBDOMAINS = new Set([
-  'www', 'app', 'api', 'mail', 'smtp', 'ftp', 'admin', 'sync',
+  'www', 'app', 'api', 'mail', 'smtp', 'ftp', 'admin', 'sync', 'publish',
 ]);
 
 /** Check if a host is an infrastructure subdomain that should pass through to origin. */
@@ -596,31 +608,35 @@ async function serveNamespaceCustomDomain(
     objectPath = 'index.html';
   }
 
-  const r2Key = `ns/${mapping.namespace_id}/${objectPath}`;
-  let response = await checkNamespaceAccess(
-    request,
-    url,
-    env,
-    mapping.namespace_id,
-    r2Key,
-    mapping.audience_name,
-  );
+  const nsId = mapping.namespace_id;
+  const audience = mapping.audience_name;
 
-  // Try index.html fallback for directory-like paths.
-  if (response.status === 404 && !objectPath.endsWith('/index.html')) {
-    const fallbackPath = `${objectPath.replace(/\/$/, '')}/index.html`;
-    const fallbackKey = `ns/${mapping.namespace_id}/${fallbackPath}`;
-    response = await checkNamespaceAccess(
-      request,
-      url,
-      env,
-      mapping.namespace_id,
-      fallbackKey,
-      mapping.audience_name,
-    );
+  // Try the path as-is first (may already include audience prefix).
+  const directKey = `ns/${nsId}/${objectPath}`;
+  let response = await checkNamespaceAccess(request, url, env, nsId, directKey, audience);
+  if (response.status !== 404) return response;
+
+  // Try with audience prefix (e.g. /index.html → /family/index.html).
+  const audiencedPath = `${audience}/${objectPath}`;
+  const audiencedKey = `ns/${nsId}/${audiencedPath}`;
+  response = await checkNamespaceAccess(request, url, env, nsId, audiencedKey, audience);
+  if (response.status !== 404) return response;
+
+  // Try index.html fallback with audience prefix.
+  if (!audiencedPath.endsWith('/index.html')) {
+    const fallback = `${audiencedPath.replace(/\/$/, '')}/index.html`;
+    response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`, audience);
+    if (response.status !== 404) return response;
   }
 
-  return response;
+  // Try index.html fallback without audience prefix.
+  if (!objectPath.endsWith('/index.html')) {
+    const fallback = `${objectPath.replace(/\/$/, '')}/index.html`;
+    response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`, audience);
+    if (response.status !== 404) return response;
+  }
+
+  return notFound();
 }
 
 // ---------------------------------------------------------------------------

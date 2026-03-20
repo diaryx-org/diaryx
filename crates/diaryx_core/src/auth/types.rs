@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Default sync server URL.
-pub const DEFAULT_SYNC_SERVER: &str = "https://sync.diaryx.org";
+pub const DEFAULT_SYNC_SERVER: &str = "https://app.diaryx.org/api";
 
 /// Stored authentication credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

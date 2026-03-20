@@ -1,17 +1,18 @@
 //! Thin HTTP handlers that wire CF Worker requests to portable services.
 
 use crate::adapters::d1::*;
+use crate::adapters::kv::KvDomainMappingCache;
 use crate::adapters::r2::R2BlobStore;
 use crate::adapters::resend::ResendMailer;
 use crate::config;
 use crate::tokens::validate_audience_token;
-use diaryx_server::ports::{Mailer, ServerCoreError};
+use diaryx_server::ports::{Mailer, NamespaceStore, ServerCoreError};
 use diaryx_server::use_cases::auth::{
-    AuthConfig, AuthenticationService, SessionValidationService, extract_token,
+    AuthConfig, AuthError, AuthenticationService, SessionValidationService, extract_token,
 };
 use diaryx_server::use_cases::{
-    audiences::AudienceService, namespaces::NamespaceService, objects::ObjectService,
-    sessions::SessionService,
+    audiences::AudienceService, domains::DomainService, namespaces::NamespaceService,
+    objects::ObjectService, sessions::SessionService,
 };
 use serde::Deserialize;
 use worker::*;
@@ -19,6 +20,10 @@ use worker::*;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+mod bindings {
+    include!(concat!(env!("OUT_DIR"), "/wrangler_bindings.rs"));
+}
 
 fn error_response(err: ServerCoreError) -> Result<Response> {
     let (status, msg) = match &err {
@@ -34,11 +39,15 @@ fn error_response(err: ServerCoreError) -> Result<Response> {
 }
 
 fn db(ctx: &RouteContext<()>) -> Result<D1Database> {
-    ctx.env.d1("diaryx_users")
+    ctx.env.d1(bindings::D1_BINDING)
 }
 
 fn bucket(ctx: &RouteContext<()>) -> Result<Bucket> {
-    ctx.env.bucket("diaryx_objects")
+    ctx.env.bucket(bindings::R2_BINDING)
+}
+
+fn domains_kv(ctx: &RouteContext<()>) -> Result<worker::kv::KvStore> {
+    ctx.env.kv(bindings::KV_BINDING)
 }
 
 fn auth_cfg(ctx: &RouteContext<()>) -> AuthConfig {
@@ -145,6 +154,54 @@ pub async fn delete_namespace(req: Request, ctx: RouteContext<()>) -> Result<Res
 // ---------------------------------------------------------------------------
 // Object handlers
 // ---------------------------------------------------------------------------
+
+pub async fn list_objects(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = authenticate(&req, &ctx).await?;
+    let ns_id = ctx
+        .param("ns_id")
+        .ok_or_else(|| Error::from("missing ns_id"))?
+        .to_string();
+
+    let url = req.url()?;
+    let params: std::collections::HashMap<String, String> = url
+        .query_pairs()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let limit: u32 = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
+    let offset: u32 = params
+        .get("offset")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
+    let blob_store = R2BlobStore::new(bucket(&ctx)?);
+    let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
+
+    match service.list(&ns_id, limit, offset, &user_id).await {
+        Ok(objects) => {
+            let response: Vec<serde_json::Value> = objects
+                .into_iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "namespace_id": m.namespace_id,
+                        "key": m.key,
+                        "r2_key": m.blob_key,
+                        "mime_type": m.mime_type,
+                        "size_bytes": m.size_bytes,
+                        "updated_at": m.updated_at,
+                        "audience": m.audience,
+                    })
+                })
+                .collect();
+            Response::from_json(&response)
+        }
+        Err(e) => error_response(e),
+    }
+}
 
 pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = authenticate(&req, &ctx).await?;
@@ -350,6 +407,235 @@ pub async fn delete_audience(req: Request, ctx: RouteContext<()>) -> Result<Resp
 }
 
 // ---------------------------------------------------------------------------
+// Domain handlers
+// ---------------------------------------------------------------------------
+
+pub async fn list_domains(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let _user_id = authenticate(&req, &ctx).await?;
+    let ns_id = ctx
+        .param("ns_id")
+        .ok_or_else(|| Error::from("missing ns_id"))?
+        .to_string();
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    match ns_store.list_custom_domains(&ns_id).await {
+        Ok(domains) => {
+            let response: Vec<serde_json::Value> = domains
+                .into_iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "domain": d.domain,
+                        "namespace_id": d.namespace_id,
+                        "audience_name": d.audience_name,
+                        "created_at": d.created_at,
+                        "verified": d.verified,
+                    })
+                })
+                .collect();
+            Response::from_json(&response)
+        }
+        Err(e) => error_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct RegisterDomainBody {
+    audience_name: String,
+}
+
+pub async fn register_domain(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let _user_id = authenticate(&req, &ctx).await?;
+    let ns_id = ctx
+        .param("ns_id")
+        .ok_or_else(|| Error::from("missing ns_id"))?
+        .to_string();
+    let domain = ctx
+        .param("domain")
+        .ok_or_else(|| Error::from("missing domain"))?
+        .to_string();
+    let body: RegisterDomainBody = req.json().await?;
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let domain_cache = KvDomainMappingCache::new(domains_kv(&ctx)?);
+    let service = DomainService::new(&ns_store, &domain_cache);
+
+    let info = match service
+        .register_domain(&ns_id, &domain, &body.audience_name)
+        .await
+    {
+        Ok(info) => info,
+        Err(e) => return error_response(e),
+    };
+
+    // Register as a Cloudflare custom hostname for automatic SSL.
+    if let (Some(zone_id), Some(api_token)) =
+        (config::cf_zone_id(&ctx.env), config::cf_api_token(&ctx.env))
+    {
+        let cf_url = format!(
+            "https://api.cloudflare.com/client/v4/zones/{}/custom_hostnames",
+            zone_id
+        );
+        let cf_body = serde_json::json!({
+            "hostname": domain,
+            "ssl": { "method": "http", "type": "dv" },
+        });
+        let mut headers = Headers::new();
+        headers.set("Authorization", &format!("Bearer {}", api_token))?;
+        headers.set("Content-Type", "application/json")?;
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post)
+            .with_headers(headers)
+            .with_body(Some(wasm_bindgen::JsValue::from_str(&cf_body.to_string())));
+        match Fetch::Request(Request::new_with_init(&cf_url, &init)?)
+            .send()
+            .await
+        {
+            Ok(mut resp) => {
+                if resp.status_code() >= 400 {
+                    let text = resp.text().await.unwrap_or_default();
+                    worker::console_log!(
+                        "Cloudflare custom hostname creation failed for {}: {} {}",
+                        domain,
+                        resp.status_code(),
+                        text
+                    );
+                }
+            }
+            Err(e) => {
+                worker::console_log!("Cloudflare custom hostname API error for {}: {}", domain, e);
+            }
+        }
+    }
+
+    Response::from_json(&serde_json::json!({
+        "domain": info.domain,
+        "namespace_id": info.namespace_id,
+        "audience_name": info.audience_name,
+        "created_at": info.created_at,
+        "verified": info.verified,
+    }))
+}
+
+pub async fn remove_domain(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let _user_id = authenticate(&req, &ctx).await?;
+    let ns_id = ctx
+        .param("ns_id")
+        .ok_or_else(|| Error::from("missing ns_id"))?
+        .to_string();
+    let domain = ctx
+        .param("domain")
+        .ok_or_else(|| Error::from("missing domain"))?
+        .to_string();
+
+    // Find and delete the Cloudflare custom hostname first.
+    if let (Some(zone_id), Some(api_token)) =
+        (config::cf_zone_id(&ctx.env), config::cf_api_token(&ctx.env))
+    {
+        // Look up the custom hostname ID by hostname.
+        let list_url = format!(
+            "https://api.cloudflare.com/client/v4/zones/{}/custom_hostnames?hostname={}",
+            zone_id, domain
+        );
+        let mut headers = Headers::new();
+        headers.set("Authorization", &format!("Bearer {}", api_token))?;
+        let mut init = RequestInit::new();
+        init.with_method(Method::Get).with_headers(headers);
+        if let Ok(mut resp) = Fetch::Request(Request::new_with_init(&list_url, &init)?)
+            .send()
+            .await
+        {
+            if let Ok(body) = resp.text().await {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(results) = parsed["result"].as_array() {
+                        for entry in results {
+                            if let Some(ch_id) = entry["id"].as_str() {
+                                let del_url = format!(
+                                    "https://api.cloudflare.com/client/v4/zones/{}/custom_hostnames/{}",
+                                    zone_id, ch_id
+                                );
+                                let mut del_headers = Headers::new();
+                                del_headers
+                                    .set("Authorization", &format!("Bearer {}", api_token))?;
+                                let mut del_init = RequestInit::new();
+                                del_init
+                                    .with_method(Method::Delete)
+                                    .with_headers(del_headers);
+                                let _ =
+                                    Fetch::Request(Request::new_with_init(&del_url, &del_init)?)
+                                        .send()
+                                        .await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let domain_cache = KvDomainMappingCache::new(domains_kv(&ctx)?);
+    let service = DomainService::new(&ns_store, &domain_cache);
+
+    match service.remove_domain(&ns_id, &domain).await {
+        Ok(()) => Response::empty().map(|r| r.with_status(204)),
+        Err(e) => error_response(e),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Subdomain handlers
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ClaimSubdomainBody {
+    subdomain: String,
+    #[serde(default)]
+    default_audience: Option<String>,
+}
+
+pub async fn claim_subdomain(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let _user_id = authenticate(&req, &ctx).await?;
+    let ns_id = ctx
+        .param("ns_id")
+        .ok_or_else(|| Error::from("missing ns_id"))?
+        .to_string();
+    let body: ClaimSubdomainBody = req.json().await?;
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let domain_cache = KvDomainMappingCache::new(domains_kv(&ctx)?);
+    let service = DomainService::new(&ns_store, &domain_cache);
+
+    match service
+        .claim_subdomain(&ns_id, &body.subdomain, body.default_audience.as_deref())
+        .await
+    {
+        Ok(claimed) => Response::from_json(&serde_json::json!({
+            "subdomain": claimed.subdomain,
+            "namespace_id": claimed.namespace_id,
+            "url": format!("https://{}.diaryx.org", claimed.subdomain),
+        })),
+        Err(e) => error_response(e),
+    }
+}
+
+pub async fn release_subdomain(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let _user_id = authenticate(&req, &ctx).await?;
+    let ns_id = ctx
+        .param("ns_id")
+        .ok_or_else(|| Error::from("missing ns_id"))?
+        .to_string();
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let domain_cache = KvDomainMappingCache::new(domains_kv(&ctx)?);
+    let service = DomainService::new(&ns_store, &domain_cache);
+
+    match service.release_subdomain(&ns_id).await {
+        Ok(_) => Response::empty().map(|r| r.with_status(204)),
+        Err(e) => error_response(e),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Session handlers
 // ---------------------------------------------------------------------------
 
@@ -445,7 +731,34 @@ pub async fn get_current_user(req: Request, ctx: RouteContext<()>) -> Result<Res
     let current_user =
         diaryx_server::use_cases::current_user::CurrentUserService::new(&auth_store, &ns_store);
     match current_user.load(&auth.user.id, &auth.user.email).await {
-        Ok(ctx) => Response::from_json(&ctx),
+        Ok(ctx) => {
+            // Flatten to match the shape the frontend expects (MeResponse).
+            let devices: Vec<serde_json::Value> = ctx
+                .devices
+                .into_iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "id": d.id,
+                        "name": d.name,
+                        "last_seen_at": d.last_seen_at.to_rfc3339(),
+                    })
+                })
+                .collect();
+            let workspaces: Vec<serde_json::Value> = ctx
+                .namespaces
+                .into_iter()
+                .map(|ns| serde_json::json!({ "id": &ns.id, "name": &ns.id }))
+                .collect();
+            Response::from_json(&serde_json::json!({
+                "user": { "id": auth.user.id, "email": ctx.user.email },
+                "workspaces": workspaces,
+                "devices": devices,
+                "tier": ctx.user.tier.as_str(),
+                "workspace_limit": ctx.limits.workspace_limit,
+                "published_site_limit": ctx.limits.published_site_limit,
+                "attachment_limit_bytes": ctx.limits.attachment_limit_bytes,
+            }))
+        }
         Err(e) => error_response(e),
     }
 }
@@ -576,6 +889,13 @@ pub async fn verify_magic_link(req: Request, ctx: RouteContext<()>) -> Result<Re
             resp.headers_mut().set("Set-Cookie", &cookie)?;
             Ok(resp)
         }
+        Err(AuthError::DeviceLimitReached { devices, .. }) => {
+            Response::from_json(&serde_json::json!({
+                "error": "Device limit reached. Remove a device to sign in on a new one.",
+                "devices": devices,
+            }))
+            .map(|r| r.with_status(403))
+        }
         Err(e) => Response::from_json(&serde_json::json!({ "error": e.to_string() }))
             .map(|r| r.with_status(400)),
     }
@@ -620,6 +940,13 @@ pub async fn verify_code(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
             }))?;
             resp.headers_mut().set("Set-Cookie", &cookie)?;
             Ok(resp)
+        }
+        Err(AuthError::DeviceLimitReached { devices, .. }) => {
+            Response::from_json(&serde_json::json!({
+                "error": "Device limit reached. Remove a device to sign in on a new one.",
+                "devices": devices,
+            }))
+            .map(|r| r.with_status(403))
         }
         Err(e) => Response::from_json(&serde_json::json!({ "error": e.to_string() }))
             .map(|r| r.with_status(400)),

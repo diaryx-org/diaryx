@@ -16,7 +16,7 @@ type ServiceBinding = {
 
 type Env = {
   ASSETS: AssetsBinding;
-  API: ServiceBinding;
+  API?: ServiceBinding;
   SYNC_SERVER_ORIGIN?: string;
 };
 
@@ -107,7 +107,24 @@ export default {
       });
     }
 
-    // All other API requests → Rust API worker via service binding
-    return env.API.fetch(request);
+    // All other API requests → Rust API worker via service binding,
+    // or fall back to sync server proxy if the binding isn't configured yet.
+    if (env.API) {
+      return env.API.fetch(request);
+    }
+
+    // Fallback: proxy to native sync server (strips /api prefix)
+    const stripped = url.pathname.replace(/^\/api/, "") || "/";
+    const upstreamUrl = new URL(
+      stripped + url.search,
+      resolveSyncServerOrigin(env),
+    );
+    const upstreamRequest = buildUpstreamRequest(request, upstreamUrl);
+    const response = await fetch(upstreamRequest);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   },
 };

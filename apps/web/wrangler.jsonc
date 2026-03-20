@@ -16,12 +16,13 @@
       "custom_domain": true
     }
   ],
-  "services": [
-    {
-      "binding": "API",
-      "service": "diaryx-api"
-    }
-  ],
+  // Uncomment after deploying diaryx-api:
+  // "services": [
+  //   {
+  //     "binding": "API",
+  //     "service": "diaryx-api"
+  //   }
+  // ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

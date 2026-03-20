@@ -383,12 +383,12 @@ jobs:
         working-directory: crates/diaryx_cloudflare
         run: worker-build --release
 
+      - name: Install Wrangler
+        run: bun install -g wrangler@4
+
       - name: Deploy to Cloudflare
-        uses: cloudflare/wrangler-action@v3
-        with:
-          wranglerVersion: "4"
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: crates/diaryx_cloudflare
-          packageManager: npm
-          command: deploy --no-build
+        working-directory: crates/diaryx_cloudflare
+        run: wrangler deploy --no-build
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

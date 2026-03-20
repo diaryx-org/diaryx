@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      server: ${{ steps.filter.outputs.server }}
       tauri: ${{ steps.filter.outputs.tauri }}
       web: ${{ steps.filter.outputs.web }}
       wasm: ${{ steps.filter.outputs.wasm }}
@@ -39,6 +40,10 @@ jobs:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+            server:
+              - 'crates/diaryx_server/**'
+              - 'crates/diaryx_sync_server/**'
+              - 'crates/diaryx_cloudflare/**'
             tauri:
               - 'apps/tauri/**'
               - 'apps/web/**'
@@ -106,6 +111,32 @@ jobs:
           toolchain: "1.91"
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p diaryx
+
+  # ── Server crates ───────────────────────────────────────────────────
+
+  test-server:
+    name: Test Server Crates
+    needs: [changes]
+    if: needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p diaryx_server -p diaryx_sync_server --verbose
+
+  check-cloudflare:
+    name: Check Cloudflare Worker
+    needs: [changes]
+    if: needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p diaryx_cloudflare --target wasm32-unknown-unknown
 
   # ── WASM & bindings (Nix derivations) ────────────────────────────────────
 
@@ -329,4 +360,32 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/web
           packageManager: npm
+          command: deploy
+
+  deploy-api:
+    name: Deploy API Worker
+    runs-on: ubuntu-latest
+    needs: [test-server, check-cloudflare]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install worker-build
+        run: cargo install worker-build
+
+      - name: Build API Worker
+        working-directory: crates/diaryx_cloudflare
+        run: worker-build --release
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          wranglerVersion: "4"
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: crates/diaryx_cloudflare
           command: deploy

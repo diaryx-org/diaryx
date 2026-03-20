@@ -391,4 +391,4 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: crates/diaryx_cloudflare
           packageManager: npm
-          command: deploy
+          command: deploy --no-build

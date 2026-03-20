@@ -8,8 +8,10 @@ export interface StarterWorkspaceRegistry {
   starters: StarterWorkspaceRegistryEntry[];
 }
 
+import { CDN_BASE_URL } from "./cdnBase";
+
 const TRUSTED_STARTER_REGISTRY_URLS = [
-  "https://cdn.diaryx.org/starter-workspaces/registry.md",
+  `${CDN_BASE_URL}/starter-workspaces/registry.md`,
 ] as const;
 
 const DEFAULT_STARTER_REGISTRY_URL = TRUSTED_STARTER_REGISTRY_URLS[0];

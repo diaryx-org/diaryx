@@ -23,10 +23,16 @@
   //     "service": "diaryx-api"
   //   }
   // ],
+  "r2_buckets": [
+    {
+      "binding": "CDN",
+      "bucket_name": "diaryx-cdn"
+    }
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/cdn/*"]
   }
 }

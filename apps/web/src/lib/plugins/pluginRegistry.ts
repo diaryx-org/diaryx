@@ -45,8 +45,10 @@ export type RegistryPlugin = MarketplaceEntry;
 export type RegistryPluginArtifact = PluginArtifact;
 export type PluginRegistryV2 = MarketplaceRegistry;
 
+import { CDN_BASE_URL } from "$lib/marketplace/cdnBase";
+
 const TRUSTED_REGISTRY_URLS = [
-  "https://cdn.diaryx.org/plugins/registry.md",
+  `${CDN_BASE_URL}/plugins/registry.md`,
 ] as const;
 
 const DEFAULT_REGISTRY_URL = TRUSTED_REGISTRY_URLS[0];

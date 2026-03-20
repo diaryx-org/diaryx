@@ -8,8 +8,10 @@ export interface BundleRegistry {
   bundles: BundleRegistryEntry[];
 }
 
+import { CDN_BASE_URL } from "./cdnBase";
+
 const TRUSTED_BUNDLE_REGISTRY_URLS = [
-  "https://cdn.diaryx.org/bundles/registry.md",
+  `${CDN_BASE_URL}/bundles/registry.md`,
 ] as const;
 
 const DEFAULT_BUNDLE_REGISTRY_URL = TRUSTED_BUNDLE_REGISTRY_URLS[0];

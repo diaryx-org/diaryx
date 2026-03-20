@@ -13,8 +13,10 @@ export interface ThemeRegistry {
   themes: ThemeRegistryEntry[];
 }
 
+import { CDN_BASE_URL } from "./cdnBase";
+
 const TRUSTED_THEME_REGISTRY_URLS = [
-  "https://cdn.diaryx.org/themes/registry.md",
+  `${CDN_BASE_URL}/themes/registry.md`,
 ] as const;
 
 const DEFAULT_THEME_REGISTRY_URL = TRUSTED_THEME_REGISTRY_URLS[0];

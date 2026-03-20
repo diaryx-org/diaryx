@@ -8,8 +8,10 @@ export interface TemplateRegistry {
   templates: TemplateRegistryEntry[];
 }
 
+import { CDN_BASE_URL } from "./cdnBase";
+
 const TRUSTED_TEMPLATE_REGISTRY_URLS = [
-  "https://cdn.diaryx.org/templates/registry.md",
+  `${CDN_BASE_URL}/templates/registry.md`,
 ] as const;
 
 const DEFAULT_TEMPLATE_REGISTRY_URL = TRUSTED_TEMPLATE_REGISTRY_URLS[0];

@@ -13,8 +13,10 @@ export interface TypographyRegistry {
   typographies: TypographyRegistryEntry[];
 }
 
+import { CDN_BASE_URL } from "./cdnBase";
+
 const TRUSTED_TYPOGRAPHY_REGISTRY_URLS = [
-  "https://cdn.diaryx.org/typographies/registry.md",
+  `${CDN_BASE_URL}/typographies/registry.md`,
 ] as const;
 
 const DEFAULT_TYPOGRAPHY_REGISTRY_URL = TRUSTED_TYPOGRAPHY_REGISTRY_URLS[0];

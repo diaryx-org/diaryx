@@ -14,9 +14,19 @@ type ServiceBinding = {
   fetch(request: Request): Promise<Response>;
 };
 
+type R2Bucket = {
+  get(key: string): Promise<R2Object | null>;
+};
+
+type R2Object = {
+  body: ReadableStream;
+  httpMetadata?: { contentType?: string };
+};
+
 type Env = {
   ASSETS: AssetsBinding;
   API?: ServiceBinding;
+  CDN?: R2Bucket;
   SYNC_SERVER_ORIGIN?: string;
 };
 
@@ -82,13 +92,66 @@ function buildUpstreamRequest(
   return new Request(upstreamUrl.toString(), init);
 }
 
+const MIME_TYPES: Record<string, string> = {
+  ".md": "text/markdown",
+  ".json": "application/json",
+  ".wasm": "application/wasm",
+  ".js": "application/javascript",
+  ".css": "text/css",
+  ".html": "text/html",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml",
+};
+
+function guessMimeType(key: string): string {
+  const ext = key.substring(key.lastIndexOf(".")).toLowerCase();
+  return MIME_TYPES[ext] || "application/octet-stream";
+}
+
+async function handleCdn(url: URL, env: Env): Promise<Response> {
+  if (!env.CDN) {
+    return new Response("CDN not configured", { status: 503 });
+  }
+
+  // Strip /cdn/ prefix to get the R2 key
+  const key = url.pathname.slice("/cdn/".length);
+  if (!key) {
+    return new Response("Not found", { status: 404 });
+  }
+
+  const object = await env.CDN.get(key);
+  if (!object) {
+    return new Response("Not found", { status: 404 });
+  }
+
+  const contentType =
+    object.httpMetadata?.contentType || guessMimeType(key);
+
+  return new Response(object.body, {
+    headers: {
+      "content-type": contentType,
+      "cache-control": "public, max-age=3600",
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // Non-API requests → static assets
-    if (!url.pathname.startsWith("/api/") && url.pathname !== "/api") {
+    // Non-API, non-CDN requests → static assets
+    if (
+      !url.pathname.startsWith("/api/") &&
+      url.pathname !== "/api" &&
+      !url.pathname.startsWith("/cdn/")
+    ) {
       return env.ASSETS.fetch(request);
+    }
+
+    // CDN requests → serve from R2 bucket
+    if (url.pathname.startsWith("/cdn/")) {
+      return handleCdn(url, env);
     }
 
     // Sync endpoints → proxy to native sync server

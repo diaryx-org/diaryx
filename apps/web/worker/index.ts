@@ -1,16 +1,22 @@
 /**
  * Cloudflare Worker entrypoint for `app.diaryx.org`.
  *
- * Static assets are served from Workers Static Assets, while `/api/*`
- * requests are proxied to the current Rust sync origin during the migration.
+ * Static assets are served from Workers Static Assets.
+ * `/api/*` requests are routed to the Rust API worker via service binding,
+ * except sync endpoints which are proxied to the native sync server.
  */
 
 type AssetsBinding = {
   fetch(request: Request): Promise<Response>;
 };
 
+type ServiceBinding = {
+  fetch(request: Request): Promise<Response>;
+};
+
 type Env = {
   ASSETS: AssetsBinding;
+  API: ServiceBinding;
   SYNC_SERVER_ORIGIN?: string;
 };
 
@@ -23,7 +29,19 @@ function resolveSyncServerOrigin(env: Env): string {
     : DEFAULT_SYNC_SERVER_ORIGIN;
 }
 
-function rewriteApiPath(url: URL): string {
+/** Paths that must be proxied to the native sync server (not the Rust API worker). */
+function isSyncPath(pathname: string): boolean {
+  const stripped = pathname.replace(/^\/api/, "") || "/";
+
+  // WebSocket sync endpoints
+  if (/^\/ns\/[^/]+\/sync\/?$/.test(stripped)) return true;
+  if (/^\/namespaces\/[^/]+\/sync\/?$/.test(stripped)) return true;
+  if (/^\/sync2\/?$/.test(stripped)) return true;
+
+  return false;
+}
+
+function rewriteSyncPath(url: URL): string {
   const stripped = url.pathname.replace(/^\/api/, "") || "/";
 
   const namespaceSyncMatch = stripped.match(/^\/ns\/([^/]+)\/sync\/?$/);
@@ -68,23 +86,28 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (!url.pathname.startsWith("/api/")) {
+    // Non-API requests → static assets
+    if (!url.pathname.startsWith("/api/") && url.pathname !== "/api") {
       return env.ASSETS.fetch(request);
     }
 
-    const upstreamPath = rewriteApiPath(url);
-    const upstreamUrl = new URL(
-      upstreamPath + url.search,
-      resolveSyncServerOrigin(env),
-    );
+    // Sync endpoints → proxy to native sync server
+    if (isSyncPath(url.pathname)) {
+      const upstreamPath = rewriteSyncPath(url);
+      const upstreamUrl = new URL(
+        upstreamPath + url.search,
+        resolveSyncServerOrigin(env),
+      );
+      const upstreamRequest = buildUpstreamRequest(request, upstreamUrl);
+      const response = await fetch(upstreamRequest);
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    }
 
-    const upstreamRequest = buildUpstreamRequest(request, upstreamUrl);
-    const response = await fetch(upstreamRequest);
-
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
+    // All other API requests → Rust API worker via service binding
+    return env.API.fetch(request);
   },
 };

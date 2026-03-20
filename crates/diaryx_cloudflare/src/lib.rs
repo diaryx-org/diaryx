@@ -18,38 +18,47 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
     let result = router
         // Health
-        .get("/", |_, _| Response::ok("Diaryx Cloudflare Worker"))
-        .get("/health", |_, _| Response::ok("OK"))
+        .get("/api", |_, _| Response::ok("Diaryx Cloudflare Worker"))
+        .get("/api/health", |_, _| Response::ok("OK"))
         // Namespaces
-        .post_async("/namespaces", handlers::create_namespace)
-        .get_async("/namespaces", handlers::list_namespaces)
-        .get_async("/namespaces/:id", handlers::get_namespace)
-        .delete_async("/namespaces/:id", handlers::delete_namespace)
+        .post_async("/api/namespaces", handlers::create_namespace)
+        .get_async("/api/namespaces", handlers::list_namespaces)
+        .get_async("/api/namespaces/:id", handlers::get_namespace)
+        .delete_async("/api/namespaces/:id", handlers::delete_namespace)
         // Objects
-        .put_async("/namespaces/:ns_id/objects/*key", handlers::put_object)
-        .get_async("/namespaces/:ns_id/objects/*key", handlers::get_object)
-        .delete_async("/namespaces/:ns_id/objects/*key", handlers::delete_object)
-        // Public objects
-        .get_async("/public/:ns_id/objects/*key", handlers::get_public_object)
-        // Audiences
-        .put_async("/namespaces/:ns_id/audiences/:name", handlers::set_audience)
-        .get_async("/namespaces/:ns_id/audiences", handlers::list_audiences)
+        .put_async("/api/namespaces/:ns_id/objects/*key", handlers::put_object)
+        .get_async("/api/namespaces/:ns_id/objects/*key", handlers::get_object)
         .delete_async(
-            "/namespaces/:ns_id/audiences/:name",
+            "/api/namespaces/:ns_id/objects/*key",
+            handlers::delete_object,
+        )
+        // Public objects
+        .get_async(
+            "/api/public/:ns_id/objects/*key",
+            handlers::get_public_object,
+        )
+        // Audiences
+        .put_async(
+            "/api/namespaces/:ns_id/audiences/:name",
+            handlers::set_audience,
+        )
+        .get_async("/api/namespaces/:ns_id/audiences", handlers::list_audiences)
+        .delete_async(
+            "/api/namespaces/:ns_id/audiences/:name",
             handlers::delete_audience,
         )
         // Sessions
-        .post_async("/sessions", handlers::create_session)
-        .get_async("/sessions/:code", handlers::get_session)
-        .delete_async("/sessions/:code", handlers::delete_session)
+        .post_async("/api/sessions", handlers::create_session)
+        .get_async("/api/sessions/:code", handlers::get_session)
+        .delete_async("/api/sessions/:code", handlers::delete_session)
         // Auth
-        .get_async("/auth/me", handlers::get_current_user)
-        .post_async("/auth/logout", handlers::logout)
-        .post_async("/auth/magic-link", handlers::request_magic_link)
-        .get_async("/auth/verify", handlers::verify_magic_link)
-        .post_async("/auth/verify-code", handlers::verify_code)
+        .get_async("/api/auth/me", handlers::get_current_user)
+        .post_async("/api/auth/logout", handlers::logout)
+        .post_async("/api/auth/magic-link", handlers::request_magic_link)
+        .get_async("/api/auth/verify", handlers::verify_magic_link)
+        .post_async("/api/auth/verify-code", handlers::verify_code)
         // Usage
-        .get_async("/usage", handlers::get_usage)
+        .get_async("/api/usage", handlers::get_usage)
         // Run
         .run(req, env.clone())
         .await?;

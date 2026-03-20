@@ -34,11 +34,11 @@ fn error_response(err: ServerCoreError) -> Result<Response> {
 }
 
 fn db(ctx: &RouteContext<()>) -> Result<D1Database> {
-    ctx.env.d1("DB")
+    ctx.env.d1("diaryx_users")
 }
 
 fn bucket(ctx: &RouteContext<()>) -> Result<Bucket> {
-    ctx.env.bucket("OBJECTS")
+    ctx.env.bucket("diaryx_objects")
 }
 
 fn auth_cfg(ctx: &RouteContext<()>) -> AuthConfig {

@@ -1,11 +1,13 @@
 use crate::auth::RequireAuth;
 use crate::config::AppleIapConfig;
-use crate::db::{AuthRepo, UserTier};
+use crate::db::AuthRepo;
 use axum::{
     Json, Router, body::Bytes, extract::State, http::StatusCode, response::IntoResponse,
     routing::post,
 };
 use base64::Engine;
+use diaryx_server::UserTier;
+use diaryx_server::ports::UserStore;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -18,6 +20,7 @@ const APPLE_ROOT_CA_G3_DER: &[u8] = include_bytes!("apple_root_ca_g3.der");
 #[derive(Clone)]
 pub struct AppleIapState {
     pub repo: Arc<AuthRepo>,
+    pub user_store: Arc<dyn UserStore>,
     pub config: AppleIapConfig,
 }
 
@@ -174,7 +177,11 @@ async fn verify_receipt(
             .into_response();
     }
 
-    match state.repo.set_user_tier(user_id, UserTier::Plus) {
+    match state
+        .user_store
+        .set_user_tier(user_id, UserTier::Plus)
+        .await
+    {
         Ok(_) => {
             info!(
                 "User {} upgraded to Plus via Apple IAP (tx: {})",
@@ -251,7 +258,11 @@ async fn restore_purchases(
     }
 
     if best_tier == UserTier::Plus {
-        if let Err(e) = state.repo.set_user_tier(user_id, UserTier::Plus) {
+        if let Err(e) = state
+            .user_store
+            .set_user_tier(user_id, UserTier::Plus)
+            .await
+        {
             error!("Failed to upgrade user {} during restore: {}", user_id, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,

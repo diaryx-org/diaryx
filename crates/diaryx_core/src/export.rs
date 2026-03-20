@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::command::{BinaryFileInfo, ExportedFile};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::error::DiaryxError;
 use crate::error::Result;
@@ -505,6 +506,141 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         let new_frontmatter = new_frontmatter.trim_end();
 
         Ok(format!("---\n{}\n---\n{}", new_frontmatter, body))
+    }
+}
+
+/// Check if a file is a binary attachment (not markdown/text).
+pub fn is_binary_file(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    match ext.as_deref() {
+        // Text/markdown files - not binary
+        Some("md" | "txt" | "json" | "yaml" | "yml" | "toml") => false,
+        // Common binary formats
+        Some(
+            "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" | "bmp" | "pdf" | "heic"
+            | "heif" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "mp3" | "mp4" | "wav"
+            | "ogg" | "flac" | "m4a" | "aac" | "mov" | "avi" | "mkv" | "webm" | "zip" | "tar"
+            | "gz" | "rar" | "7z" | "ttf" | "otf" | "woff" | "woff2" | "sqlite" | "db",
+        ) => true,
+        _ => false,
+    }
+}
+
+impl<FS: AsyncFileSystem> Exporter<FS> {
+    /// Export files to memory by running `plan_export()` and reading each included file.
+    ///
+    /// Returns the raw file contents without body rendering — callers (plugins)
+    /// can post-process the results as needed.
+    pub async fn export_to_memory(
+        &self,
+        workspace_root: &Path,
+        audience: &str,
+        default_audience: Option<&str>,
+    ) -> Result<Vec<ExportedFile>> {
+        let plan = self
+            .plan_export(
+                workspace_root,
+                audience,
+                Path::new("/tmp/export"),
+                default_audience,
+            )
+            .await?;
+
+        let root_dir = workspace_root
+            .parent()
+            .unwrap_or(workspace_root)
+            .to_path_buf();
+
+        let mut files = Vec::new();
+        for included in &plan.included {
+            match self
+                .workspace
+                .fs_ref()
+                .read_to_string(&included.source_path)
+                .await
+            {
+                Ok(content) => {
+                    let relative_path = pathdiff::diff_paths(&included.source_path, &root_dir)
+                        .unwrap_or_else(|| included.source_path.clone());
+                    files.push(ExportedFile {
+                        path: relative_path.to_string_lossy().to_string(),
+                        content,
+                    });
+                }
+                Err(e) => {
+                    log::warn!("[Exporter] read failed: {:?} - {}", included.source_path, e);
+                }
+            }
+        }
+        Ok(files)
+    }
+
+    /// Walk a directory tree collecting binary (non-text) file paths.
+    pub async fn collect_binary_attachments(&self, root_path: &Path) -> Vec<BinaryFileInfo> {
+        let root_dir = root_path.parent().unwrap_or(root_path);
+        let mut attachments = Vec::new();
+        let mut visited_dirs = HashSet::new();
+        self.collect_binaries_recursive(root_dir, root_dir, &mut attachments, &mut visited_dirs)
+            .await;
+        attachments
+    }
+
+    async fn collect_binaries_recursive(
+        &self,
+        dir: &Path,
+        root_dir: &Path,
+        attachments: &mut Vec<BinaryFileInfo>,
+        visited_dirs: &mut HashSet<PathBuf>,
+    ) {
+        if visited_dirs.contains(dir) {
+            return;
+        }
+        visited_dirs.insert(dir.to_path_buf());
+
+        // Skip hidden directories
+        if let Some(name) = dir.file_name().and_then(|n| n.to_str())
+            && name.starts_with('.')
+        {
+            return;
+        }
+
+        let entries = match self.workspace.fs_ref().list_files(dir).await {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("[Exporter] list_files failed for {:?}: {}", dir, e);
+                return;
+            }
+        };
+
+        for entry_path in entries {
+            // Skip hidden files/dirs
+            if let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
+                && name.starts_with('.')
+            {
+                continue;
+            }
+
+            if self.workspace.fs_ref().is_dir(&entry_path).await {
+                Box::pin(self.collect_binaries_recursive(
+                    &entry_path,
+                    root_dir,
+                    attachments,
+                    visited_dirs,
+                ))
+                .await;
+            } else if is_binary_file(&entry_path) {
+                let relative_path = pathdiff::diff_paths(&entry_path, root_dir)
+                    .unwrap_or_else(|| entry_path.clone());
+                attachments.push(BinaryFileInfo {
+                    source_path: entry_path.to_string_lossy().to_string(),
+                    relative_path: relative_path.to_string_lossy().to_string(),
+                });
+            }
+        }
     }
 }
 

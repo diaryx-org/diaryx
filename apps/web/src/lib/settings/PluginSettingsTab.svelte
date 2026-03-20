@@ -24,6 +24,13 @@
   import SignInForm from "$lib/components/SignInForm.svelte";
   import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
   import PublishingPanel from "$lib/share/PublishingPanel.svelte";
+  import NamespaceGuardWidget from "$lib/namespace/NamespaceGuardWidget.svelte";
+  import NamespaceSiteUrlWidget from "$lib/namespace/NamespaceSiteUrlWidget.svelte";
+  import NamespaceSubdomainWidget from "$lib/namespace/NamespaceSubdomainWidget.svelte";
+  import NamespaceAudienceWidget from "$lib/namespace/NamespaceAudienceWidget.svelte";
+  import NamespacePublishWidget from "$lib/namespace/NamespacePublishWidget.svelte";
+  import NamespaceCustomDomainManager from "$lib/namespace/NamespaceCustomDomainManager.svelte";
+  import { getNamespaceContext } from "$lib/namespace/namespaceContext.svelte";
   import Self from "./PluginSettingsTab.svelte";
   import { evaluateFieldCondition } from "./pluginFieldConditions";
   import type { SettingsField, SelectOption } from "$lib/backend/generated";
@@ -525,6 +532,33 @@
         <div class="px-1">
           <PublishingPanel {api} onAddWorkspace={handleAddWorkspaceRequest} />
         </div>
+      {:else if field.widget_id === "namespace.guard"}
+        <div class="px-1">
+          <NamespaceGuardWidget />
+        </div>
+      {:else if field.widget_id === "namespace.site-url"}
+        <div class="px-1">
+          <NamespaceSiteUrlWidget />
+        </div>
+      {:else if field.widget_id === "namespace.subdomain"}
+        <div class="px-1">
+          <NamespaceSubdomainWidget />
+        </div>
+      {:else if field.widget_id === "namespace.audiences"}
+        <div class="px-1">
+          <NamespaceAudienceWidget {api} />
+        </div>
+      {:else if field.widget_id === "namespace.publish-button"}
+        <div class="px-1">
+          <NamespacePublishWidget />
+        </div>
+      {:else if field.widget_id === "namespace.custom-domains"}
+        {@const nsCtx = getNamespaceContext()}
+        {#if nsCtx.isReady && nsCtx.isConfigured && nsCtx.namespaceId}
+          <div class="px-1">
+            <NamespaceCustomDomainManager namespaceId={nsCtx.namespaceId} subdomain={nsCtx.subdomain} />
+          </div>
+        {/if}
       {:else}
         <div class="px-1 text-xs text-muted-foreground">
           Unsupported host widget: {field.widget_id}

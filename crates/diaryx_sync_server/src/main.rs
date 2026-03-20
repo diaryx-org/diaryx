@@ -5,18 +5,20 @@ use axum::{
     routing::get,
 };
 use diaryx_sync_server::{
+    adapters::{
+        NativeAuthSessionStore, NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore,
+        NativeObjectMetaStore, NativeSessionStore, NativeUserStore,
+    },
     auth::{AuthExtractor, MagicLinkService, PasskeyService},
-    blob_store::{BlobStore, build_blob_store, build_sites_store},
+    blob_store::{BlobStore, build_blob_store},
     config::Config,
+    db::NamespaceRepo,
     db::{AuthRepo, init_database},
     email::EmailService,
-    handlers::sites::verify_domain_route,
     handlers::{
-        ai_routes, api_routes, auth_routes, session_routes, share_session_routes, site_routes,
-    },
-    kv_client::CloudflareKvClient,
-    publish::{
-        new_publish_lock, publish_workspace_to_r2, release_publish_lock, try_acquire_publish_lock,
+        AudienceState, DomainState, NamespaceState, NsSessionState, ObjectState, ai_routes,
+        audience_routes, auth_routes, domain_auth_route, domain_routes, namespace_routes,
+        ns_session_routes, object_routes, public_object_routes, usage_routes,
     },
     sync_v2::SyncV2Server,
 };
@@ -77,13 +79,14 @@ async fn main() {
         config.clone(),
         magic_link_service.clone(),
     ));
-    let auth_extractor = AuthExtractor::new(repo.clone());
+    let auth_session_store = Arc::new(NativeAuthSessionStore::new(repo.clone()));
+    let user_store = Arc::new(NativeUserStore::new(repo.clone()));
     let blob_store: Arc<dyn BlobStore> = match build_blob_store(config.as_ref()).await {
         Ok(store) => {
             if config.is_r2_configured() {
-                info!("Attachment blob store: R2 ({})", config.r2.bucket);
+                info!("Blob store: R2 ({})", config.r2.bucket);
             } else {
-                info!("Attachment blob store: in-memory (R2 not configured)");
+                info!("Blob store: in-memory (R2 not configured)");
             }
             store
         }
@@ -92,21 +95,6 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let sites_store: Arc<dyn BlobStore> = match build_sites_store(config.as_ref()).await {
-        Ok(store) => {
-            if config.is_r2_configured() {
-                info!("Sites blob store: R2 ({})", config.sites_r2_bucket);
-            } else {
-                info!("Sites blob store: in-memory (R2 not configured)");
-            }
-            store
-        }
-        Err(err) => {
-            error!("Failed to initialize sites blob store: {}", err);
-            std::process::exit(1);
-        }
-    };
-    let publish_lock = new_publish_lock();
 
     // Create data directory for workspace databases
     let data_dir = config
@@ -119,33 +107,37 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // Create sync v2 server (siphonophore-based)
-    let sync_v2_server = SyncV2Server::new(repo.clone(), workspaces_dir.clone());
-    let sync_v2_state = Arc::new(sync_v2_server.state());
-    let sync_v2_router = sync_v2_server.into_router_at("/sync2");
+    // Create namespace repo (shared connection from AuthRepo)
+    let ns_repo = Arc::new(NamespaceRepo::new(repo.connection()));
+    let auth_store = Arc::new(NativeAuthStore::new(repo.clone()));
+    let namespace_store = Arc::new(NativeNamespaceStore::new(ns_repo.clone()));
+    let domain_mapping_cache = Arc::new(NativeDomainMappingCache::new(
+        reqwest::Client::new(),
+        config.r2.account_id.clone(),
+        config.kv_api_token.clone(),
+        config.kv_namespace_id.clone(),
+    ));
+
+    // Create sync server (GenericNamespaceSyncHook)
+    let sync_server = SyncV2Server::new(repo.clone(), ns_repo.clone(), workspaces_dir);
+    let sync_router = sync_server.into_router_at("/namespaces/{ns_id}/sync");
 
     // Create shared rate limiter
     let rate_limiter = diaryx_sync_server::rate_limit::RateLimiter::new();
+
+    let auth_extractor = AuthExtractor::new(auth_store.clone(), auth_session_store.clone());
 
     // Create handler states
     let auth_state = diaryx_sync_server::handlers::auth::AuthState {
         magic_link_service,
         email_service,
-        repo: repo.clone(),
+        auth_store,
+        namespace_store: namespace_store.clone(),
+        session_store: auth_session_store,
+        user_store: user_store.clone(),
         passkey_service,
-        workspaces_dir: Some(workspaces_dir.clone()),
-        blob_store: blob_store.clone(),
-    };
-
-    let api_state = diaryx_sync_server::handlers::api::ApiState {
-        repo: repo.clone(),
-        sync_v2: sync_v2_state.clone(),
-        blob_store: blob_store.clone(),
-        snapshot_upload_max_bytes: config.snapshot_upload_max_bytes,
-        attachment_incremental_sync_enabled: config.attachment_incremental_sync_enabled,
-        admin_secret: config.admin_secret.clone(),
-        rate_limiter: rate_limiter.clone(),
-        data_dir: data_dir.to_path_buf(),
+        session_expiry_days: config.session_expiry_days,
+        secure_cookies: config.secure_cookies,
     };
 
     let ai_state = diaryx_sync_server::handlers::ai::AiState {
@@ -170,30 +162,34 @@ async fn main() {
         );
     }
 
-    let sessions_state = diaryx_sync_server::handlers::sessions::SessionsState {
-        repo: repo.clone(),
-        sync_v2: sync_v2_state.clone(),
-    };
-    let kv_client = if config.is_kv_configured() {
-        Some(Arc::new(CloudflareKvClient::new(
-            config.r2.account_id.clone(),
-            config.kv_namespace_id.clone(),
-            config.kv_api_token.clone(),
-        )))
-    } else {
-        None
-    };
+    let session_store = Arc::new(NativeSessionStore::new(ns_repo.clone()));
+    let object_meta_store = Arc::new(NativeObjectMetaStore::new(ns_repo.clone()));
 
-    let sites_state = diaryx_sync_server::handlers::sites::SitesState {
-        repo: repo.clone(),
-        sync_v2: sync_v2_state.clone(),
-        sites_store: sites_store.clone(),
-        attachments_store: blob_store.clone(),
+    // Namespace / object / audience states
+    let namespace_state = NamespaceState {
+        namespace_store: namespace_store.clone(),
+    };
+    let object_state = ObjectState {
+        namespace_store: namespace_store.clone(),
+        object_meta_store,
+        blob_store: blob_store.clone(),
         token_signing_key: config.token_signing_key.clone(),
-        sites_base_url: config.sites_base_url.clone(),
-        publish_lock: publish_lock.clone(),
-        kv_client,
-        rate_limiter: rate_limiter.clone(),
+    };
+    let audience_state = AudienceState {
+        namespace_store: namespace_store.clone(),
+        token_signing_key: config.token_signing_key.clone(),
+        blob_store: blob_store.clone(),
+    };
+    let domain_state = DomainState {
+        ns_repo: ns_repo.clone(),
+        namespace_store,
+        domain_mapping_cache,
+        blob_store: blob_store.clone(),
+        token_signing_key: config.token_signing_key.clone(),
+    };
+    let ns_session_state = NsSessionState {
+        namespace_store: namespace_state.namespace_store.clone(),
+        session_store,
     };
 
     // Create Stripe state (if configured)
@@ -201,6 +197,7 @@ async fn main() {
         info!("Stripe billing: enabled (price={})", stripe_config.price_id);
         let stripe_state = diaryx_sync_server::handlers::stripe::StripeState {
             repo: repo.clone(),
+            user_store: user_store.clone(),
             config: stripe_config,
             app_base_url: config.app_base_url.clone(),
         };
@@ -225,6 +222,7 @@ async fn main() {
         }
         let apple_state = diaryx_sync_server::handlers::apple::AppleIapState {
             repo: repo.clone(),
+            user_store: user_store.clone(),
             config: apple_config,
         };
         Some(diaryx_sync_server::handlers::apple::apple_iap_routes(
@@ -255,6 +253,8 @@ async fn main() {
             header::CONTENT_TYPE,
             header::CACHE_CONTROL,
             header::PRAGMA,
+            header::COOKIE,
+            header::HeaderName::from_static("x-audience"),
         ])
         .allow_credentials(true)
         .allow_origin(AllowOrigin::list(origins));
@@ -266,21 +266,26 @@ async fn main() {
         .route("/health", get(|| async { "OK" }))
         // Auth routes
         .nest("/auth", auth_routes(auth_state))
-        // API routes
-        .nest("/api", api_routes(api_state))
+        // AI routes
         .nest("/api", ai_routes(ai_state))
-        .nest("/api", site_routes(sites_state.clone()))
-        // Caddy verify-domain endpoint (unauthenticated)
-        .nest("/api", verify_domain_route(sites_state))
-        // Live share session routes
-        .nest(
-            "/api/share/sessions",
-            share_session_routes(sessions_state.clone()),
-        )
-        // Backward-compatible live share alias
-        .nest("/api/sessions", session_routes(sessions_state))
-        // Sync v2 endpoint (siphonophore-based)
-        .merge(sync_v2_router);
+        // Generic namespace routes
+        .nest("/namespaces", namespace_routes(namespace_state))
+        // Object store routes (mounted under /namespaces/{ns_id})
+        .nest("/namespaces/{ns_id}", object_routes(object_state.clone()))
+        // Audience routes (mounted under /namespaces/{ns_id})
+        .nest("/namespaces/{ns_id}", audience_routes(audience_state))
+        // Domain management routes (mounted under /namespaces/{ns_id})
+        .nest("/namespaces/{ns_id}", domain_routes(domain_state.clone()))
+        // Public (unauthenticated) object access
+        .merge(public_object_routes(object_state.clone()))
+        // Caddy forward_auth endpoint
+        .merge(domain_auth_route(domain_state))
+        // Usage metering route (user-level, not namespace-scoped)
+        .nest("/usage", usage_routes(object_state))
+        // Namespace session routes
+        .nest("/sessions", ns_session_routes(ns_session_state))
+        // Generic namespace sync endpoint
+        .merge(sync_router);
 
     // Stripe billing routes (only if configured)
     if let Some(stripe) = stripe_router {
@@ -318,321 +323,10 @@ async fn main() {
             interval.tick().await;
             let _ = cleanup_repo.cleanup_expired_magic_tokens();
             let _ = cleanup_repo.cleanup_expired_sessions();
-            let _ = cleanup_repo.cleanup_expired_share_sessions();
             let _ = cleanup_repo.cleanup_expired_passkey_challenges();
-            info!("Cleaned up expired tokens, sessions, share sessions, and passkey challenges");
+            info!("Cleaned up expired tokens, sessions, and passkey challenges");
         }
     });
-
-    // Start attachment blob GC task
-    {
-        let gc_repo = repo.clone();
-        let gc_blob_store = blob_store.clone();
-        let retention_days = config.r2.gc_retention_days.max(1);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
-            loop {
-                interval.tick().await;
-                let cutoff = chrono::Utc::now()
-                    .checked_sub_signed(chrono::Duration::days(retention_days))
-                    .unwrap_or_else(chrono::Utc::now)
-                    .timestamp();
-                let due = match gc_repo.list_soft_deleted_blobs_due(cutoff) {
-                    Ok(rows) => rows,
-                    Err(err) => {
-                        error!("Blob GC query failed: {}", err);
-                        continue;
-                    }
-                };
-
-                for row in due {
-                    if !row.r2_key.is_empty()
-                        && let Err(err) = gc_blob_store.delete(&row.r2_key).await
-                    {
-                        error!(
-                            "Blob GC delete failed for {} (user {}): {}",
-                            row.r2_key, row.user_id, err
-                        );
-                        continue;
-                    }
-                    if let Err(err) = gc_repo.delete_blob_row(&row.user_id, &row.blob_hash) {
-                        error!(
-                            "Blob GC DB delete failed for {}:{}: {}",
-                            row.user_id, row.blob_hash, err
-                        );
-                    }
-                }
-            }
-        });
-    }
-
-    // Start expired attachment upload cleanup task
-    {
-        let uploads_repo = repo.clone();
-        let uploads_blob_store = blob_store.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(600));
-            loop {
-                interval.tick().await;
-                let now = chrono::Utc::now().timestamp();
-                let expired = match uploads_repo.list_expired_attachment_uploads(now) {
-                    Ok(rows) => rows,
-                    Err(err) => {
-                        error!("Attachment upload cleanup query failed: {}", err);
-                        continue;
-                    }
-                };
-
-                for session in expired {
-                    if !session.r2_multipart_upload_id.is_empty()
-                        && let Err(err) = uploads_blob_store
-                            .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
-                            .await
-                    {
-                        error!(
-                            "Attachment upload abort failed for {}:{}: {}",
-                            session.upload_id, session.r2_key, err
-                        );
-                    }
-                    if let Err(err) =
-                        uploads_repo.set_attachment_upload_status(&session.upload_id, "expired")
-                    {
-                        error!(
-                            "Attachment upload status update failed for {}: {}",
-                            session.upload_id, err
-                        );
-                    }
-                    if let Err(err) =
-                        uploads_repo.delete_attachment_upload_session(&session.upload_id)
-                    {
-                        error!(
-                            "Attachment upload delete failed for {}: {}",
-                            session.upload_id, err
-                        );
-                    }
-                }
-            }
-        });
-    }
-
-    // Start git auto-commit background task
-    {
-        let sync_v2_state = sync_v2_state.clone();
-        let quiescence_mins = config.git_quiescence_minutes;
-        let max_staleness_hours = config.git_max_staleness_hours;
-        let auto_repo = repo.clone();
-        let auto_sites_store = sites_store.clone();
-        let auto_attachments_store = blob_store.clone();
-        let auto_publish_lock = publish_lock.clone();
-        info!(
-            "Git auto-commit: quiescence={}min, max_staleness={}h",
-            quiescence_mins, max_staleness_hours
-        );
-        tokio::spawn(async move {
-            let check_interval = tokio::time::Duration::from_secs(60);
-            let quiescence = tokio::time::Duration::from_secs(u64::from(quiescence_mins) * 60);
-            let max_staleness =
-                tokio::time::Duration::from_secs(u64::from(max_staleness_hours) * 3600);
-            let mut interval = tokio::time::interval(check_interval);
-
-            loop {
-                interval.tick().await;
-
-                // Collect workspaces that are ready to commit
-                let candidates: Vec<String> = {
-                    let dirty = sync_v2_state.dirty_workspaces.read().await;
-                    let now = tokio::time::Instant::now();
-                    dirty
-                        .iter()
-                        .filter(|(_, last_change)| {
-                            let elapsed = now.duration_since(**last_change);
-                            elapsed >= quiescence || elapsed >= max_staleness
-                        })
-                        .map(|(id, _)| id.clone())
-                        .collect()
-                };
-
-                for workspace_id in candidates {
-                    // Skip orphaned workspace IDs that no longer exist in user_workspaces.
-                    // Also opportunistically clean up leftover local artifacts.
-                    match auto_repo.get_workspace(&workspace_id) {
-                        Ok(Some(_)) => {}
-                        Ok(None) => {
-                            sync_v2_state
-                                .dirty_workspaces
-                                .write()
-                                .await
-                                .remove(&workspace_id);
-
-                            sync_v2_state.storage_cache.evict_storage(&workspace_id);
-
-                            let db_path =
-                                sync_v2_state.storage_cache.workspace_db_path(&workspace_id);
-                            if db_path.exists() {
-                                if let Err(err) = std::fs::remove_file(&db_path) {
-                                    warn!(
-                                        "Failed to remove orphan workspace DB {}: {}",
-                                        db_path.display(),
-                                        err
-                                    );
-                                } else {
-                                    info!("Removed orphan workspace DB {}", db_path.display());
-                                }
-                            }
-
-                            let git_path = sync_v2_state.storage_cache.git_repo_path(&workspace_id);
-                            if git_path.exists() {
-                                if let Err(err) = std::fs::remove_dir_all(&git_path) {
-                                    warn!(
-                                        "Failed to remove orphan workspace git repo {}: {}",
-                                        git_path.display(),
-                                        err
-                                    );
-                                } else {
-                                    info!(
-                                        "Removed orphan workspace git repo {}",
-                                        git_path.display()
-                                    );
-                                }
-                            }
-
-                            warn!(
-                                "Skipping auto-commit for unknown workspace {}; cleared dirty state",
-                                workspace_id
-                            );
-                            continue;
-                        }
-                        Err(err) => {
-                            error!(
-                                "Failed to verify workspace {} before auto-commit: {}",
-                                workspace_id, err
-                            );
-                            continue;
-                        }
-                    }
-
-                    // Check peer count — prefer committing when no one is connected
-                    let doc_id = format!("workspace:{}", workspace_id);
-                    let peer_count = sync_v2_state.handle.get_peer_count(&doc_id).await;
-
-                    // Check if past max staleness (commit even with peers)
-                    let force = {
-                        let dirty = sync_v2_state.dirty_workspaces.read().await;
-                        dirty.get(&workspace_id).is_some_and(|last_change| {
-                            tokio::time::Instant::now().duration_since(*last_change)
-                                >= max_staleness
-                        })
-                    };
-
-                    if peer_count > 0 && !force {
-                        continue;
-                    }
-
-                    // Attempt commit
-                    match diaryx_sync_server::git_ops::commit_workspace_by_id(
-                        &sync_v2_state.storage_cache,
-                        &workspace_id,
-                        None,
-                    ) {
-                        Ok(result) => {
-                            sync_v2_state
-                                .dirty_workspaces
-                                .write()
-                                .await
-                                .remove(&workspace_id);
-                            info!(
-                                "Auto-committed workspace {}: {} files [{}]",
-                                workspace_id, result.file_count, result.commit_id
-                            );
-
-                            let site = match auto_repo.get_site_for_workspace(&workspace_id) {
-                                Ok(site) => site,
-                                Err(err) => {
-                                    error!(
-                                        "Failed to query site config for {}: {}",
-                                        workspace_id, err
-                                    );
-                                    None
-                                }
-                            };
-
-                            if let Some(site) = site {
-                                if !site.enabled || !site.auto_publish {
-                                    continue;
-                                }
-
-                                let now = chrono::Utc::now().timestamp();
-                                if site
-                                    .last_published_at
-                                    .is_some_and(|last| last >= now.saturating_sub(300))
-                                {
-                                    continue;
-                                }
-
-                                if !try_acquire_publish_lock(&auto_publish_lock, &workspace_id)
-                                    .await
-                                {
-                                    continue;
-                                }
-
-                                let publish_workspace_id = workspace_id.clone();
-                                let publish_site = site.clone();
-                                let publish_repo = auto_repo.clone();
-                                let publish_sites_store = auto_sites_store.clone();
-                                let publish_attachments_store = auto_attachments_store.clone();
-                                let publish_storage_cache = sync_v2_state.storage_cache.clone();
-                                let publish_lock = auto_publish_lock.clone();
-
-                                tokio::spawn(async move {
-                                    let publish_result = publish_workspace_to_r2(
-                                        publish_repo.as_ref(),
-                                        publish_storage_cache.as_ref(),
-                                        publish_sites_store.as_ref(),
-                                        publish_attachments_store.as_ref(),
-                                        &publish_workspace_id,
-                                        &publish_site,
-                                        None,
-                                    )
-                                    .await;
-
-                                    if let Err(err) = publish_result {
-                                        error!(
-                                            "Auto-publish failed for workspace {} (slug={}): {}",
-                                            publish_workspace_id, publish_site.slug, err
-                                        );
-                                    } else {
-                                        info!(
-                                            "Auto-publish complete for workspace {} (slug={})",
-                                            publish_workspace_id, publish_site.slug
-                                        );
-                                    }
-
-                                    release_publish_lock(&publish_lock, &publish_workspace_id)
-                                        .await;
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            if e.to_string().contains("No files to commit") {
-                                sync_v2_state
-                                    .dirty_workspaces
-                                    .write()
-                                    .await
-                                    .remove(&workspace_id);
-                                info!(
-                                    "Auto-commit skipped for {}: no files to commit; cleared dirty state",
-                                    workspace_id
-                                );
-                            } else {
-                                // Keep dirty state for retriable failures.
-                                error!("Auto-commit failed for {}: {}", workspace_id, e);
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    }
 
     // Start rate limiter cleanup task
     {
@@ -642,52 +336,6 @@ async fn main() {
             loop {
                 interval.tick().await;
                 rl.cleanup(std::time::Duration::from_secs(3600));
-            }
-        });
-    }
-
-    // Start git GC background task
-    {
-        let gc_workspaces_dir = workspaces_dir.clone();
-        let gc_interval_hours = config.git_gc_interval_hours;
-        info!("Git GC: interval={}h", gc_interval_hours);
-        tokio::spawn(async move {
-            let interval_duration =
-                tokio::time::Duration::from_secs(u64::from(gc_interval_hours) * 3600);
-            let mut interval = tokio::time::interval(interval_duration);
-            // Skip the first immediate tick
-            interval.tick().await;
-            loop {
-                interval.tick().await;
-                info!("Git GC: starting sweep");
-                let dir = gc_workspaces_dir.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    let mut count = 0u32;
-                    let entries = match std::fs::read_dir(&dir) {
-                        Ok(e) => e,
-                        Err(err) => {
-                            error!("Git GC: failed to read workspaces dir: {}", err);
-                            return 0;
-                        }
-                    };
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.extension().is_some_and(|ext| ext == "git") && path.is_dir() {
-                            if let Err(err) = diaryx_sync_server::git_ops::gc_workspace_repo(&path)
-                            {
-                                warn!("Git GC failed for {}: {}", path.display(), err);
-                            } else {
-                                count += 1;
-                            }
-                        }
-                    }
-                    count
-                })
-                .await;
-                match result {
-                    Ok(count) => info!("Git GC: sweep complete ({} repos)", count),
-                    Err(err) => error!("Git GC: task panicked: {}", err),
-                }
             }
         });
     }

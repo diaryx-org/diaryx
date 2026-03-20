@@ -1,0 +1,50 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "diaryx-api",
+	"compatibility_date": "2025-03-01",
+	"main": "build/worker/shim.mjs",
+	"build": {
+		"command": "cargo install -q worker-build && worker-build --release"
+	},
+
+	// No public route — reached only via service binding from the web worker.
+	// To expose publicly later (e.g. for API access), add:
+	//   "routes": [{ "pattern": "api.diaryx.org/*", "zone_name": "diaryx.org" }]
+
+	"vars": {
+		"APP_BASE_URL": "https://app.diaryx.org",
+		"CORS_ORIGINS": "https://app.diaryx.org",
+		"EMAIL_FROM_NAME": "Diaryx",
+		"EMAIL_FROM_ADDRESS": "noreply@signin.diaryx.org",
+		"MAGIC_LINK_EXPIRY_MINUTES": "15",
+		"SESSION_EXPIRY_DAYS": "30",
+		"SECURE_COOKIES": "true"
+	},
+
+	// Secrets (set via `npx wrangler secret put <NAME>`):
+	// - TOKEN_SIGNING_KEY
+	// - RESEND_API_KEY
+
+	"d1_databases": [
+		{
+			"binding": "diaryx_users",
+			"database_name": "diaryx-users",
+			"database_id": "2d952957-b0a4-4172-a617-2cbbb4edcd75",
+			"remote": true
+		}
+	],
+	"r2_buckets": [
+		{
+			"bucket_name": "diaryx-objects",
+			"binding": "diaryx_objects",
+			"remote": true
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "DOMAINS",
+			"id": "38a69e7da4874c2a944130ba9c8ebdec",
+			"remote": true
+		}
+	]
+}

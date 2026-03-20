@@ -2037,7 +2037,7 @@
         // This handles the case where user clicks magic link in a new browser/tab
         const serverUrl = localStorage.getItem("diaryx_sync_server_url");
         if (!serverUrl) {
-          setServerUrl("https://sync.diaryx.org");
+          setServerUrl(isTauri() ? "https://sync.diaryx.org" : "/api");
         }
         // Verify automatically and wait for completion before continuing
         await handleMagicLinkToken(token);

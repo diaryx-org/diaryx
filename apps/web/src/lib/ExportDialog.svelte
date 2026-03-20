@@ -238,18 +238,7 @@
         const rawBinaryFiles = await api.exportBinaryAttachments(rootPath, audience);
         const binaries = normalizeToObject(rawBinaryFiles) ?? [];
 
-        const availability = await executePublishCommand<any>("IsConverterAvailable", {
-          name: "pandoc",
-        });
-        const converterAvailable =
-          typeof availability === "boolean"
-            ? availability
-            : Boolean(availability?.available);
-
-        if (!converterAvailable) {
-          converterProgress = 'Downloading converter (first time only)...';
-          await executePublishCommand("DownloadConverter", { name: "pandoc" });
-        }
+        // Converter is downloaded on plugin init; ConvertFormat retries on demand if missing.
 
         const resources: Record<string, string> = {};
         for (const info of binaries) {

@@ -21,7 +21,7 @@
   import { getAppearanceStore } from "$lib/stores/appearance.svelte";
   import type { EntryData } from "$lib/backend/interface";
   import type { Api } from "$lib/backend/api";
-  import { getAuthState, getToken } from "$lib/auth";
+  import { getAuthState } from "$lib/auth";
 
   interface Props {
     pluginId: string;
@@ -88,7 +88,7 @@
     win.postMessage(cloneForPostMessage(message), "*");
   }
 
-  function withManagedContext(command: string, params: unknown): unknown {
+  async function withManagedContext(command: string, params: unknown): Promise<unknown> {
     const baseParams =
       params && typeof params === "object" && !Array.isArray(params)
         ? { ...(params as Record<string, unknown>) }
@@ -102,10 +102,15 @@
     }
 
     const authState = getAuthState();
-    const token = getToken();
-    if (!authState.serverUrl || !token) {
+    if (!authState.serverUrl) {
       return baseParams;
     }
+
+    // On Tauri, load token from Stronghold for managed AI context.
+    // On browser, token is null (cookie handles auth for HTTP calls,
+    // but managed AI needs the token in the payload for streaming).
+    const { getTokenAsync } = await import("$lib/auth");
+    const token = await getTokenAsync();
 
     return {
       ...baseParams,
@@ -128,7 +133,7 @@
       hasApi: !!api,
       runtime: getBrowserPlugin(pluginId) ? "browser-plugin" : "backend-api",
     });
-    const commandParams = withManagedContext(command, params);
+    const commandParams = await withManagedContext(command, params);
     const browserPlugin = getBrowserPlugin(pluginId);
     if (browserPlugin) {
       try {

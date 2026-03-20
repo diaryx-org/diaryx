@@ -28,13 +28,17 @@ export interface ProxyFetchInit extends RequestInit {
 /**
  * Drop-in fetch() replacement that routes through native HTTP on Tauri.
  * Returns a real Response object so callers don't need to change their code.
+ *
+ * Browser: adds `credentials: 'include'` so HttpOnly cookies are sent.
+ * Tauri: auto-injects `Authorization: Bearer` from Stronghold when available.
  */
 export async function proxyFetch(
   input: RequestInfo | URL,
   init?: ProxyFetchInit,
 ): Promise<Response> {
   if (!isTauri()) {
-    return fetch(input, init);
+    // Browser: always send cookies for same-origin /api requests
+    return fetch(input, { ...init, credentials: "include" });
   }
 
   const { invoke } = await import("@tauri-apps/api/core");
@@ -65,6 +69,19 @@ export async function proxyFetch(
       }
     } else {
       Object.assign(headers, rawHeaders);
+    }
+  }
+
+  // Auto-inject Bearer token from OS keychain when no Authorization header is set
+  if (!headers["authorization"] && !headers["Authorization"]) {
+    try {
+      const { getCredential } = await import("$lib/credentials");
+      const token = await getCredential("diaryx_auth_token");
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+    } catch {
+      // Keychain not available — skip
     }
   }
 

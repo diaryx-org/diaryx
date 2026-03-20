@@ -1,0 +1,25 @@
+{
+	on_demand_tls {
+		ask http://localhost:3031/domain-check
+	}
+}
+
+sync.diaryx.org {
+	reverse_proxy localhost:3030 {
+		flush_interval -1
+		transport http {
+			response_header_timeout 600s
+		}
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	reverse_proxy https://site.diaryx.org {
+		header_up Host site.diaryx.org
+		header_up X-Custom-Domain {host}
+		header_up X-Proxy-Secret {$TOKEN_SIGNING_KEY}
+	}
+}

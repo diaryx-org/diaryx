@@ -1,10 +1,12 @@
+mod namespaces;
 mod repo;
 mod schema;
 
+pub use namespaces::{
+    AudienceInfo, CustomDomainInfo, NamespaceInfo, NamespaceObjectMeta, NamespaceRepo,
+    NamespaceSessionInfo, UsageTotals,
+};
 pub use repo::{
-    AccessTokenInfo, AttachmentUploadPart, AttachmentUploadSession, AuthRepo,
-    CompletedAttachmentUploadInfo, DeviceInfo, DueBlobDelete, PasskeyChallengeInfo,
-    PublishedSiteInfo, SessionInfo, ShareSessionInfo, SiteAudienceBuildInfo, TierDefaults,
-    UserInfo, UserStorageUsage, UserTier, WorkspaceAttachmentRefRecord, WorkspaceInfo,
+    AuthRepo, DeviceInfo, PasskeyChallengeInfo, SessionInfo, TierDefaults, UserInfo, UserTier,
 };
 pub use schema::init_database;

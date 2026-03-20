@@ -1,5 +1,5 @@
 use crate::auth::RequireAuth;
-use crate::db::{AuthRepo, UserTier};
+use crate::db::AuthRepo;
 use crate::rate_limit::RateLimiter;
 use axum::{
     Json, Router,
@@ -8,6 +8,7 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
+use diaryx_server::UserTier;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::{collections::HashSet, sync::Arc, time::Duration};
@@ -201,7 +202,7 @@ mod tests {
     use super::{AiState, ai_routes, current_period_utc};
     use crate::{
         auth::AuthExtractor,
-        db::{AuthRepo, UserTier, init_database},
+        db::{AuthRepo, init_database},
         rate_limit::RateLimiter,
     };
     use axum::{
@@ -211,6 +212,7 @@ mod tests {
         routing::post,
     };
     use chrono::{Duration, Utc};
+    use diaryx_server::UserTier;
     use rusqlite::Connection;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
@@ -224,7 +226,11 @@ mod tests {
 
     fn create_session_token(repo: &AuthRepo, email: &str, tier: UserTier) -> String {
         let user_id = repo.get_or_create_user(email).expect("create user");
-        repo.set_user_tier(&user_id, tier).expect("set tier");
+        let db_tier = match tier {
+            UserTier::Free => crate::db::UserTier::Free,
+            UserTier::Plus => crate::db::UserTier::Plus,
+        };
+        repo.set_user_tier(&user_id, db_tier).expect("set tier");
         let device_id = repo
             .create_device(&user_id, Some("test"), Some("test-agent"))
             .expect("create device");
@@ -251,9 +257,12 @@ mod tests {
     }
 
     fn build_app(state: AiState, repo: Arc<AuthRepo>) -> Router {
+        use crate::adapters::{NativeAuthSessionStore, NativeAuthStore};
+        let auth_store = Arc::new(NativeAuthStore::new(repo.clone()));
+        let session_store = Arc::new(NativeAuthSessionStore::new(repo));
         Router::new()
             .nest("/api", ai_routes(state))
-            .layer(Extension(AuthExtractor::new(repo)))
+            .layer(Extension(AuthExtractor::new(auth_store, session_store)))
     }
 
     async fn post_chat(

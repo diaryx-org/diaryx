@@ -34,13 +34,25 @@
               (lib.fileset.fileFilter (file: file.hasExt "md") ./.)
               (lib.fileset.fileFilter (file: file.hasExt "json") ./.)
               (lib.fileset.fileFilter (file: file.hasExt "png") ./.)
+              (lib.fileset.fileFilter (file: file.hasExt "der") ./.)
             ];
           };
 
-          diaryx-cli = (pkgs.makeRustPlatform {
+          rustPlatform = pkgs.makeRustPlatform {
             cargo = rustToolchain;
             rustc = rustToolchain;
-          }).buildRustPackage {
+          };
+
+          wasmRustToolchain = pkgs.rust-bin.stable.latest.default.override {
+            targets = [ "wasm32-unknown-unknown" ];
+          };
+
+          wasmRustPlatform = pkgs.makeRustPlatform {
+            cargo = wasmRustToolchain;
+            rustc = wasmRustToolchain;
+          };
+
+          diaryx-cli = rustPlatform.buildRustPackage {
             pname = "diaryx";
             version = "1.4.0";
             inherit src;
@@ -49,16 +61,121 @@
             cargoTestFlags = [ "-p" "diaryx" ];
             doCheck = false;
 
-            # Fixed: Use the modern SDK 15 attribute directly
             buildInputs = lib.optionals pkgs.stdenv.isDarwin [
               pkgs.apple-sdk_15
             ];
 
             nativeBuildInputs = [ pkgs.pkg-config ];
           };
+
+          diaryx-sync-server = rustPlatform.buildRustPackage {
+            pname = "diaryx-sync-server";
+            version = "1.4.0";
+            inherit src;
+            cargoLock.lockFile = ./Cargo.lock;
+            cargoBuildFlags = [ "-p" "diaryx_sync_server" ];
+            doCheck = false; # tests need network/DB
+
+            buildInputs = lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.apple-sdk_15
+            ];
+
+            # perl needed for vendored openssl build
+            nativeBuildInputs = [ pkgs.pkg-config pkgs.perl ];
+          };
+
+          ts-bindings = rustPlatform.buildRustPackage {
+            pname = "ts-bindings";
+            version = "1.4.0";
+            inherit src;
+            cargoLock.lockFile = ./Cargo.lock;
+            cargoBuildFlags = [ "-p" "diaryx_core" ];
+            cargoTestFlags = [ "-p" "diaryx_core" ];
+            doCheck = true; # ts-rs generates bindings during cargo test
+
+            buildInputs = lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.apple-sdk_15
+            ];
+
+            nativeBuildInputs = [ pkgs.pkg-config ];
+
+            postCheck = ''
+              # ts-rs writes bindings relative to the crate directory
+              if [ -d crates/diaryx_core/bindings ]; then
+                mkdir -p $out
+                cp -r crates/diaryx_core/bindings/* $out/
+              fi
+            '';
+
+            # Skip the normal install phase (we only want the test output)
+            installPhase = ''
+              # Bindings already copied in postCheck
+              if [ ! -d "$out" ] || [ -z "$(ls -A "$out" 2>/dev/null)" ]; then
+                echo "Warning: no bindings were generated"
+                mkdir -p $out
+              fi
+            '';
+          };
+
+          # wasm-bindgen-cli must match the wasm-bindgen crate version in Cargo.lock.
+          # If wasm-bindgen is upgraded, update this version and fix hashes by running:
+          #   nix build .#wasm-package
+          # and replacing the hashes from the error output.
+          wasm-bindgen-cli = pkgs.buildWasmBindgenCli rec {
+            src = pkgs.fetchCrate {
+              pname = "wasm-bindgen-cli";
+              version = "0.2.114";
+              hash = "sha256-xrCym+rFY6EUQFWyWl6OPA+LtftpUAE5pIaElAIVqW0=";
+            };
+            cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+              inherit src;
+              inherit (src) pname version;
+              hash = "sha256-Z8+dUXPQq7S+Q7DWNr2Y9d8GMuEdSnq00quUR0wDNPM=";
+            };
+          };
+
+          wasm-package = wasmRustPlatform.buildRustPackage {
+            pname = "wasm-package";
+            version = "1.4.0";
+            inherit src;
+            cargoLock.lockFile = ./Cargo.lock;
+            cargoBuildFlags = [ "-p" "diaryx_wasm" "--target" "wasm32-unknown-unknown" ];
+            doCheck = false;
+
+            nativeBuildInputs = [
+              wasm-bindgen-cli
+              pkgs.binaryen
+              pkgs.pkg-config
+            ];
+
+            buildInputs = lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.apple-sdk_15
+            ];
+
+            # Override install to run wasm-bindgen + wasm-opt instead of cargo install
+            installPhase = ''
+              mkdir -p $out
+              wasm-bindgen --target web --out-dir $out \
+                target/wasm32-unknown-unknown/release/diaryx_wasm.wasm
+              wasm-opt -Oz -o $out/diaryx_wasm_bg.wasm $out/diaryx_wasm_bg.wasm
+
+              # Generate package.json for npm publishing compatibility
+              cat > $out/package.json <<'EOF'
+            {
+              "name": "diaryx_wasm",
+              "type": "module",
+              "version": "1.4.0",
+              "main": "diaryx_wasm.js",
+              "types": "diaryx_wasm.d.ts",
+              "files": ["diaryx_wasm_bg.wasm", "diaryx_wasm.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]
+            }
+            EOF
+            '';
+          };
         in
         {
           default = diaryx-cli;
+          inherit diaryx-sync-server ts-bindings wasm-package;
         });
 
       apps = forAllSystems (system: {

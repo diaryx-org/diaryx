@@ -67,6 +67,13 @@ export default defineConfig({
           "Cross-Origin-Embedder-Policy": "require-corp",
         }
       : undefined,
+    proxy: {
+      "/api": {
+        target: "http://localhost:3030",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
+    },
     watch: {
       // Tell vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],

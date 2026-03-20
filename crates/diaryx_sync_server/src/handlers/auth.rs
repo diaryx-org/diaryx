@@ -1,16 +1,17 @@
 use crate::auth::{MagicLinkService, PasskeyService, RequireAuth};
-use crate::blob_store::BlobStore;
-use crate::db::AuthRepo;
 use crate::email::EmailService;
 use axum::{
     Router,
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
     routing::{delete, get, post},
 };
+use diaryx_server::ports::{
+    AuthSessionStore, AuthStore, NamespaceStore, ServerCoreError, UserStore,
+};
+use diaryx_server::use_cases::current_user::CurrentUserService;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -19,12 +20,15 @@ use tracing::{error, info, warn};
 pub struct AuthState {
     pub magic_link_service: Arc<MagicLinkService>,
     pub email_service: Arc<EmailService>,
-    pub repo: Arc<AuthRepo>,
+    pub auth_store: Arc<dyn AuthStore>,
+    pub namespace_store: Arc<dyn NamespaceStore>,
+    pub session_store: Arc<dyn AuthSessionStore>,
+    pub user_store: Arc<dyn UserStore>,
     pub passkey_service: Arc<PasskeyService>,
-    /// Path to workspace database files (for cleanup on account deletion)
-    pub workspaces_dir: Option<PathBuf>,
-    /// Attachment blob store (R2/in-memory)
-    pub blob_store: Arc<dyn BlobStore>,
+    /// Session expiry in days, used for cookie Max-Age.
+    pub session_expiry_days: i64,
+    /// Whether to set the `Secure` flag on session cookies.
+    pub secure_cookies: bool,
 }
 
 /// Request body for magic link request
@@ -99,14 +103,25 @@ impl ErrorResponse {
     }
 }
 
+fn status_for_core_error(error: &ServerCoreError) -> StatusCode {
+    match error {
+        ServerCoreError::InvalidInput(_) | ServerCoreError::Conflict(_) => StatusCode::BAD_REQUEST,
+        ServerCoreError::NotFound(_) => StatusCode::NOT_FOUND,
+        ServerCoreError::PermissionDenied(_) => StatusCode::FORBIDDEN,
+        ServerCoreError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+        ServerCoreError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        ServerCoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 /// Response for user info
 #[derive(Debug, Serialize)]
 pub struct MeResponse {
     pub user: UserResponse,
     pub workspaces: Vec<WorkspaceResponse>,
     pub devices: Vec<DeviceResponse>,
-    pub workspace_limit: u32,
     pub tier: String,
+    pub workspace_limit: u32,
     pub published_site_limit: u32,
     pub attachment_limit_bytes: u64,
 }
@@ -122,6 +137,30 @@ pub struct DeviceResponse {
     pub id: String,
     pub name: Option<String>,
     pub last_seen_at: String,
+}
+
+/// Session cookie name.
+const SESSION_COOKIE: &str = "diaryx_session";
+
+/// Build a `Set-Cookie` header that sets the session cookie.
+fn set_session_cookie(token: &str, max_age_days: i64, secure: bool) -> String {
+    let max_age_secs = max_age_days * 86400;
+    if secure {
+        format!(
+            "{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age_secs}"
+        )
+    } else {
+        format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age_secs}")
+    }
+}
+
+/// Build a `Set-Cookie` header that clears the session cookie.
+fn clear_session_cookie(secure: bool) -> String {
+    if secure {
+        format!("{SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0")
+    } else {
+        format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+    }
 }
 
 /// Create auth routes
@@ -165,7 +204,7 @@ async fn request_magic_link(
     }
 
     // Request magic link
-    let (token, code) = match state.magic_link_service.request_magic_link(&email) {
+    let (token, code) = match state.magic_link_service.request_magic_link(&email).await {
         Ok(result) => result,
         Err(crate::auth::MagicLinkError::RateLimited) => {
             warn!("Rate limited magic link request for {}", email);
@@ -239,18 +278,32 @@ async fn verify_magic_link(
     State(state): State<AuthState>,
     Query(query): Query<VerifyQuery>,
 ) -> impl IntoResponse {
-    let result = state.magic_link_service.verify_magic_link(
-        &query.token,
-        query.device_name.as_deref(),
-        None, // Could extract user-agent from headers
-        query.replace_device_id.as_deref(),
-    );
+    let result = state
+        .magic_link_service
+        .verify_magic_link(
+            &query.token,
+            query.device_name.as_deref(),
+            None, // Could extract user-agent from headers
+            query.replace_device_id.as_deref(),
+        )
+        .await;
 
     match result {
         Ok(verify_result) => {
             info!("User {} logged in successfully", verify_result.email);
+            let mut headers = HeaderMap::new();
+            if let Ok(cookie) = set_session_cookie(
+                &verify_result.session_token,
+                state.session_expiry_days,
+                state.secure_cookies,
+            )
+            .parse()
+            {
+                headers.insert(header::SET_COOKIE, cookie);
+            }
             (
                 StatusCode::OK,
+                headers,
                 Json(VerifyResponse {
                     success: true,
                     token: verify_result.session_token,
@@ -300,13 +353,16 @@ async fn verify_code(
     State(state): State<AuthState>,
     Json(body): Json<VerifyCodeRequest>,
 ) -> impl IntoResponse {
-    let result = state.magic_link_service.verify_code(
-        &body.code,
-        &body.email,
-        body.device_name.as_deref(),
-        None,
-        body.replace_device_id.as_deref(),
-    );
+    let result = state
+        .magic_link_service
+        .verify_code(
+            &body.code,
+            &body.email,
+            body.device_name.as_deref(),
+            None,
+            body.replace_device_id.as_deref(),
+        )
+        .await;
 
     match result {
         Ok(verify_result) => {
@@ -314,8 +370,19 @@ async fn verify_code(
                 "User {} logged in via verification code",
                 verify_result.email
             );
+            let mut headers = HeaderMap::new();
+            if let Ok(cookie) = set_session_cookie(
+                &verify_result.session_token,
+                state.session_expiry_days,
+                state.secure_cookies,
+            )
+            .parse()
+            {
+                headers.insert(header::SET_COOKIE, cookie);
+            }
             (
                 StatusCode::OK,
+                headers,
                 Json(VerifyResponse {
                     success: true,
                     token: verify_result.session_token,
@@ -365,61 +432,52 @@ async fn get_current_user(
     State(state): State<AuthState>,
     RequireAuth(auth): RequireAuth,
 ) -> impl IntoResponse {
-    let workspaces = state
-        .repo
-        .get_user_workspaces(&auth.user.id)
-        .unwrap_or_default()
+    let service =
+        CurrentUserService::new(state.auth_store.as_ref(), state.namespace_store.as_ref());
+    let context = match service.load(&auth.user.id, &auth.user.email).await {
+        Ok(context) => context,
+        Err(err) => {
+            error!("Failed to load current user context: {}", err);
+            return (
+                status_for_core_error(&err),
+                Json(ErrorResponse::new(err.to_string())),
+            )
+                .into_response();
+        }
+    };
+
+    let devices = context
+        .devices
         .into_iter()
-        .map(|w| WorkspaceResponse {
-            id: w.id,
-            name: w.name,
+        .map(|device| DeviceResponse {
+            id: device.id,
+            name: device.name,
+            last_seen_at: device.last_seen_at.to_rfc3339(),
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    let devices = state
-        .repo
-        .get_user_devices(&auth.user.id)
-        .unwrap_or_default()
+    let workspaces = context
+        .namespaces
         .into_iter()
-        .map(|d| DeviceResponse {
-            id: d.id,
-            name: d.name,
-            last_seen_at: d.last_seen_at.to_rfc3339(),
+        .map(|ns| WorkspaceResponse {
+            id: ns.id.clone(),
+            name: ns.id,
         })
-        .collect();
-
-    let workspace_limit = state
-        .repo
-        .get_effective_workspace_limit(&auth.user.id)
-        .unwrap_or(crate::db::UserTier::Free.defaults().workspace_limit);
-
-    let tier = state
-        .repo
-        .get_user_tier(&auth.user.id)
-        .unwrap_or(crate::db::UserTier::Free);
-
-    let published_site_limit = state
-        .repo
-        .get_effective_published_site_limit(&auth.user.id)
-        .unwrap_or(tier.defaults().published_site_limit);
-
-    let attachment_limit_bytes = state
-        .repo
-        .get_effective_user_attachment_limit(&auth.user.id)
-        .unwrap_or(tier.defaults().attachment_limit_bytes);
+        .collect::<Vec<_>>();
 
     Json(MeResponse {
         user: UserResponse {
             id: auth.user.id,
-            email: auth.user.email,
+            email: context.user.email,
         },
         workspaces,
         devices,
-        workspace_limit,
-        tier: tier.as_str().to_string(),
-        published_site_limit,
-        attachment_limit_bytes,
+        tier: context.user.tier.as_str().to_string(),
+        workspace_limit: context.limits.workspace_limit,
+        published_site_limit: context.limits.published_site_limit,
+        attachment_limit_bytes: context.limits.attachment_limit_bytes,
     })
+    .into_response()
 }
 
 /// POST /auth/logout - Log out (delete session)
@@ -427,11 +485,20 @@ async fn logout(
     State(state): State<AuthState>,
     RequireAuth(auth): RequireAuth,
 ) -> impl IntoResponse {
-    if let Err(e) = state.repo.delete_session(&auth.session.token) {
+    if let Err(e) = state
+        .session_store
+        .delete_session(&auth.session.token)
+        .await
+    {
         error!("Failed to delete session: {}", e);
     }
 
-    StatusCode::NO_CONTENT
+    let mut headers = HeaderMap::new();
+    if let Ok(cookie) = clear_session_cookie(state.secure_cookies).parse() {
+        headers.insert(header::SET_COOKIE, cookie);
+    }
+
+    (StatusCode::NO_CONTENT, headers)
 }
 
 /// GET /auth/devices - List user's devices
@@ -440,8 +507,9 @@ async fn list_devices(
     RequireAuth(auth): RequireAuth,
 ) -> impl IntoResponse {
     let devices = state
-        .repo
-        .get_user_devices(&auth.user.id)
+        .auth_store
+        .list_user_devices(&auth.user.id)
+        .await
         .unwrap_or_default()
         .into_iter()
         .map(|d| DeviceResponse {
@@ -469,8 +537,9 @@ async fn rename_device(
 ) -> impl IntoResponse {
     // Verify the device belongs to the user
     let devices = state
-        .repo
-        .get_user_devices(&auth.user.id)
+        .auth_store
+        .list_user_devices(&auth.user.id)
+        .await
         .unwrap_or_default();
 
     if !devices.iter().any(|d| d.id == device_id) {
@@ -486,7 +555,7 @@ async fn rename_device(
             .into_response();
     }
 
-    match state.repo.rename_device(&device_id, &name) {
+    match state.auth_store.rename_device(&device_id, &name).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
@@ -504,8 +573,9 @@ async fn delete_device(
 ) -> impl IntoResponse {
     // Verify the device belongs to the user
     let devices = state
-        .repo
-        .get_user_devices(&auth.user.id)
+        .auth_store
+        .list_user_devices(&auth.user.id)
+        .await
         .unwrap_or_default();
 
     let owns_device = devices.iter().any(|d| d.id == device_id);
@@ -519,7 +589,7 @@ async fn delete_device(
         return StatusCode::BAD_REQUEST;
     }
 
-    if let Err(e) = state.repo.delete_device(&device_id) {
+    if let Err(e) = state.auth_store.delete_device(&device_id).await {
         error!("Failed to delete device: {}", e);
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
@@ -536,54 +606,14 @@ async fn delete_account(
 
     info!("Deleting account for user: {}", user_id);
 
-    // Capture blob keys before deleting the user row (which cascades metadata rows).
-    let blob_keys = match state.repo.list_user_blob_keys(user_id) {
-        Ok(keys) => keys,
-        Err(e) => {
-            error!("Failed to query blob keys for {}: {}", user_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new("Failed to delete account")),
-            )
-                .into_response();
-        }
-    };
-
-    // Delete user from database (returns workspace IDs for file cleanup)
-    let workspace_ids = match state.repo.delete_user(user_id) {
-        Ok(ids) => ids,
-        Err(e) => {
-            error!("Failed to delete user {}: {}", user_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new("Failed to delete account")),
-            )
-                .into_response();
-        }
-    };
-
-    // Delete workspace database files from disk
-    if let Some(workspaces_dir) = &state.workspaces_dir {
-        for workspace_id in workspace_ids {
-            let db_path = workspaces_dir.join(format!("{}.db", workspace_id));
-            if db_path.exists() {
-                if let Err(e) = std::fs::remove_file(&db_path) {
-                    warn!("Failed to delete workspace file {:?}: {}", db_path, e);
-                } else {
-                    info!("Deleted workspace file: {:?}", db_path);
-                }
-            }
-        }
-    }
-
-    // Delete blob payloads from object storage (best effort).
-    for key in blob_keys {
-        if key.is_empty() {
-            continue;
-        }
-        if let Err(e) = state.blob_store.delete(&key).await {
-            warn!("Failed to delete blob {} for user {}: {}", key, user_id, e);
-        }
+    // Delete user from database (CASCADE deletes namespaces, sessions, etc.)
+    if let Err(e) = state.user_store.delete_user(user_id).await {
+        error!("Failed to delete user {}: {}", user_id, e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new("Failed to delete account")),
+        )
+            .into_response();
     }
 
     info!("Successfully deleted account for user: {}", user_id);
@@ -769,17 +799,32 @@ async fn passkey_auth_finish(
         }
     };
 
-    match state.passkey_service.finish_any_authentication(
-        &body.challenge_id,
-        &credential,
-        body.device_name.as_deref(),
-        None,
-        body.replace_device_id.as_deref(),
-    ) {
+    match state
+        .passkey_service
+        .finish_any_authentication(
+            &body.challenge_id,
+            &credential,
+            body.device_name.as_deref(),
+            None,
+            body.replace_device_id.as_deref(),
+        )
+        .await
+    {
         Ok(result) => {
             info!("User {} logged in via passkey", result.email);
+            let mut headers = HeaderMap::new();
+            if let Ok(cookie) = set_session_cookie(
+                &result.session_token,
+                state.session_expiry_days,
+                state.secure_cookies,
+            )
+            .parse()
+            {
+                headers.insert(header::SET_COOKIE, cookie);
+            }
             (
                 StatusCode::OK,
+                headers,
                 Json(VerifyResponse {
                     success: true,
                     token: result.session_token,

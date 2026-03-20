@@ -66,6 +66,34 @@ pub trait RuntimeContextProvider: Send + Sync {
     fn get_context(&self, plugin_id: &str) -> serde_json::Value;
 }
 
+/// Metadata for a single object in a namespace.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NamespaceObjectMeta {
+    pub key: String,
+    #[serde(default)]
+    pub audience: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+}
+
+/// Trait for namespace object operations (upload, delete, list, sync audience).
+///
+/// Implementations talk to the sync server — via `proxyFetch` on browser,
+/// via `ureq` on native.
+pub trait NamespaceProvider: Send + Sync {
+    fn put_object(
+        &self,
+        ns_id: &str,
+        key: &str,
+        bytes: &[u8],
+        mime_type: &str,
+        audience: &str,
+    ) -> Result<(), String>;
+    fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String>;
+    fn list_objects(&self, ns_id: &str) -> Result<Vec<NamespaceObjectMeta>, String>;
+    fn sync_audience(&self, ns_id: &str, audience: &str, access: &str) -> Result<(), String>;
+}
+
 /// No-op implementation of [`PluginStorage`] for plugins that don't need persistence.
 pub struct NoopStorage;
 
@@ -250,6 +278,31 @@ impl RuntimeContextProvider for NoopRuntimeContextProvider {
     }
 }
 
+/// No-op namespace provider for hosts that don't support namespace operations.
+pub struct NoopNamespaceProvider;
+
+impl NamespaceProvider for NoopNamespaceProvider {
+    fn put_object(
+        &self,
+        _ns_id: &str,
+        _key: &str,
+        _bytes: &[u8],
+        _mime_type: &str,
+        _audience: &str,
+    ) -> Result<(), String> {
+        Err("Namespace operations are not available".to_string())
+    }
+    fn delete_object(&self, _ns_id: &str, _key: &str) -> Result<(), String> {
+        Err("Namespace operations are not available".to_string())
+    }
+    fn list_objects(&self, _ns_id: &str) -> Result<Vec<NamespaceObjectMeta>, String> {
+        Err("Namespace operations are not available".to_string())
+    }
+    fn sync_audience(&self, _ns_id: &str, _audience: &str, _access: &str) -> Result<(), String> {
+        Err("Namespace operations are not available".to_string())
+    }
+}
+
 /// Trait for checking plugin permissions before allowing host function calls.
 ///
 /// Implementations may check static config, prompt the user, or consult
@@ -292,6 +345,8 @@ pub struct HostContext {
     pub plugin_command_bridge: Arc<dyn PluginCommandBridge>,
     /// Provider of generic runtime context for the caller plugin.
     pub runtime_context_provider: Arc<dyn RuntimeContextProvider>,
+    /// Provider of namespace object operations (upload, delete, list, sync).
+    pub namespace_provider: Arc<dyn NamespaceProvider>,
 }
 
 impl HostContext {
@@ -308,6 +363,7 @@ impl HostContext {
             ws_bridge: Arc::new(NoopWebSocketBridge),
             plugin_command_bridge: Arc::new(NoopPluginCommandBridge),
             runtime_context_provider: Arc::new(NoopRuntimeContextProvider),
+            namespace_provider: Arc::new(NoopNamespaceProvider),
         }
     }
 
@@ -496,6 +552,34 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_get_runtime_context,
+        )
+        .with_function(
+            "host_namespace_put_object",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_put_object,
+        )
+        .with_function(
+            "host_namespace_delete_object",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_delete_object,
+        )
+        .with_function(
+            "host_namespace_list_objects",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_list_objects,
+        )
+        .with_function(
+            "host_namespace_sync_audience",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_sync_audience,
         )
         .with_function(
             "host_ws_request",
@@ -1360,5 +1444,147 @@ fn host_http_request(
         "body": "host_http_request: http feature not enabled"
     });
     plugin.memory_set_val(&mut outputs[0], error.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_put_object(input: {ns_id, key, body_base64, mime_type, audience}) -> {ok: true} or {error}`
+fn host_namespace_put_object(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    use base64::Engine as _;
+
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+        key: String,
+        body_base64: String,
+        mime_type: String,
+        audience: String,
+    }
+
+    let parsed: Input = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_namespace_put_object: invalid input: {e}")))?;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&parsed.body_base64)
+        .map_err(|e| ExtismError::msg(format!("host_namespace_put_object: base64 decode: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    let result = ctx.namespace_provider.put_object(
+        &parsed.ns_id,
+        &parsed.key,
+        &bytes,
+        &parsed.mime_type,
+        &parsed.audience,
+    );
+
+    let json = match result {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_delete_object(input: {ns_id, key}) -> {ok: true} or {error}`
+fn host_namespace_delete_object(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+        key: String,
+    }
+
+    let parsed: Input = serde_json::from_str(&input).map_err(|e| {
+        ExtismError::msg(format!("host_namespace_delete_object: invalid input: {e}"))
+    })?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    let result = ctx
+        .namespace_provider
+        .delete_object(&parsed.ns_id, &parsed.key);
+
+    let json = match result {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_list_objects(input: {ns_id}) -> [{key, audience?, mime_type?}]`
+fn host_namespace_list_objects(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+    }
+
+    let parsed: Input = serde_json::from_str(&input).map_err(|e| {
+        ExtismError::msg(format!("host_namespace_list_objects: invalid input: {e}"))
+    })?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    let result = ctx.namespace_provider.list_objects(&parsed.ns_id);
+
+    let json = match result {
+        Ok(objects) => serde_json::to_value(&objects).unwrap_or(serde_json::json!([])),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_sync_audience(input: {ns_id, audience, access}) -> {ok: true} or {error}`
+fn host_namespace_sync_audience(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+        audience: String,
+        access: String,
+    }
+
+    let parsed: Input = serde_json::from_str(&input).map_err(|e| {
+        ExtismError::msg(format!("host_namespace_sync_audience: invalid input: {e}"))
+    })?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    let result =
+        ctx.namespace_provider
+            .sync_audience(&parsed.ns_id, &parsed.audience, &parsed.access);
+
+    let json = match result {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
     Ok(())
 }

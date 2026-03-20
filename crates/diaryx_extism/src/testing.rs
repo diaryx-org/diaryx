@@ -255,6 +255,7 @@ impl PluginTestHarnessBuilder {
             ws_bridge: Arc::new(NoopWebSocketBridge),
             plugin_command_bridge: Arc::new(NoopPluginCommandBridge),
             runtime_context_provider: Arc::new(NoopRuntimeContextProvider),
+            namespace_provider: Arc::new(crate::host_fns::NoopNamespaceProvider),
         });
 
         let adapter = load_plugin_from_wasm(&self.wasm_path, host_context, None)

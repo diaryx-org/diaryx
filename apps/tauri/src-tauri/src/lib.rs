@@ -11,6 +11,7 @@ Use `apple` for App Store builds and `desktop-updater` for direct desktop distri
 
 /// Where all the Tauri `invoke` functions are defined.
 mod commands;
+mod credentials;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_security_scoped;
@@ -105,6 +106,9 @@ pub fn run() {
     builder
         .setup(|app| {
             if let Ok(data_dir) = app.path().app_data_dir() {
+                // Credential store uses app data dir on Android for file-based fallback
+                app.manage(credentials::CredentialStoreDir(data_dir.clone()));
+
                 let (_, log_file) = crate::logging::log_paths(&data_dir);
                 if let Err(err) = crate::logging::init(&log_file) {
                     eprintln!("[Diaryx] Failed to initialize file-backed logging: {err}");
@@ -176,6 +180,10 @@ pub fn run() {
             commands::oauth_webview,
             // iCloud Drive workspace storage
             commands::set_icloud_enabled,
+            // Secure credential storage (OS keychain / encrypted file on Android)
+            credentials::store_credential,
+            credentials::get_credential,
+            credentials::remove_credential,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

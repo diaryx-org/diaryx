@@ -75,10 +75,10 @@ pub mod ws_transport;
 pub use adapter::ExtismPluginAdapter;
 pub use host_fns::{
     EventEmitter, FilePluginSecretStore, FilePluginStorage, FileProvider, HostContext,
-    MapFileProvider, NoopEventEmitter, NoopFileProvider, NoopPluginCommandBridge,
-    NoopRuntimeContextProvider, NoopSecretStore, NoopStorage, NoopWebSocketBridge,
-    PermissionChecker, PluginCommandBridge, PluginSecretStore, PluginStorage,
-    RuntimeContextProvider, WebSocketBridge,
+    MapFileProvider, NamespaceObjectMeta, NamespaceProvider, NoopEventEmitter, NoopFileProvider,
+    NoopNamespaceProvider, NoopPluginCommandBridge, NoopRuntimeContextProvider, NoopSecretStore,
+    NoopStorage, NoopWebSocketBridge, PermissionChecker, PluginCommandBridge, PluginSecretStore,
+    PluginStorage, RuntimeContextProvider, WebSocketBridge,
 };
 pub use loader::{
     ExtismLoadError, inspect_plugin_wasm_manifest, load_plugin_from_wasm, load_plugins_from_dir,

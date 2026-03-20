@@ -4,11 +4,13 @@ description: Source code for the sync server
 part_of: '[README](/crates/diaryx_sync_server/README.md)'
 contents:
   - '[README](/crates/diaryx_sync_server/src/auth/README.md)'
+  - '[README](/crates/diaryx_server/src/README.md)'
   - '[README](/crates/diaryx_sync_server/src/db/README.md)'
   - '[README](/crates/diaryx_sync_server/src/email/README.md)'
   - '[README](/crates/diaryx_sync_server/src/handlers/README.md)'
-  - '[README](/crates/diaryx_sync_server/src/sync/README.md)'
+  - '[README](/crates/diaryx_sync_server/src/sync_v2/README.md)'
 attachments:
+  - '[adapters.rs](/crates/diaryx_sync_server/src/adapters.rs)'
   - '[lib.rs](/crates/diaryx_sync_server/src/lib.rs)'
   - '[main.rs](/crates/diaryx_sync_server/src/main.rs)'
   - '[config.rs](/crates/diaryx_sync_server/src/config.rs)'
@@ -22,20 +24,30 @@ exclude:
 
 This directory contains the source code for the Diaryx sync server.
 
+`diaryx_sync_server` now acts as the native adapter around the shared
+`diaryx_server` core so future platforms can bind to the same business logic
+without pulling Axum or cloud-runtime details into the core.
+
+Shared current-user and domain-management use cases now live in
+`diaryx_server`, while this crate supplies SQLite-backed `NamespaceStore` /
+`AuthStore` implementations plus a best-effort Cloudflare KV
+`DomainMappingCache` adapter.
+
 ## Structure
 
 | File | Purpose |
 |------|---------|
+| `adapters.rs` | Native implementations of the shared `diaryx_server` ports, including the Cloudflare KV cache adapter |
 | `lib.rs` | Library entry point |
 | `main.rs` | Server entry point |
 | `config.rs` | Configuration from environment variables |
-| `blob_store.rs` | Attachment blob storage abstraction (R2/in-memory) |
+| `blob_store.rs` | Attachment blob storage adapter implementing the shared `diaryx_server::BlobStore` port (R2/in-memory) |
 | `publish.rs` | Static site publishing pipeline + token signing helpers (audience-filtered builds using workspace config's `public_audience`, per-audience artifact replacement, root-index selection via `diaryx_core::workspace`, helper-tested audience discovery/normalization, and zero-build diagnostics) |
 
 ## Modules
 
 - `auth/` - Authentication middleware and magic link handling
-- `blob_store.rs` - R2-backed attachment blob storage abstraction
+- `blob_store.rs` - R2-backed attachment blob storage adapter for the shared server core
 - `db/` - SQLite database schema and repository
 - `email/` - SMTP email sending
 - `git_ops.rs` - Git operations (commit, restore) for server-side workspaces

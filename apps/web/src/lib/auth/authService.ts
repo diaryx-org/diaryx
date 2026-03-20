@@ -167,8 +167,18 @@ export class AuthService {
     return `${payload.message} (${usedMb} MB / ${limitMb} MB)`;
   }
 
+  /** Build headers for an authenticated request. If authToken is provided, sets
+   *  Authorization: Bearer. Otherwise relies on cookie (browser) or auto-injected
+   *  header (Tauri proxyFetch). */
+  private authHeaders(authToken?: string): Record<string, string> {
+    if (authToken) {
+      return { Authorization: `Bearer ${authToken}` };
+    }
+    return {};
+  }
+
   private uploadWorkspaceSnapshotWithProgress(
-    authToken: string,
+    authToken: string | undefined,
     url: string,
     snapshot: Blob,
     onUploadProgress: (uploadedBytes: number, totalBytes: number) => void,
@@ -176,7 +186,10 @@ export class AuthService {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
-      xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+      if (authToken) {
+        xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+      }
+      xhr.withCredentials = true;
       xhr.setRequestHeader("Content-Type", "application/zip");
       xhr.responseType = "text";
 
@@ -344,11 +357,9 @@ export class AuthService {
   /**
    * Get current user info.
    */
-  async getMe(authToken: string): Promise<MeResponse> {
+  async getMe(authToken?: string): Promise<MeResponse> {
     const response = await proxyFetch(`${this.serverUrl}/auth/me`, {
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
+      headers: this.authHeaders(authToken),
     });
 
     if (!response.ok) {
@@ -364,23 +375,19 @@ export class AuthService {
   /**
    * Log out (delete session).
    */
-  async logout(authToken: string): Promise<void> {
+  async logout(authToken?: string): Promise<void> {
     await proxyFetch(`${this.serverUrl}/auth/logout`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
+      headers: this.authHeaders(authToken),
     });
   }
 
   /**
    * Get user's devices.
    */
-  async getDevices(authToken: string): Promise<Device[]> {
+  async getDevices(authToken?: string): Promise<Device[]> {
     const response = await proxyFetch(`${this.serverUrl}/auth/devices`, {
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
+      headers: this.authHeaders(authToken),
     });
 
     if (!response.ok) {
@@ -393,11 +400,11 @@ export class AuthService {
   /**
    * Rename a device.
    */
-  async renameDevice(authToken: string, deviceId: string, newName: string): Promise<void> {
+  async renameDevice(authToken: string | undefined, deviceId: string, newName: string): Promise<void> {
     const response = await proxyFetch(`${this.serverUrl}/auth/devices/${deviceId}`, {
       method: "PATCH",
       headers: {
-        Authorization: `Bearer ${authToken}`,
+        ...this.authHeaders(authToken),
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ name: newName }),
@@ -411,12 +418,10 @@ export class AuthService {
   /**
    * Delete a device.
    */
-  async deleteDevice(authToken: string, deviceId: string): Promise<void> {
+  async deleteDevice(authToken: string | undefined, deviceId: string): Promise<void> {
     const response = await proxyFetch(`${this.serverUrl}/auth/devices/${deviceId}`, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
+      headers: this.authHeaders(authToken),
     });
 
     if (!response.ok) {
@@ -427,12 +432,10 @@ export class AuthService {
   /**
    * Delete user account and all server data.
    */
-  async deleteAccount(authToken: string): Promise<void> {
+  async deleteAccount(authToken?: string): Promise<void> {
     const response = await proxyFetch(`${this.serverUrl}/auth/account`, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
+      headers: this.authHeaders(authToken),
     });
 
     if (!response.ok) {
@@ -455,11 +458,9 @@ export class AuthService {
   /**
    * Check if user has synced data on the server.
    */
-  async checkUserHasData(authToken: string): Promise<UserHasDataResponse> {
+  async checkUserHasData(authToken?: string): Promise<UserHasDataResponse> {
     const response = await proxyFetch(`${this.serverUrl}/api/user/has-data`, {
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
+      headers: this.authHeaders(authToken),
     });
 
     if (!response.ok) {
@@ -473,7 +474,7 @@ export class AuthService {
    * Download a workspace snapshot zip from the server.
    */
   async downloadWorkspaceSnapshot(
-    authToken: string,
+    authToken: string | undefined,
     workspaceId: string,
     includeAttachments = true,
     commitId?: string,
@@ -489,9 +490,7 @@ export class AuthService {
     const response = await proxyFetch(
       url.toString(),
       {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-        },
+        headers: this.authHeaders(authToken),
       },
     );
 
@@ -506,7 +505,7 @@ export class AuthService {
    * Upload a workspace snapshot zip to seed server CRDT state.
    */
   async uploadWorkspaceSnapshot(
-    authToken: string,
+    authToken: string | undefined,
     workspaceId: string,
     snapshot: Blob,
     mode: "replace" | "merge" = "replace",
@@ -534,7 +533,7 @@ export class AuthService {
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...this.authHeaders(authToken),
           "Content-Type": "application/zip",
         },
         body: snapshot,
@@ -581,12 +580,12 @@ export class AuthService {
    * Get attachment storage usage for the authenticated user.
    */
   async getUserStorageUsage(
-    authToken: string,
+    authToken?: string,
   ): Promise<UserStorageUsageResponse> {
     const response = await proxyFetch(`${this.serverUrl}/api/user/storage`, {
       cache: "no-store",
       headers: {
-        Authorization: `Bearer ${authToken}`,
+        ...this.authHeaders(authToken),
         "Cache-Control": "no-cache",
         Pragma: "no-cache",
       },
@@ -603,7 +602,7 @@ export class AuthService {
    * Initialize a resumable attachment upload session.
    */
   async initAttachmentUpload(
-    authToken: string,
+    authToken: string | undefined,
     workspaceId: string,
     request: InitAttachmentUploadRequest,
   ): Promise<InitAttachmentUploadResponse> {
@@ -612,7 +611,7 @@ export class AuthService {
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...this.authHeaders(authToken),
           "Content-Type": "application/json",
         },
         body: JSON.stringify(request),
@@ -647,7 +646,7 @@ export class AuthService {
    * Upload one attachment multipart chunk.
    */
   async uploadAttachmentPart(
-    authToken: string,
+    authToken: string | undefined,
     workspaceId: string,
     uploadId: string,
     partNo: number,
@@ -658,7 +657,7 @@ export class AuthService {
       {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...this.authHeaders(authToken),
           "Content-Type": "application/octet-stream",
         },
         body: bytes,
@@ -677,7 +676,7 @@ export class AuthService {
    * Returns a conflict payload when missing parts are detected.
    */
   async completeAttachmentUpload(
-    authToken: string,
+    authToken: string | undefined,
     workspaceId: string,
     uploadId: string,
     request: CompleteAttachmentUploadRequest,
@@ -687,7 +686,7 @@ export class AuthService {
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...this.authHeaders(authToken),
           "Content-Type": "application/json",
         },
         body: JSON.stringify(request),
@@ -726,13 +725,13 @@ export class AuthService {
    * Download attachment bytes by hash for a workspace.
    */
   async downloadAttachment(
-    authToken: string,
+    authToken: string | undefined,
     workspaceId: string,
     hash: string,
     range?: { start: number; end?: number },
   ): Promise<DownloadAttachmentResponse> {
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${authToken}`,
+      ...this.authHeaders(authToken),
     };
     if (range) {
       headers.Range = `bytes=${range.start}-${range.end ?? ""}`;
@@ -766,11 +765,11 @@ export class AuthService {
    * Returns the created workspace object.
    * Throws 403 if workspace limit reached, 409 if name taken.
    */
-  async createWorkspace(authToken: string, name: string): Promise<Workspace> {
+  async createWorkspace(authToken: string | undefined, name: string): Promise<Workspace> {
     const response = await proxyFetch(`${this.serverUrl}/api/workspaces`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${authToken}`,
+        ...this.authHeaders(authToken),
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ name }),
@@ -793,11 +792,11 @@ export class AuthService {
   /**
    * Rename a workspace.
    */
-  async renameWorkspace(authToken: string, workspaceId: string, newName: string): Promise<void> {
+  async renameWorkspace(authToken: string | undefined, workspaceId: string, newName: string): Promise<void> {
     const response = await proxyFetch(`${this.serverUrl}/api/workspaces/${workspaceId}`, {
       method: "PATCH",
       headers: {
-        Authorization: `Bearer ${authToken}`,
+        ...this.authHeaders(authToken),
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ name: newName }),
@@ -812,12 +811,10 @@ export class AuthService {
   /**
    * Delete a workspace.
    */
-  async deleteWorkspace(authToken: string, workspaceId: string): Promise<void> {
+  async deleteWorkspace(authToken: string | undefined, workspaceId: string): Promise<void> {
     const response = await proxyFetch(`${this.serverUrl}/api/workspaces/${workspaceId}`, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
+      headers: this.authHeaders(authToken),
     });
 
     if (response.status === 404) {
@@ -838,12 +835,10 @@ export class AuthService {
    * Create a Stripe Checkout Session for upgrading to Plus.
    * Returns the hosted checkout page URL.
    */
-  async createCheckoutSession(authToken: string): Promise<{ url: string }> {
+  async createCheckoutSession(authToken?: string): Promise<{ url: string }> {
     const response = await proxyFetch(`${this.serverUrl}/api/stripe/checkout`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
+      headers: this.authHeaders(authToken),
     });
 
     if (!response.ok) {
@@ -857,12 +852,10 @@ export class AuthService {
    * Create a Stripe Customer Portal session for managing billing.
    * Returns the portal URL.
    */
-  async createPortalSession(authToken: string): Promise<{ url: string }> {
+  async createPortalSession(authToken?: string): Promise<{ url: string }> {
     const response = await proxyFetch(`${this.serverUrl}/api/stripe/portal`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
+      headers: this.authHeaders(authToken),
     });
 
     if (!response.ok) {
@@ -881,7 +874,7 @@ export class AuthService {
    * On success, the server upgrades the user to Plus tier.
    */
   async verifyAppleTransaction(
-    authToken: string,
+    authToken: string | undefined,
     signedTransaction: string,
     productId: string,
   ): Promise<{ success: boolean; tier: string }> {
@@ -890,7 +883,7 @@ export class AuthService {
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...this.authHeaders(authToken),
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -915,7 +908,7 @@ export class AuthService {
    * Restore Apple IAP purchases by sending signed transactions to the server.
    */
   async restoreApplePurchases(
-    authToken: string,
+    authToken: string | undefined,
     signedTransactions: string[],
   ): Promise<{ success: boolean; restored_count: number; tier: string }> {
     const response = await proxyFetch(
@@ -923,7 +916,7 @@ export class AuthService {
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...this.authHeaders(authToken),
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -951,14 +944,14 @@ export class AuthService {
    * Start passkey registration (requires auth).
    */
   async startPasskeyRegistration(
-    authToken: string,
+    authToken?: string,
   ): Promise<{ challenge_id: string; options: any }> {
     const response = await proxyFetch(
       `${this.serverUrl}/auth/passkeys/register/start`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...this.authHeaders(authToken),
           "Content-Type": "application/json",
         },
       },
@@ -973,7 +966,7 @@ export class AuthService {
    * Finish passkey registration.
    */
   async finishPasskeyRegistration(
-    authToken: string,
+    authToken: string | undefined,
     challengeId: string,
     name: string,
     credential: any,
@@ -983,7 +976,7 @@ export class AuthService {
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...this.authHeaders(authToken),
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1067,10 +1060,10 @@ export class AuthService {
    * List user's passkeys (requires auth).
    */
   async listPasskeys(
-    authToken: string,
+    authToken?: string,
   ): Promise<PasskeyListItem[]> {
     const response = await proxyFetch(`${this.serverUrl}/auth/passkeys`, {
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers: this.authHeaders(authToken),
     });
     if (!response.ok) {
       throw new AuthError("Failed to list passkeys", response.status);
@@ -1081,10 +1074,10 @@ export class AuthService {
   /**
    * Delete a passkey (requires auth).
    */
-  async deletePasskey(authToken: string, id: string): Promise<void> {
+  async deletePasskey(authToken: string | undefined, id: string): Promise<void> {
     const response = await proxyFetch(`${this.serverUrl}/auth/passkeys/${id}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers: this.authHeaders(authToken),
     });
     if (!response.ok) {
       throw new AuthError("Failed to delete passkey", response.status);

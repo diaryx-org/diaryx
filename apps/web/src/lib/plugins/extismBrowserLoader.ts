@@ -298,6 +298,35 @@ function normalizeWorkspaceRoot(path: string | null | undefined): string | null 
   return trimmed;
 }
 
+/**
+ * Resolve a workspace directory path to its root index file.
+ *
+ * Uses the backend's `FindRootIndex` command which finds the `.md` file with
+ * `contents` but no `part_of` — the canonical root index detection from
+ * `diaryx_core::workspace::Workspace::find_root_index_in_dir`.
+ *
+ * Falls back to the original path if resolution fails.
+ */
+async function resolveWorkspaceRootIndex(dirPath: string): Promise<string> {
+  try {
+    const backend = getBackendSync();
+    const response: any = await backend.execute({
+      type: "FindRootIndex",
+      params: { directory: dirPath },
+    });
+    const resolved = response?.data;
+    if (typeof resolved === "string" && resolved.trim()) {
+      const result = resolved.trim().replace(/^\.\/+/, "");
+      console.debug("[extism] resolveWorkspaceRootIndex:", dirPath, "→", result);
+      return result;
+    }
+    console.warn("[extism] resolveWorkspaceRootIndex: no data in response", response);
+  } catch (e) {
+    console.warn("[extism] resolveWorkspaceRootIndex failed:", e);
+  }
+  return dirPath;
+}
+
 function readPluginWorkspaceId(
   runtime: Record<string, unknown>,
   pluginId: string,
@@ -359,6 +388,12 @@ async function buildBrowserPluginInitPayload(pluginId: string): Promise<Record<s
     } catch {
       workspaceRoot = null;
     }
+  }
+
+  // Resolve directory-only paths (e.g. ".") to the actual root index file
+  // so plugins get a valid file path for reading/writing workspace config.
+  if (workspaceRoot && !workspaceRoot.endsWith(".md")) {
+    workspaceRoot = await resolveWorkspaceRootIndex(workspaceRoot);
   }
 
   return {
@@ -499,10 +534,26 @@ class BrowserSyncTransportController {
 
   private normalizeServerBase(serverUrl: string): string {
     let base = serverUrl.trim().replace(/\/+$/, "");
-    while (base.endsWith("/sync2") || base.endsWith("/sync")) {
-      base = base.replace(/\/(?:sync2|sync)$/, "");
+    while (
+      /\/(?:sync2|sync)$/.test(base) ||
+      /\/(?:ns|namespaces)\/[^/]+\/sync$/.test(base)
+    ) {
+      if (/\/(?:sync2|sync)$/.test(base)) {
+        base = base.replace(/\/(?:sync2|sync)$/, "");
+        continue;
+      }
+      base = base.replace(/\/(?:ns|namespaces)\/[^/]+\/sync$/, "");
     }
     return base;
+  }
+
+  private buildAbsoluteWebSocketBase(serverUrl: string): URL {
+    const isAbsolute = /^[a-z][a-z0-9+.-]*:\/\//i.test(serverUrl);
+    const url = isAbsolute
+      ? new URL(serverUrl)
+      : new URL(serverUrl || "/", window.location.origin);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url;
   }
 
   private buildConnectionKey(request: SyncTransportConnectRequest): string {
@@ -517,7 +568,8 @@ class BrowserSyncTransportController {
 
   private buildWebSocketUrl(request: SyncTransportConnectRequest): string {
     const base = this.normalizeServerBase(request.server_url);
-    const url = new URL(`${base}/sync2`);
+    const url = this.buildAbsoluteWebSocketBase(base);
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/ns/${encodeURIComponent(request.workspace_id)}/sync`;
     url.searchParams.set("workspace_id", request.workspace_id);
     if (request.auth_token) {
       url.searchParams.set("token", request.auth_token);
@@ -748,6 +800,21 @@ async function requirePermission(
       }),
     );
   }
+
+  // All plugins may access the sync server without explicit permission.
+  // The server authenticates via session cookies, so this is safe.
+  if (permType === "http_requests") {
+    try {
+      const authModule = await import("$lib/auth");
+      const serverUrl = authModule.getServerUrl();
+      if (serverUrl) {
+        const serverOrigin = new URL(serverUrl).origin;
+        const targetOrigin = new URL(target).origin;
+        if (targetOrigin === serverOrigin) return;
+      }
+    } catch {}
+  }
+
   await checkBrowserPermission(opts, permType, target);
 }
 
@@ -755,6 +822,36 @@ function buildHostFunctions(
   transport: BrowserSyncTransportController,
   opts?: HostFunctionOptions,
 ) {
+  async function getNamespaceServerBase(): Promise<string> {
+    const authModule = await import("$lib/auth");
+    const serverUrl = authModule.getServerUrl();
+    if (!serverUrl) {
+      throw new Error("not authenticated");
+    }
+    return serverUrl.replace(/\/$/, "");
+  }
+
+  async function namespaceFetch(
+    method: string,
+    path: string,
+    init: Omit<RequestInit, "method" | "credentials"> = {},
+    okStatuses: number[] = [],
+  ): Promise<Response> {
+    const serverBase = await getNamespaceServerBase();
+    const response = await fetch(`${serverBase}${path}`, {
+      ...init,
+      method,
+      credentials: "include",
+    });
+
+    if (!response.ok && !okStatuses.includes(response.status)) {
+      const text = await response.text();
+      throw new Error(text || `${method} returned ${response.status}`);
+    }
+
+    return response;
+  }
+
   return {
     "extism:host/user": {
       host_log(cp: CallContext, offs: bigint) {
@@ -1035,10 +1132,24 @@ function buildHostFunctions(
               : null;
           let resp: Response;
           try {
+            // Include credentials (cookies) for same-origin and sync server
+            // requests, but not for third-party CDNs (which reject credentials
+            // when Access-Control-Allow-Origin is wildcard).
+            const requestUrl = new URL(input.url);
+            const isSameOrigin = requestUrl.origin === globalThis.location?.origin;
+            let isServerUrl = false;
+            try {
+              const authModule = await import("$lib/auth");
+              const sUrl = authModule.getServerUrl();
+              if (sUrl) isServerUrl = requestUrl.origin === new URL(sUrl).origin;
+            } catch {}
+            const credentials = isSameOrigin || isServerUrl ? "include" as const : "omit" as const;
+
             resp = await fetch(input.url, {
               method: input.method,
               headers: input.headers,
               body: fetchBody,
+              credentials,
               signal: abortController?.signal,
             });
           } finally {
@@ -1283,6 +1394,91 @@ function buildHostFunctions(
               stderr: `host_run_wasi_module: ${msg}`,
             }),
           );
+        }
+      },
+      async host_namespace_put_object(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | {
+                ns_id: string;
+                key: string;
+                body_base64: string;
+                mime_type: string;
+                audience: string;
+              }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+          const binary = atob(input.body_base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          await namespaceFetch(
+            "PUT",
+            `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeURIComponent(input.key)}`,
+            {
+              headers: {
+                "Content-Type": input.mime_type,
+                "X-Audience": input.audience,
+              },
+              body: bytes,
+            },
+          );
+          return cp.store(JSON.stringify({ ok: true }));
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
+      async host_namespace_delete_object(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { ns_id: string; key: string }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+          await namespaceFetch(
+            "DELETE",
+            `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeURIComponent(input.key)}`,
+            {},
+            [404],
+          );
+          return cp.store(JSON.stringify({ ok: true }));
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
+      async host_namespace_list_objects(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { ns_id: string }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify([]));
+          const resp = await namespaceFetch(
+            "GET",
+            `/namespaces/${encodeURIComponent(input.ns_id)}/objects`,
+          );
+          const data = await resp.text();
+          return cp.store(data);
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
+      async host_namespace_sync_audience(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { ns_id: string; audience: string; access: string }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+          await namespaceFetch(
+            "PUT",
+            `/namespaces/${encodeURIComponent(input.ns_id)}/audiences/${encodeURIComponent(input.audience)}`,
+            {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ access: input.access }),
+            },
+          );
+          return cp.store(JSON.stringify({ ok: true }));
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
         }
       },
     },

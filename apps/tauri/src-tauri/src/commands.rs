@@ -675,6 +675,7 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
         ws_bridge: ws_bridge.clone(),
         plugin_command_bridge: Arc::new(TauriPluginCommandBridge { app: app.clone() }),
         runtime_context_provider: Arc::new(TauriRuntimeContextProvider { app: app.clone() }),
+        namespace_provider: Arc::new(diaryx_extism::NoopNamespaceProvider),
     });
     let mut adapters = Vec::new();
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
@@ -945,6 +946,7 @@ pub async fn install_user_plugin<R: Runtime>(
         ws_bridge: Arc::new(diaryx_extism::NoopWebSocketBridge),
         plugin_command_bridge: Arc::new(diaryx_extism::NoopPluginCommandBridge),
         runtime_context_provider: Arc::new(diaryx_extism::NoopRuntimeContextProvider),
+        namespace_provider: Arc::new(diaryx_extism::NoopNamespaceProvider),
     });
 
     log::info!(
@@ -3518,10 +3520,10 @@ pub async fn export_to_zip<R: Runtime>(
     })
 }
 
-/// Export workspace to a specific format (DOCX, EPUB, PDF, etc.) using pandoc
+/// Export workspace to a specific format (DOCX, EPUB, PDF, etc.) via the publish plugin.
 ///
-/// For markdown and HTML, uses the built-in pipeline. For other formats,
-/// shells out to the native `pandoc` binary.
+/// For markdown, writes files as-is. For other formats, delegates conversion
+/// to the publish plugin's `ConvertFormat` command (pandoc WASM).
 #[tauri::command]
 pub async fn export_to_format<R: Runtime>(
     app: AppHandle<R>,
@@ -3530,31 +3532,38 @@ pub async fn export_to_format<R: Runtime>(
     audience: Option<String>,
 ) -> Result<ExportResult, SerializableError> {
     use diaryx_core::export::Exporter;
-    use diaryx_core::pandoc;
     use std::io::Write;
     use tauri_plugin_dialog::DialogExt;
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
 
+    const SUPPORTED_FORMATS: &[&str] = &[
+        "markdown", "html", "docx", "epub", "pdf", "latex", "odt", "rst",
+    ];
+
+    fn format_extension(format: &str) -> &str {
+        match format {
+            "markdown" => "md",
+            "html" => "html",
+            "docx" => "docx",
+            "epub" => "epub",
+            "pdf" => "pdf",
+            "latex" => "tex",
+            "odt" => "odt",
+            "rst" => "rst",
+            _ => format,
+        }
+    }
+
     // Validate format
-    if !pandoc::is_supported_format(&format) {
+    if !SUPPORTED_FORMATS.contains(&format.as_str()) {
         return Err(SerializableError {
             kind: "ExportError".to_string(),
             message: format!(
                 "Unsupported format: '{}'. Supported: {}",
                 format,
-                pandoc::SUPPORTED_FORMATS.join(", ")
+                SUPPORTED_FORMATS.join(", ")
             ),
-            path: None,
-        });
-    }
-
-    // Check pandoc availability for formats that need it
-    if pandoc::requires_pandoc(&format) && !pandoc::is_pandoc_available() {
-        return Err(SerializableError {
-            kind: "PandocNotFound".to_string(),
-            message: "pandoc is not installed. Install from https://pandoc.org/installing.html"
-                .to_string(),
             path: None,
         });
     }
@@ -3569,7 +3578,7 @@ pub async fn export_to_format<R: Runtime>(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("workspace");
-    let ext = pandoc::format_extension(&format);
+    let ext = format_extension(&format);
     let default_filename = format!("{}-export.zip", workspace_name);
 
     // Show native save dialog
@@ -3638,6 +3647,20 @@ pub async fn export_to_format<R: Runtime>(
         });
     }
 
+    // Get plugin adapter for format conversion (when not markdown)
+    #[cfg(feature = "extism-plugins")]
+    let plugin_adapter = if format != "markdown" {
+        let adapters = app.state::<PluginAdapters>();
+        let guard = adapters.adapters.lock().map_err(|e| SerializableError {
+            kind: "LockError".to_string(),
+            message: format!("Failed to lock plugin adapters: {}", e),
+            path: None,
+        })?;
+        guard.get("diaryx.publish").cloned()
+    } else {
+        None
+    };
+
     // Create zip with converted files
     let file = std::fs::File::create(&output_path).map_err(|e| SerializableError {
         kind: "ExportError".to_string(),
@@ -3679,13 +3702,55 @@ pub async fn export_to_format<R: Runtime>(
                 continue;
             }
         } else {
-            // Convert via pandoc (or comrak for html in future)
+            // Convert via publish plugin (pandoc WASM)
             let new_path = relative_str.replace(".md", &format!(".{}", ext));
-            let converted = if pandoc::requires_pandoc(&format) || format == "html" {
-                pandoc::convert_content(&content, &format, true)
+
+            #[cfg(feature = "extism-plugins")]
+            let converted: Result<Vec<u8>, String> = if let Some(ref adapter) = plugin_adapter {
+                let input = serde_json::json!({
+                    "command": "ConvertFormat",
+                    "params": {
+                        "content": content,
+                        "from": "markdown",
+                        "to": format,
+                    },
+                })
+                .to_string();
+
+                match adapter.call_guest("handle_command", &input) {
+                    Ok(output) => {
+                        let response: serde_json::Value =
+                            serde_json::from_str(&output).unwrap_or_default();
+                        if response.get("success").and_then(|v| v.as_bool()) == Some(true) {
+                            let data = response.get("data").cloned().unwrap_or_default();
+                            if let Some(binary_b64) = data.get("binary").and_then(|v| v.as_str()) {
+                                use base64::Engine;
+                                base64::engine::general_purpose::STANDARD
+                                    .decode(binary_b64)
+                                    .map_err(|e| format!("base64 decode error: {}", e))
+                            } else if let Some(text) = data.get("content").and_then(|v| v.as_str())
+                            {
+                                Ok(text.as_bytes().to_vec())
+                            } else {
+                                Err("Plugin returned no content".to_string())
+                            }
+                        } else {
+                            let err = response
+                                .get("error")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown plugin error");
+                            Err(err.to_string())
+                        }
+                    }
+                    Err(e) => Err(format!("Plugin call failed: {}", e)),
+                }
             } else {
-                Ok(content.into_bytes())
+                Err("Publish plugin not loaded".to_string())
             };
+
+            #[cfg(not(feature = "extism-plugins"))]
+            let converted: Result<Vec<u8>, String> =
+                Err("Format conversion requires the extism-plugins feature".to_string());
 
             match converted {
                 Ok(data) => {
@@ -3700,7 +3765,7 @@ pub async fn export_to_format<R: Runtime>(
                 }
                 Err(e) => {
                     log::warn!(
-                        "[ExportFormat] pandoc conversion failed for {}: {}",
+                        "[ExportFormat] conversion failed for {}: {}",
                         relative_str,
                         e
                     );

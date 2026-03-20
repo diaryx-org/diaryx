@@ -1,7 +1,32 @@
 {
   "name": "diaryx",
   "compatibility_date": "2026-02-07",
+  "workers_dev": false,
+  "preview_urls": true,
+  "main": "./worker/index.ts",
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  },
+  "routes": [
+    {
+      "pattern": "app.diaryx.org",
+      "custom_domain": true
+    }
+  ],
+  // Uncomment after deploying diaryx-api:
+  // "services": [
+  //   {
+  //     "binding": "API",
+  //     "service": "diaryx-api"
+  //   }
+  // ],
   "assets": {
-    "directory": "./dist"
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
   }
 }

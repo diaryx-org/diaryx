@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-13T04:18:37Z
+updated: 2026-03-19T19:23:07Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -30,6 +30,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── History - Version history components - apps/web/src/lib/history/README.md
 │   │   │   │   ├── Hooks - Svelte hooks - apps/web/src/lib/hooks/README.md
 │   │   │   │   ├── Marketplace - Marketplace registries and bundle apply execution - apps/web/src/lib/marketplace/README.md
+│   │   │   │   ├── Namespace - Namespace management services and host-side UI components - apps/web/src/lib/namespace/README.md
 │   │   │   │   ├── Publish - Publishing and export UI wiring - apps/web/src/lib/publish/README.md
 │   │   │   │   ├── Settings - Settings panel components - apps/web/src/lib/settings/README.md
 │   │   │   │   ├── Share - Legacy share/publish panel module - apps/web/src/lib/share/README.md
@@ -48,6 +49,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Shared Views - Shared view components - apps/web/src/views/shared/README.md
 │   │   │   │   └── Sidebar Views - Sidebar components - apps/web/src/views/sidebar/README.md
 │   │   │   └── LICENSE - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md
+│   │   ├── web worker - Cloudflare Worker entrypoint for app.diaryx.org - apps/web/worker/README.md
 │   │   ├── Marketplace Dist - Preassembled marketplace payloads for themes, typographies, bundles, templates, and starter workspaces - apps/web/marketplace-dist/README.md
 │   │   └── TipTap Custom Extensions - Guide to creating custom TipTap extensions with markdown support - apps/web/docs/tiptap-custom-extensions.md
 │   └── tauri - Web app + native backend - apps/tauri/README.md
@@ -56,25 +58,27 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   └── diaryx src - Source code for the Diaryx CLI application - crates/diaryx/src/README.md
 │   │       └── Command-line module - The main CLI command implementation module - crates/diaryx/src/cli/README.md
 │   │           └── Navigation TUI module - Interactive TUI for navigating workspace hierarchy - crates/diaryx/src/cli/nav/README.md
+│   ├── diaryx_server - Platform-agnostic server core for Diaryx cloud adapters - crates/diaryx_server/README.md
+│   │   └── diaryx_server src - Platform-agnostic core modules for Diaryx server adapters - crates/diaryx_server/src/README.md
 │   ├── diaryx_core - Core library shared by Diaryx clients - crates/diaryx_core/README.md
 │   │   └── diaryx_core src - Source code for the core Diaryx library - crates/diaryx_core/src/README.md
 │   │       ├── Entry module - Entry manipulation functionality - crates/diaryx_core/src/entry/README.md
 │   │       ├── Filesystem module - Filesystem abstraction layer - crates/diaryx_core/src/fs/README.md
 │   │       ├── crates/diaryx_core/src/plugin/README.md
-│   │       ├── Publish module - Format-agnostic publishing pipeline - crates/diaryx_core/src/publish/README.md
 │   │       ├── Utils module - Utility functions for date and path handling - crates/diaryx_core/src/utils/README.md
 │   │       ├── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   │       └── Import module - Import external formats into Diaryx entries - crates/diaryx_core/src/import/README.md
 │   ├── crates/diaryx_daily/README.md
-│   ├── Publish module - Format-agnostic publishing pipeline - crates/diaryx_core/src/publish/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
 │   │   └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
 │   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
 │   │   └── diaryx_sync_server src - Source code for the sync server - crates/diaryx_sync_server/src/README.md
 │   │       ├── Auth module - Authentication middleware and magic link handling - crates/diaryx_sync_server/src/auth/README.md
+│   │       ├── diaryx_server src - Platform-agnostic core modules for Diaryx server adapters - crates/diaryx_server/src/README.md
 │   │       ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
-│   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
+│   │       ├── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
+│   │       └── Y-sync v2 Module - Siphonophore-based sync implementation (experimental) - crates/diaryx_sync_server/src/sync_v2/README.md
 │   ├── diaryx_sync - crates/diaryx_sync/README.md
 │   └── crates/diaryx_extism/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md

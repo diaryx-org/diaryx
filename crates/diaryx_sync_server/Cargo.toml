@@ -11,12 +11,13 @@ license-file.workspace = true
 
 [dependencies]
 # Internal crates
-diaryx_core = { workspace = true, features = ["html-publish"] }
+diaryx_server = { workspace = true }
+diaryx_core = { workspace = true }
 diaryx_sync = { workspace = true, features = ["server", "git"] }
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
-axum-extra = { version = "0.10", features = ["typed-header"] }
+axum-extra = { version = "0.10", features = ["typed-header", "cookie"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
@@ -76,6 +77,9 @@ async-stripe = { version = "0.41", default-features = false, features = ["runtim
 # Apple IAP (JWS verification)
 jsonwebtoken = "9"
 x509-parser = { version = "0.16", features = ["verify"] }
+
+# Vendored OpenSSL for cross-compilation (pulled in by webauthn-rs)
+openssl = { version = "0.10", features = ["vendored"] }
 
 # Environment
 dotenvy = "0.15"

@@ -3,7 +3,7 @@ import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import path from "path";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync, statSync } from "fs";
 
 const pkg = JSON.parse(
   readFileSync(path.resolve(__dirname, "package.json"), "utf-8"),
@@ -36,12 +36,45 @@ const devOrigin = explicitDevOrigin
       : canonicalDevHost
   }:${devPort}`;
 
+const marketplaceDistDir = path.resolve(__dirname, "marketplace-dist");
+
+/**
+ * Serve `/cdn/*` from the local `marketplace-dist` directory during dev.
+ * In production, `/cdn/*` is served from an R2 bucket by the Cloudflare Worker.
+ */
+function localCdnPlugin() {
+  const MIME: Record<string, string> = {
+    ".md": "text/markdown",
+    ".json": "application/json",
+    ".zip": "application/zip",
+  };
+  return {
+    name: "local-cdn",
+    configureServer(server: any) {
+      server.middlewares.use((req: any, res: any, next: any) => {
+        if (!req.url?.startsWith("/cdn/")) return next();
+        const relPath = req.url.slice("/cdn/".length);
+        const filePath = path.join(marketplaceDistDir, relPath);
+        if (!filePath.startsWith(marketplaceDistDir)) return next();
+        if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+          res.statusCode = 404;
+          res.end("Not found");
+          return;
+        }
+        const ext = path.extname(filePath).toLowerCase();
+        res.setHeader("Content-Type", MIME[ext] || "application/octet-stream");
+        res.end(readFileSync(filePath));
+      });
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
-  plugins: [tailwindcss(), svelte() as any, ...(useHttps ? [basicSsl()] : [])],
+  plugins: [tailwindcss(), svelte() as any, localCdnPlugin(), ...(useHttps ? [basicSsl()] : [])],
   // Base path for GitHub Pages deployment
   // Set VITE_BASE_PATH env var to deploy to a subdirectory (e.g., "/repo-name/")
   base: process.env.VITE_BASE_PATH || "/",

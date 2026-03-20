@@ -18,26 +18,21 @@ async function installAttachmentReadDelay(page: import('@playwright/test').Page,
 
         g.__e2e_original_execute = backend.execute.bind(backend)
         g.__e2e_inflight_attachment_reads = 0
-        g.__e2e_execute_lane = Promise.resolve()
 
         backend.execute = async (command: any) => {
-          const run = async () => {
-            if (command?.type === 'GetAttachmentData') {
-              g.__e2e_inflight_attachment_reads += 1
-              try {
-                await new Promise((resolve) => setTimeout(resolve, delay))
-                return await g.__e2e_original_execute(command)
-              } finally {
-                g.__e2e_inflight_attachment_reads -= 1
-              }
+          // Intercept FileExists calls for attachment probing —
+          // the RightSidebar checks availability via fileExists for each attachment.
+          if (command?.type === 'FileExists') {
+            g.__e2e_inflight_attachment_reads += 1
+            try {
+              await new Promise((resolve) => setTimeout(resolve, delay))
+              return await g.__e2e_original_execute(command)
+            } finally {
+              g.__e2e_inflight_attachment_reads -= 1
             }
-
-            return g.__e2e_original_execute(command)
           }
 
-          const next = g.__e2e_execute_lane.then(run, run)
-          g.__e2e_execute_lane = next.catch(() => undefined)
-          return next
+          return g.__e2e_original_execute(command)
         }
       }, delayMs)
       return

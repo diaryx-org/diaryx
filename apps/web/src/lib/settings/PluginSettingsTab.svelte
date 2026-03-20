@@ -556,7 +556,7 @@
         {@const nsCtx = getNamespaceContext()}
         {#if nsCtx.isReady && nsCtx.isConfigured && nsCtx.namespaceId}
           <div class="px-1">
-            <NamespaceCustomDomainManager namespaceId={nsCtx.namespaceId} subdomain={nsCtx.subdomain} />
+            <NamespaceCustomDomainManager namespaceId={nsCtx.namespaceId} />
           </div>
         {/if}
       {:else}

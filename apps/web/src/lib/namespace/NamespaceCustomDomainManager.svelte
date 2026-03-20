@@ -8,12 +8,11 @@
 
   interface Props {
     namespaceId: string;
-    subdomain: string | null;
   }
 
-  let { namespaceId, subdomain }: Props = $props();
+  let { namespaceId }: Props = $props();
 
-  let cnameTarget = $derived(subdomain ? 'sites.diaryx.org' : null);
+  let cnameTarget = 'publish.diaryx.org';
 
   let domains = $state<DomainInfo[]>([]);
   let isLoading = $state(false);
@@ -80,22 +79,18 @@
 <div class="space-y-2">
   <div class="flex items-center justify-between">
     <p class="text-xs font-medium text-muted-foreground">Custom domains</p>
-    {#if cnameTarget}
-      <Button
-        variant="ghost"
-        size="icon"
-        class="size-6"
-        onclick={() => { showAddForm = !showAddForm; }}
-        aria-label="Add custom domain"
-      >
-        <Plus class="size-3.5" />
-      </Button>
-    {/if}
+    <Button
+      variant="ghost"
+      size="icon"
+      class="size-6"
+      onclick={() => { showAddForm = !showAddForm; }}
+      aria-label="Add custom domain"
+    >
+      <Plus class="size-3.5" />
+    </Button>
   </div>
 
-  {#if !cnameTarget}
-    <p class="text-xs text-muted-foreground">Claim a subdomain first to enable custom domains.</p>
-  {:else if isLoading}
+  {#if isLoading}
     <div class="flex items-center justify-center py-2">
       <Loader2 class="size-4 animate-spin text-muted-foreground" />
     </div>
@@ -122,7 +117,7 @@
     </div>
   {/if}
 
-  {#if showAddForm && cnameTarget}
+  {#if showAddForm}
     <div class="space-y-2 p-2.5 rounded-md border border-border bg-secondary">
       <Input
         type="text"

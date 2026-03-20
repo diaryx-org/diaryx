@@ -9,6 +9,7 @@ members = [
     "crates/diaryx_sync",
     "crates/diaryx_sync_server",
     "crates/diaryx_extism",
+    "crates/diaryx_cloudflare",
     "apps/tauri/src-tauri"
 ]
 

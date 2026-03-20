@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "diaryx-api",
+  "compatibility_date": "2025-03-01",
+  "main": "build/worker/shim.mjs",
+
+  "build": {
+    "command": "cargo install -q worker-build && worker-build --release"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "diaryx",
+      "database_id": "" // Set via overrides or env
+    }
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "OBJECTS",
+      "bucket_name": "diaryx-objects"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "DOMAINS",
+      "id": "" // Set via overrides or env
+    }
+  ]
+}

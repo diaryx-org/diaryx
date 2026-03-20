@@ -3,7 +3,6 @@
 use crate::adapters::d1::*;
 use crate::adapters::kv::KvDomainMappingCache;
 use crate::adapters::r2::R2BlobStore;
-use crate::adapters::resend::ResendMailer;
 use crate::config;
 use crate::tokens::validate_audience_token;
 use diaryx_server::ports::{Mailer, NamespaceStore, ServerCoreError};
@@ -479,7 +478,7 @@ pub async fn register_domain(mut req: Request, ctx: RouteContext<()>) -> Result<
             "hostname": domain,
             "ssl": { "method": "http", "type": "dv" },
         });
-        let mut headers = Headers::new();
+        let headers = Headers::new();
         headers.set("Authorization", &format!("Bearer {}", api_token))?;
         headers.set("Content-Type", "application/json")?;
         let mut init = RequestInit::new();
@@ -536,7 +535,7 @@ pub async fn remove_domain(req: Request, ctx: RouteContext<()>) -> Result<Respon
             "https://api.cloudflare.com/client/v4/zones/{}/custom_hostnames?hostname={}",
             zone_id, domain
         );
-        let mut headers = Headers::new();
+        let headers = Headers::new();
         headers.set("Authorization", &format!("Bearer {}", api_token))?;
         let mut init = RequestInit::new();
         init.with_method(Method::Get).with_headers(headers);
@@ -553,7 +552,7 @@ pub async fn remove_domain(req: Request, ctx: RouteContext<()>) -> Result<Respon
                                     "https://api.cloudflare.com/client/v4/zones/{}/custom_hostnames/{}",
                                     zone_id, ch_id
                                 );
-                                let mut del_headers = Headers::new();
+                                let del_headers = Headers::new();
                                 del_headers
                                     .set("Authorization", &format!("Bearer {}", api_token))?;
                                 let mut del_init = RequestInit::new();

@@ -385,6 +385,22 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
         "#,
     )?;
 
+    // Forward migration: add content_hash column to namespace_objects.
+    let has_content_hash_col: bool = conn
+        .prepare("PRAGMA table_info(namespace_objects)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "content_hash");
+    if !has_content_hash_col {
+        conn.execute(
+            "ALTER TABLE namespace_objects ADD COLUMN content_hash TEXT",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_namespace_objects_r2_key ON namespace_objects(namespace_id, r2_key);",
+    )?;
+
     // Forward migration: create passkey tables if missing.
     let has_passkey_credentials = conn
         .query_row(

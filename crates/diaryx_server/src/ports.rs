@@ -274,6 +274,7 @@ pub trait ObjectMetaStore: Send + Sync {
         mime_type: &str,
         size_bytes: u64,
         audience: Option<&str>,
+        content_hash: Option<&str>,
     ) -> Result<(), ServerCoreError>;
     async fn get_object_meta(
         &self,
@@ -287,6 +288,12 @@ pub trait ObjectMetaStore: Send + Sync {
         offset: u32,
     ) -> Result<Vec<ObjectMeta>, ServerCoreError>;
     async fn delete_object(&self, namespace_id: &str, key: &str) -> Result<(), ServerCoreError>;
+    /// Count how many object metadata rows reference a given blob key within a namespace.
+    async fn count_refs_to_blob(
+        &self,
+        namespace_id: &str,
+        blob_key: &str,
+    ) -> Result<u64, ServerCoreError>;
     async fn record_usage(
         &self,
         user_id: &str,

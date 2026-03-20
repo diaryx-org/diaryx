@@ -669,9 +669,18 @@ impl ObjectMetaStore for NativeObjectMetaStore {
         mime_type: &str,
         size_bytes: u64,
         audience: Option<&str>,
+        content_hash: Option<&str>,
     ) -> Result<(), ServerCoreError> {
         self.repo
-            .upsert_object(namespace_id, key, blob_key, mime_type, size_bytes, audience)
+            .upsert_object(
+                namespace_id,
+                key,
+                blob_key,
+                mime_type,
+                size_bytes,
+                audience,
+                content_hash,
+            )
             .map_err(ServerCoreError::from)
     }
 
@@ -701,6 +710,14 @@ impl ObjectMetaStore for NativeObjectMetaStore {
         self.repo
             .delete_object(namespace_id, key)
             .map_err(ServerCoreError::from)
+    }
+
+    async fn count_refs_to_blob(
+        &self,
+        namespace_id: &str,
+        blob_key: &str,
+    ) -> Result<u64, ServerCoreError> {
+        Ok(self.repo.count_refs_to_blob(namespace_id, blob_key))
     }
 
     async fn record_usage(
@@ -741,6 +758,7 @@ impl From<crate::db::NamespaceObjectMeta> for CoreObjectMeta {
             size_bytes: value.size_bytes,
             updated_at: value.updated_at,
             audience: value.audience,
+            content_hash: value.content_hash,
         }
     }
 }

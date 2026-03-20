@@ -141,6 +141,8 @@ pub struct ObjectMeta {
     pub updated_at: i64,
     /// Audience tag. `None` = private (owner-only).
     pub audience: Option<String>,
+    /// SHA-256 hex digest of the blob content. `None` for legacy rows.
+    pub content_hash: Option<String>,
 }
 
 /// Aggregated usage totals for a user.

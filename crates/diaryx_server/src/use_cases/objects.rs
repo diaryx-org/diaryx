@@ -1,5 +1,6 @@
 use crate::domain::{ObjectMeta, PublicObjectAccess, UsageTotals};
 use crate::ports::{BlobStore, NamespaceStore, ObjectMetaStore, ServerCoreError};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 /// Result of a successful object put.
@@ -80,29 +81,72 @@ impl<'a> ObjectService<'a> {
             }
         }
 
-        let blob_key = object_blob_key(namespace_id, key);
         let size = bytes.len() as u64;
 
-        // Build R2 metadata with audience info.
-        let r2_metadata = match audience {
-            Some(aud) => {
-                let mut m = HashMap::new();
-                m.insert("audience".to_string(), aud.to_string());
-                if let Some(info) = self.namespace_store.get_audience(namespace_id, aud).await? {
-                    m.insert("access".to_string(), info.access);
-                }
-                Some(m)
-            }
-            None => None,
-        };
+        // Content-hash dedup: compute SHA-256 and derive blob key.
+        let content_hash =
+            Sha256::digest(bytes)
+                .iter()
+                .fold(String::with_capacity(64), |mut s, b| {
+                    use std::fmt::Write;
+                    let _ = write!(s, "{:02x}", b);
+                    s
+                });
+        let blob_key = content_blob_key(namespace_id, &content_hash);
 
-        self.blob_store
-            .put(&blob_key, bytes, mime_type, r2_metadata.as_ref())
-            .await?;
+        // Fetch existing meta to find old blob key for cleanup.
+        let old_blob_key = self
+            .object_meta_store
+            .get_object_meta(namespace_id, key)
+            .await?
+            .and_then(|m| m.blob_key);
+
+        // Skip R2 write if an identical blob already exists.
+        let blob_exists = self.blob_store.exists(&blob_key).await?;
+        if !blob_exists {
+            // Build R2 metadata with audience info.
+            let r2_metadata = match audience {
+                Some(aud) => {
+                    let mut m = HashMap::new();
+                    m.insert("audience".to_string(), aud.to_string());
+                    if let Some(info) = self.namespace_store.get_audience(namespace_id, aud).await?
+                    {
+                        m.insert("access".to_string(), info.access);
+                    }
+                    Some(m)
+                }
+                None => None,
+            };
+
+            self.blob_store
+                .put(&blob_key, bytes, mime_type, r2_metadata.as_ref())
+                .await?;
+        }
 
         self.object_meta_store
-            .upsert_object(namespace_id, key, &blob_key, mime_type, size, audience)
+            .upsert_object(
+                namespace_id,
+                key,
+                &blob_key,
+                mime_type,
+                size,
+                audience,
+                Some(&content_hash),
+            )
             .await?;
+
+        // Clean up old blob if it differs and is no longer referenced.
+        if let Some(ref old_key) = old_blob_key {
+            if *old_key != blob_key {
+                let refs = self
+                    .object_meta_store
+                    .count_refs_to_blob(namespace_id, old_key)
+                    .await?;
+                if refs == 0 {
+                    self.blob_store.delete(old_key).await?;
+                }
+            }
+        }
 
         // Record bytes_in usage (fire-and-forget; errors are non-fatal).
         let _ = self
@@ -172,10 +216,18 @@ impl<'a> ObjectService<'a> {
             .blob_key
             .unwrap_or_else(|| object_blob_key(namespace_id, key));
 
-        self.blob_store.delete(&blob_key).await?;
+        // Delete metadata first (drops ref count), then conditionally delete blob.
         self.object_meta_store
             .delete_object(namespace_id, key)
             .await?;
+
+        let refs = self
+            .object_meta_store
+            .count_refs_to_blob(namespace_id, &blob_key)
+            .await?;
+        if refs == 0 {
+            self.blob_store.delete(&blob_key).await?;
+        }
 
         Ok(())
     }
@@ -276,9 +328,14 @@ impl<'a> ObjectService<'a> {
     }
 }
 
-/// Derive the blob store key for a namespace object.
+/// Derive the blob store key for a namespace object (legacy layout).
 pub fn object_blob_key(namespace_id: &str, key: &str) -> String {
     format!("ns/{}/{}", namespace_id, key)
+}
+
+/// Derive the content-addressed blob key for a namespace object.
+fn content_blob_key(namespace_id: &str, content_hash: &str) -> String {
+    format!("ns/{}/blobs/{}", namespace_id, content_hash)
 }
 
 #[cfg(test)]
@@ -385,6 +442,7 @@ mod tests {
             mime_type: &str,
             size_bytes: u64,
             audience: Option<&str>,
+            content_hash: Option<&str>,
         ) -> Result<(), ServerCoreError> {
             self.objects.lock().unwrap().insert(
                 (namespace_id.to_string(), key.to_string()),
@@ -396,6 +454,7 @@ mod tests {
                     size_bytes,
                     updated_at: 1,
                     audience: audience.map(|s| s.to_string()),
+                    content_hash: content_hash.map(|s| s.to_string()),
                 },
             );
             Ok(())
@@ -438,6 +497,23 @@ mod tests {
                 .unwrap()
                 .remove(&(namespace_id.to_string(), key.to_string()));
             Ok(())
+        }
+        async fn count_refs_to_blob(
+            &self,
+            namespace_id: &str,
+            blob_key: &str,
+        ) -> Result<u64, ServerCoreError> {
+            let count = self
+                .objects
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|o| {
+                    o.namespace_id == namespace_id
+                        && o.blob_key.as_deref() == Some(blob_key)
+                })
+                .count();
+            Ok(count as u64)
         }
         async fn record_usage(
             &self,
@@ -498,8 +574,8 @@ mod tests {
             self.blobs.lock().unwrap().remove(key);
             Ok(())
         }
-        async fn exists(&self, _: &str) -> Result<bool, ServerCoreError> {
-            Ok(false)
+        async fn exists(&self, key: &str) -> Result<bool, ServerCoreError> {
+            Ok(self.blobs.lock().unwrap().contains_key(key))
         }
         async fn init_multipart(&self, _: &str, _: &str) -> Result<String, ServerCoreError> {
             Ok(String::new())
@@ -661,14 +737,8 @@ mod tests {
                 .get(&("ns1".to_string(), "hello.txt".to_string()))
                 .is_none()
         );
-        assert!(
-            blob_store
-                .blobs
-                .lock()
-                .unwrap()
-                .get("ns/ns1/hello.txt")
-                .is_none()
-        );
+        // Blob is content-addressed; should be cleaned up when no refs remain.
+        assert!(blob_store.blobs.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -731,5 +801,146 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServerCoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn dedup_same_bytes_under_two_keys() {
+        let (ns_store, obj_store, blob_store) = make_stores();
+        let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
+
+        service
+            .put("ns1", "a.txt", "text/plain", b"same content", None, "user1")
+            .await
+            .unwrap();
+        service
+            .put("ns1", "b.txt", "text/plain", b"same content", None, "user1")
+            .await
+            .unwrap();
+
+        // Both keys exist in meta store.
+        assert!(
+            obj_store
+                .objects
+                .lock()
+                .unwrap()
+                .contains_key(&("ns1".into(), "a.txt".into()))
+        );
+        assert!(
+            obj_store
+                .objects
+                .lock()
+                .unwrap()
+                .contains_key(&("ns1".into(), "b.txt".into()))
+        );
+
+        // Only one blob in blob store (deduped).
+        assert_eq!(blob_store.blobs.lock().unwrap().len(), 1);
+
+        // Both meta rows point to the same blob key.
+        let a_blob = obj_store
+            .objects
+            .lock()
+            .unwrap()
+            .get(&("ns1".into(), "a.txt".into()))
+            .unwrap()
+            .blob_key
+            .clone();
+        let b_blob = obj_store
+            .objects
+            .lock()
+            .unwrap()
+            .get(&("ns1".into(), "b.txt".into()))
+            .unwrap()
+            .blob_key
+            .clone();
+        assert_eq!(a_blob, b_blob);
+    }
+
+    #[tokio::test]
+    async fn ref_counted_delete() {
+        let (ns_store, obj_store, blob_store) = make_stores();
+        let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
+
+        service
+            .put("ns1", "a.txt", "text/plain", b"shared", None, "user1")
+            .await
+            .unwrap();
+        service
+            .put("ns1", "b.txt", "text/plain", b"shared", None, "user1")
+            .await
+            .unwrap();
+
+        // Delete one key — blob should survive.
+        service.delete("ns1", "a.txt", "user1").await.unwrap();
+        assert_eq!(blob_store.blobs.lock().unwrap().len(), 1);
+
+        // Delete the other — blob should be removed.
+        service.delete("ns1", "b.txt", "user1").await.unwrap();
+        assert!(blob_store.blobs.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn overwrite_cleans_up_old_blob() {
+        let (ns_store, obj_store, blob_store) = make_stores();
+        let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
+
+        service
+            .put("ns1", "file.txt", "text/plain", b"content A", None, "user1")
+            .await
+            .unwrap();
+        assert_eq!(blob_store.blobs.lock().unwrap().len(), 1);
+
+        service
+            .put("ns1", "file.txt", "text/plain", b"content B", None, "user1")
+            .await
+            .unwrap();
+
+        // Old blob for "content A" should be cleaned up; only "content B" blob remains.
+        assert_eq!(blob_store.blobs.lock().unwrap().len(), 1);
+        let meta = obj_store
+            .objects
+            .lock()
+            .unwrap()
+            .get(&("ns1".into(), "file.txt".into()))
+            .unwrap()
+            .clone();
+        assert!(meta.content_hash.is_some());
+        assert!(meta.blob_key.as_ref().unwrap().contains("blobs/"));
+    }
+
+    #[tokio::test]
+    async fn legacy_rows_without_content_hash_still_work() {
+        let (ns_store, obj_store, blob_store) = make_stores();
+
+        // Simulate a legacy row: blob_key uses old format, no content_hash.
+        let legacy_blob_key = "ns/ns1/legacy.txt";
+        blob_store
+            .blobs
+            .lock()
+            .unwrap()
+            .insert(legacy_blob_key.to_string(), b"legacy data".to_vec());
+        obj_store.objects.lock().unwrap().insert(
+            ("ns1".into(), "legacy.txt".into()),
+            ObjectMeta {
+                namespace_id: "ns1".into(),
+                key: "legacy.txt".into(),
+                blob_key: Some(legacy_blob_key.into()),
+                mime_type: "text/plain".into(),
+                size_bytes: 11,
+                updated_at: 1,
+                audience: None,
+                content_hash: None,
+            },
+        );
+
+        let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
+
+        // get() should work with legacy blob key.
+        let obj = service.get("ns1", "legacy.txt", "user1").await.unwrap();
+        assert_eq!(obj.bytes, b"legacy data");
+
+        // delete() should clean up legacy blob.
+        service.delete("ns1", "legacy.txt", "user1").await.unwrap();
+        assert!(blob_store.blobs.lock().unwrap().is_empty());
     }
 }

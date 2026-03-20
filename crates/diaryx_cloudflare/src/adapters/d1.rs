@@ -577,21 +577,23 @@ impl ObjectMetaStore for D1ObjectMetaStore {
         mime_type: &str,
         size_bytes: u64,
         audience: Option<&str>,
+        content_hash: Option<&str>,
     ) -> Result<(), ServerCoreError> {
         let now = chrono::Utc::now().timestamp();
         self.db
             .prepare(
-                "INSERT INTO namespace_objects (namespace_id, key, r2_key, data, mime_type, size_bytes, updated_at, audience) \
-                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7) \
+                "INSERT INTO namespace_objects (namespace_id, key, r2_key, data, mime_type, size_bytes, updated_at, audience, content_hash) \
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8) \
                  ON CONFLICT(namespace_id, key) DO UPDATE SET \
                    r2_key = excluded.r2_key, data = NULL, mime_type = excluded.mime_type, \
                    size_bytes = excluded.size_bytes, updated_at = excluded.updated_at, \
-                   audience = excluded.audience",
+                   audience = excluded.audience, content_hash = excluded.content_hash",
             )
             .bind(&[
                 namespace_id.into(), key.into(), blob_key.into(),
                 mime_type.into(), ts(size_bytes as i64), ts(now),
                 audience.unwrap_or("").into(),
+                content_hash.unwrap_or("").into(),
             ])
             .map_err(e)?
             .run()
@@ -608,7 +610,7 @@ impl ObjectMetaStore for D1ObjectMetaStore {
         let result = self
             .db
             .prepare(
-                "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience \
+                "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience, content_hash \
                  FROM namespace_objects WHERE namespace_id = ?1 AND key = ?2",
             )
             .bind(&[namespace_id.into(), key.into()])
@@ -628,6 +630,10 @@ impl ObjectMetaStore for D1ObjectMetaStore {
                 .as_str()
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
+            content_hash: row["content_hash"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
         }))
     }
 
@@ -640,7 +646,7 @@ impl ObjectMetaStore for D1ObjectMetaStore {
         let results = self
             .db
             .prepare(
-                "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience \
+                "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience, content_hash \
                  FROM namespace_objects WHERE namespace_id = ?1 ORDER BY key LIMIT ?2 OFFSET ?3",
             )
             .bind(&[namespace_id.into(), limit.into(), offset.into()])
@@ -663,6 +669,10 @@ impl ObjectMetaStore for D1ObjectMetaStore {
                     .as_str()
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string()),
+                content_hash: row["content_hash"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string()),
             })
             .collect())
     }
@@ -676,6 +686,24 @@ impl ObjectMetaStore for D1ObjectMetaStore {
             .await
             .map_err(e)?;
         Ok(())
+    }
+
+    async fn count_refs_to_blob(
+        &self,
+        namespace_id: &str,
+        blob_key: &str,
+    ) -> Result<u64, ServerCoreError> {
+        let result = self
+            .db
+            .prepare(
+                "SELECT COUNT(*) as cnt FROM namespace_objects WHERE namespace_id = ?1 AND r2_key = ?2",
+            )
+            .bind(&[namespace_id.into(), blob_key.into()])
+            .map_err(e)?
+            .first::<serde_json::Value>(None)
+            .await
+            .map_err(e)?;
+        Ok(result.and_then(|v| v["cnt"].as_u64()).unwrap_or(0))
     }
 
     async fn record_usage(

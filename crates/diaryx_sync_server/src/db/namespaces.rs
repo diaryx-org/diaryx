@@ -24,6 +24,8 @@ pub struct NamespaceObjectMeta {
     pub updated_at: i64,
     /// Audience tag. `None` = private (owner-only).
     pub audience: Option<String>,
+    /// SHA-256 hex digest of the blob content. `None` for legacy rows.
+    pub content_hash: Option<String>,
 }
 
 /// Audience visibility record.
@@ -151,20 +153,22 @@ impl NamespaceRepo {
         mime_type: &str,
         size_bytes: u64,
         audience: Option<&str>,
+        content_hash: Option<&str>,
     ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().timestamp();
         conn.execute(
-            "INSERT INTO namespace_objects (namespace_id, key, r2_key, data, mime_type, size_bytes, updated_at, audience)
-             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7)
+            "INSERT INTO namespace_objects (namespace_id, key, r2_key, data, mime_type, size_bytes, updated_at, audience, content_hash)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(namespace_id, key) DO UPDATE SET
                r2_key = excluded.r2_key,
                data = NULL,
                mime_type = excluded.mime_type,
                size_bytes = excluded.size_bytes,
                updated_at = excluded.updated_at,
-               audience = excluded.audience",
-            params![namespace_id, key, r2_key, mime_type, size_bytes as i64, now, audience],
+               audience = excluded.audience,
+               content_hash = excluded.content_hash",
+            params![namespace_id, key, r2_key, mime_type, size_bytes as i64, now, audience, content_hash],
         )
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -173,7 +177,7 @@ impl NamespaceRepo {
     pub fn get_object_meta(&self, namespace_id: &str, key: &str) -> Option<NamespaceObjectMeta> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience
+            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience, content_hash
              FROM namespace_objects WHERE namespace_id = ?1 AND key = ?2",
             params![namespace_id, key],
             |row| {
@@ -185,6 +189,7 @@ impl NamespaceRepo {
                     size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
                     updated_at: row.get(5)?,
                     audience: row.get(6)?,
+                    content_hash: row.get(7)?,
                 })
             },
         )
@@ -200,7 +205,7 @@ impl NamespaceRepo {
     ) -> Vec<NamespaceObjectMeta> {
         let conn = self.conn.lock().unwrap();
         conn.prepare(
-            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience
+            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience, content_hash
              FROM namespace_objects WHERE namespace_id = ?1 ORDER BY key LIMIT ?2 OFFSET ?3",
         )
         .and_then(|mut stmt| {
@@ -213,6 +218,7 @@ impl NamespaceRepo {
                     size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
                     updated_at: row.get(5)?,
                     audience: row.get(6)?,
+                    content_hash: row.get(7)?,
                 })
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -230,6 +236,18 @@ impl NamespaceRepo {
         .map_err(|e| e.to_string())
     }
 
+    /// Count how many object rows reference a given blob key within a namespace.
+    pub fn count_refs_to_blob(&self, namespace_id: &str, blob_key: &str) -> u64 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM namespace_objects WHERE namespace_id = ?1 AND r2_key = ?2",
+            params![namespace_id, blob_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        .max(0) as u64
+    }
+
     /// List objects belonging to a specific audience.
     pub fn list_objects_by_audience(
         &self,
@@ -240,7 +258,7 @@ impl NamespaceRepo {
     ) -> Vec<NamespaceObjectMeta> {
         let conn = self.conn.lock().unwrap();
         conn.prepare(
-            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience
+            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience, content_hash
              FROM namespace_objects WHERE namespace_id = ?1 AND audience = ?2 ORDER BY key LIMIT ?3 OFFSET ?4",
         )
         .and_then(|mut stmt| {
@@ -253,6 +271,7 @@ impl NamespaceRepo {
                     size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
                     updated_at: row.get(5)?,
                     audience: row.get(6)?,
+                    content_hash: row.get(7)?,
                 })
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())

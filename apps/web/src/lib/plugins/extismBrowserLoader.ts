@@ -1486,6 +1486,25 @@ function buildHostFunctions(
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
         }
       },
+      async host_hash_file(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { path: string }
+            | undefined;
+          if (!input) return cp.store("");
+          const path = normalizeExtismHostPath(input.path);
+          await requirePermission(opts, "read_files", path);
+          const backend = getBackendSync();
+          const data = await backend.readBinary(path);
+          const hashBuffer = await crypto.subtle.digest("SHA-256", new Uint8Array(data));
+          const hashHex = Array.from(new Uint8Array(hashBuffer))
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join("");
+          return cp.store(JSON.stringify({ hash: hashHex }));
+        } catch {
+          return cp.store("");
+        }
+      },
     },
   };
 }

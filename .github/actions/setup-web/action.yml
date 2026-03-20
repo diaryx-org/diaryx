@@ -4,8 +4,6 @@ description: 'Checkout, install Nix, download WASM + bindings artifacts, and ins
 runs:
   using: 'composite'
   steps:
-    - uses: actions/checkout@v4
-
     - uses: DeterminateSystems/nix-installer-action@main
 
     - uses: DeterminateSystems/magic-nix-cache-action@main

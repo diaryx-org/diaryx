@@ -176,6 +176,7 @@ jobs:
     needs: [changes, build-wasm]
     if: needs.changes.outputs.web == 'true'
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-web
 
       - name: Type check
@@ -201,6 +202,7 @@ jobs:
     needs: [web, build-wasm, changes]
     if: needs.changes.outputs.web == 'true'
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-web
 
       - name: Install Playwright browsers

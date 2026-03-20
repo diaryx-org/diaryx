@@ -658,6 +658,7 @@ mod tests {
             "text/markdown",
             42,
             None,
+            None,
         )
         .unwrap();
 
@@ -674,6 +675,7 @@ mod tests {
             "text/markdown",
             100,
             Some("public"),
+            None,
         )
         .unwrap();
         let meta2 = repo.get_object_meta("workspace:abc", "README.md").unwrap();
@@ -693,8 +695,16 @@ mod tests {
         repo.create_namespace("site:x", "u1").unwrap();
 
         // Private (no audience)
-        repo.upsert_object("site:x", "a.txt", "ns/site:x/a.txt", "text/plain", 10, None)
-            .unwrap();
+        repo.upsert_object(
+            "site:x",
+            "a.txt",
+            "ns/site:x/a.txt",
+            "text/plain",
+            10,
+            None,
+            None,
+        )
+        .unwrap();
         // With audience
         repo.upsert_object(
             "site:x",
@@ -703,6 +713,7 @@ mod tests {
             "text/plain",
             20,
             Some("public"),
+            None,
         )
         .unwrap();
         repo.upsert_object(
@@ -712,6 +723,7 @@ mod tests {
             "text/plain",
             30,
             Some("public"),
+            None,
         )
         .unwrap();
         repo.upsert_object(
@@ -721,6 +733,7 @@ mod tests {
             "text/plain",
             40,
             Some("members"),
+            None,
         )
         .unwrap();
 

@@ -29,6 +29,7 @@ log = "0.4"
 thiserror.workspace = true
 futures-lite = "2"
 base64 = "0.22"
+sha2 = "0.10"
 ureq = { version = "3", optional = true }
 tokio = { version = "1", features = ["rt", "time", "sync"], optional = true }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"], optional = true }

@@ -41,6 +41,8 @@ pub struct ObjectMetaResponse {
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 impl From<ObjectMeta> for ObjectMetaResponse {
@@ -53,6 +55,7 @@ impl From<ObjectMeta> for ObjectMetaResponse {
             size_bytes: m.size_bytes,
             updated_at: m.updated_at,
             audience: m.audience,
+            content_hash: m.content_hash,
         }
     }
 }
@@ -206,6 +209,9 @@ pub struct PaginationParams {
     pub limit: u32,
     #[serde(default)]
     pub offset: u32,
+    /// Optional key prefix filter (e.g. `?prefix=files/`).
+    #[serde(default)]
+    pub prefix: Option<String>,
 }
 
 fn default_limit() -> u32 {
@@ -226,8 +232,17 @@ async fn list_objects(
         .await
     {
         Ok(objects) => {
-            let response: Vec<ObjectMetaResponse> =
-                objects.into_iter().map(ObjectMetaResponse::from).collect();
+            let response: Vec<ObjectMetaResponse> = objects
+                .into_iter()
+                .filter(|o| {
+                    pagination
+                        .prefix
+                        .as_ref()
+                        .map(|p| o.key.starts_with(p.as_str()))
+                        .unwrap_or(true)
+                })
+                .map(ObjectMetaResponse::from)
+                .collect();
             Json(response).into_response()
         }
         Err(e) => core_error_response(e),

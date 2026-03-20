@@ -585,8 +585,15 @@ pub fn register_host_functions(
             "host_ws_request",
             [ValType::I64],
             [ValType::I64],
-            user_data,
+            user_data.clone(),
             host_ws_request,
+        )
+        .with_function(
+            "host_hash_file",
+            [ValType::I64],
+            [ValType::I64],
+            user_data,
+            host_hash_file,
         )
 }
 
@@ -1306,6 +1313,53 @@ fn host_ws_request(
     let ctx = ctx.lock().unwrap();
     let result = ctx.ws_bridge.request(&input).map_err(ExtismError::msg)?;
     plugin.memory_set_val(&mut outputs[0], result.as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_hash_file(input: {path}) -> {hash: "hex..."}`
+///
+/// Computes the SHA-256 hash of a workspace file and returns the hex digest.
+/// Returns an empty string if the file does not exist.
+fn host_hash_file(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    use sha2::{Digest, Sha256};
+
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct HashInput {
+        path: String,
+    }
+
+    let parsed: HashInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_hash_file: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
+
+    let bytes = match futures_lite::future::block_on(ctx.fs.read_binary(Path::new(&parsed.path))) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            plugin.memory_set_val(&mut outputs[0], "")?;
+            return Ok(());
+        }
+    };
+
+    let hash = Sha256::digest(&bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{:02x}", b);
+            s
+        });
+
+    let json = serde_json::json!({ "hash": hash }).to_string();
+    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
     Ok(())
 }
 

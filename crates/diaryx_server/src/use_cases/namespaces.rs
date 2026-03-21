@@ -15,13 +15,14 @@ impl<'a> NamespaceService<'a> {
         &self,
         owner_user_id: &str,
         id: Option<&str>,
+        metadata: Option<&str>,
     ) -> Result<NamespaceInfo, ServerCoreError> {
         let namespace_id = id
             .map(|s| s.to_string())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
         self.namespace_store
-            .create_namespace(&namespace_id, owner_user_id)
+            .create_namespace(&namespace_id, owner_user_id, metadata)
             .await
             .map_err(|_| ServerCoreError::conflict("Namespace already exists"))?;
 
@@ -29,6 +30,34 @@ impl<'a> NamespaceService<'a> {
             .get_namespace(&namespace_id)
             .await?
             .ok_or_else(|| ServerCoreError::internal("Namespace was missing after creation"))
+    }
+
+    pub async fn update_metadata(
+        &self,
+        namespace_id: &str,
+        caller_user_id: &str,
+        metadata: Option<&str>,
+    ) -> Result<NamespaceInfo, ServerCoreError> {
+        let ns = self
+            .namespace_store
+            .get_namespace(namespace_id)
+            .await?
+            .ok_or_else(|| ServerCoreError::not_found("Namespace not found"))?;
+
+        if ns.owner_user_id != caller_user_id {
+            return Err(ServerCoreError::permission_denied(
+                "You do not own this namespace",
+            ));
+        }
+
+        self.namespace_store
+            .update_namespace_metadata(namespace_id, metadata)
+            .await?;
+
+        self.namespace_store
+            .get_namespace(namespace_id)
+            .await?
+            .ok_or_else(|| ServerCoreError::internal("Namespace missing after metadata update"))
     }
 
     pub async fn get(
@@ -127,6 +156,7 @@ mod tests {
             &self,
             namespace_id: &str,
             owner_user_id: &str,
+            metadata: Option<&str>,
         ) -> Result<(), ServerCoreError> {
             let mut map = self.namespaces.lock().unwrap();
             if map.contains_key(namespace_id) {
@@ -138,8 +168,21 @@ mod tests {
                     id: namespace_id.to_string(),
                     owner_user_id: owner_user_id.to_string(),
                     created_at: 1,
+                    metadata: metadata.map(String::from),
                 },
             );
+            Ok(())
+        }
+
+        async fn update_namespace_metadata(
+            &self,
+            namespace_id: &str,
+            metadata: Option<&str>,
+        ) -> Result<(), ServerCoreError> {
+            let mut map = self.namespaces.lock().unwrap();
+            if let Some(ns) = map.get_mut(namespace_id) {
+                ns.metadata = metadata.map(String::from);
+            }
             Ok(())
         }
 
@@ -199,7 +242,7 @@ mod tests {
         let service = NamespaceService::new(&store);
 
         let ns = service
-            .create("user1", Some("workspace:abc"))
+            .create("user1", Some("workspace:abc"), None)
             .await
             .unwrap();
         assert_eq!(ns.id, "workspace:abc");
@@ -214,7 +257,7 @@ mod tests {
         let store = TestNamespaceStore::default();
         let service = NamespaceService::new(&store);
 
-        let ns = service.create("user1", None).await.unwrap();
+        let ns = service.create("user1", None, None).await.unwrap();
         assert!(!ns.id.is_empty());
         assert_eq!(ns.owner_user_id, "user1");
     }
@@ -225,7 +268,7 @@ mod tests {
         let service = NamespaceService::new(&store);
 
         service
-            .create("user1", Some("workspace:abc"))
+            .create("user1", Some("workspace:abc"), None)
             .await
             .unwrap();
 
@@ -239,7 +282,7 @@ mod tests {
         let service = NamespaceService::new(&store);
 
         service
-            .create("user1", Some("workspace:abc"))
+            .create("user1", Some("workspace:abc"), None)
             .await
             .unwrap();
 
@@ -253,7 +296,7 @@ mod tests {
         let service = NamespaceService::new(&store);
 
         service
-            .create("user1", Some("workspace:abc"))
+            .create("user1", Some("workspace:abc"), None)
             .await
             .unwrap();
         service.delete("workspace:abc", "user1").await.unwrap();

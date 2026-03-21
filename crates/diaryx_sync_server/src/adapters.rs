@@ -384,9 +384,21 @@ impl NamespaceStore for NativeNamespaceStore {
         &self,
         namespace_id: &str,
         owner_user_id: &str,
+        metadata: Option<&str>,
     ) -> Result<(), ServerCoreError> {
         self.repo
-            .create_namespace(namespace_id, owner_user_id)
+            .create_namespace(namespace_id, owner_user_id, metadata)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn update_namespace_metadata(
+        &self,
+        namespace_id: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .update_metadata(namespace_id, metadata)
+            .map(|_| ())
             .map_err(ServerCoreError::from)
     }
 
@@ -816,6 +828,7 @@ impl From<crate::db::NamespaceInfo> for CoreNamespaceInfo {
             id: value.id,
             owner_user_id: value.owner_user_id,
             created_at: value.created_at,
+            metadata: value.metadata,
         }
     }
 }
@@ -883,7 +896,7 @@ mod tests {
         repo.create_device(&user_id, Some("Laptop"), Some("test-agent"))
             .expect("device created");
         ns_repo
-            .create_namespace("workspace:test", &user_id)
+            .create_namespace("workspace:test", &user_id, None)
             .expect("namespace created");
 
         let auth_store = NativeAuthStore::new(repo);
@@ -913,7 +926,7 @@ mod tests {
             .get_or_create_user("user@example.com")
             .expect("user created");
         ns_repo
-            .create_namespace("workspace:test", &user_id)
+            .create_namespace("workspace:test", &user_id, None)
             .expect("namespace created");
         ns_repo
             .upsert_audience("workspace:test", "public", "public")
@@ -951,7 +964,7 @@ mod tests {
         let service = NamespaceService::new(&namespace_store);
 
         let ns = service
-            .create(&user_id, Some("workspace:test"))
+            .create(&user_id, Some("workspace:test"), None)
             .await
             .expect("namespace created");
         assert_eq!(ns.id, "workspace:test");
@@ -977,7 +990,7 @@ mod tests {
             .get_or_create_user("user@example.com")
             .expect("user created");
         ns_repo
-            .create_namespace("workspace:test", &user_id)
+            .create_namespace("workspace:test", &user_id, None)
             .expect("namespace created");
 
         let namespace_store = NativeNamespaceStore::new(ns_repo.clone());

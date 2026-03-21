@@ -220,6 +220,12 @@ pub trait NamespaceStore: Send + Sync {
         &self,
         namespace_id: &str,
         owner_user_id: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), ServerCoreError>;
+    async fn update_namespace_metadata(
+        &self,
+        namespace_id: &str,
+        metadata: Option<&str>,
     ) -> Result<(), ServerCoreError>;
     async fn delete_namespace(&self, namespace_id: &str) -> Result<(), ServerCoreError>;
 

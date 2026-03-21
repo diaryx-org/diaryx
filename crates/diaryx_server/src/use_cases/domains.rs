@@ -323,7 +323,10 @@ mod tests {
                 .remove(domain)
                 .is_some())
         }
-        async fn create_namespace(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
+        async fn create_namespace(&self, _: &str, _: &str, _: Option<&str>) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn update_namespace_metadata(&self, _: &str, _: Option<&str>) -> Result<(), ServerCoreError> {
             Ok(())
         }
         async fn delete_namespace(&self, _: &str) -> Result<(), ServerCoreError> {

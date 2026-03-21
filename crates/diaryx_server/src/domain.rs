@@ -98,6 +98,9 @@ pub struct NamespaceInfo {
     pub id: String,
     pub owner_user_id: String,
     pub created_at: i64,
+    /// Free-form JSON metadata set by clients (e.g. workspace name, provider).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<String>,
 }
 
 /// Namespace audience metadata.

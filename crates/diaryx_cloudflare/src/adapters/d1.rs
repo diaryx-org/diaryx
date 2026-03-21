@@ -61,6 +61,7 @@ impl NamespaceStore for D1NamespaceStore {
                 .unwrap_or_default()
                 .to_string(),
             created_at: row["created_at"].as_i64().unwrap_or_default(),
+            metadata: row["metadata"].as_str().map(String::from),
         }))
     }
 
@@ -73,7 +74,7 @@ impl NamespaceStore for D1NamespaceStore {
         let stmt = self
             .db
             .prepare(
-                "SELECT id, owner_user_id, created_at FROM namespaces \
+                "SELECT id, owner_user_id, created_at, metadata FROM namespaces \
                  WHERE owner_user_id = ?1 ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
             )
             .bind(&[owner_user_id.into(), limit.into(), offset.into()])
@@ -91,6 +92,7 @@ impl NamespaceStore for D1NamespaceStore {
                     .unwrap_or_default()
                     .to_string(),
                 created_at: row["created_at"].as_i64().unwrap_or_default(),
+                metadata: row["metadata"].as_str().map(String::from),
             })
             .collect())
     }
@@ -99,11 +101,39 @@ impl NamespaceStore for D1NamespaceStore {
         &self,
         namespace_id: &str,
         owner_user_id: &str,
+        metadata: Option<&str>,
     ) -> Result<(), ServerCoreError> {
         let now = chrono::Utc::now().timestamp();
         self.db
-            .prepare("INSERT INTO namespaces (id, owner_user_id, created_at) VALUES (?1, ?2, ?3)")
-            .bind(&[namespace_id.into(), owner_user_id.into(), ts(now)])
+            .prepare(
+                "INSERT INTO namespaces (id, owner_user_id, created_at, metadata) VALUES (?1, ?2, ?3, ?4)",
+            )
+            .bind(&[
+                namespace_id.into(),
+                owner_user_id.into(),
+                ts(now),
+                metadata.map(|s| s.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
+            ])
+            .map_err(e)?
+            .run()
+            .await
+            .map_err(e)?;
+        Ok(())
+    }
+
+    async fn update_namespace_metadata(
+        &self,
+        namespace_id: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), ServerCoreError> {
+        self.db
+            .prepare("UPDATE namespaces SET metadata = ?1 WHERE id = ?2")
+            .bind(&[
+                metadata
+                    .map(|s| s.into())
+                    .unwrap_or(worker::wasm_bindgen::JsValue::NULL),
+                namespace_id.into(),
+            ])
             .map_err(e)?
             .run()
             .await

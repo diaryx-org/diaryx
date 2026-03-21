@@ -202,7 +202,10 @@ mod tests {
         ) -> Result<Vec<NamespaceInfo>, ServerCoreError> {
             Ok(vec![])
         }
-        async fn create_namespace(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
+        async fn create_namespace(&self, _: &str, _: &str, _: Option<&str>) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn update_namespace_metadata(&self, _: &str, _: Option<&str>) -> Result<(), ServerCoreError> {
             Ok(())
         }
         async fn delete_namespace(&self, _: &str) -> Result<(), ServerCoreError> {
@@ -372,6 +375,7 @@ mod tests {
                 id: ns_id.to_string(),
                 owner_user_id: owner.to_string(),
                 created_at: 1,
+                metadata: None,
             },
         );
         store

@@ -401,6 +401,16 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
         "CREATE INDEX IF NOT EXISTS idx_namespace_objects_r2_key ON namespace_objects(namespace_id, r2_key);",
     )?;
 
+    // Forward migration: add metadata column to namespaces table.
+    let has_metadata_col = conn
+        .prepare("PRAGMA table_info(namespaces)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "metadata");
+    if !has_metadata_col {
+        conn.execute("ALTER TABLE namespaces ADD COLUMN metadata TEXT", [])?;
+    }
+
     // Forward migration: create passkey tables if missing.
     let has_passkey_credentials = conn
         .query_row(

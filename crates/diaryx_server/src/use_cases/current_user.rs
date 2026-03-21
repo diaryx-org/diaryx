@@ -131,6 +131,7 @@ mod tests {
                 id: "workspace:test".to_string(),
                 owner_user_id: owner_user_id.to_string(),
                 created_at: 1,
+                metadata: None,
             }])
         }
 
@@ -168,7 +169,10 @@ mod tests {
         async fn delete_custom_domain(&self, _domain: &str) -> Result<bool, ServerCoreError> {
             Ok(false)
         }
-        async fn create_namespace(&self, _: &str, _: &str) -> Result<(), ServerCoreError> {
+        async fn create_namespace(&self, _: &str, _: &str, _: Option<&str>) -> Result<(), ServerCoreError> {
+            Ok(())
+        }
+        async fn update_namespace_metadata(&self, _: &str, _: Option<&str>) -> Result<(), ServerCoreError> {
             Ok(())
         }
         async fn delete_namespace(&self, _: &str) -> Result<(), ServerCoreError> {

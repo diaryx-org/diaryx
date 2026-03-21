@@ -10,6 +10,8 @@ pub struct NamespaceInfo {
     pub id: String,
     pub owner_user_id: String,
     pub created_at: i64,
+    /// Free-form JSON metadata set by clients (e.g. workspace name, provider).
+    pub metadata: Option<String>,
 }
 
 /// Metadata for an object in a namespace (excludes inline data).
@@ -79,12 +81,17 @@ impl NamespaceRepo {
     // Namespaces
     // -------------------------------------------------------------------------
 
-    pub fn create_namespace(&self, namespace_id: &str, owner_user_id: &str) -> Result<(), String> {
+    pub fn create_namespace(
+        &self,
+        namespace_id: &str,
+        owner_user_id: &str,
+        metadata: Option<&str>,
+    ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().timestamp();
         conn.execute(
-            "INSERT INTO namespaces (id, owner_user_id, created_at) VALUES (?1, ?2, ?3)",
-            params![namespace_id, owner_user_id, now],
+            "INSERT INTO namespaces (id, owner_user_id, created_at, metadata) VALUES (?1, ?2, ?3, ?4)",
+            params![namespace_id, owner_user_id, now, metadata],
         )
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -93,13 +100,14 @@ impl NamespaceRepo {
     pub fn get_namespace(&self, namespace_id: &str) -> Option<NamespaceInfo> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, owner_user_id, created_at FROM namespaces WHERE id = ?1",
+            "SELECT id, owner_user_id, created_at, metadata FROM namespaces WHERE id = ?1",
             params![namespace_id],
             |row| {
                 Ok(NamespaceInfo {
                     id: row.get(0)?,
                     owner_user_id: row.get(1)?,
                     created_at: row.get(2)?,
+                    metadata: row.get(3)?,
                 })
             },
         )
@@ -115,7 +123,7 @@ impl NamespaceRepo {
     ) -> Vec<NamespaceInfo> {
         let conn = self.conn.lock().unwrap();
         conn.prepare(
-            "SELECT id, owner_user_id, created_at FROM namespaces WHERE owner_user_id = ?1 ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
+            "SELECT id, owner_user_id, created_at, metadata FROM namespaces WHERE owner_user_id = ?1 ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
         )
         .and_then(|mut stmt| {
             stmt.query_map(params![owner_user_id, limit, offset], |row| {
@@ -123,11 +131,26 @@ impl NamespaceRepo {
                     id: row.get(0)?,
                     owner_user_id: row.get(1)?,
                     created_at: row.get(2)?,
+                    metadata: row.get(3)?,
                 })
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
         })
         .unwrap_or_default()
+    }
+
+    pub fn update_metadata(
+        &self,
+        namespace_id: &str,
+        metadata: Option<&str>,
+    ) -> Result<bool, String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE namespaces SET metadata = ?1 WHERE id = ?2",
+            params![metadata, namespace_id],
+        )
+        .map(|changed| changed > 0)
+        .map_err(|e| e.to_string())
     }
 
     pub fn delete_namespace(&self, namespace_id: &str) -> Result<(), String> {
@@ -634,7 +657,7 @@ mod tests {
     fn namespace_crud() {
         let repo = make_repo_with_schema();
 
-        repo.create_namespace("workspace:abc", "u1").unwrap();
+        repo.create_namespace("workspace:abc", "u1", None).unwrap();
 
         let ns = repo.get_namespace("workspace:abc").unwrap();
         assert_eq!(ns.id, "workspace:abc");
@@ -650,7 +673,7 @@ mod tests {
     #[test]
     fn object_crud() {
         let repo = make_repo_with_schema();
-        repo.create_namespace("workspace:abc", "u1").unwrap();
+        repo.create_namespace("workspace:abc", "u1", None).unwrap();
         repo.upsert_object(
             "workspace:abc",
             "README.md",
@@ -692,7 +715,7 @@ mod tests {
     #[test]
     fn object_audience_round_trip() {
         let repo = make_repo_with_schema();
-        repo.create_namespace("site:x", "u1").unwrap();
+        repo.create_namespace("site:x", "u1", None).unwrap();
 
         // Private (no audience)
         repo.upsert_object(
@@ -756,7 +779,7 @@ mod tests {
     #[test]
     fn custom_domain_crud() {
         let repo = make_repo_with_schema();
-        repo.create_namespace("site:x", "u1").unwrap();
+        repo.create_namespace("site:x", "u1", None).unwrap();
 
         repo.upsert_custom_domain("blog.example.com", "site:x", "public")
             .unwrap();
@@ -781,7 +804,7 @@ mod tests {
     #[test]
     fn audience_crud() {
         let repo = make_repo_with_schema();
-        repo.create_namespace("site:abc", "u1").unwrap();
+        repo.create_namespace("site:abc", "u1", None).unwrap();
 
         repo.upsert_audience("site:abc", "public", "public")
             .unwrap();
@@ -807,7 +830,7 @@ mod tests {
     #[test]
     fn session_crud() {
         let repo = make_repo_with_schema();
-        repo.create_namespace("workspace:abc", "u1").unwrap();
+        repo.create_namespace("workspace:abc", "u1", None).unwrap();
 
         let code = repo
             .create_session("workspace:abc", "u1", false, None)

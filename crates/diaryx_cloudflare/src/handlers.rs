@@ -101,6 +101,7 @@ async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> Result<String> {
 #[derive(Deserialize)]
 struct CreateNamespaceBody {
     id: Option<String>,
+    metadata: Option<serde_json::Value>,
 }
 
 pub async fn create_namespace(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -108,8 +109,12 @@ pub async fn create_namespace(mut req: Request, ctx: RouteContext<()>) -> Result
     let body: CreateNamespaceBody = req.json().await?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let service = NamespaceService::new(&ns_store);
+    let metadata_str = body.metadata.as_ref().map(|v| v.to_string());
 
-    match service.create(&user_id, body.id.as_deref()).await {
+    match service
+        .create(&user_id, body.id.as_deref(), metadata_str.as_deref())
+        .await
+    {
         Ok(ns) => Response::from_json(&ns).map(|r| r.with_status(201)),
         Err(e) => error_response(e),
     }
@@ -133,6 +138,28 @@ pub async fn get_namespace(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let service = NamespaceService::new(&ns_store);
 
     match service.get(id, &user_id).await {
+        Ok(ns) => Response::from_json(&ns),
+        Err(e) => error_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateNamespaceBody {
+    metadata: Option<serde_json::Value>,
+}
+
+pub async fn update_namespace(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = authenticate(&req, &ctx).await?;
+    let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
+    let body: UpdateNamespaceBody = req.json().await?;
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let service = NamespaceService::new(&ns_store);
+    let metadata_str = body.metadata.as_ref().map(|v| v.to_string());
+
+    match service
+        .update_metadata(id, &user_id, metadata_str.as_deref())
+        .await
+    {
         Ok(ns) => Response::from_json(&ns),
         Err(e) => error_response(e),
     }

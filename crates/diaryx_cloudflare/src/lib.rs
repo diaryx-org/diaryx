@@ -24,6 +24,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/namespaces", handlers::create_namespace)
         .get_async("/api/namespaces", handlers::list_namespaces)
         .get_async("/api/namespaces/:id", handlers::get_namespace)
+        .patch_async("/api/namespaces/:id", handlers::update_namespace)
         .delete_async("/api/namespaces/:id", handlers::delete_namespace)
         // Objects
         .get_async("/api/namespaces/:ns_id/objects", handlers::list_objects)

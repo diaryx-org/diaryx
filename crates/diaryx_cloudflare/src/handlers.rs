@@ -5,6 +5,9 @@ use crate::adapters::kv::KvDomainMappingCache;
 use crate::adapters::r2::R2BlobStore;
 use crate::config;
 use crate::tokens::validate_audience_token;
+use diaryx_server::api::namespaces::{
+    CreateNamespaceRequest, NamespaceResponse, UpdateNamespaceRequest,
+};
 use diaryx_server::ports::{Mailer, NamespaceStore, ServerCoreError};
 use diaryx_server::use_cases::auth::{
     AuthConfig, AuthError, AuthenticationService, SessionValidationService, extract_token,
@@ -98,24 +101,18 @@ async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> Result<String> {
 // Namespace handlers
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct CreateNamespaceBody {
-    id: Option<String>,
-    metadata: Option<serde_json::Value>,
-}
-
 pub async fn create_namespace(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = authenticate(&req, &ctx).await?;
-    let body: CreateNamespaceBody = req.json().await?;
+    let body: CreateNamespaceRequest = req.json().await?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let service = NamespaceService::new(&ns_store);
-    let metadata_str = body.metadata.as_ref().map(|v| v.to_string());
+    let metadata_str = body.metadata_str();
 
     match service
         .create(&user_id, body.id.as_deref(), metadata_str.as_deref())
         .await
     {
-        Ok(ns) => Response::from_json(&ns).map(|r| r.with_status(201)),
+        Ok(ns) => Response::from_json(&NamespaceResponse::from(ns)).map(|r| r.with_status(201)),
         Err(e) => error_response(e),
     }
 }
@@ -126,7 +123,11 @@ pub async fn list_namespaces(req: Request, ctx: RouteContext<()>) -> Result<Resp
     let service = NamespaceService::new(&ns_store);
 
     match service.list(&user_id, 100, 0).await {
-        Ok(list) => Response::from_json(&list),
+        Ok(list) => {
+            let response: Vec<NamespaceResponse> =
+                list.into_iter().map(NamespaceResponse::from).collect();
+            Response::from_json(&response)
+        }
         Err(e) => error_response(e),
     }
 }
@@ -138,29 +139,24 @@ pub async fn get_namespace(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let service = NamespaceService::new(&ns_store);
 
     match service.get(id, &user_id).await {
-        Ok(ns) => Response::from_json(&ns),
+        Ok(ns) => Response::from_json(&NamespaceResponse::from(ns)),
         Err(e) => error_response(e),
     }
-}
-
-#[derive(Deserialize)]
-struct UpdateNamespaceBody {
-    metadata: Option<serde_json::Value>,
 }
 
 pub async fn update_namespace(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = authenticate(&req, &ctx).await?;
     let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
-    let body: UpdateNamespaceBody = req.json().await?;
+    let body: UpdateNamespaceRequest = req.json().await?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let service = NamespaceService::new(&ns_store);
-    let metadata_str = body.metadata.as_ref().map(|v| v.to_string());
+    let metadata_str = body.metadata_str();
 
     match service
         .update_metadata(id, &user_id, metadata_str.as_deref())
         .await
     {
-        Ok(ns) => Response::from_json(&ns),
+        Ok(ns) => Response::from_json(&NamespaceResponse::from(ns)),
         Err(e) => error_response(e),
     }
 }

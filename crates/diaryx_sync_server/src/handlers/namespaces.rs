@@ -1,4 +1,4 @@
-//! Namespace CRUD handlers — `POST/GET/DELETE /namespaces`.
+//! Namespace CRUD handlers — `POST/GET/PATCH/DELETE /namespaces`.
 
 use crate::auth::RequireAuth;
 use axum::{
@@ -8,58 +8,18 @@ use axum::{
     response::{IntoResponse, Json},
     routing::{get, patch, post},
 };
-use diaryx_server::domain::NamespaceInfo;
+use diaryx_server::api::namespaces::{
+    CreateNamespaceRequest, NamespaceResponse, UpdateNamespaceRequest,
+};
 use diaryx_server::ports::{NamespaceStore, ServerCoreError};
 use diaryx_server::use_cases::namespaces::NamespaceService;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
 /// Shared state for namespace handlers.
 #[derive(Clone)]
 pub struct NamespaceState {
     pub namespace_store: Arc<dyn NamespaceStore>,
-}
-
-// ---------------------------------------------------------------------------
-// Request / response types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-pub struct CreateNamespaceRequest {
-    /// Optional explicit ID (e.g. `"workspace:abc"`). If absent, a UUID is generated.
-    pub id: Option<String>,
-    /// Optional JSON metadata (e.g. `{"kind":"workspace","name":"My Journal"}`).
-    pub metadata: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateNamespaceRequest {
-    /// JSON metadata to set (or `null` to clear).
-    pub metadata: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct NamespaceResponse {
-    pub id: String,
-    pub owner_user_id: String,
-    pub created_at: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-}
-
-impl From<NamespaceInfo> for NamespaceResponse {
-    fn from(ns: NamespaceInfo) -> Self {
-        let metadata = ns
-            .metadata
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok());
-        Self {
-            id: ns.id,
-            owner_user_id: ns.owner_user_id,
-            created_at: ns.created_at,
-            metadata,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,8 +73,8 @@ async fn create_namespace(
     Json(req): Json<CreateNamespaceRequest>,
 ) -> impl IntoResponse {
     let service = NamespaceService::new(state.namespace_store.as_ref());
+    let metadata_str = req.metadata_str();
 
-    let metadata_str = req.metadata.as_ref().map(|v| v.to_string());
     match service
         .create(&auth.user.id, req.id.as_deref(), metadata_str.as_deref())
         .await
@@ -182,7 +142,7 @@ async fn update_namespace(
     Json(req): Json<UpdateNamespaceRequest>,
 ) -> impl IntoResponse {
     let service = NamespaceService::new(state.namespace_store.as_ref());
-    let metadata_str = req.metadata.as_ref().map(|v| v.to_string());
+    let metadata_str = req.metadata_str();
 
     match service
         .update_metadata(&id, &auth.user.id, metadata_str.as_deref())

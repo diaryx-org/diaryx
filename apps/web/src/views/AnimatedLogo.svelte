@@ -21,8 +21,7 @@
   // Drag state
   let pointerIsDown = false;
   let dragging = $state(false);
-  let stretchX = $state(1);
-  let stretchY = $state(1);
+  let transformCSS = $state('none');
   let originX = $state('50%');
   let originY = $state('50%');
   let snapping = $state(false);
@@ -30,6 +29,7 @@
   let pointerId = -1;
 
   const DRAG_THRESHOLD = 5;
+  const MAX_STRETCH = 0.4;
 
   async function triggerBounce() {
     bouncing = false;
@@ -59,13 +59,24 @@
       }
     }
 
-    const maxStretch = 0.4;
-    const absDx = Math.abs(dx);
-    const absDy = Math.abs(dy);
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const angle = Math.atan2(dy, dx);
+    const s = 1 + Math.tanh(dist / (size * 1.5)) * MAX_STRETCH;
 
-    // Always stretch outward (scale > 1), origin on the opposite side
-    stretchX = 1 + Math.tanh(absDx / (size * 1.5)) * maxStretch;
-    stretchY = 1 + Math.tanh(absDy / (size * 1.5)) * maxStretch;
+    // Scale by `s` along drag direction, 1.0 perpendicular.
+    // Matrix = R(-θ) · Scale(s, 1) · R(θ)
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const cos2 = cos * cos;
+    const sin2 = sin * sin;
+    const sc = sin * cos;
+
+    const a = s * cos2 + sin2;       // m11
+    const b = (1 - s) * sc;          // m21 (note: CSS matrix param order)
+    const c = (1 - s) * sc;          // m12
+    const d = s * sin2 + cos2;       // m22
+
+    transformCSS = `matrix(${a}, ${-b}, ${-c}, ${d}, 0, 0)`;
     originX = dx >= 0 ? '0%' : '100%';
     originY = dy >= 0 ? '0%' : '100%';
   }
@@ -76,8 +87,7 @@
     if (dragging) {
       dragging = false;
       snapping = true;
-      stretchX = 1;
-      stretchY = 1;
+      transformCSS = 'none';
     } else {
       triggerBounce();
     }
@@ -93,7 +103,7 @@
   bind:this={wrapEl}
   class="logo-wrap"
   class:snapping
-  style="width:{size}px;height:{size}px;transform:scale({stretchX},{stretchY});transform-origin:{originX} {originY}"
+  style="width:{size}px;height:{size}px;transform:{transformCSS};transform-origin:{originX} {originY}"
   onpointerdown={handlePointerDown}
   onpointermove={handlePointerMove}
   onpointerup={handlePointerUp}

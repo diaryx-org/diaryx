@@ -19,11 +19,38 @@ fi
 sed 's/import source wasmModule/import wasmModule/' build/.tmp/index.js > build/.tmp/index.js.tmp
 mv build/.tmp/index.js.tmp build/.tmp/index.js
 
+# getrandom 0.3 with the `custom` feature (enabled transitively) generates
+# a wasm import `env.__getrandom_v03_custom`. Provide a JS shim that
+# implements it using Web Crypto (available in Workers).
+cat > build/.tmp/env.js << 'ENVJS'
+// Lazily resolved wasm memory — not available until after instantiation,
+// but __getrandom_v03_custom is only called at runtime, not during init.
+let memory;
+export function __getrandom_v03_custom(ptr, len) {
+  if (!memory) {
+    // The wasm-bindgen glue exports `wasm` which has `.memory`.
+    // At call time the instance is fully initialised.
+    throw new Error("getrandom called before wasm memory is available");
+  }
+  const buf = new Uint8Array(memory.buffer, ptr, len);
+  crypto.getRandomValues(buf);
+  return 0; // success
+}
+// Called by the patched glue to hand over the memory reference.
+export function __set_memory(mem) { memory = mem; }
+ENVJS
+
+# Patch index.js to hand the wasm memory to our env shim after instantiation.
+# Insert `import1.__set_memory(wasm.memory);` right after `wasm = wasmInstance.exports;`
+sed 's/wasm = wasmInstance\.exports;/wasm = wasmInstance.exports; if (typeof import1.__set_memory === "function") import1.__set_memory(wasm.memory);/' \
+  build/.tmp/index.js > build/.tmp/index.js.tmp
+mv build/.tmp/index.js.tmp build/.tmp/index.js
+
 mkdir -p build/worker
 npx --yes esbuild@0.27 build/.tmp/shim.js \
   --bundle \
   --format=esm \
-  --external:env \
+  --alias:env=./build/.tmp/env.js \
   --external:cloudflare:workers \
   --external:./index_bg.wasm \
   --outfile=build/worker/shim.mjs \

@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-19T19:23:07Z
+updated: 2026-03-21T13:42:14Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -50,7 +50,6 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   └── Sidebar Views - Sidebar components - apps/web/src/views/sidebar/README.md
 │   │   │   └── LICENSE - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md
 │   │   ├── web worker - Cloudflare Worker entrypoint for app.diaryx.org - apps/web/worker/README.md
-│   │   ├── Marketplace Dist - Preassembled marketplace payloads for themes, typographies, bundles, templates, and starter workspaces - apps/web/marketplace-dist/README.md
 │   │   └── TipTap Custom Extensions - Guide to creating custom TipTap extensions with markdown support - apps/web/docs/tiptap-custom-extensions.md
 │   └── tauri - Web app + native backend - apps/tauri/README.md
 ├── crates - Cargo crates for Diaryx - crates/README.md

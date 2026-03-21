@@ -27,6 +27,7 @@ macro_rules! cfg_async_trait {
 pub mod api;
 pub mod domain;
 pub mod ports;
+pub mod schema;
 pub mod use_cases;
 
 pub use domain::{

@@ -190,18 +190,18 @@
         <!-- ============ MAIN VIEW ============ -->
         <div class="w-full max-w-sm mx-auto space-y-6">
           <div class="text-center space-y-4">
-            <div class="mx-auto size-16 fade-in" style="animation-delay: 0s">
-              <AnimatedLogo size={64} />
+            <div class="mx-auto size-24 fade-in" style="animation-delay: 0s">
+              <AnimatedLogo size={96} />
             </div>
-            <h1 class="text-3xl font-bold tracking-tight text-foreground fade-in" style="animation-delay: 0.2s">
+            <h1 class="text-3xl font-bold tracking-tight text-foreground fade-in" style="animation-delay: 2.0s">
               Welcome to Diaryx
             </h1>
-            <p class="text-muted-foreground text-sm fade-in" style="animation-delay: 0.4s">
+            <p class="text-muted-foreground text-sm fade-in" style="animation-delay: 2.2s">
               Your personal knowledge workspace.
             </p>
           </div>
 
-          <div class="space-y-3 fade-in" style="animation-delay: 0.5s">
+          <div class="space-y-3 fade-in" style="animation-delay: 2.4s">
             {#if returnWorkspaceName && onReturn}
               <Button
                 class="w-full get-started-btn"

@@ -55,7 +55,7 @@
   }
 
   .draw-nib {
-    clip-path: polygon(0% 0%, 50% 0%, 50% 0%, 0% 0%);
+    clip-path: polygon(0% 0%, 100% 0%, 100% 0%, 50% 0%, 50% 0%, 0% 0%);
     animation: drawNib 1.6s ease-in-out forwards,
                logoFadeOut 0.4s ease-out 1.8s forwards;
   }
@@ -72,11 +72,20 @@
    *  66%  → full width, top 85%
    * 100%  → full
    */
+  /*
+   * 6-point polygon so each half reveals top-to-bottom independently.
+   * Points (clockwise): top-left, top-right, right-edge-y, center-y, center-bottom, left-bottom
+   *
+   *   0%  → all collapsed along top edge
+   *  33%  → left half drops to 85% (L-shape)
+   *  66%  → right half also drops to 85% (full width at 85%)
+   * 100%  → bottom drops to 100%
+   */
   @keyframes drawNib {
-    0%   { clip-path: polygon(0% 0%, 50% 0%, 50% 0%,   0% 0%);   }
-    33%  { clip-path: polygon(0% 0%, 50% 0%, 50% 85%,  0% 85%);  }
-    66%  { clip-path: polygon(0% 0%, 100% 0%, 100% 85%, 0% 85%); }
-    100% { clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%); }
+    0%   { clip-path: polygon(0% 0%, 100% 0%, 100% 0%,  50% 0%,  50% 0%,  0% 0%);  }
+    33%  { clip-path: polygon(0% 0%, 100% 0%, 100% 0%,  50% 0%,  50% 85%, 0% 85%); }
+    66%  { clip-path: polygon(0% 0%, 100% 0%, 100% 85%, 50% 85%, 50% 85%, 0% 85%); }
+    100% { clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 50% 100%, 50% 100%, 0% 100%); }
   }
 
   @keyframes logoFadeOut {

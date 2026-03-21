@@ -11,14 +11,24 @@
   import { Button } from "$lib/components/ui/button";
   import type { BundleRegistryEntry, ThemeRegistryEntry } from "$lib/marketplace/types";
 
+  export interface BundleSelectInfo {
+    bundle: BundleRegistryEntry;
+    launchRect: DOMRect | null;
+    previewUrl: string;
+  }
+
   interface Props {
     bundles: BundleRegistryEntry[];
     themes: ThemeRegistryEntry[];
     onSelect: (bundle: BundleRegistryEntry) => void | Promise<void>;
+    /** Called instead of onSelect when deferZoom is true — passes launch info without zooming */
+    onDeferredSelect?: (info: BundleSelectInfo) => void | Promise<void>;
     onBack?: () => void;
+    /** When true, skip the zoom animation and call onDeferredSelect instead */
+    deferZoom?: boolean;
   }
 
-  let { bundles, themes, onSelect, onBack }: Props = $props();
+  let { bundles, themes, onSelect, onDeferredSelect, onBack, deferZoom = false }: Props = $props();
 
   let activeIndex = $state(0);
   let launching = $state(false);
@@ -54,6 +64,16 @@
 
   async function handleSelect() {
     if (!activeBundle || launching) return;
+
+    if (deferZoom && onDeferredSelect) {
+      const card = containerEl?.querySelector(`[data-bundle-index="${activeIndex}"]`) as HTMLElement | null;
+      await onDeferredSelect({
+        bundle: activeBundle,
+        launchRect: card?.getBoundingClientRect() ?? null,
+        previewUrl: previewUrl(activeBundle),
+      });
+      return;
+    }
 
     // Capture the preview card's position for the zoom animation
     const card = containerEl?.querySelector(`[data-bundle-index="${activeIndex}"]`) as HTMLElement | null;

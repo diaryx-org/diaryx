@@ -4542,7 +4542,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       try {
         const { downloadWorkspace } = await import("$lib/sync/workspaceProviderService");
         const name = namespace.metadata?.name ?? "Restored Workspace";
-        const result = await downloadWorkspace("diaryx.sync", {
+        const providerId = namespace.metadata?.provider ?? "diaryx.sync";
+        const result = await downloadWorkspace(providerId, {
           remoteId: namespace.id,
           name,
           link: true,
@@ -4558,6 +4559,34 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         }
       } catch (e) {
         console.error("[App] Restore workspace failed:", e);
+        showAddWorkspace = true;
+      } finally {
+        entryStore.setLoading(false);
+      }
+    }}
+    onCreateWithProvider={async (bundle, providerPluginId) => {
+      entryStore.setLoading(true);
+      try {
+        const { id, name } = await autoCreateDefaultWorkspace(bundle);
+        if (providerPluginId) {
+          const { linkWorkspace } = await import("$lib/sync/workspaceProviderService");
+          await linkWorkspace(providerPluginId, { localId: id, name });
+        }
+        showWelcomeScreen = false;
+        await refreshTree();
+        if (tree) {
+          workspaceStore.expandNode(tree.path);
+          await openEntry(tree.path);
+        }
+        await runValidation();
+        if (bundle?.spotlight?.length) {
+          await tick();
+          requestAnimationFrame(() => {
+            spotlightSteps = bundle.spotlight;
+          });
+        }
+      } catch (e) {
+        console.error("[App] Create with provider failed:", e);
         showAddWorkspace = true;
       } finally {
         entryStore.setLoading(false);

@@ -16,6 +16,13 @@ export interface PluginArtifact {
   published_at: string;
 }
 
+export interface RegistryUiEntry {
+  slot: string;
+  id: string;
+  label: string;
+  description?: string | null;
+}
+
 export interface MarketplaceEntry {
   id: string;
   name: string;
@@ -32,6 +39,7 @@ export interface MarketplaceEntry {
   icon: string | null;
   screenshots: string[];
   requested_permissions: unknown | null;
+  ui?: RegistryUiEntry[];
 }
 
 export interface MarketplaceRegistry {
@@ -136,6 +144,14 @@ function validateMarketplaceEntry(input: unknown): MarketplaceEntry {
     screenshots: readStringArray(input, "screenshots"),
     capabilities: readStringArray(input, "capabilities"),
     requested_permissions: input.requested_permissions ?? null,
+    ui: Array.isArray(input.ui)
+      ? (input.ui as Record<string, unknown>[]).filter(
+          (e) =>
+            typeof e.slot === "string" &&
+            typeof e.id === "string" &&
+            typeof e.label === "string",
+        ) as unknown as RegistryUiEntry[]
+      : undefined,
   };
 }
 
@@ -186,4 +202,31 @@ export function clearRegistryCache(): void {
 
 export function getTrustedRegistryUrls(): readonly string[] {
   return TRUSTED_REGISTRY_URLS;
+}
+
+export interface RegistryWorkspaceProvider {
+  pluginId: string;
+  label: string;
+  description: string | null;
+}
+
+export function getRegistryWorkspaceProviders(
+  plugins: MarketplaceEntry[],
+  pluginIds: string[],
+): RegistryWorkspaceProvider[] {
+  const idSet = new Set(pluginIds);
+  const result: RegistryWorkspaceProvider[] = [];
+  for (const plugin of plugins) {
+    if (!idSet.has(plugin.id) || !plugin.ui) continue;
+    for (const ui of plugin.ui) {
+      if (ui.slot === "WorkspaceProvider") {
+        result.push({
+          pluginId: plugin.id,
+          label: ui.label,
+          description: ui.description ?? null,
+        });
+      }
+    }
+  }
+  return result;
 }

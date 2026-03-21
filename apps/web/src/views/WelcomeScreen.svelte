@@ -2,27 +2,29 @@
   /**
    * WelcomeScreen — full-screen first-run experience.
    *
-   * Two primary paths:
-   * - "Sign in to get your workspace" → sign in → pick existing workspace or create first
-   * - "Continue without an account" → create a local-only workspace
-   *
    * Views:
    * - main: Two-button welcome
    * - sign-in: Embedded SignInForm
    * - workspace-picker: List of user's synced workspaces after auth
-   * - bundles: Full-screen bundle picker (via "More options")
+   * - bundles: Full-screen bundle picker
+   * - provider-choice: Choose where workspace lives (after bundle selection)
    */
   import { Button } from "$lib/components/ui/button";
-  import { ArrowLeft, LogIn, Loader2, Cloud, Download, Check } from "@lucide/svelte";
+  import { ArrowLeft, LogIn, Loader2, Cloud, Download, Check, HardDrive, Lock } from "@lucide/svelte";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
   import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
   import type { BundleRegistryEntry, ThemeRegistryEntry } from "$lib/marketplace/types";
   import type { NamespaceEntry } from "$lib/auth/authService";
   import SignInForm from "$lib/components/SignInForm.svelte";
   import AnimatedLogo from "./AnimatedLogo.svelte";
-  import BundleCarousel from "./BundleCarousel.svelte";
-  import { listUserWorkspaceNamespaces } from "$lib/auth/authStore.svelte";
-  import { fetchPluginRegistry, type RegistryPlugin } from "$lib/plugins/pluginRegistry";
+  import BundleCarousel, { type BundleSelectInfo } from "./BundleCarousel.svelte";
+  import { isAuthenticated, listUserWorkspaceNamespaces } from "$lib/auth/authStore.svelte";
+  import {
+    fetchPluginRegistry,
+    getRegistryWorkspaceProviders,
+    type RegistryPlugin,
+    type RegistryWorkspaceProvider,
+  } from "$lib/plugins/pluginRegistry";
   import { installRegistryPlugin } from "$lib/plugins/pluginInstallService";
 
   interface Props {
@@ -32,6 +34,11 @@
     onSignInCreateNew: () => void | Promise<void>;
     /** Called when user picks an existing workspace to restore */
     onRestoreWorkspace: (namespace: NamespaceEntry) => void | Promise<void>;
+    /** Called when user picks a provider for a new workspace */
+    onCreateWithProvider: (
+      bundle: BundleRegistryEntry | null,
+      providerPluginId: string | null,
+    ) => void | Promise<void>;
     /** When set, user navigated here from an existing workspace — show a "Return" button */
     returnWorkspaceName?: string | null;
     onReturn?: () => void;
@@ -43,13 +50,14 @@
     onGetStarted,
     onSignInCreateNew,
     onRestoreWorkspace,
+    onCreateWithProvider,
     returnWorkspaceName = null,
     onReturn,
     onCreateNewWithBundle,
   }: Props = $props();
 
   // View state machine
-  type WelcomeView = 'main' | 'sign-in' | 'workspace-picker' | 'bundles';
+  type WelcomeView = 'main' | 'sign-in' | 'workspace-picker' | 'bundles' | 'provider-choice';
   let currentView = $state<WelcomeView>('main');
   let transitionDirection = $state<'forward' | 'back'>('forward');
 
@@ -59,21 +67,39 @@
   let loading = $state(true);
   let settingUp = $state(false);
 
+  // Bundle + provider choice state
+  let selectedBundle = $state<BundleRegistryEntry | null>(null);
+  let bundleProviders = $state<RegistryWorkspaceProvider[]>([]);
+  let signInForProvider = $state<string | null>(null);
+  let checkingProvider = $state(false);
+
+  // Deferred zoom animation state
+  let launchInfo = $state<BundleSelectInfo | null>(null);
+  let launching = $state(false);
+
   // Workspace picker state
   let workspaceNamespaces = $state<NamespaceEntry[]>([]);
   let loadingWorkspaces = $state(false);
   let restoringNamespace = $state<string | null>(null);
 
-  // Sync plugin install state
-  let syncPlugin = $state<RegistryPlugin | null>(null);
-  let syncPluginInstalled = $state(false);
-  let installingSyncPlugin = $state(false);
-  let syncPluginError = $state<string | null>(null);
+  // Provider plugin install state (for workspace-picker)
+  let providerPlugin = $state<RegistryPlugin | null>(null);
+  let providerPluginInstalled = $state(false);
+  let installingProviderPlugin = $state(false);
+  let providerPluginError = $state<string | null>(null);
+
+  async function playZoomThen(callback: () => void | Promise<void>) {
+    if (launchInfo?.launchRect) {
+      launching = true;
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    await callback();
+  }
 
   async function handleGetStarted(bundle: BundleRegistryEntry | null) {
     settingUp = true;
     try {
-      await onGetStarted(bundle);
+      await playZoomThen(() => onGetStarted(bundle));
     } catch {
       settingUp = false;
     }
@@ -89,8 +115,84 @@
     }
   }
 
+  async function handleBundleSelected(info: BundleSelectInfo) {
+    launchInfo = info;
+    const bundle = info.bundle;
+
+    if (returnWorkspaceName && onCreateNewWithBundle) {
+      await handleCreateNewWithBundle(bundle);
+      return;
+    }
+
+    selectedBundle = bundle;
+    const pluginIds = bundle.plugins.map((p) => p.plugin_id);
+
+    try {
+      const registry = await fetchPluginRegistry();
+      bundleProviders = getRegistryWorkspaceProviders(registry.plugins, pluginIds);
+    } catch {
+      bundleProviders = [];
+    }
+
+    if (bundleProviders.length === 0) {
+      await handleGetStarted(bundle);
+    } else {
+      navigateTo('provider-choice');
+    }
+  }
+
+  async function handleProviderSelected(provider: RegistryWorkspaceProvider) {
+    if (!isAuthenticated()) {
+      signInForProvider = provider.pluginId;
+      navigateTo('sign-in');
+      return;
+    }
+
+    await checkProviderNamespaces(provider.pluginId);
+  }
+
+  async function checkProviderNamespaces(providerPluginId: string) {
+    checkingProvider = true;
+    try {
+      const allNamespaces = await listUserWorkspaceNamespaces();
+      const providerNs = allNamespaces.filter(
+        (ns) => ns.metadata?.provider === providerPluginId,
+      );
+
+      if (providerNs.length > 0) {
+        workspaceNamespaces = providerNs;
+        await fetchProviderPlugin(providerPluginId);
+        navigateTo('workspace-picker');
+      } else {
+        settingUp = true;
+        try {
+          await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId));
+        } catch {
+          settingUp = false;
+        }
+      }
+    } catch {
+      settingUp = true;
+      try {
+        await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId));
+      } catch {
+        settingUp = false;
+      }
+    } finally {
+      checkingProvider = false;
+    }
+  }
+
   async function handleSignInComplete() {
-    // After auth, fetch the user's workspace namespaces
+    if (signInForProvider) {
+      // User signed in specifically to use a provider
+      const providerPluginId = signInForProvider;
+      signInForProvider = null;
+      await checkProviderNamespaces(providerPluginId);
+      return;
+    }
+
+    // Original flow: signed in from main screen
     loadingWorkspaces = true;
     navigateTo('workspace-picker');
     try {
@@ -100,11 +202,16 @@
     } finally {
       loadingWorkspaces = false;
       if (workspaceNamespaces.length === 0) {
-        // No existing workspaces — show bundle carousel so user can pick a starter
         navigateTo('bundles');
       } else {
-        // Workspaces found — fetch sync plugin info so we can offer installation
-        fetchSyncPlugin();
+        // Determine provider plugin(s) needed from namespace metadata
+        const providerIds = new Set(
+          workspaceNamespaces
+            .map((ns) => ns.metadata?.provider)
+            .filter((p): p is string => typeof p === "string"),
+        );
+        const firstProvider = providerIds.values().next().value ?? "diaryx.sync";
+        await fetchProviderPlugin(firstProvider);
       }
     }
   }
@@ -127,29 +234,28 @@
     }
   }
 
-  async function fetchSyncPlugin() {
+  async function fetchProviderPlugin(pluginId: string) {
     try {
       const registry = await fetchPluginRegistry();
-      syncPlugin = registry.plugins.find((p) => p.id === "diaryx.sync") ?? null;
+      providerPlugin = registry.plugins.find((p) => p.id === pluginId) ?? null;
     } catch {
-      syncPlugin = null;
+      providerPlugin = null;
     }
   }
 
-  async function handleInstallSyncPlugin() {
-    if (!syncPlugin) return;
-    installingSyncPlugin = true;
-    syncPluginError = null;
+  async function handleInstallProviderPlugin() {
+    if (!providerPlugin) return;
+    installingProviderPlugin = true;
+    providerPluginError = null;
     try {
-      await installRegistryPlugin(syncPlugin);
-      syncPluginInstalled = true;
+      await installRegistryPlugin(providerPlugin);
+      providerPluginInstalled = true;
     } catch (e) {
-      syncPluginError = e instanceof Error ? e.message : "Installation failed";
+      providerPluginError = e instanceof Error ? e.message : "Installation failed";
     } finally {
-      installingSyncPlugin = false;
+      installingProviderPlugin = false;
     }
   }
-
 
   $effect(() => {
     loadData();
@@ -173,7 +279,8 @@
   }
 
   function navigateTo(view: WelcomeView) {
-    transitionDirection = view === 'main' ? 'back' : 'forward';
+    const backViews: WelcomeView[] = ['main', 'bundles'];
+    transitionDirection = backViews.includes(view) && currentView !== 'main' ? 'back' : 'forward';
     currentView = view;
   }
 
@@ -238,7 +345,7 @@
             <button
               type="button"
               class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors fade-in"
-              onclick={() => navigateTo('main')}
+              onclick={() => navigateTo(signInForProvider ? 'provider-choice' : 'main')}
             >
               <ArrowLeft class="size-4" />
               Back
@@ -257,6 +364,88 @@
           <div class="fade-in" style="animation-delay: 0.2s">
             <SignInForm compact={true} onAuthenticated={() => handleSignInComplete()} />
           </div>
+        </div>
+
+      {:else if currentView === 'provider-choice'}
+        <!-- ============ PROVIDER CHOICE VIEW ============ -->
+        <div class="w-full max-w-sm mx-auto space-y-6">
+          <div>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors fade-in"
+              onclick={() => navigateTo('bundles')}
+            >
+              <ArrowLeft class="size-4" />
+              Back
+            </button>
+          </div>
+
+          <div class="text-center space-y-2 fade-in" style="animation-delay: 0.1s">
+            <h1 class="text-2xl font-bold tracking-tight text-foreground">
+              Where should your workspace live?
+            </h1>
+            <p class="text-muted-foreground text-sm">
+              You can change this later in settings.
+            </p>
+          </div>
+
+          <div class="space-y-3 fade-in" style="animation-delay: 0.2s">
+            <button
+              type="button"
+              class="w-full text-left p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-secondary/50 transition-colors disabled:opacity-50"
+              disabled={settingUp}
+              onclick={() => handleGetStarted(selectedBundle)}
+            >
+              <div class="flex items-center gap-3">
+                <HardDrive class="size-5 text-muted-foreground shrink-0" />
+                <div class="min-w-0">
+                  <div class="font-medium text-sm">This device only</div>
+                  <div class="text-xs text-muted-foreground">
+                    Your workspace stays on this device.
+                  </div>
+                </div>
+              </div>
+            </button>
+
+            {#each bundleProviders as provider (provider.pluginId)}
+              <button
+                type="button"
+                class="w-full text-left p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-secondary/50 transition-colors disabled:opacity-50"
+                disabled={settingUp || checkingProvider}
+                onclick={() => handleProviderSelected(provider)}
+              >
+                <div class="flex items-center gap-3">
+                  {#if checkingProvider}
+                    <Loader2 class="size-5 animate-spin text-primary shrink-0" />
+                  {:else}
+                    <Cloud class="size-5 text-muted-foreground shrink-0" />
+                  {/if}
+                  <div class="min-w-0 flex-1">
+                    <div class="font-medium text-sm">{provider.label}</div>
+                    {#if provider.description}
+                      <div class="text-xs text-muted-foreground">
+                        {provider.description}
+                      </div>
+                    {:else}
+                      <div class="text-xs text-muted-foreground">
+                        Sync across your devices.
+                      </div>
+                    {/if}
+                  </div>
+                  {#if !isAuthenticated()}
+                    <Lock class="size-4 text-muted-foreground shrink-0" />
+                  {/if}
+                </div>
+              </button>
+            {/each}
+          </div>
+
+          {#if settingUp}
+            <div class="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 class="size-4 animate-spin" />
+              Setting up…
+            </div>
+          {/if}
         </div>
 
       {:else if currentView === 'workspace-picker'}
@@ -288,43 +477,45 @@
               </p>
             </div>
 
-            <!-- Sync plugin install card -->
-            {#if !syncPluginInstalled}
+            <!-- Provider plugin install card -->
+            {#if !providerPluginInstalled}
               <div class="rounded-lg border border-border bg-secondary/30 p-4 space-y-3 fade-in" style="animation-delay: 0.15s">
                 <div class="flex items-start gap-3">
                   <Download class="size-5 text-primary shrink-0 mt-0.5" />
                   <div class="space-y-1">
-                    <div class="font-medium text-sm">Sync plugin required</div>
+                    <div class="font-medium text-sm">
+                      {providerPlugin?.name ?? 'Sync'} plugin required
+                    </div>
                     <p class="text-xs text-muted-foreground">
-                      Install the Sync plugin to restore and keep your workspaces in sync.
+                      Install to restore and keep your workspaces in sync.
                     </p>
                   </div>
                 </div>
-                {#if syncPluginError}
-                  <p class="text-xs text-destructive">{syncPluginError}</p>
+                {#if providerPluginError}
+                  <p class="text-xs text-destructive">{providerPluginError}</p>
                 {/if}
                 <Button
                   class="w-full"
                   size="sm"
-                  disabled={!syncPlugin || installingSyncPlugin}
-                  onclick={handleInstallSyncPlugin}
+                  disabled={!providerPlugin || installingProviderPlugin}
+                  onclick={handleInstallProviderPlugin}
                 >
-                  {#if installingSyncPlugin}
+                  {#if installingProviderPlugin}
                     <Loader2 class="size-4 animate-spin mr-2" />
                     Installing…
-                  {:else if !syncPlugin}
+                  {:else if !providerPlugin}
                     <Loader2 class="size-4 animate-spin mr-2" />
                     Loading…
                   {:else}
                     <Download class="size-4 mr-2" />
-                    Install Sync Plugin
+                    Install {providerPlugin.name} Plugin
                   {/if}
                 </Button>
               </div>
             {:else}
               <div class="rounded-lg border border-border bg-secondary/30 p-3 flex items-center gap-2 text-sm text-muted-foreground fade-in" style="animation-delay: 0.15s">
                 <Check class="size-4 text-primary shrink-0" />
-                Sync plugin installed
+                {providerPlugin?.name ?? 'Sync'} plugin installed
               </div>
             {/if}
 
@@ -333,8 +524,8 @@
                 <button
                   type="button"
                   class="w-full text-left p-4 rounded-lg border border-border transition-colors disabled:opacity-50
-                    {syncPluginInstalled ? 'hover:border-primary/50 hover:bg-secondary/50' : 'opacity-60 cursor-not-allowed'}"
-                  disabled={!syncPluginInstalled || restoringNamespace !== null}
+                    {providerPluginInstalled ? 'hover:border-primary/50 hover:bg-secondary/50' : 'opacity-60 cursor-not-allowed'}"
+                  disabled={!providerPluginInstalled || restoringNamespace !== null}
                   onclick={() => handleRestoreWorkspace(ns)}
                 >
                   <div class="flex items-center gap-3">
@@ -382,13 +573,9 @@
           <BundleCarousel
             {bundles}
             {themes}
-            onSelect={async (bundle) => {
-              if (returnWorkspaceName && onCreateNewWithBundle) {
-                await handleCreateNewWithBundle(bundle);
-              } else {
-                await handleGetStarted(bundle);
-              }
-            }}
+            deferZoom={true}
+            onDeferredSelect={(info) => handleBundleSelected(info)}
+            onSelect={(bundle) => handleGetStarted(bundle)}
             onBack={() => navigateTo('main')}
           />
         {/if}
@@ -397,6 +584,24 @@
     </div>
   {/key}
 </div>
+
+<!-- Zoom overlay for launch animation (deferred from carousel) -->
+{#if launching && launchInfo?.launchRect}
+  <div class="launch-overlay" style="
+    --start-x: {launchInfo.launchRect.left}px;
+    --start-y: {launchInfo.launchRect.top}px;
+    --start-w: {launchInfo.launchRect.width}px;
+    --start-h: {launchInfo.launchRect.height}px;
+  ">
+    <div class="launch-zoom">
+      <iframe
+        src={launchInfo.previewUrl}
+        title="Launching"
+        class="launch-iframe"
+      ></iframe>
+    </div>
+  </div>
+{/if}
 
 <style>
   @property --orb1-x { syntax: '<percentage>'; initial-value: 20%; inherits: false; }
@@ -466,5 +671,48 @@
   :global(.get-started-btn:hover) {
     transform: scale(1.02);
     box-shadow: 0 4px 20px color-mix(in oklch, var(--primary) 35%, transparent);
+  }
+
+  /* ---- Launch zoom animation ---- */
+
+  .launch-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+  }
+
+  .launch-zoom {
+    position: absolute;
+    border-radius: 12px;
+    overflow: hidden;
+    left: var(--start-x);
+    top: var(--start-y);
+    width: var(--start-w);
+    height: var(--start-h);
+    animation: zoomToFull 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes zoomToFull {
+    0% {
+      left: var(--start-x);
+      top: var(--start-y);
+      width: var(--start-w);
+      height: var(--start-h);
+      border-radius: 12px;
+    }
+    100% {
+      left: 0;
+      top: 0;
+      width: 100vw;
+      height: 100vh;
+      border-radius: 0;
+    }
+  }
+
+  .launch-iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    pointer-events: none;
   }
 </style>

@@ -29,7 +29,7 @@
 //! ```
 
 use axum::extract::ws::{Message, WebSocket};
-use diaryx_sync::{CrdtStorage, SqliteStorage};
+use diaryx_sync::SyncDocManager;
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -51,46 +51,33 @@ pub struct ConnectionContext {
     pub workspace_id: String,
     pub handshake_state: HandshakeState,
     pub focused_files: HashSet<String>,
-    pub storage: Arc<SqliteStorage>,
+    pub doc_manager: SyncDocManager,
 }
 
 impl ConnectionContext {
-    pub fn new(user: AuthenticatedUser, storage: Arc<SqliteStorage>) -> Self {
+    pub fn new(user: AuthenticatedUser, storage: Arc<dyn diaryx_sync::CrdtStorage>) -> Self {
         let workspace_id = user.workspace_id.clone();
         Self {
             user,
-            workspace_id,
+            workspace_id: workspace_id.clone(),
             handshake_state: HandshakeState::AwaitingManifest,
             focused_files: HashSet::new(),
-            storage,
+            doc_manager: SyncDocManager::new(storage),
         }
     }
 
     /// Generate file manifest from workspace CRDT.
     pub fn generate_file_manifest(&self) -> Result<Vec<ManifestFileEntry>, String> {
-        // Query active files from storage
-        let files = self
-            .storage
-            .query_active_files()
-            .map_err(|e| format!("Failed to query files: {}", e))?;
-
-        Ok(files
-            .into_iter()
-            .map(|(path, title, part_of)| ManifestFileEntry {
-                doc_id: format!("body:{}/{}", self.workspace_id, path),
-                filename: path,
-                title,
-                part_of,
-                deleted: false,
-            })
-            .collect())
+        self.doc_manager
+            .generate_file_manifest(&self.workspace_id)
+            .map_err(|e| format!("Failed to generate manifest: {}", e))
     }
 
     /// Get full CRDT state for the workspace.
     pub fn get_workspace_state(&self) -> Result<Vec<u8>, String> {
         let storage_key = format!("workspace:{}", self.workspace_id);
-        self.storage
-            .load_doc(&storage_key)
+        self.doc_manager
+            .load_document(&storage_key)
             .map_err(|e| format!("Failed to load workspace state: {}", e))?
             .ok_or_else(|| "No workspace state found".to_string())
     }
@@ -159,24 +146,17 @@ pub async fn perform_handshake(
         }
     }
 
-    // Step 3: Send CRDT state
-    match ctx.get_workspace_state() {
-        Ok(state) => {
-            let state_b64 =
-                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &state);
-            let state_msg = ServerControlMessage::CrdtState { state: state_b64 };
-            let json = serde_json::to_string(&state_msg)
-                .map_err(|e| format!("Failed to serialize state: {}", e))?;
-
-            sink.send(Message::Text(json.into()))
-                .await
-                .map_err(|e| format!("Failed to send state: {}", e))?;
-
-            debug!("Sent CRDT state to client ({} bytes)", state.len());
+    // Step 3: Send CRDT state via SyncDocManager::complete_handshake
+    match ctx.doc_manager.complete_handshake(&ctx.workspace_id) {
+        Ok(messages) => {
+            for msg in messages {
+                sink.send(Message::Text(msg.into()))
+                    .await
+                    .map_err(|e| format!("Failed to send handshake message: {}", e))?;
+            }
         }
         Err(e) => {
-            // No state yet, which is fine for new workspaces
-            debug!("No CRDT state to send: {}", e);
+            debug!("Handshake completion error: {}", e);
         }
     }
 
@@ -201,7 +181,6 @@ pub async fn handle_control_message(
                 ctx.focused_files.insert(file.clone());
             }
             debug!("Client focused on {} files", files.len());
-            // Could broadcast FocusListChanged here
             None
         }
         Ok(ClientControlMessage::Unfocus { files }) => {

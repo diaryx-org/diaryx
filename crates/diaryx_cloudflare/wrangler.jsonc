@@ -49,6 +49,20 @@
 			"remote": true
 		}
 	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "NAMESPACE_SYNC",
+				"class_name": "NamespaceSyncDO"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["NamespaceSyncDO"]
+		}
+	],
 
 	"observability": {
     "logs": {

@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod config;
 mod handlers;
+pub mod sync;
 mod tokens;
 
 use worker::*;
@@ -110,6 +111,8 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/apple/webhook", handlers::apple_webhook)
         // Tier
         .post_async("/api/tier", handlers::set_tier)
+        // Sync (WebSocket upgrade → Durable Object)
+        .get_async("/api/sync/:namespace_id", handlers::upgrade_sync_ws)
         // Run
         .run(req, env.clone())
         .await?;

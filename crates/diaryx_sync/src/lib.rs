@@ -57,6 +57,16 @@ mod tokio_transport;
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
 mod transport;
 
+// Protocol types (wasm-compatible, no tokio)
+#[cfg(feature = "protocol")]
+pub mod protocol_types;
+
+// Platform-agnostic document manager (wasm-compatible)
+#[cfg(feature = "doc-server")]
+mod doc_manager;
+#[cfg(feature = "doc-server")]
+pub use doc_manager::SyncDocManager;
+
 // Server infrastructure (siphonophore hooks, axum WebSocket)
 #[cfg(feature = "server")]
 pub mod hooks;

@@ -65,8 +65,14 @@ typescript = ["dep:ts-rs", "diaryx_core/typescript"]
 # SQLite CRDT storage (native only)
 sqlite = ["dep:rusqlite", "diaryx_core/database"]
 
+# Sync protocol types (wasm-compatible, no tokio). Used by Cloudflare adapter.
+protocol = []
+
+# Platform-agnostic document management (depends on protocol). Used by Cloudflare adapter.
+doc-server = ["protocol"]
+
 # Siphonophore-based server (hooks, axum WebSocket, StorageCache)
-server = ["sqlite", "dep:siphonophore", "dep:kameo", "dep:axum", "dep:tokio", "dep:tower-http", "dep:rand", "dep:futures"]
+server = ["protocol", "doc-server", "sqlite", "dep:siphonophore", "dep:kameo", "dep:axum", "dep:tokio", "dep:tower-http", "dep:rand", "dep:futures"]
 
 # Native sync transport (tokio-tungstenite WebSocket)
 native-sync = ["dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util"]

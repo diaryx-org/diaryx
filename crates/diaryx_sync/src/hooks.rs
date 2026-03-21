@@ -3,8 +3,11 @@
 //! Defines the [`SyncHookDelegate`] trait for auth and workspace events, and
 //! [`DiarySyncHook`] — a generic siphonophore `Hook` implementation that
 //! delegates to a `SyncHookDelegate` for server-specific behavior.
+//!
+//! Document persistence (load/save/change) is handled by [`SyncDocManager`],
+//! which is shared with the Cloudflare Durable Object adapter.
 
-use crate::{CrdtStorage, UpdateOrigin};
+use crate::doc_manager::SyncDocManager;
 use async_trait::async_trait;
 use siphonophore::{
     BeforeCloseDirtyPayload, BeforeSyncAction, ControlMessageResponse, Handle, Hook, HookResult,
@@ -15,7 +18,8 @@ use siphonophore::{
 use std::sync::{Arc, OnceLock};
 use tracing::{debug, error, info, warn};
 
-use crate::protocol::{AuthenticatedUser, DirtyWorkspaces, DocType, select_persistable_update};
+use crate::UpdateOrigin;
+use crate::protocol::{AuthenticatedUser, DirtyWorkspaces, DocType};
 use crate::storage::StorageCache;
 
 // ==================== SyncHookDelegate Trait ====================
@@ -57,8 +61,9 @@ pub trait SyncHookDelegate: Send + Sync + 'static {
 /// Generic siphonophore `Hook` implementation that delegates auth and events
 /// to a [`SyncHookDelegate`].
 ///
-/// Handles document persistence (load/save/change) using `StorageCache`,
-/// and delegates authentication and workspace-change events to the delegate.
+/// Document persistence is handled by [`SyncDocManager`] (shared with the
+/// Cloudflare DO adapter). Authentication and workspace-change events are
+/// delegated to the [`SyncHookDelegate`].
 pub struct DiarySyncHook<D: SyncHookDelegate> {
     delegate: Arc<D>,
     storage_cache: Arc<StorageCache>,
@@ -84,6 +89,15 @@ impl<D: SyncHookDelegate> DiarySyncHook<D> {
             dirty_workspaces,
         };
         (hook, handle)
+    }
+
+    /// Get a SyncDocManager for the given workspace.
+    fn doc_manager(&self, workspace_id: &str) -> Result<SyncDocManager, String> {
+        let storage = self
+            .storage_cache
+            .get_storage(workspace_id)
+            .map_err(|e| format!("Failed to get storage: {}", e))?;
+        Ok(SyncDocManager::new(storage))
     }
 }
 
@@ -135,71 +149,22 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
             }
         };
 
-        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
-            Ok(s) => s,
+        let manager = match self.doc_manager(doc_type.workspace_id()) {
+            Ok(m) => m,
             Err(e) => {
-                error!("Failed to get storage: {}", e);
+                error!("{}", e);
                 return Ok(None);
             }
         };
 
         let storage_key = doc_type.storage_key();
-
-        // Load base snapshot from the `documents` table.
-        let base_state = match storage.load_doc(&storage_key) {
-            Ok(state) => state,
+        match manager.load_document(&storage_key) {
+            Ok(result) => Ok(result),
             Err(e) => {
                 error!("Failed to load document {}: {}", doc_id, e);
-                return Ok(None);
-            }
-        };
-
-        // Also load incremental updates from the `updates` table, in case the
-        // caller only stored data via append_update (e.g. WorkspaceCrdt::set_file).
-        let updates = match storage.get_all_updates(&storage_key) {
-            Ok(u) => u,
-            Err(e) => {
-                debug!("No incremental updates for {}: {}", doc_id, e);
-                Vec::new()
-            }
-        };
-
-        if base_state.is_none() && updates.is_empty() {
-            debug!(
-                "[on_load_document] doc={}, storage_key={}, has_state=false",
-                doc_id, storage_key
-            );
-            return Ok(None);
-        }
-
-        // Merge base + incremental updates into a single state vector.
-        use yrs::{Doc, ReadTxn, Transact, Update, updates::decoder::Decode};
-        let doc = Doc::new();
-        {
-            let mut txn = doc.transact_mut();
-            if let Some(state) = &base_state {
-                if let Ok(update) = Update::decode_v1(state) {
-                    let _ = txn.apply_update(update);
-                }
-            }
-            for crdt_update in &updates {
-                if let Ok(update) = Update::decode_v1(&crdt_update.data) {
-                    let _ = txn.apply_update(update);
-                }
+                Ok(None)
             }
         }
-        let merged = doc
-            .transact()
-            .encode_state_as_update_v1(&yrs::StateVector::default());
-        debug!(
-            "[on_load_document] doc={}, storage_key={}, has_state=true, state_len={} (base={}, updates={})",
-            doc_id,
-            storage_key,
-            merged.len(),
-            base_state.as_ref().map(|s| s.len()).unwrap_or(0),
-            updates.len()
-        );
-        Ok(Some(merged))
     }
 
     async fn on_change(&self, payload: OnChangePayload<'_>) -> HookResult {
@@ -222,10 +187,6 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
         };
 
         let user = payload.context.get::<AuthenticatedUser>();
-        let (device_id, device_name) = match user {
-            Some(u) => (u.device_id.as_deref(), None),
-            None => (None, None),
-        };
 
         // Check read-only mode
         if let Some(u) = user {
@@ -238,34 +199,29 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
             }
         }
 
-        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
-            Ok(s) => s,
+        let (device_id, device_name) = match user {
+            Some(u) => (u.device_id.as_deref(), None),
+            None => (None, None),
+        };
+
+        let manager = match self.doc_manager(doc_type.workspace_id()) {
+            Ok(m) => m,
             Err(e) => {
-                error!("Failed to get storage for change: {}", e);
+                error!("{}", e);
                 return Ok(());
             }
         };
 
-        let (update_data, update_mode) = select_persistable_update(update);
-        let update_data_ref = update_data.as_ref();
-
         let storage_key = doc_type.storage_key();
-        if let Err(e) = storage.append_update_with_device(
+        if let Err(e) = manager.apply_change(
             &storage_key,
-            update_data_ref,
+            update,
             UpdateOrigin::Remote,
             device_id,
             device_name,
         ) {
             error!("Failed to persist update for {}: {}", doc_id, e);
         } else {
-            debug!(
-                "Persisted {} byte update for {} (mode={})",
-                update_data_ref.len(),
-                doc_id,
-                update_mode
-            );
-
             // Mark workspace as dirty
             let workspace_id = doc_type.workspace_id().to_string();
             self.dirty_workspaces
@@ -279,13 +235,7 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
                     self.delegate.on_workspace_changed(&workspace_id).await;
                 }
                 DocType::Body { body_id, .. } => {
-                    eprintln!(
-                        "[DiarySyncHook] Body doc changed: ws={}, body_id={}, update_len={}",
-                        workspace_id,
-                        body_id,
-                        update_data_ref.len()
-                    );
-                    self.delegate.on_body_changed(&workspace_id, &body_id).await;
+                    self.delegate.on_body_changed(&workspace_id, body_id).await;
                 }
             }
         }
@@ -315,21 +265,16 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
             }
         };
 
-        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to get storage for save: {}", e);
-                return Err(e.into());
-            }
-        };
+        let manager = self
+            .doc_manager(doc_type.workspace_id())
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
 
         let storage_key = doc_type.storage_key();
-        storage.save_doc(&storage_key, state).map_err(|e| {
+        manager.save_document(&storage_key, state).map_err(|e| {
             error!("Failed to save document {}: {}", doc_id, e);
             format!("Save failed: {}", e)
         })?;
 
-        info!("Saved document {} ({} bytes)", doc_id, state.len());
         Ok(())
     }
 
@@ -347,23 +292,17 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
             }
         };
 
-        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
-            Ok(s) => s,
+        let manager = match self.doc_manager(doc_type.workspace_id()) {
+            Ok(m) => m,
             Err(e) => {
-                error!("Failed to get storage for auto-save: {}", e);
+                error!("{}", e);
                 return Ok(());
             }
         };
 
         let storage_key = doc_type.storage_key();
-        if let Err(e) = storage.save_doc(&storage_key, state) {
+        if let Err(e) = manager.save_document(&storage_key, state) {
             error!("Failed to auto-save document {}: {}", doc_id, e);
-        } else {
-            info!(
-                "Auto-saved document {} on close ({} bytes)",
-                doc_id,
-                state.len()
-            );
         }
 
         Ok(())
@@ -410,11 +349,11 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
             }
         }
 
-        // Get storage to generate file manifest
-        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
-            Ok(s) => s,
+        // Generate file manifest via SyncDocManager
+        let manager = match self.doc_manager(doc_type.workspace_id()) {
+            Ok(m) => m,
             Err(e) => {
-                warn!("Failed to get storage for before_sync: {}", e);
+                warn!("Failed to get doc manager for before_sync: {}", e);
                 if messages.is_empty() {
                     return Ok(BeforeSyncAction::Continue);
                 }
@@ -428,11 +367,10 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
             }
         };
 
-        // Query active files
-        let files = match storage.query_active_files() {
+        let files = match manager.generate_file_manifest(doc_type.workspace_id()) {
             Ok(f) => f,
             Err(e) => {
-                warn!("Failed to query files for manifest: {}", e);
+                warn!("Failed to generate file manifest: {}", e);
                 if messages.is_empty() {
                     return Ok(BeforeSyncAction::Continue);
                 }
@@ -452,33 +390,22 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
             return Ok(BeforeSyncAction::Continue);
         }
 
-        // Generate file manifest message
-        {
-            let manifest = serde_json::json!({
-                "type": "file_manifest",
-                "files": files.iter().map(|(path, title, part_of)| {
-                    serde_json::json!({
-                        "doc_id": format!("body:{}/{}", doc_type.workspace_id(), path),
-                        "filename": path,
-                        "title": title,
-                        "part_of": part_of,
-                        "deleted": false
-                    })
-                }).collect::<Vec<_>>(),
-                "client_is_new": false
-            });
+        // Serialize the manifest entries
+        let manifest = serde_json::json!({
+            "type": "file_manifest",
+            "files": files,
+            "client_is_new": false
+        });
 
-            if !files.is_empty() {
-                info!(
-                    "Sending file manifest with {} files for {}",
-                    files.len(),
-                    doc_id
-                );
-            }
-
-            messages.push(manifest.to_string());
+        if !files.is_empty() {
+            info!(
+                "Sending file manifest with {} files for {}",
+                files.len(),
+                doc_id
+            );
         }
 
+        messages.push(manifest.to_string());
         Ok(BeforeSyncAction::SendMessages { messages })
     }
 
@@ -501,44 +428,15 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
 
                 if let Some(doc_id) = payload.doc_id {
                     if let Some(DocType::Workspace(workspace_id)) = DocType::parse(doc_id) {
-                        if let Ok(storage) = self.storage_cache.get_storage(&workspace_id) {
-                            let files_synced = storage
-                                .query_active_files()
-                                .map(|files| files.len())
-                                .unwrap_or(0);
-                            let storage_key = format!("workspace:{}", workspace_id);
-                            if let Ok(Some(state)) = storage.load_doc(&storage_key) {
-                                let state_b64 = base64::Engine::encode(
-                                    &base64::engine::general_purpose::STANDARD,
-                                    &state,
-                                );
-                                let crdt_state = serde_json::json!({
-                                    "type": "crdt_state",
-                                    "state": state_b64
-                                });
-                                let sync_complete = serde_json::json!({
-                                    "type": "sync_complete",
-                                    "files_synced": files_synced
-                                });
-                                info!(
-                                    "Completing handshake with CRDT state ({} bytes)",
-                                    state.len()
-                                );
-                                return ControlMessageResponse::CompleteHandshake {
-                                    responses: vec![
-                                        crdt_state.to_string(),
-                                        sync_complete.to_string(),
-                                    ],
-                                };
+                        if let Ok(manager) = self.doc_manager(&workspace_id) {
+                            match manager.complete_handshake(&workspace_id) {
+                                Ok(responses) => {
+                                    return ControlMessageResponse::CompleteHandshake { responses };
+                                }
+                                Err(e) => {
+                                    warn!("Failed to complete handshake: {}", e);
+                                }
                             }
-
-                            let sync_complete = serde_json::json!({
-                                "type": "sync_complete",
-                                "files_synced": files_synced
-                            });
-                            return ControlMessageResponse::CompleteHandshake {
-                                responses: vec![sync_complete.to_string()],
-                            };
                         }
                     }
                 }
@@ -626,6 +524,7 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
 mod tests {
     use super::*;
     use crate::BodyDoc;
+    use crate::CrdtStorage;
     use siphonophore::Context;
     use std::sync::atomic::{AtomicBool, Ordering};
     use yrs::{Doc, GetString, ReadTxn, Text, Transact, updates::decoder::Decode};
@@ -663,7 +562,7 @@ mod tests {
             // Also do actual write-back to verify end-to-end
             let storage = self.storage_cache.get_storage(workspace_id).unwrap();
             let body_key = format!("body:{}/{}", workspace_id, path);
-            let body_storage: Arc<dyn crate::CrdtStorage> = storage;
+            let body_storage: Arc<dyn CrdtStorage> = storage;
             let body_doc = BodyDoc::load(body_storage, body_key).unwrap();
             let new_body = body_doc.get_body();
 
@@ -696,7 +595,7 @@ mod tests {
         let storage = storage_cache.get_storage(workspace_id).unwrap();
         let body_key = format!("body:{}/notes.md", workspace_id);
         {
-            let body_storage: Arc<dyn crate::CrdtStorage> = storage.clone();
+            let body_storage: Arc<dyn CrdtStorage> = storage.clone();
             let body_doc = BodyDoc::new(body_storage, body_key.clone());
             body_doc.set_body("Initial content.\n").unwrap();
             body_doc.save().unwrap();
@@ -713,13 +612,9 @@ mod tests {
         let (hook, _handle) = DiarySyncHook::new(delegate, storage_cache.clone(), dirty_workspaces);
 
         // Generate a Y.js update that changes the body content.
-        // We simulate what the guest client does: create a Y.Doc, apply the existing
-        // state, make an edit, and extract the incremental update.
         let update_bytes = {
-            // Load existing state
             let existing_state = storage.load_doc(&body_key).unwrap().unwrap();
 
-            // Create a "client" doc and apply existing state
             let client_doc = Doc::new();
             let text = client_doc.get_or_insert_text("body");
             {
@@ -728,19 +623,15 @@ mod tests {
                 txn.apply_update(update).unwrap();
             }
 
-            // Record state vector before edit
             let sv_before = client_doc.transact().state_vector();
 
-            // Make the edit
             {
                 let mut txn = client_doc.transact_mut();
                 let current = text.get_string(&txn);
-                // Delete existing content and insert new
                 text.remove_range(&mut txn, 0, current.len() as u32);
                 text.insert(&mut txn, 0, "Edited by guest via sync.\n");
             }
 
-            // Extract the incremental update (what would be sent over WebSocket)
             client_doc.transact().encode_state_as_update_v1(&sv_before)
         };
 

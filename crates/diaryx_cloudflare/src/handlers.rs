@@ -1530,3 +1530,51 @@ pub async fn passkey_delete(req: Request, ctx: RouteContext<()>) -> Result<Respo
         Err(e) => error_response(e),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Sync (WebSocket → Durable Object)
+// ---------------------------------------------------------------------------
+
+/// GET /api/sync/:namespace_id — Upgrade to WebSocket, forward to namespace DO.
+pub async fn upgrade_sync_ws(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let namespace_id = ctx
+        .param("namespace_id")
+        .ok_or_else(|| Error::from("missing namespace_id"))?
+        .to_string();
+
+    // Authenticate
+    let user_id = authenticate(&req, &ctx).await?;
+
+    // Verify namespace ownership
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let ns = ns_store
+        .get_namespace(&namespace_id)
+        .await
+        .map_err(|e| Error::from(e.to_string()))?
+        .ok_or_else(|| Error::from("Namespace not found"))?;
+
+    if ns.owner_user_id != user_id {
+        return Response::error("Forbidden", 403);
+    }
+
+    // Get DO stub for this namespace
+    let do_namespace = ctx.env.durable_object("NAMESPACE_SYNC")?;
+    let do_id = do_namespace.id_from_name(&namespace_id)?;
+    let stub = do_id.get_stub()?;
+
+    // Forward the request to the DO with auth context in query params
+    let url = req.url()?;
+    let mut do_url = url.clone();
+    do_url
+        .query_pairs_mut()
+        .append_pair("user_id", &user_id)
+        .append_pair("workspace_id", &namespace_id);
+
+    let mut do_req = Request::new(do_url.as_str(), Method::Get)?;
+    // Copy the Upgrade header
+    if let Some(upgrade) = req.headers().get("Upgrade")? {
+        do_req.headers_mut()?.set("Upgrade", &upgrade)?;
+    }
+
+    stub.fetch_with_request(do_req).await
+}

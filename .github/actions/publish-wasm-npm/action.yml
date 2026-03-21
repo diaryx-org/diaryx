@@ -34,6 +34,7 @@ runs:
 
         jq --arg name "${{ inputs.package-name }}" '.name = $name' package.json > tmp.json && mv tmp.json package.json
         jq --argjson files '${{ inputs.files }}' '.files = $files' package.json > tmp.json && mv tmp.json package.json
+        jq '.repository = {"type": "git", "url": "https://github.com/diaryx-org/diaryx"}' package.json > tmp.json && mv tmp.json package.json
 
         if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
           NPM_TAG=latest

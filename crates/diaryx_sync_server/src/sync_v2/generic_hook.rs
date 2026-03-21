@@ -173,12 +173,10 @@ impl SyncHookDelegate for GenericNamespaceSyncHook {
         Err("Authentication required".to_string())
     }
 
-    /// No-op: attachment reconciliation is now client-driven via plugin-sync.
-    async fn on_workspace_changed(&self, _namespace_id: &str) {}
-
     async fn on_peer_joined_extra(&self, doc_id: &str, user_id: &str, _peer_count: usize) {
         if user_id.starts_with("guest:") {
-            if let Some(DocType::Workspace(ns_id)) = DocType::parse(doc_id) {
+            if let Some(doc_type) = DocType::parse(doc_id) {
+                let ns_id = doc_type.workspace_id().to_string();
                 let mut counts = self.guest_counts.write().await;
                 *counts.entry(ns_id).or_insert(0) += 1;
             }
@@ -187,7 +185,8 @@ impl SyncHookDelegate for GenericNamespaceSyncHook {
 
     async fn on_peer_left_extra(&self, doc_id: &str, user_id: &str, _peer_count: usize) {
         if user_id.starts_with("guest:") {
-            if let Some(DocType::Workspace(ns_id)) = DocType::parse(doc_id) {
+            if let Some(doc_type) = DocType::parse(doc_id) {
+                let ns_id = doc_type.workspace_id().to_string();
                 let mut counts = self.guest_counts.write().await;
                 if let Some(count) = counts.get_mut(&ns_id) {
                     *count = count.saturating_sub(1);

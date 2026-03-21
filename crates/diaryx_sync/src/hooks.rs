@@ -19,15 +19,14 @@ use std::sync::{Arc, OnceLock};
 use tracing::{debug, error, info, warn};
 
 use crate::UpdateOrigin;
-use crate::protocol::{AuthenticatedUser, DirtyWorkspaces, DocType};
+use crate::protocol::{AuthenticatedUser, DocType};
 use crate::storage::StorageCache;
 
 // ==================== SyncHookDelegate Trait ====================
 
 /// Trait for server-specific behavior injected into the generic sync hook.
 ///
-/// The cloud server implements this with JWT auth, attachment reconciliation, etc.
-/// The local CLI server implements this with no-op auth for single-workspace mode.
+/// The cloud server implements this with JWT auth + session-code auth.
 #[async_trait]
 pub trait SyncHookDelegate: Send + Sync + 'static {
     /// Authenticate a connection request.
@@ -41,18 +40,10 @@ pub trait SyncHookDelegate: Send + Sync + 'static {
         query_params: &std::collections::HashMap<String, String>,
     ) -> Result<AuthenticatedUser, String>;
 
-    /// Called after a workspace document changes (for git auto-commit, attachment reconciliation, etc.).
-    async fn on_workspace_changed(&self, workspace_id: &str);
-
-    /// Called after a body document changes (for filesystem write-back, etc.).
-    ///
-    /// `path` is the relative file path within the workspace (e.g., "README.md").
-    async fn on_body_changed(&self, _workspace_id: &str, _path: &str) {}
-
-    /// Called when a peer joins a document. Default implementation broadcasts peer_joined.
+    /// Called when a peer joins a document.
     async fn on_peer_joined_extra(&self, _doc_id: &str, _user_id: &str, _peer_count: usize) {}
 
-    /// Called when a peer leaves a document. Default implementation broadcasts peer_left.
+    /// Called when a peer leaves a document.
     async fn on_peer_left_extra(&self, _doc_id: &str, _user_id: &str, _peer_count: usize) {}
 }
 
@@ -68,7 +59,6 @@ pub struct DiarySyncHook<D: SyncHookDelegate> {
     delegate: Arc<D>,
     storage_cache: Arc<StorageCache>,
     handle: Arc<OnceLock<Handle>>,
-    dirty_workspaces: DirtyWorkspaces,
 }
 
 impl<D: SyncHookDelegate> DiarySyncHook<D> {
@@ -79,14 +69,12 @@ impl<D: SyncHookDelegate> DiarySyncHook<D> {
     pub fn new(
         delegate: Arc<D>,
         storage_cache: Arc<StorageCache>,
-        dirty_workspaces: DirtyWorkspaces,
     ) -> (Self, Arc<OnceLock<Handle>>) {
         let handle = Arc::new(OnceLock::new());
         let hook = Self {
             delegate,
             storage_cache,
             handle: handle.clone(),
-            dirty_workspaces,
         };
         (hook, handle)
     }
@@ -221,23 +209,6 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
             device_name,
         ) {
             error!("Failed to persist update for {}: {}", doc_id, e);
-        } else {
-            // Mark workspace as dirty
-            let workspace_id = doc_type.workspace_id().to_string();
-            self.dirty_workspaces
-                .write()
-                .await
-                .insert(workspace_id.clone(), tokio::time::Instant::now());
-
-            // Notify delegate of document changes
-            match &doc_type {
-                DocType::Workspace(_) => {
-                    self.delegate.on_workspace_changed(&workspace_id).await;
-                }
-                DocType::Body { body_id, .. } => {
-                    self.delegate.on_body_changed(&workspace_id, body_id).await;
-                }
-            }
         }
 
         Ok(())
@@ -314,99 +285,14 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
     ) -> Result<BeforeSyncAction, Box<dyn std::error::Error + Send + Sync>> {
         let doc_id = payload.doc_id;
 
-        let doc_type = match DocType::parse(doc_id) {
-            Some(dt) => dt,
-            None => {
-                return Ok(BeforeSyncAction::Abort {
-                    reason: format!("Invalid document ID: {}", doc_id),
-                });
-            }
-        };
-
-        // Only workspace documents need Files-Ready handshake and session_joined
-        if !matches!(doc_type, DocType::Workspace(_)) {
-            return Ok(BeforeSyncAction::Continue);
+        if DocType::parse(doc_id).is_none() {
+            return Ok(BeforeSyncAction::Abort {
+                reason: format!("Invalid document ID: {}", doc_id),
+            });
         }
 
-        let mut messages = Vec::new();
-
-        // For session guests, send session_joined confirmation
-        if let Some(user) = payload.context.get::<AuthenticatedUser>() {
-            if user.is_guest {
-                if let Some(session_code) = payload.request.query_params.get("session") {
-                    let session_joined = serde_json::json!({
-                        "type": "session_joined",
-                        "joinCode": session_code.to_uppercase(),
-                        "workspaceId": user.workspace_id,
-                        "readOnly": user.read_only,
-                    });
-                    messages.push(session_joined.to_string());
-                    info!(
-                        "Sending session_joined for guest on workspace {}",
-                        user.workspace_id
-                    );
-                }
-            }
-        }
-
-        // Generate file manifest via SyncDocManager
-        let manager = match self.doc_manager(doc_type.workspace_id()) {
-            Ok(m) => m,
-            Err(e) => {
-                warn!("Failed to get doc manager for before_sync: {}", e);
-                if messages.is_empty() {
-                    return Ok(BeforeSyncAction::Continue);
-                }
-                let manifest = serde_json::json!({
-                    "type": "file_manifest",
-                    "files": [],
-                    "client_is_new": false
-                });
-                messages.push(manifest.to_string());
-                return Ok(BeforeSyncAction::SendMessages { messages });
-            }
-        };
-
-        let files = match manager.generate_file_manifest(doc_type.workspace_id()) {
-            Ok(f) => f,
-            Err(e) => {
-                warn!("Failed to generate file manifest: {}", e);
-                if messages.is_empty() {
-                    return Ok(BeforeSyncAction::Continue);
-                }
-                let manifest = serde_json::json!({
-                    "type": "file_manifest",
-                    "files": [],
-                    "client_is_new": false
-                });
-                messages.push(manifest.to_string());
-                return Ok(BeforeSyncAction::SendMessages { messages });
-            }
-        };
-
-        // If no files and no session messages, skip handshake
-        if files.is_empty() && messages.is_empty() {
-            debug!("No files in workspace, skipping Files-Ready handshake");
-            return Ok(BeforeSyncAction::Continue);
-        }
-
-        // Serialize the manifest entries
-        let manifest = serde_json::json!({
-            "type": "file_manifest",
-            "files": files,
-            "client_is_new": false
-        });
-
-        if !files.is_empty() {
-            info!(
-                "Sending file manifest with {} files for {}",
-                files.len(),
-                doc_id
-            );
-        }
-
-        messages.push(manifest.to_string());
-        Ok(BeforeSyncAction::SendMessages { messages })
+        // All doc types: no server-side handshake. Content is pushed by clients.
+        Ok(BeforeSyncAction::Continue)
     }
 
     async fn on_control_message(
@@ -423,41 +309,46 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
         let msg_type = json.get("type").and_then(|v| v.as_str());
 
         match msg_type {
-            Some("files_ready") | Some("FilesReady") => {
-                debug!("Received FilesReady from client");
-
-                if let Some(doc_id) = payload.doc_id {
-                    if let Some(DocType::Workspace(workspace_id)) = DocType::parse(doc_id) {
-                        if let Ok(manager) = self.doc_manager(&workspace_id) {
-                            match manager.complete_handshake(&workspace_id) {
-                                Ok(responses) => {
-                                    return ControlMessageResponse::CompleteHandshake { responses };
-                                }
-                                Err(e) => {
-                                    warn!("Failed to complete handshake: {}", e);
-                                }
+            Some("file_request") => {
+                if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
+                    let user = payload.context.get::<AuthenticatedUser>();
+                    let requester_id = user.map(|u| u.user_id.as_str()).unwrap_or("unknown");
+                    let relay = crate::protocol::ServerControlMessage::FileRequested {
+                        path: path.to_string(),
+                        requester_id: requester_id.to_string(),
+                    };
+                    if let Ok(relay_json) = serde_json::to_string(&relay) {
+                        if let Some(handle) = self.handle.get() {
+                            if let Some(doc_id) = payload.doc_id {
+                                handle
+                                    .broadcast_text(doc_id, relay_json, Some(payload.client_id))
+                                    .await;
                             }
                         }
                     }
                 }
-
-                let sync_complete = serde_json::json!({
-                    "type": "sync_complete",
-                    "files_synced": 0
-                });
-                ControlMessageResponse::CompleteHandshake {
-                    responses: vec![sync_complete.to_string()],
-                }
+                ControlMessageResponse::Handled { responses: vec![] }
             }
-            Some("focus") => {
-                if let Some(files) = json.get("files").and_then(|v| v.as_array()) {
-                    debug!("Client focusing on {} files", files.len());
+            Some("file_ready") => {
+                if let Some(handle) = self.handle.get() {
+                    if let Some(doc_id) = payload.doc_id {
+                        handle
+                            .broadcast_text(doc_id, message.to_string(), Some(payload.client_id))
+                            .await;
+                    }
                 }
                 ControlMessageResponse::Handled { responses: vec![] }
             }
-            Some("unfocus") => {
-                if let Some(files) = json.get("files").and_then(|v| v.as_array()) {
-                    debug!("Client unfocusing {} files", files.len());
+            Some("session_end") => {
+                let ended = crate::protocol::ServerControlMessage::SessionEnded;
+                if let Ok(ended_json) = serde_json::to_string(&ended) {
+                    if let Some(handle) = self.handle.get() {
+                        if let Some(doc_id) = payload.doc_id {
+                            handle
+                                .broadcast_text(doc_id, ended_json, Some(payload.client_id))
+                                .await;
+                        }
+                    }
                 }
                 ControlMessageResponse::Handled { responses: vec![] }
             }
@@ -523,18 +414,11 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BodyDoc;
     use crate::CrdtStorage;
     use siphonophore::Context;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use yrs::{Doc, GetString, ReadTxn, Text, Transact, updates::decoder::Decode};
+    use yrs::{Doc, Map, ReadTxn, Transact, updates::decoder::Decode};
 
-    /// Test delegate that records whether on_body_changed was called.
-    struct TestDelegate {
-        workspace_root: std::path::PathBuf,
-        storage_cache: Arc<StorageCache>,
-        body_changed_called: Arc<AtomicBool>,
-    }
+    struct TestDelegate;
 
     #[async_trait]
     impl SyncHookDelegate for TestDelegate {
@@ -547,137 +431,98 @@ mod tests {
         ) -> Result<AuthenticatedUser, String> {
             Ok(AuthenticatedUser {
                 user_id: "test".into(),
-                workspace_id: "test-ws".into(),
+                workspace_id: "test-ns".into(),
                 device_id: None,
-                is_guest: true,
+                is_guest: false,
                 read_only: false,
             })
         }
-
-        async fn on_workspace_changed(&self, _workspace_id: &str) {}
-
-        async fn on_body_changed(&self, workspace_id: &str, path: &str) {
-            self.body_changed_called.store(true, Ordering::SeqCst);
-
-            // Also do actual write-back to verify end-to-end
-            let storage = self.storage_cache.get_storage(workspace_id).unwrap();
-            let body_key = format!("body:{}/{}", workspace_id, path);
-            let body_storage: Arc<dyn CrdtStorage> = storage;
-            let body_doc = BodyDoc::load(body_storage, body_key).unwrap();
-            let new_body = body_doc.get_body();
-
-            let file_path = self.workspace_root.join(path);
-            let content = std::fs::read_to_string(&file_path).unwrap();
-            let parsed = diaryx_core::frontmatter::parse_or_empty(&content).unwrap();
-            let new_content =
-                diaryx_core::frontmatter::serialize(&parsed.frontmatter, &new_body).unwrap();
-            std::fs::write(&file_path, &new_content).unwrap();
-        }
     }
 
-    /// Test that DiarySyncHook::on_change calls on_body_changed for body doc updates,
-    /// which then writes the updated body back to the filesystem.
-    ///
-    /// This tests the full server-side flow:
-    /// guest Y.js update → on_change → persist to SQLite → on_body_changed → filesystem write
     #[tokio::test]
-    async fn test_on_change_triggers_body_writeback() {
+    async fn test_on_change_persists_manifest_update() {
         let tmp = tempfile::tempdir().unwrap();
-        let workspace_root = tmp.path().to_path_buf();
-        let workspace_id = "test-ws";
+        let storage_cache = Arc::new(StorageCache::new(tmp.path().to_path_buf()));
+        let delegate = Arc::new(TestDelegate);
+        let (hook, _handle) = DiarySyncHook::new(delegate, storage_cache.clone());
 
-        // Create a file with initial content
-        let file_path = workspace_root.join("notes.md");
-        std::fs::write(&file_path, "---\ntitle: Notes\n---\nInitial content.\n").unwrap();
-
-        // Set up storage and populate initial body doc
-        let storage_cache = Arc::new(StorageCache::new(workspace_root.clone()));
-        let storage = storage_cache.get_storage(workspace_id).unwrap();
-        let body_key = format!("body:{}/notes.md", workspace_id);
+        // Create a yrs update for a manifest doc
+        let doc = Doc::new();
+        let map = doc.get_or_insert_map("manifest");
         {
-            let body_storage: Arc<dyn CrdtStorage> = storage.clone();
-            let body_doc = BodyDoc::new(body_storage, body_key.clone());
-            body_doc.set_body("Initial content.\n").unwrap();
-            body_doc.save().unwrap();
+            let mut txn = doc.transact_mut();
+            map.insert(&mut txn, "notes/foo.md", "test");
         }
+        let update = doc
+            .transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default());
 
-        // Create DiarySyncHook with TestDelegate
-        let body_changed = Arc::new(AtomicBool::new(false));
-        let delegate = Arc::new(TestDelegate {
-            workspace_root: workspace_root.clone(),
-            storage_cache: storage_cache.clone(),
-            body_changed_called: body_changed.clone(),
-        });
-        let dirty_workspaces: DirtyWorkspaces = Arc::new(Default::default());
-        let (hook, _handle) = DiarySyncHook::new(delegate, storage_cache.clone(), dirty_workspaces);
-
-        // Generate a Y.js update that changes the body content.
-        let update_bytes = {
-            let existing_state = storage.load_doc(&body_key).unwrap().unwrap();
-
-            let client_doc = Doc::new();
-            let text = client_doc.get_or_insert_text("body");
-            {
-                let mut txn = client_doc.transact_mut();
-                let update = yrs::Update::decode_v1(&existing_state).unwrap();
-                txn.apply_update(update).unwrap();
-            }
-
-            let sv_before = client_doc.transact().state_vector();
-
-            {
-                let mut txn = client_doc.transact_mut();
-                let current = text.get_string(&txn);
-                text.remove_range(&mut txn, 0, current.len() as u32);
-                text.insert(&mut txn, 0, "Edited by guest via sync.\n");
-            }
-
-            client_doc.transact().encode_state_as_update_v1(&sv_before)
-        };
-
-        // Call on_change with the update (simulating what siphonophore does)
         let mut ctx = Context::default();
         ctx.insert(AuthenticatedUser {
-            user_id: "guest-1".to_string(),
-            workspace_id: workspace_id.to_string(),
+            user_id: "host-1".to_string(),
+            workspace_id: "test-ns".to_string(),
             device_id: None,
-            is_guest: true,
+            is_guest: false,
             read_only: false,
         });
 
-        let doc_id = format!("body:{}/notes.md", workspace_id);
+        let doc_id = "manifest:test-ns";
         let payload = siphonophore::OnChangePayload {
-            doc_id: &doc_id,
+            doc_id,
             client_id: kameo::actor::ActorId::new(1),
-            update: &update_bytes,
+            update: &update,
             context: &ctx,
         };
 
         let result = Hook::on_change(&hook, payload).await;
-        assert!(result.is_ok(), "on_change should succeed");
+        assert!(result.is_ok());
 
-        // Verify on_body_changed was called
-        assert!(
-            body_changed.load(Ordering::SeqCst),
-            "on_body_changed should have been called for body doc update"
-        );
+        // Verify the update was persisted
+        let storage = storage_cache.get_storage("test-ns").unwrap();
+        let updates = storage.get_all_updates("manifest:test-ns").unwrap();
+        assert!(!updates.is_empty(), "manifest update should be persisted");
+    }
 
-        // Verify the file was updated
-        let file_content = std::fs::read_to_string(&file_path).unwrap();
+    #[tokio::test]
+    async fn test_on_change_rejects_read_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage_cache = Arc::new(StorageCache::new(tmp.path().to_path_buf()));
+        let delegate = Arc::new(TestDelegate);
+        let (hook, _handle) = DiarySyncHook::new(delegate, storage_cache.clone());
+
+        let doc = Doc::new();
+        let update = doc
+            .transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default());
+
+        let mut ctx = Context::default();
+        ctx.insert(AuthenticatedUser {
+            user_id: "guest-1".to_string(),
+            workspace_id: "test-ns".to_string(),
+            device_id: None,
+            is_guest: true,
+            read_only: true,
+        });
+
+        let doc_id = "file:test-ns/notes/foo.md";
+        let payload = siphonophore::OnChangePayload {
+            doc_id,
+            client_id: kameo::actor::ActorId::new(1),
+            update: &update,
+            context: &ctx,
+        };
+
+        let result = Hook::on_change(&hook, payload).await;
+        assert!(result.is_ok());
+
+        // Verify nothing was persisted (read-only user)
+        let storage = storage_cache.get_storage("test-ns").unwrap();
+        let updates = storage
+            .get_all_updates("file:test-ns/notes/foo.md")
+            .unwrap();
         assert!(
-            file_content.contains("title: Notes"),
-            "Frontmatter should be preserved. Got:\n{}",
-            file_content
-        );
-        assert!(
-            file_content.contains("Edited by guest via sync."),
-            "Body should contain the guest's edit. Got:\n{}",
-            file_content
-        );
-        assert!(
-            !file_content.contains("Initial content."),
-            "Old body should be replaced. Got:\n{}",
-            file_content
+            updates.is_empty(),
+            "read-only user changes should not be persisted"
         );
     }
 }

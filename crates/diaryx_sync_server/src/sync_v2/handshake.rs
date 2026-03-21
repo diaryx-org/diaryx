@@ -194,6 +194,14 @@ pub async fn handle_control_message(
             debug!("Ignoring FilesReady after handshake");
             None
         }
+        Ok(
+            ClientControlMessage::FileRequest { .. }
+            | ClientControlMessage::FileReady { .. }
+            | ClientControlMessage::SessionEnd,
+        ) => {
+            // Share session messages — handled by DiarySyncHook via siphonophore
+            None
+        }
         Err(_) => {
             // Not a control message, might be siphonophore control message
             None

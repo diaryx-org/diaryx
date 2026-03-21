@@ -3,7 +3,6 @@
 //! Wraps siphonophore `Server` with an axum `Router` for WebSocket and REST endpoints.
 
 use crate::hooks::{DiarySyncHook, SyncHookDelegate};
-use crate::protocol::DirtyWorkspaces;
 use crate::storage::StorageCache;
 use siphonophore::{Handle, Server};
 use std::sync::Arc;
@@ -12,22 +11,17 @@ use std::sync::Arc;
 pub struct SyncServer {
     /// The siphonophore server handle for broadcasting messages.
     pub handle: Handle,
-    /// The axum router with WebSocket upgrade at `/sync2`.
+    /// The axum router with WebSocket upgrade endpoint.
     pub router: axum::Router,
 }
 
 impl SyncServer {
     /// Create a new sync server with the given delegate and storage cache.
     ///
-    /// The delegate provides authentication and workspace-change hooks.
+    /// The delegate provides authentication hooks.
     /// Returns the configured server with its handle and axum router.
-    /// The WebSocket endpoint is at `/sync2` (matching the client convention).
-    pub fn new<D: SyncHookDelegate>(
-        delegate: Arc<D>,
-        storage_cache: Arc<StorageCache>,
-        dirty_workspaces: DirtyWorkspaces,
-    ) -> Self {
-        let (hook, handle_lock) = DiarySyncHook::new(delegate, storage_cache, dirty_workspaces);
+    pub fn new<D: SyncHookDelegate>(delegate: Arc<D>, storage_cache: Arc<StorageCache>) -> Self {
+        let (hook, handle_lock) = DiarySyncHook::new(delegate, storage_cache);
 
         let hooks: Vec<Box<dyn siphonophore::Hook>> = vec![Box::new(hook)];
         let server = Server::with_hooks(hooks);

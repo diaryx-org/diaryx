@@ -41,33 +41,10 @@ function resolveSyncServerOrigin(env: Env): string {
 
 /** Paths that must be proxied to the native sync server (not the Rust API worker). */
 function isSyncPath(pathname: string): boolean {
-  const stripped = pathname.replace(/^\/api/, "") || "/";
-
-  // WebSocket sync endpoints
-  if (/^\/ns\/[^/]+\/sync\/?$/.test(stripped)) return true;
-  if (/^\/namespaces\/[^/]+\/sync\/?$/.test(stripped)) return true;
-  if (/^\/sync2\/?$/.test(stripped)) return true;
+  // WebSocket sync endpoint: /api/sync/{namespace_id}
+  if (/^\/api\/sync\/[^/]+\/?$/.test(pathname)) return true;
 
   return false;
-}
-
-function rewriteSyncPath(url: URL): string {
-  const stripped = url.pathname.replace(/^\/api/, "") || "/";
-
-  const namespaceSyncMatch = stripped.match(/^\/ns\/([^/]+)\/sync\/?$/);
-  if (namespaceSyncMatch) {
-    const namespaceId = decodeURIComponent(namespaceSyncMatch[1]);
-    return `/namespaces/${encodeURIComponent(namespaceId)}/sync`;
-  }
-
-  if (/^\/sync2\/?$/.test(stripped)) {
-    const workspaceId = url.searchParams.get("workspace_id")?.trim();
-    if (workspaceId) {
-      return `/namespaces/${encodeURIComponent(workspaceId)}/sync`;
-    }
-  }
-
-  return stripped;
 }
 
 function buildUpstreamRequest(
@@ -168,11 +145,10 @@ export default {
       return handleCdn(url, env);
     }
 
-    // Sync endpoints → proxy to native sync server
+    // Sync endpoints → proxy to native sync server (passthrough, no path rewrite)
     if (isSyncPath(url.pathname)) {
-      const upstreamPath = rewriteSyncPath(url);
       const upstreamUrl = new URL(
-        upstreamPath + url.search,
+        url.pathname + url.search,
         resolveSyncServerOrigin(env),
       );
       const upstreamRequest = buildUpstreamRequest(request, upstreamUrl);
@@ -190,10 +166,9 @@ export default {
       return env.API.fetch(request);
     }
 
-    // Fallback: proxy to native sync server (strips /api prefix)
-    const stripped = url.pathname.replace(/^\/api/, "") || "/";
+    // Fallback: proxy to native sync server (passthrough)
     const upstreamUrl = new URL(
-      stripped + url.search,
+      url.pathname + url.search,
       resolveSyncServerOrigin(env),
     );
     const upstreamRequest = buildUpstreamRequest(request, upstreamUrl);

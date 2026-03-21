@@ -5,7 +5,6 @@
 
 use axum::Router;
 use diaryx_sync::hooks::DiarySyncHook;
-use diaryx_sync::protocol::DirtyWorkspaces;
 use diaryx_sync::storage::StorageCache;
 use siphonophore::Server;
 use std::collections::HashMap;
@@ -36,7 +35,6 @@ impl SyncV2Server {
     pub fn new(repo: Arc<AuthRepo>, ns_repo: Arc<NamespaceRepo>, workspaces_dir: PathBuf) -> Self {
         let storage_cache = Arc::new(StorageCache::new(workspaces_dir));
         let session_to_namespace = Arc::new(RwLock::new(HashMap::new()));
-        let dirty_workspaces: DirtyWorkspaces = Arc::new(RwLock::new(HashMap::new()));
 
         let delegate = Arc::new(GenericNamespaceSyncHook::new(
             repo,
@@ -44,7 +42,7 @@ impl SyncV2Server {
             session_to_namespace,
         ));
 
-        let (hook, handle_cell) = DiarySyncHook::new(delegate, storage_cache, dirty_workspaces);
+        let (hook, handle_cell) = DiarySyncHook::new(delegate, storage_cache);
         let server = Server::with_hooks(vec![Box::new(hook)]);
         handle_cell.set(server.handle()).ok();
 

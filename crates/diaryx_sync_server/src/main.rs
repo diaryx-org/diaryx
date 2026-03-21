@@ -125,7 +125,7 @@ async fn main() {
 
     // Create sync server (GenericNamespaceSyncHook)
     let sync_server = SyncV2Server::new(repo.clone(), ns_repo.clone(), workspaces_dir);
-    let sync_router = sync_server.into_router_at("/namespaces/{ns_id}/sync");
+    let sync_router = sync_server.into_router_at("/sync/{namespace_id}");
 
     // Create shared rate limiter
     let rate_limiter = diaryx_sync_server::rate_limit::RateLimiter::new();
@@ -264,15 +264,12 @@ async fn main() {
         .allow_credentials(true)
         .allow_origin(AllowOrigin::list(origins));
 
-    // Build the router
-    let mut app = Router::new()
-        // Health check
-        .route("/", get(|| async { "Diaryx Sync Server" }))
-        .route("/health", get(|| async { "OK" }))
+    // Build the API router (all routes under /api for parity with Cloudflare worker)
+    let mut api = Router::new()
         // Auth routes
         .nest("/auth", auth_routes(auth_state))
         // AI routes
-        .nest("/api", ai_routes(ai_state))
+        .merge(ai_routes(ai_state))
         // Generic namespace routes
         .nest("/namespaces", namespace_routes(namespace_state))
         // Object store routes (mounted under /namespaces/{ns_id})
@@ -294,13 +291,21 @@ async fn main() {
 
     // Stripe billing routes (only if configured)
     if let Some(stripe) = stripe_router {
-        app = app.nest("/api", stripe);
+        api = api.merge(stripe);
     }
 
     // Apple IAP routes (only if configured)
     if let Some(apple) = apple_iap_router {
-        app = app.nest("/api", apple);
+        api = api.merge(apple);
     }
+
+    // Build the top-level router
+    let app = Router::new()
+        // Health check
+        .route("/", get(|| async { "Diaryx Sync Server" }))
+        .route("/health", get(|| async { "OK" }))
+        // All API routes under /api
+        .nest("/api", api);
 
     let app = app
         // Add layers

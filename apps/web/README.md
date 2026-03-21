@@ -48,8 +48,8 @@ against WASM or Tauri with the same interface.
 Browser-hosted cloud traffic now routes through the Cloudflare Worker in
 `worker/`, which serves the SPA from Workers Static Assets and handles the
 same-origin `/api/*` proxy before asset serving. The Worker keeps auth
-same-origin, normalizes the public sync URL to `/api/ns/{namespace_id}/sync`,
-and preserves the legacy `/api/sync2` compatibility path during migration.
+same-origin and proxies API requests to the backend with paths passed through
+unchanged (both the Cloudflare API worker and native sync server serve under `/api/`).
 
 Production deploys attach this Worker directly to the `app.diaryx.org` custom
 domain via Wrangler routes, disable `workers.dev`, and keep Preview URLs

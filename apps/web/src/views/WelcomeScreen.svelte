@@ -13,14 +13,17 @@
    * - bundles: Full-screen bundle picker (via "More options")
    */
   import { Button } from "$lib/components/ui/button";
-  import { ArrowLeft, LogIn, Loader2, Cloud, FolderOpen } from "@lucide/svelte";
+  import { ArrowLeft, LogIn, Loader2, Cloud, Download, Check } from "@lucide/svelte";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
   import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
   import type { BundleRegistryEntry, ThemeRegistryEntry } from "$lib/marketplace/types";
   import type { NamespaceEntry } from "$lib/auth/authService";
   import SignInForm from "$lib/components/SignInForm.svelte";
+  import AnimatedLogo from "./AnimatedLogo.svelte";
   import BundleCarousel from "./BundleCarousel.svelte";
   import { listUserWorkspaceNamespaces } from "$lib/auth/authStore.svelte";
+  import { fetchPluginRegistry, type RegistryPlugin } from "$lib/plugins/pluginRegistry";
+  import { installRegistryPlugin } from "$lib/plugins/pluginInstallService";
 
   interface Props {
     /** Called to create a local workspace (no account) */
@@ -61,6 +64,12 @@
   let loadingWorkspaces = $state(false);
   let restoringNamespace = $state<string | null>(null);
 
+  // Sync plugin install state
+  let syncPlugin = $state<RegistryPlugin | null>(null);
+  let syncPluginInstalled = $state(false);
+  let installingSyncPlugin = $state(false);
+  let syncPluginError = $state<string | null>(null);
+
   async function handleGetStarted(bundle: BundleRegistryEntry | null) {
     settingUp = true;
     try {
@@ -90,6 +99,13 @@
       workspaceNamespaces = [];
     } finally {
       loadingWorkspaces = false;
+      if (workspaceNamespaces.length === 0) {
+        // No existing workspaces — show bundle carousel so user can pick a starter
+        navigateTo('bundles');
+      } else {
+        // Workspaces found — fetch sync plugin info so we can offer installation
+        fetchSyncPlugin();
+      }
     }
   }
 
@@ -108,6 +124,29 @@
       await onSignInCreateNew();
     } catch {
       settingUp = false;
+    }
+  }
+
+  async function fetchSyncPlugin() {
+    try {
+      const registry = await fetchPluginRegistry();
+      syncPlugin = registry.plugins.find((p) => p.id === "diaryx.sync") ?? null;
+    } catch {
+      syncPlugin = null;
+    }
+  }
+
+  async function handleInstallSyncPlugin() {
+    if (!syncPlugin) return;
+    installingSyncPlugin = true;
+    syncPluginError = null;
+    try {
+      await installRegistryPlugin(syncPlugin);
+      syncPluginInstalled = true;
+    } catch (e) {
+      syncPluginError = e instanceof Error ? e.message : "Installation failed";
+    } finally {
+      installingSyncPlugin = false;
     }
   }
 
@@ -151,7 +190,9 @@
         <!-- ============ MAIN VIEW ============ -->
         <div class="w-full max-w-sm mx-auto space-y-6">
           <div class="text-center space-y-4">
-            <img src="/icon.png" alt="Diaryx" class="size-16 mx-auto fade-in" style="animation-delay: 0s" />
+            <div class="mx-auto size-16 fade-in" style="animation-delay: 0s">
+              <AnimatedLogo size={64} />
+            </div>
             <h1 class="text-3xl font-bold tracking-tight text-foreground fade-in" style="animation-delay: 0.2s">
               Welcome to Diaryx
             </h1>
@@ -247,12 +288,53 @@
               </p>
             </div>
 
+            <!-- Sync plugin install card -->
+            {#if !syncPluginInstalled}
+              <div class="rounded-lg border border-border bg-secondary/30 p-4 space-y-3 fade-in" style="animation-delay: 0.15s">
+                <div class="flex items-start gap-3">
+                  <Download class="size-5 text-primary shrink-0 mt-0.5" />
+                  <div class="space-y-1">
+                    <div class="font-medium text-sm">Sync plugin required</div>
+                    <p class="text-xs text-muted-foreground">
+                      Install the Sync plugin to restore and keep your workspaces in sync.
+                    </p>
+                  </div>
+                </div>
+                {#if syncPluginError}
+                  <p class="text-xs text-destructive">{syncPluginError}</p>
+                {/if}
+                <Button
+                  class="w-full"
+                  size="sm"
+                  disabled={!syncPlugin || installingSyncPlugin}
+                  onclick={handleInstallSyncPlugin}
+                >
+                  {#if installingSyncPlugin}
+                    <Loader2 class="size-4 animate-spin mr-2" />
+                    Installing…
+                  {:else if !syncPlugin}
+                    <Loader2 class="size-4 animate-spin mr-2" />
+                    Loading…
+                  {:else}
+                    <Download class="size-4 mr-2" />
+                    Install Sync Plugin
+                  {/if}
+                </Button>
+              </div>
+            {:else}
+              <div class="rounded-lg border border-border bg-secondary/30 p-3 flex items-center gap-2 text-sm text-muted-foreground fade-in" style="animation-delay: 0.15s">
+                <Check class="size-4 text-primary shrink-0" />
+                Sync plugin installed
+              </div>
+            {/if}
+
             <div class="space-y-2 fade-in" style="animation-delay: 0.2s">
               {#each workspaceNamespaces as ns (ns.id)}
                 <button
                   type="button"
-                  class="w-full text-left p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-secondary/50 transition-colors disabled:opacity-50"
-                  disabled={restoringNamespace !== null}
+                  class="w-full text-left p-4 rounded-lg border border-border transition-colors disabled:opacity-50
+                    {syncPluginInstalled ? 'hover:border-primary/50 hover:bg-secondary/50' : 'opacity-60 cursor-not-allowed'}"
+                  disabled={!syncPluginInstalled || restoringNamespace !== null}
                   onclick={() => handleRestoreWorkspace(ns)}
                 >
                   <div class="flex items-center gap-3">
@@ -285,32 +367,6 @@
               >
                 {settingUp ? 'Creating…' : 'Or create a new workspace'}
               </button>
-            </div>
-          {:else}
-            <!-- No existing workspaces — create first one -->
-            <div class="text-center space-y-4 fade-in" style="animation-delay: 0.1s">
-              <div class="space-y-2">
-                <h1 class="text-2xl font-bold tracking-tight text-foreground">
-                  Welcome!
-                </h1>
-                <p class="text-muted-foreground text-sm">
-                  You're signed in. Let's create your first workspace.
-                </p>
-              </div>
-
-              <Button
-                class="w-full get-started-btn"
-                disabled={settingUp}
-                onclick={handleCreateFirstWorkspace}
-              >
-                {#if settingUp}
-                  <Loader2 class="size-4 animate-spin mr-2" />
-                  Creating…
-                {:else}
-                  <FolderOpen class="size-4 mr-2" />
-                  Create workspace
-                {/if}
-              </Button>
             </div>
           {/if}
         </div>

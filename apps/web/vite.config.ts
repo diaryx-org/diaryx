@@ -38,32 +38,71 @@ const devOrigin = explicitDevOrigin
 
 const marketplaceDistDir = path.resolve(__dirname, "marketplace-dist");
 
+const CDN_ORIGIN = process.env.CDN_ORIGIN || "https://app.diaryx.org";
+
 /**
- * Serve `/cdn/*` from the local `marketplace-dist` directory during dev.
- * In production, `/cdn/*` is served from an R2 bucket by the Cloudflare Worker.
+ * Serve `/cdn/*` from the local `marketplace-dist` directory during dev,
+ * falling back to the production CDN for files not present locally (e.g.
+ * WASM plugin artifacts). Registry responses have absolute CDN URLs rewritten
+ * to relative `/cdn/` paths so the browser never makes cross-origin requests
+ * (which would be blocked by the COEP header).
  */
 function localCdnPlugin() {
   const MIME: Record<string, string> = {
     ".md": "text/markdown",
     ".json": "application/json",
     ".zip": "application/zip",
+    ".wasm": "application/wasm",
   };
+
+  /** Replace absolute CDN URLs with same-origin /cdn/ paths. */
+  function rewriteCdnUrls(content: string): string {
+    return content.replace(/https:\/\/cdn\.diaryx\.org\//g, "/cdn/");
+  }
+
   return {
     name: "local-cdn",
     configureServer(server: any) {
-      server.middlewares.use((req: any, res: any, next: any) => {
+      server.middlewares.use(async (req: any, res: any, next: any) => {
         if (!req.url?.startsWith("/cdn/")) return next();
         const relPath = req.url.slice("/cdn/".length);
         const filePath = path.join(marketplaceDistDir, relPath);
         if (!filePath.startsWith(marketplaceDistDir)) return next();
-        if (!existsSync(filePath) || !statSync(filePath).isFile()) {
-          res.statusCode = 404;
-          res.end("Not found");
+
+        // Serve from local marketplace-dist if available
+        if (existsSync(filePath) && statSync(filePath).isFile()) {
+          const ext = path.extname(filePath).toLowerCase();
+          const contentType = MIME[ext] || "application/octet-stream";
+          res.setHeader("Content-Type", contentType);
+
+          // Rewrite absolute CDN URLs in text registry files
+          if (ext === ".md" || ext === ".json") {
+            const content = readFileSync(filePath, "utf-8");
+            res.end(rewriteCdnUrls(content));
+          } else {
+            res.end(readFileSync(filePath));
+          }
           return;
         }
-        const ext = path.extname(filePath).toLowerCase();
-        res.setHeader("Content-Type", MIME[ext] || "application/octet-stream");
-        res.end(readFileSync(filePath));
+
+        // Proxy from production CDN for files not available locally
+        try {
+          const upstream = `${CDN_ORIGIN}/cdn/${relPath}`;
+          const resp = await fetch(upstream);
+          if (!resp.ok) {
+            res.statusCode = resp.status;
+            res.end(resp.statusText);
+            return;
+          }
+          const contentType =
+            resp.headers.get("content-type") || "application/octet-stream";
+          res.setHeader("Content-Type", contentType);
+          const buffer = Buffer.from(await resp.arrayBuffer());
+          res.end(buffer);
+        } catch (e: any) {
+          res.statusCode = 502;
+          res.end(`CDN proxy error: ${e.message}`);
+        }
       });
     },
   };

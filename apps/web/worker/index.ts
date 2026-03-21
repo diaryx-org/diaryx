@@ -132,6 +132,19 @@ async function handleCdn(url: URL, env: Env): Promise<Response> {
     headers: {
       "content-type": contentType,
       "cache-control": "public, max-age=3600",
+      "access-control-allow-origin": "*",
+      "cross-origin-resource-policy": "cross-origin",
+    },
+  });
+}
+
+function handleCdnCors(): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, HEAD, OPTIONS",
+      "access-control-max-age": "86400",
     },
   });
 }
@@ -149,8 +162,9 @@ export default {
       return env.ASSETS.fetch(request);
     }
 
-    // CDN requests → serve from R2 bucket
+    // CDN requests → serve from R2 bucket (public, CORS-open)
     if (url.pathname.startsWith("/cdn/")) {
+      if (request.method === "OPTIONS") return handleCdnCors();
       return handleCdn(url, env);
     }
 

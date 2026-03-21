@@ -361,7 +361,6 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/web
-          packageManager: npm
           command: deploy
 
   deploy-api:
@@ -376,19 +375,12 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install worker-build
-        run: cargo install worker-build
-
-      - name: Build API Worker
-        working-directory: crates/diaryx_cloudflare
-        run: worker-build --release
-
       - name: Install Wrangler
-        run: bun install -g wrangler@4
+        run: npm install -g wrangler@4
 
       - name: Deploy to Cloudflare
         working-directory: crates/diaryx_cloudflare
-        run: wrangler deploy --no-build
+        run: wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

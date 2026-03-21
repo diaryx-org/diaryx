@@ -1,10 +1,10 @@
 <script lang="ts">
   /**
-   * PreviewApp — lightweight themed workspace mockup for onboarding carousel.
+   * PreviewApp — themed workspace mockup for onboarding carousel.
    *
    * Mounted instead of App when `?preview` is in the URL. Renders a static
-   * workspace layout (sidebar + editor) using the bundle's theme colors.
-   * No backend, no plugins, no WASM — just themed HTML.
+   * workspace layout that closely mirrors the real app using the bundle's
+   * theme colors. No backend, no plugins, no WASM — just themed HTML.
    */
   import { onMount } from "svelte";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
@@ -86,16 +86,16 @@
     loaded = true;
   });
 
-  // Sample sidebar entries
-  const sidebarEntries = [
-    { name: "Welcome", icon: "file", active: true, indent: 0 },
-    { name: "Getting Started", icon: "file", active: false, indent: 1 },
-    { name: "Quick Tips", icon: "file", active: false, indent: 1 },
-    { name: "Journal", icon: "folder", active: false, indent: 0 },
-    { name: "Today", icon: "file", active: false, indent: 1 },
-    { name: "Ideas", icon: "folder", active: false, indent: 0 },
-    { name: "Project Notes", icon: "file", active: false, indent: 1 },
-    { name: "Reading List", icon: "file", active: false, indent: 1 },
+  // Sample sidebar tree entries
+  const treeEntries = [
+    { name: "My Workspace", depth: 0, expanded: true, isFolder: true, active: false },
+    { name: "Welcome", depth: 1, expanded: false, isFolder: false, active: true },
+    { name: "Getting Started", depth: 1, expanded: false, isFolder: false, active: false },
+    { name: "Journal", depth: 1, expanded: true, isFolder: true, active: false },
+    { name: "March 21", depth: 2, expanded: false, isFolder: false, active: false },
+    { name: "March 20", depth: 2, expanded: false, isFolder: false, active: false },
+    { name: "Ideas", depth: 1, expanded: false, isFolder: true, active: false },
+    { name: "Reading List", depth: 1, expanded: false, isFolder: false, active: false },
   ];
 </script>
 
@@ -104,55 +104,139 @@
   class:opacity-0={!loaded}
   class:opacity-100={loaded}
 >
-  <!-- Sidebar -->
-  <div class="w-56 shrink-0 flex flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-    <!-- Sidebar header -->
-    <div class="px-4 py-4 border-b border-sidebar-border bg-sidebar-accent">
-      <div class="flex items-center gap-2">
-        <div class="size-5 rounded bg-sidebar-primary opacity-80"></div>
-        <span class="text-sm font-semibold text-sidebar-foreground truncate">My Workspace</span>
+  <!-- ====== LEFT SIDEBAR ====== -->
+  <div class="sidebar-left flex flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-3 py-2.5 border-b border-sidebar-border bg-sidebar-accent">
+      <div class="flex items-center gap-1.5">
+        <span class="text-sm font-semibold text-sidebar-foreground">Diaryx</span>
+        <span class="text-[10px] text-sidebar-foreground/40">1.4</span>
       </div>
+      <!-- svelte-ignore element_invalid_self_closing_tag -->
+      <svg class="size-4 text-sidebar-foreground/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <line x1="9" y1="3" x2="9" y2="21" />
+      </svg>
     </div>
 
-    <!-- Sidebar tree -->
-    <div class="flex-1 overflow-hidden py-2">
-      {#each sidebarEntries as entry}
+    <!-- Tree view -->
+    <div class="flex-1 overflow-hidden py-1">
+      {#each treeEntries as entry}
         <div
-          class="flex items-center gap-2 px-3 py-1.5 text-xs cursor-default transition-colors
-            {entry.active ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground hover:bg-sidebar-accent/50'}"
-          style="padding-left: {12 + entry.indent * 16}px"
+          class="flex items-center gap-1 py-[3px] text-xs cursor-default select-none transition-colors
+            {entry.active ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground/80'}"
+          style="padding-left: {4 + entry.depth * 14}px; padding-right: 8px;"
         >
-          {#if entry.icon === "folder"}
-            <svg class="size-3.5 shrink-0 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          <!-- Expand/collapse chevron -->
+          {#if entry.isFolder}
+            <!-- svelte-ignore element_invalid_self_closing_tag -->
+            <svg class="size-3 shrink-0 text-sidebar-foreground/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              {#if entry.expanded}
+                <polyline points="6 9 12 15 18 9" />
+              {:else}
+                <polyline points="9 6 15 12 9 18" />
+              {/if}
             </svg>
           {:else}
-            <svg class="size-3.5 shrink-0 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <div class="size-3 shrink-0"></div>
+          {/if}
+
+          <!-- Icon -->
+          {#if entry.isFolder}
+            <!-- svelte-ignore element_invalid_self_closing_tag -->
+            <svg class="size-3.5 shrink-0 text-sidebar-foreground/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              {#if entry.expanded}
+                <path d="M5 19a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4l2 2h9a2 2 0 0 1 2 2v1M5 19h14a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2Z"/>
+              {:else}
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              {/if}
+            </svg>
+          {:else}
+            <!-- svelte-ignore element_invalid_self_closing_tag -->
+            <svg class="size-3.5 shrink-0 text-sidebar-foreground/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
               <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
             </svg>
           {/if}
+
           <span class="truncate">{entry.name}</span>
         </div>
       {/each}
     </div>
+
+    <!-- Tab bar -->
+    <div class="px-2 py-1.5 border-t border-sidebar-border">
+      <div class="flex gap-0.5 bg-muted rounded-md p-0.5">
+        <div class="flex-1 flex items-center justify-center gap-1 py-1 rounded text-[10px] font-medium bg-background text-foreground shadow-sm">
+          <!-- svelte-ignore element_invalid_self_closing_tag -->
+          <svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          Files
+        </div>
+        <div class="flex-1 flex items-center justify-center gap-1 py-1 rounded text-[10px] font-medium text-muted-foreground">
+          <!-- svelte-ignore element_invalid_self_closing_tag -->
+          <svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="5" r="3"/>
+            <circle cx="6" cy="12" r="3"/>
+            <circle cx="18" cy="19" r="3"/>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+          </svg>
+          Share
+        </div>
+        <div class="flex-1 flex items-center justify-center gap-1 py-1 rounded text-[10px] font-medium text-muted-foreground">
+          <!-- svelte-ignore element_invalid_self_closing_tag -->
+          <svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          History
+        </div>
+      </div>
+    </div>
+
+    <!-- Workspace selector -->
+    <div class="px-2 py-1.5 border-t border-sidebar-border">
+      <div class="flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-sidebar-foreground/70 cursor-default">
+        <!-- svelte-ignore element_invalid_self_closing_tag -->
+        <svg class="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+          <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+          <line x1="6" y1="6" x2="6.01" y2="6"/>
+          <line x1="6" y1="18" x2="6.01" y2="18"/>
+        </svg>
+        <span class="truncate flex-1">My Workspace</span>
+        <!-- svelte-ignore element_invalid_self_closing_tag -->
+        <svg class="size-3 shrink-0 text-sidebar-foreground/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Profile footer -->
+    <div class="px-3 py-2 border-t border-sidebar-border">
+      <div class="flex items-center gap-2 text-xs text-sidebar-foreground/60">
+        <!-- svelte-ignore element_invalid_self_closing_tag -->
+        <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="8" r="5"/>
+          <path d="M20 21a8 8 0 1 0-16 0"/>
+        </svg>
+        <span class="truncate">you@example.com</span>
+      </div>
+    </div>
   </div>
 
-  <!-- Editor area -->
+  <!-- ====== MAIN CONTENT ====== -->
   <div class="flex-1 flex flex-col min-w-0 bg-background">
-    <!-- Editor toolbar -->
-    <div class="flex items-center gap-1 px-4 py-2 border-b border-border">
-      {#each ["B", "I", "U", "H₁", "H₂", "⊞", "—"] as tool}
-        <div class="px-2 py-1 text-xs text-muted-foreground rounded hover:bg-secondary cursor-default">
-          {tool}
-        </div>
-      {/each}
-    </div>
 
     <!-- Editor content -->
     <div class="flex-1 overflow-hidden">
       <div
-        class="mx-auto px-8 py-8"
+        class="mx-auto px-6 py-6"
         style="
           max-width: var(--editor-content-max-width, 65ch);
           font-family: var(--editor-font-family);
@@ -160,14 +244,14 @@
           line-height: var(--editor-line-height, 1.6);
         "
       >
-        <h1 class="text-2xl font-bold text-foreground mb-4">Welcome to Diaryx</h1>
+        <h1 class="text-2xl font-bold text-foreground mb-4">Welcome</h1>
         <p class="text-foreground/90 mb-4">
           Your personal knowledge workspace. Write, organize, and connect your thoughts
           in a single, beautiful interface.
         </p>
         <h2 class="text-lg font-semibold text-foreground mt-6 mb-3">Getting Started</h2>
         <p class="text-foreground/80 mb-3">
-          Everything lives in a <span class="px-1.5 py-0.5 rounded text-xs font-medium bg-secondary text-secondary-foreground">tree</span> on
+          Everything lives in a tree on
           the left. Create entries, nest them, and link them together.
         </p>
         <ul class="space-y-2 mb-4">
@@ -192,20 +276,65 @@
         </p>
       </div>
     </div>
+
+    <!-- Editor footer -->
+    <div class="flex items-center justify-end gap-1.5 px-3 py-1.5 border-t border-border">
+      <div class="size-5 rounded flex items-center justify-center text-muted-foreground/50">
+        <!-- svelte-ignore element_invalid_self_closing_tag -->
+        <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+        </svg>
+      </div>
+      <div class="size-5 rounded flex items-center justify-center text-muted-foreground/50">
+        <!-- svelte-ignore element_invalid_self_closing_tag -->
+        <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+        </svg>
+      </div>
+    </div>
   </div>
 
-  <!-- Right sidebar hint -->
-  <div class="w-10 shrink-0 border-l border-border bg-background flex flex-col items-center py-3 gap-3">
-    {#each Array(4) as _}
-      <div class="size-5 rounded bg-muted"></div>
-    {/each}
+  <!-- ====== RIGHT SIDEBAR (collapsed, icon strip) ====== -->
+  <div class="sidebar-right shrink-0 border-l border-border bg-sidebar flex flex-col items-center py-2.5 gap-2">
+    <!-- svelte-ignore element_invalid_self_closing_tag -->
+    <svg class="sidebar-icon text-muted-foreground/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/>
+    </svg>
+    <!-- svelte-ignore element_invalid_self_closing_tag -->
+    <svg class="sidebar-icon text-muted-foreground/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="10"/>
+      <polyline points="12 6 12 12 16 14"/>
+    </svg>
+    <!-- svelte-ignore element_invalid_self_closing_tag -->
+    <svg class="sidebar-icon text-muted-foreground/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+    </svg>
   </div>
 </div>
 
 <style>
   .preview-root {
-    /* Ensure theme variables are inherited */
     color: var(--foreground);
     background: var(--background);
+  }
+
+  .sidebar-left {
+    width: 210px;
+    min-width: 0;
+  }
+
+  .sidebar-right {
+    width: 36px;
+  }
+
+  .sidebar-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* Scale down for small viewports (carousel iframes) */
+  @container (max-width: 500px) {
+    .sidebar-left { width: 160px; }
   }
 </style>

@@ -20,7 +20,7 @@ plugins:
     author: "Diaryx Team"
     license: "PolyForm Shield 1.0.0"
     artifact:
-      url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc.wasm"
+      url: "https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/1.2.3/abc.wasm"
       sha256: "abc"
       size: 123
       published_at: "2026-03-03T00:00:00Z"

@@ -354,7 +354,7 @@ describe("pluginInstallService", () => {
       capabilities: [],
       requested_permissions: null,
       artifact: {
-        url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.spoiler/1.0.0/plugin.wasm",
+        url: "https://app.diaryx.org/cdn/plugins/artifacts/diaryx.spoiler/1.0.0/plugin.wasm",
         sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
         size: 4,
         published_at: "2026-03-14T00:00:00Z",
@@ -362,7 +362,7 @@ describe("pluginInstallService", () => {
     });
 
     expect(proxyFetch).toHaveBeenCalledWith(
-      "https://cdn.diaryx.org/plugins/artifacts/diaryx.spoiler/1.0.0/plugin.wasm",
+      "https://app.diaryx.org/cdn/plugins/artifacts/diaryx.spoiler/1.0.0/plugin.wasm",
     );
     expect(backend.installPlugin).toHaveBeenCalledTimes(1);
   });
@@ -394,7 +394,7 @@ describe("pluginInstallService", () => {
         capabilities: [],
         requested_permissions: null,
         artifact: {
-          url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.spoiler/1.0.0/plugin.wasm",
+          url: "https://app.diaryx.org/cdn/plugins/artifacts/diaryx.spoiler/1.0.0/plugin.wasm",
           sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
           size: 4,
           published_at: "2026-03-14T00:00:00Z",

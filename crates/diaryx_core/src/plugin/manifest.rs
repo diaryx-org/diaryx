@@ -1057,7 +1057,7 @@ plugins:
     categories: ["sync", "collaboration"]
     tags: ["sync", "crdt", "realtime"]
     artifact:
-      url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc123.wasm"
+      url: "https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/1.2.3/abc123.wasm"
       sha256: "abc123"
       size: 2048000
       published_at: "2026-03-03T00:00:00Z"
@@ -1082,7 +1082,7 @@ categories: ["sync", "collaboration"]
 tags: ["sync", "crdt", "realtime"]
 capabilities: ["sync_transport", "crdt_commands"]
 artifact:
-  url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc123.wasm"
+  url: "https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/1.2.3/abc123.wasm"
   sha256: "abc123"
   size: 2048000
   published_at: "2026-03-03T00:00:00Z"

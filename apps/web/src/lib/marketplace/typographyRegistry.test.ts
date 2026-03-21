@@ -24,7 +24,7 @@ typographies:
     icon: null
     screenshots: []
     artifact:
-      url: "https://cdn.diaryx.org/typographies/artifacts/typography.editorial-serif/1.0.0/typography.json"
+      url: "https://app.diaryx.org/cdn/typographies/artifacts/typography.editorial-serif/1.0.0/typography.json"
       sha256: "abc"
       size: 128
       published_at: "2026-03-04T00:00:00Z"

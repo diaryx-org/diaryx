@@ -433,16 +433,14 @@
     launchOverlayDone = false;
   }
 
-  // Mobile spotlight actions: open/close sidebars for steps targeting elements inside them
+  // Mobile spotlight actions: open/close sidebars for steps targeting elements inside them.
+  // The spotlight SVG cutout reveals the target through the overlay — no z-index hacks needed.
   const mobileSpotlightActions: Record<string, { prepare: () => Promise<(() => void) | null> }> = {
     "workspace-tree": {
       prepare: async () => {
         uiStore.setLeftSidebarCollapsed(false);
         await new Promise(r => setTimeout(r, 350));
-        const aside = document.querySelector('[data-spotlight="workspace-tree"]')?.closest('aside');
-        if (aside) (aside as HTMLElement).style.zIndex = '10000';
         return () => {
-          if (aside) (aside as HTMLElement).style.zIndex = '';
           uiStore.setLeftSidebarCollapsed(true);
         };
       }
@@ -451,10 +449,7 @@
       prepare: async () => {
         uiStore.setLeftSidebarCollapsed(false);
         await new Promise(r => setTimeout(r, 350));
-        const aside = document.querySelector('[data-spotlight="marketplace-button"]')?.closest('aside');
-        if (aside) (aside as HTMLElement).style.zIndex = '10000';
         return () => {
-          if (aside) (aside as HTMLElement).style.zIndex = '';
           uiStore.setLeftSidebarCollapsed(true);
         };
       }
@@ -464,10 +459,7 @@
         uiStore.setLeftSidebarCollapsed(true);
         uiStore.setRightSidebarCollapsed(false);
         await new Promise(r => setTimeout(r, 350));
-        const aside = document.querySelector('[data-spotlight="properties-panel"]')?.closest('aside');
-        if (aside) (aside as HTMLElement).style.zIndex = '10000';
         return () => {
-          if (aside) (aside as HTMLElement).style.zIndex = '';
           uiStore.setRightSidebarCollapsed(true);
         };
       }

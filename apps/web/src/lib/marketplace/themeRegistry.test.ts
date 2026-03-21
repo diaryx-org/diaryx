@@ -24,7 +24,7 @@ themes:
     icon: null
     screenshots: []
     artifact:
-      url: "https://cdn.diaryx.org/themes/artifacts/theme.citrus/1.0.0/theme.json"
+      url: "https://app.diaryx.org/cdn/themes/artifacts/theme.citrus/1.0.0/theme.json"
       sha256: "abc"
       size: 123
       published_at: "2026-03-04T00:00:00Z"

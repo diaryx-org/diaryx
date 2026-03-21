@@ -67,4 +67,4 @@ runs:
             --cache-control "${CACHE_CONTROL}"
         done
 
-        echo "Upload complete: https://cdn.diaryx.org/wasm/${VERSION}/"
+        echo "Upload complete: https://app.diaryx.org/cdn/wasm/${VERSION}/"

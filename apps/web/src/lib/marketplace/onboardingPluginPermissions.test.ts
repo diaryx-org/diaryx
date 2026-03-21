@@ -43,7 +43,7 @@ function makeRegistryPlugin(
     capabilities: [],
     requested_permissions,
     artifact: {
-      url: `https://cdn.diaryx.org/plugins/${pluginId}.wasm`,
+      url: `https://app.diaryx.org/cdn/plugins/${pluginId}.wasm`,
       sha256: "abc123",
       size: 123,
       published_at: "2026-03-10T00:00:00Z",
@@ -93,7 +93,7 @@ describe("hydrateOnboardingPluginPermissionDefaults", () => {
       },
     );
 
-    expect(fetchImpl).toHaveBeenCalledWith("https://cdn.diaryx.org/plugins/diaryx.sync.wasm");
+    expect(fetchImpl).toHaveBeenCalledWith("https://app.diaryx.org/cdn/plugins/diaryx.sync.wasm");
     expect(verifyArtifact).toHaveBeenCalledWith(arrayBuffer, "abc123");
     expect(inspectPluginBytes).toHaveBeenCalledWith(arrayBuffer);
     expect(persistDefaults).toHaveBeenCalledWith("diaryx.sync", defaults);

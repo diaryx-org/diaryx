@@ -1,7 +1,7 @@
 ---
 schema_version: 2
 generated_at: '2026-03-16T22:42:06.992621+00:00'
-cdn_base: https://cdn.diaryx.org
+cdn_base: https://app.diaryx.org/cdn
 plugins:
 - id: diaryx.ai
   name: AI Assistant
@@ -21,7 +21,7 @@ plugins:
   - custom_commands
   summary: Chat assistant plugin for Diaryx.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.ai/0.1.5/diaryx_ai_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.ai/0.1.5/diaryx_ai_extism.wasm
     sha256: 1d2b6fbbd0db7508c54eb76fdba3add04bd07d7944dd0f10a2e8552564bbf6dd
     size: 447416
     published_at: '2026-03-16T18:44:25Z'
@@ -62,7 +62,7 @@ plugins:
   capabilities: []
   summary: This plugin adds audio capturing to Diaryx!
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.audio/0.1.4/diaryx_audio_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.audio/0.1.4/diaryx_audio_extism.wasm
     sha256: 91361e0ca3dadeb355e327e2090725a34b0f02283f036715dcb00aa79ca3f53c
     size: 207481
     published_at: '2026-03-16T22:28:40Z'
@@ -85,7 +85,7 @@ plugins:
   - custom_commands
   summary: Daily entry workflow and navigation.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.daily/0.1.7/diaryx_daily_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.daily/0.1.7/diaryx_daily_extism.wasm
     sha256: 3f2a6c4c2c09081e2590f4226954d2c65f2c3322471135145f46d69ed02f4942
     size: 905436
     published_at: '2026-03-16T19:41:22Z'
@@ -120,7 +120,7 @@ plugins:
   summary: This plugin lets you draw a picture in your notes using the wonderful `perfect-freehand`
     library!
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.drawing/0.1.3/diaryx_drawing_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.drawing/0.1.3/diaryx_drawing_extism.wasm
     sha256: 5ccf3025555da55353b5308b8cf0a9749dece22059e08873a0d050f627159bda
     size: 214112
     published_at: '2026-03-16T22:24:08Z'
@@ -142,7 +142,7 @@ plugins:
   capabilities: []
   summary: This plugin provides support for HEIC images in Diaryx
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.heic/0.1.0/diaryx_heic_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.heic/0.1.0/diaryx_heic_extism.wasm
     sha256: 36fab80ca1f2234105492843d630e07c48801c53cda9a16566719e4221afcd4e
     size: 165745
     published_at: '2026-03-16T22:26:14Z'
@@ -165,7 +165,7 @@ plugins:
   summary: The Diaryx Highlight plugin allows you to color up your notes with a beautiful
     palette of 10 colors.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.highlight/0.1.3/diaryx_highlight_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.highlight/0.1.3/diaryx_highlight_extism.wasm
     sha256: c1517ba53d0a9e9530fa3a8edb38b7bc232e114aeb2114b768e097495d75bc87
     size: 193826
     published_at: '2026-03-16T22:24:01Z'
@@ -187,7 +187,7 @@ plugins:
   - custom_commands
   summary: Import entries from external formats.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.import/0.1.4/diaryx_import_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.import/0.1.4/diaryx_import_extism.wasm
     sha256: 387849493b7b19851046b9e9ab7c20e7eb391f4bcf01639d0ba1c1a99f3109ae
     size: 1224198
     published_at: '2026-03-16T18:37:15Z'
@@ -227,7 +227,7 @@ plugins:
   - editor_extension
   summary: Render inline and block LaTeX.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.math/0.1.6/diaryx_math_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.math/0.1.6/diaryx_math_extism.wasm
     sha256: ee9095ffbecc850de7e192ababaebf3748667bab95060c04107893649767d0cd
     size: 425883
     published_at: '2026-03-16T18:44:31Z'
@@ -257,7 +257,7 @@ plugins:
   - custom_commands
   summary: Export and publish workspaces.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.publish/0.1.6/diaryx_publish_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.publish/0.1.6/diaryx_publish_extism.wasm
     sha256: 8d7a4490e0e489e65cbe2940ea4c9cf7423366d0f139d595d318ae3ddfb6cccb
     size: 1892377
     published_at: '2026-03-16T18:37:27Z'
@@ -294,7 +294,7 @@ plugins:
   - editor_extension
   summary: Hide inline text with spoiler markup.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.spoiler/0.1.5/diaryx_spoiler_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.spoiler/0.1.5/diaryx_spoiler_extism.wasm
     sha256: 06dca8ed4cdb01c8d7f26cf011560049a3a19ce6bb095eae199526feeaa93d84
     size: 189229
     published_at: '2026-03-16T18:36:46Z'
@@ -320,7 +320,7 @@ plugins:
   - custom_commands
   summary: Google Drive storage backend.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.storage.gdrive/0.1.0/diaryx_storage_gdrive_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.storage.gdrive/0.1.0/diaryx_storage_gdrive_extism.wasm
     sha256: d1819d2b59f9b2f7abce05b9614ca8485558869bb146e5acb03c69fc7ad06acd
     size: 362804
     published_at: '2026-03-05T01:14:10Z'
@@ -349,7 +349,7 @@ plugins:
   - custom_commands
   summary: S3-compatible storage backend.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.storage.s3/0.1.0/diaryx_storage_s3_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.storage.s3/0.1.0/diaryx_storage_s3_extism.wasm
     sha256: 49f7ba4f3fd698f87d2cc6cf2d1d045a8604d34d2c8eb7e93543c1fff62117f0
     size: 393864
     published_at: '2026-03-05T01:14:09Z'
@@ -382,7 +382,7 @@ plugins:
   - custom_commands
   summary: Realtime multi-device workspace sync.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/0.1.6/diaryx_sync_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.1.6/diaryx_sync_extism.wasm
     sha256: 99aac49823ea74190b5f2aed5f8aa3527dcd70a1124bf3be8aed6c5856a5d87d
     size: 2398613
     published_at: '2026-03-16T18:37:34Z'
@@ -427,7 +427,7 @@ plugins:
   - custom_commands
   summary: Creation-time and render-time templating.
   artifact:
-    url: https://cdn.diaryx.org/plugins/artifacts/diaryx.templating/0.1.5/diaryx_templating_extism.wasm
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.templating/0.1.5/diaryx_templating_extism.wasm
     sha256: f12d0cd5abde477855e3165383bd2a0e50ef4774fa9f929cc7e90ee1a1af1d61
     size: 1020303
     published_at: '2026-03-16T18:37:09Z'

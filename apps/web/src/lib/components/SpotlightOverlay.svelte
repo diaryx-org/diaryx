@@ -253,42 +253,7 @@
       />
     </svg>
 
-    {#if isMobileMode}
-      <!-- Mobile bottom card -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="spotlight-mobile-card"
-        role="dialog"
-        aria-label="Onboarding tour"
-        tabindex="-1"
-        ontouchstart={handleTouchStart}
-        ontouchend={handleTouchEnd}
-      >
-        <div class="space-y-2">
-          <h3 class="text-sm font-semibold text-foreground">{currentStep.title}</h3>
-          <p class="text-xs text-muted-foreground leading-relaxed">{currentStep.description}</p>
-        </div>
-
-        <div class="flex items-center justify-between mt-4">
-          <span class="text-xs text-muted-foreground/60">
-            {currentStepIndex + 1} of {steps.length}
-          </span>
-          <div class="flex items-center gap-2">
-            {#if currentStepIndex > 0}
-              <Button variant="ghost" size="sm" onclick={prev}>
-                Back
-              </Button>
-            {/if}
-            <Button variant="ghost" size="sm" onclick={() => finish()}>
-              Skip
-            </Button>
-            <Button size="sm" onclick={next}>
-              {isLastStep ? "Done" : "Next"}
-            </Button>
-          </div>
-        </div>
-      </div>
-    {:else}
+    {#if !isMobileMode}
       <!-- Desktop positioned tooltip -->
       <div
         class="spotlight-tooltip"
@@ -317,6 +282,43 @@
       </div>
     {/if}
   </div>
+
+  {#if isMobileMode}
+    <!-- Mobile bottom card — rendered outside the overlay so it's not trapped in its stacking context -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="spotlight-mobile-card"
+      role="dialog"
+      aria-label="Onboarding tour"
+      tabindex="-1"
+      ontouchstart={handleTouchStart}
+      ontouchend={handleTouchEnd}
+    >
+      <div class="space-y-2">
+        <h3 class="text-sm font-semibold text-foreground">{currentStep.title}</h3>
+        <p class="text-xs text-muted-foreground leading-relaxed">{currentStep.description}</p>
+      </div>
+
+      <div class="flex items-center justify-between mt-4">
+        <span class="text-xs text-muted-foreground/60">
+          {currentStepIndex + 1} of {steps.length}
+        </span>
+        <div class="flex items-center gap-2">
+          {#if currentStepIndex > 0}
+            <Button variant="ghost" size="sm" onclick={prev}>
+              Back
+            </Button>
+          {/if}
+          <Button variant="ghost" size="sm" onclick={() => finish()}>
+            Skip
+          </Button>
+          <Button size="sm" onclick={next}>
+            {isLastStep ? "Done" : "Next"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  {/if}
 {/if}
 
 <style>

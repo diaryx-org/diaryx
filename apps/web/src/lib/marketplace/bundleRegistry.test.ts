@@ -24,7 +24,7 @@ bundles:
     icon: null
     screenshots: []
     artifact:
-      url: "https://cdn.diaryx.org/bundles/writer-mode.json"
+      url: "https://app.diaryx.org/cdn/bundles/writer-mode.json"
       sha256: "abc"
       size: 456
       published_at: "2026-03-04T00:00:00Z"

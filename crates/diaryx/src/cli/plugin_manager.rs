@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::cli::args::PluginCommands;
 
-const REGISTRY_URL: &str = "https://cdn.diaryx.org/plugins/registry.md";
+const REGISTRY_URL: &str = "https://app.diaryx.org/cdn/plugins/registry.md";
 
 #[derive(Debug, Clone)]
 struct InstalledPlugin {
@@ -845,7 +845,8 @@ mod tests {
             author: "Diaryx Team".into(),
             license: "PolyForm Shield 1.0.0".into(),
             artifact: PluginArtifact {
-                url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc.wasm".into(),
+                url: "https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/1.2.3/abc.wasm"
+                    .into(),
                 sha256: "abc".into(),
                 size: 42,
                 published_at: "2026-03-03T00:00:00Z".into(),
@@ -883,7 +884,7 @@ plugins:
     author: "Diaryx Team"
     license: "MIT"
     artifact:
-      url: "https://cdn.diaryx.org/test.wasm"
+      url: "https://app.diaryx.org/cdn/test.wasm"
       sha256: "abc"
       size: 42
       published_at: "2026-03-03T00:00:00Z"

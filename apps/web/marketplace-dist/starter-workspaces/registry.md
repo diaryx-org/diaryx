@@ -20,7 +20,7 @@ starters:
     icon: null
     screenshots: []
     artifact:
-      url: "https://cdn.diaryx.org/starter-workspaces/artifacts/starter.getting-started/1.0.0/starter.zip"
+      url: "https://app.diaryx.org/cdn/starter-workspaces/artifacts/starter.getting-started/1.0.0/starter.zip"
       sha256: "b33b3390202cd8312dbcc9cd5b8933be3aae339b382774ad47a0db21be865bc4"
       size: 1000
       published_at: "2026-03-10T00:00:00Z"
@@ -46,7 +46,7 @@ starters:
     icon: null
     screenshots: []
     artifact:
-      url: "https://cdn.diaryx.org/starter-workspaces/artifacts/starter.minimal/1.0.0/starter.zip"
+      url: "https://app.diaryx.org/cdn/starter-workspaces/artifacts/starter.minimal/1.0.0/starter.zip"
       sha256: "951901d44321455a225b6e1daed15bd9615810d85315e242f0df13d8ca184e99"
       size: 183
       published_at: "2026-03-10T00:00:00Z"
@@ -73,7 +73,7 @@ starters:
     icon: null
     screenshots: []
     artifact:
-      url: "https://cdn.diaryx.org/starter-workspaces/artifacts/starter.journal/1.0.0/starter.zip"
+      url: "https://app.diaryx.org/cdn/starter-workspaces/artifacts/starter.journal/1.0.0/starter.zip"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size: 1509
       published_at: "2026-03-10T00:00:00Z"
@@ -100,7 +100,7 @@ starters:
     icon: null
     screenshots: []
     artifact:
-      url: "https://cdn.diaryx.org/starter-workspaces/artifacts/starter.project/1.0.0/starter.zip"
+      url: "https://app.diaryx.org/cdn/starter-workspaces/artifacts/starter.project/1.0.0/starter.zip"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size: 1728
       published_at: "2026-03-10T00:00:00Z"

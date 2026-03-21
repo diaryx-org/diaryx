@@ -575,7 +575,7 @@ mod tests {
         config.insert(
             "diaryx.ai".to_string(),
             PluginConfig {
-                download: Some("https://cdn.diaryx.org/plugins/diaryx_ai".to_string()),
+                download: Some("https://app.diaryx.org/cdn/plugins/diaryx_ai".to_string()),
                 permissions: PluginPermissions {
                     read_files: Some(PermissionRule {
                         include: vec!["[Daily](/journal/daily/daily.md)".to_string()],
@@ -679,7 +679,7 @@ mod tests {
     #[test]
     fn test_yaml_round_trip() {
         let config = PluginConfig {
-            download: Some("https://cdn.diaryx.org/plugins/diaryx_ai".to_string()),
+            download: Some("https://app.diaryx.org/cdn/plugins/diaryx_ai".to_string()),
             permissions: PluginPermissions {
                 read_files: Some(PermissionRule {
                     include: vec![

@@ -197,7 +197,7 @@
               Welcome to Diaryx
             </h1>
             <p class="text-muted-foreground text-sm fade-in" style="animation-delay: 2.2s">
-              Your personal knowledge workspace.
+              Your writing. Worth sharing.
             </p>
           </div>
 

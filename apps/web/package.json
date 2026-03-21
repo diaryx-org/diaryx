@@ -88,6 +88,6 @@
     "vite-plugin-wasm": "^3.6.0",
     "vitest": "^4.1.0",
     "wasm-pack": "^0.14.0",
-    "wrangler": "^4.75.0"
+    "wrangler": "^4.76.0"
   }
 }

@@ -1,6 +1,5 @@
 import "./app.css";
 import { mount } from "svelte";
-import App from "./App.svelte";
 
 if (import.meta.env.DEV && typeof window !== "undefined") {
   const { protocol, hostname, port, pathname, search, hash } = window.location;
@@ -14,7 +13,24 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
 const target = document.getElementById("app");
 
 if (target) {
-  // Clear the loading placeholder before mounting
   target.innerHTML = "";
-  mount(App, { target });
+
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("preview")) {
+    // Lightweight preview mode — renders a themed workspace mockup
+    // Used by the onboarding carousel via iframe
+    import("./views/PreviewApp.svelte").then(({ default: PreviewApp }) => {
+      mount(PreviewApp, {
+        target,
+        props: {
+          bundleId: params.get("bundle") ?? "bundle.default",
+          darkMode: params.get("dark") === "1",
+        },
+      });
+    });
+  } else {
+    import("./App.svelte").then(({ default: App }) => {
+      mount(App, { target });
+    });
+  }
 }

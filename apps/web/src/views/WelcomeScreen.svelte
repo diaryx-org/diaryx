@@ -13,12 +13,13 @@
    * - bundles: Full-screen bundle picker (via "More options")
    */
   import { Button } from "$lib/components/ui/button";
-  import { ArrowLeft, Package, Minus, LogIn, Loader2, Ellipsis, Cloud, FolderOpen } from "@lucide/svelte";
+  import { ArrowLeft, LogIn, Loader2, Cloud, FolderOpen } from "@lucide/svelte";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
   import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
   import type { BundleRegistryEntry, ThemeRegistryEntry } from "$lib/marketplace/types";
   import type { NamespaceEntry } from "$lib/auth/authService";
   import SignInForm from "$lib/components/SignInForm.svelte";
+  import BundleCarousel from "./BundleCarousel.svelte";
   import { listUserWorkspaceNamespaces } from "$lib/auth/authStore.svelte";
 
   interface Props {
@@ -53,7 +54,6 @@
   let bundles = $state<BundleRegistryEntry[]>([]);
   let themes = $state<ThemeRegistryEntry[]>([]);
   let loading = $state(true);
-  let selectedBundleId = $state<string>("bundle.default");
   let settingUp = $state(false);
 
   // Workspace picker state
@@ -111,17 +111,6 @@
     }
   }
 
-  let defaultBundle = $derived(
-    bundles.find((b) => b.id === "bundle.default") ?? null,
-  );
-
-  let selectedBundle = $derived(
-    bundles.find((b) => b.id === selectedBundleId) ?? null,
-  );
-
-  let themeMap = $derived(
-    new Map(themes.map((t) => [t.id, t])),
-  );
 
   $effect(() => {
     loadData();
@@ -147,14 +136,6 @@
   function navigateTo(view: WelcomeView) {
     transitionDirection = view === 'main' ? 'back' : 'forward';
     currentView = view;
-  }
-
-  function getThemeColors(themeId: string): string[] | null {
-    if (themeId === 'default') return null;
-    const theme = themeMap.get(themeId);
-    if (!theme) return null;
-    const c = theme.theme.colors.light;
-    return [c.primary, c.background, c.accent, c.muted];
   }
 
   function workspaceName(ns: NamespaceEntry): string {
@@ -200,26 +181,12 @@
               <Button
                 variant="ghost"
                 class="w-full text-muted-foreground"
-                disabled={loading || settingUp}
-                onclick={() => handleGetStarted(defaultBundle)}
+                disabled={loading}
+                onclick={() => navigateTo('bundles')}
               >
-                {#if loading || settingUp}
-                  <Loader2 class="size-4 animate-spin mr-2" />
-                {/if}
-                {settingUp ? 'Setting up…' : 'Continue without an account'}
+                Continue without an account
               </Button>
             {/if}
-          </div>
-
-          <div class="text-center fade-in" style="animation-delay: 0.7s">
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              onclick={() => navigateTo('bundles')}
-            >
-              <Ellipsis class="size-3" />
-              More options
-            </button>
           </div>
         </div>
 
@@ -349,120 +316,26 @@
         </div>
 
       {:else if currentView === 'bundles'}
-        <!-- ============ BUNDLE PICKER VIEW ============ -->
-        <div class="w-full max-w-2xl mx-auto space-y-6">
-          <div>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors fade-in"
-              onclick={() => navigateTo('main')}
-            >
-              <ArrowLeft class="size-4" />
-              Back
-            </button>
+        <!-- ============ BUNDLE CAROUSEL VIEW ============ -->
+        {#if loading}
+          <div class="flex items-center justify-center gap-2 text-sm text-muted-foreground py-20">
+            <Loader2 class="size-4 animate-spin" />
+            Loading…
           </div>
-
-          <div class="text-center space-y-2 fade-in" style="animation-delay: 0.1s">
-            <h1 class="text-2xl font-bold tracking-tight text-foreground">
-              Choose your setup
-            </h1>
-            <p class="text-muted-foreground text-sm">
-              Pick a bundle to configure your workspace with themes, plugins, and starter content.
-            </p>
-          </div>
-
-          {#if loading}
-            <div class="flex items-center justify-center gap-2 text-sm text-muted-foreground py-8 fade-in" style="animation-delay: 0.2s">
-              <Loader2 class="size-4 animate-spin" />
-              Loading bundles...
-            </div>
-          {:else}
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 fade-in" style="animation-delay: 0.2s">
-              {#each bundles as bundle (bundle.id)}
-                {@const colors = getThemeColors(bundle.theme_id)}
-                <button
-                  type="button"
-                  class="text-left p-4 rounded-lg border-2 transition-colors {selectedBundleId === bundle.id ? 'border-primary bg-secondary' : 'border-border hover:border-muted-foreground/50'}"
-                  onclick={() => { selectedBundleId = bundle.id; }}
-                >
-                  <div class="space-y-2">
-                    <!-- Theme color swatches -->
-                    {#if colors}
-                      <div class="flex gap-1.5">
-                        {#each colors as color}
-                          <span
-                            class="size-4 rounded-full border border-border/50"
-                            style="background-color: {color}"
-                          ></span>
-                        {/each}
-                      </div>
-                    {:else}
-                      <div class="flex gap-1.5">
-                        <span class="size-4 rounded-full border border-border/50 bg-foreground/10"></span>
-                        <span class="size-4 rounded-full border border-border/50 bg-primary/30"></span>
-                        <span class="size-4 rounded-full border border-border/50 bg-muted"></span>
-                      </div>
-                    {/if}
-
-                    <div>
-                      <div class="font-medium text-sm flex items-center gap-2">
-                        {#if bundle.id === 'bundle.minimal'}
-                          <Minus class="size-4 shrink-0 {selectedBundleId === bundle.id ? 'text-primary' : 'text-muted-foreground'}" />
-                        {:else}
-                          <Package class="size-4 shrink-0 {selectedBundleId === bundle.id ? 'text-primary' : 'text-muted-foreground'}" />
-                        {/if}
-                        {bundle.name}
-                        {#if bundle.id === 'bundle.default'}
-                          <span class="text-xs text-primary">Recommended</span>
-                        {/if}
-                      </div>
-                      <p class="text-xs text-muted-foreground mt-1">{bundle.summary}</p>
-                    </div>
-
-                    <div class="text-xs text-muted-foreground/60">
-                      {#if bundle.plugins.length > 0}
-                        {bundle.plugins.length} plugin{bundle.plugins.length === 1 ? '' : 's'}
-                      {:else}
-                        No plugins
-                      {/if}
-                    </div>
-                  </div>
-                </button>
-              {/each}
-            </div>
-
-            <div class="fade-in" style="animation-delay: 0.3s">
-              <Button
-                class="w-full get-started-btn"
-                disabled={settingUp}
-                onclick={() => {
-                  if (returnWorkspaceName && onCreateNewWithBundle) {
-                    handleCreateNewWithBundle(selectedBundle);
-                  } else {
-                    handleGetStarted(selectedBundle);
-                  }
-                }}
-              >
-                {#if settingUp}
-                  <Loader2 class="size-4 animate-spin mr-2" />
-                  Setting up…
-                {:else if returnWorkspaceName}
-                  {#if selectedBundle}
-                    New Workspace with {selectedBundle.name}
-                  {:else}
-                    New Workspace
-                  {/if}
-                {:else}
-                  {#if selectedBundle}
-                    Get Started with {selectedBundle.name}
-                  {:else}
-                    Get Started
-                  {/if}
-                {/if}
-              </Button>
-            </div>
-          {/if}
-        </div>
+        {:else}
+          <BundleCarousel
+            {bundles}
+            {themes}
+            onSelect={async (bundle) => {
+              if (returnWorkspaceName && onCreateNewWithBundle) {
+                await handleCreateNewWithBundle(bundle);
+              } else {
+                await handleGetStarted(bundle);
+              }
+            }}
+            onBack={() => navigateTo('main')}
+          />
+        {/if}
       {/if}
 
     </div>

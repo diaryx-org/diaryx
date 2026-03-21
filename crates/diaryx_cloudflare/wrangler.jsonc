@@ -4,7 +4,7 @@
 	"compatibility_date": "2025-03-01",
 	"main": "build/worker/shim.mjs",
 	"build": {
-		"command": "cargo install -q worker-build && worker-build --release"
+		"command": "bash build.sh"
 	},
 
 	// No public route — reached only via service binding from the web worker.

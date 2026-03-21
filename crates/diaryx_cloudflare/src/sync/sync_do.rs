@@ -155,6 +155,9 @@ impl NamespaceSyncDO {
         self.state.accept_web_socket(&server);
 
         // Attach auth metadata for hibernation persistence
+        let session_code = params.get("session_code").cloned();
+        let is_share_session = session_code.is_some();
+
         let meta = ConnectionMeta {
             user_id: user_id.clone(),
             workspace_id: workspace_id.clone(),
@@ -167,19 +170,38 @@ impl NamespaceSyncDO {
             .serialize_attachment(&meta)
             .map_err(|e| Error::from(format!("Serialize attachment: {e}")))?;
 
-        // Send file manifest
-        let manager = self.doc_manager()?;
-        let manifest_entries = manager
-            .generate_file_manifest(&workspace_id)
-            .map_err(|e| Error::from(format!("Manifest: {e}")))?;
+        if is_share_session {
+            // Share session: send manifest CRDT doc state if it exists
+            let manager = self.doc_manager()?;
+            let manifest_doc_id = format!("manifest:{}", workspace_id);
+            let manifest_key = DocType::parse(&manifest_doc_id)
+                .map(|dt| dt.storage_key())
+                .unwrap_or(manifest_doc_id);
+            if let Ok(Some(state)) = manager.load_document(&manifest_key) {
+                // Frame as v3 binary: [u16 LE: doc_id_len][doc_id][payload]
+                let doc_id_bytes = manifest_key.as_bytes();
+                let len = doc_id_bytes.len() as u16;
+                let mut frame = Vec::with_capacity(2 + doc_id_bytes.len() + state.len());
+                frame.extend_from_slice(&len.to_le_bytes());
+                frame.extend_from_slice(doc_id_bytes);
+                frame.extend_from_slice(&state);
+                server.send_with_bytes(&frame)?;
+            }
+        } else {
+            // Legacy sync: send file manifest as JSON control message
+            let manager = self.doc_manager()?;
+            let manifest_entries = manager
+                .generate_file_manifest(&workspace_id)
+                .map_err(|e| Error::from(format!("Manifest: {e}")))?;
 
-        let manifest = ServerControlMessage::FileManifest {
-            files: manifest_entries,
-            client_is_new: false,
-        };
-        let manifest_json =
-            serde_json::to_string(&manifest).map_err(|e| Error::from(e.to_string()))?;
-        server.send_with_str(&manifest_json)?;
+            let manifest = ServerControlMessage::FileManifest {
+                files: manifest_entries,
+                client_is_new: false,
+            };
+            let manifest_json =
+                serde_json::to_string(&manifest).map_err(|e| Error::from(e.to_string()))?;
+            server.send_with_str(&manifest_json)?;
+        }
 
         // Broadcast peer_joined
         let peer_count = self.state.get_websockets().len() + 1;
@@ -204,19 +226,19 @@ impl NamespaceSyncDO {
             return Ok(());
         }
 
-        // Parse doc_id from v2 framing: [u8: doc_id_len][bytes: doc_id][bytes: y-sync payload]
-        if data.is_empty() {
+        // Parse doc_id from v3 framing: [u16 LE: doc_id_len][bytes: doc_id][bytes: y-sync payload]
+        if data.len() < 2 {
             return Ok(());
         }
 
-        let doc_id_len = data[0] as usize;
-        if data.len() < 1 + doc_id_len {
+        let doc_id_len = u16::from_le_bytes([data[0], data[1]]) as usize;
+        if data.len() < 2 + doc_id_len {
             return Ok(());
         }
 
-        let doc_id = std::str::from_utf8(&data[1..1 + doc_id_len])
+        let doc_id = std::str::from_utf8(&data[2..2 + doc_id_len])
             .map_err(|e| Error::from(format!("Invalid doc_id: {e}")))?;
-        let payload = &data[1 + doc_id_len..];
+        let payload = &data[2 + doc_id_len..];
 
         let doc_type = DocType::parse(doc_id)
             .ok_or_else(|| Error::from(format!("Invalid doc_id: {}", doc_id)))?;
@@ -271,6 +293,30 @@ impl NamespaceSyncDO {
             }
             Some("focus") | Some("unfocus") => {
                 self.broadcast_text(&text, Some(ws));
+            }
+            Some("file_request") => {
+                if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
+                    let relay = ServerControlMessage::FileRequested {
+                        path: path.to_string(),
+                        requester_id: meta.user_id.clone(),
+                    };
+                    if let Ok(relay_json) = serde_json::to_string(&relay) {
+                        self.broadcast_text(&relay_json, Some(ws));
+                    }
+                }
+            }
+            Some("file_ready") => {
+                self.broadcast_text(&text, Some(ws));
+            }
+            Some("session_end") => {
+                let ended = ServerControlMessage::SessionEnded;
+                if let Ok(json) = serde_json::to_string(&ended) {
+                    self.broadcast_text(&json, Some(ws));
+                }
+                // Close all connections
+                for peer in self.state.get_websockets() {
+                    let _ = peer.close(Some(1000), Some("session ended"));
+                }
             }
             _ => {}
         }

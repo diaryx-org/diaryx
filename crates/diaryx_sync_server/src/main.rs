@@ -85,8 +85,13 @@ async fn main() {
         Ok(store) => {
             if config.is_r2_configured() {
                 info!("Blob store: R2 ({})", config.r2.bucket);
+            } else if config.blob_store_in_memory {
+                info!("Blob store: in-memory (volatile)");
             } else {
-                info!("Blob store: in-memory (R2 not configured)");
+                info!(
+                    "Blob store: local filesystem ({:?})",
+                    config.blob_store_path
+                );
             }
             store
         }

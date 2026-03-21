@@ -21,6 +21,10 @@ pub enum DocType {
         workspace_id: String,
         body_id: String,
     },
+    /// Share session manifest CRDT (manifest:<namespace_id>)
+    Manifest(String),
+    /// Share session file CRDT (file:<namespace_id>/<path>)
+    File { namespace_id: String, path: String },
 }
 
 impl DocType {
@@ -34,6 +38,14 @@ impl DocType {
                 workspace_id: workspace_id.to_string(),
                 body_id: body_id.to_string(),
             })
+        } else if let Some(namespace_id) = doc_id.strip_prefix("manifest:") {
+            Some(DocType::Manifest(namespace_id.to_string()))
+        } else if let Some(rest) = doc_id.strip_prefix("file:") {
+            let (namespace_id, path) = rest.split_once('/')?;
+            Some(DocType::File {
+                namespace_id: namespace_id.to_string(),
+                path: path.to_string(),
+            })
         } else {
             // Legacy format: just workspace_id (treat as workspace doc)
             Some(DocType::Workspace(doc_id.to_string()))
@@ -45,6 +57,8 @@ impl DocType {
         match self {
             DocType::Workspace(id) => id,
             DocType::Body { workspace_id, .. } => workspace_id,
+            DocType::Manifest(id) => id,
+            DocType::File { namespace_id, .. } => namespace_id,
         }
     }
 
@@ -56,6 +70,8 @@ impl DocType {
                 workspace_id,
                 body_id,
             } => format!("body:{}/{}", workspace_id, body_id),
+            DocType::Manifest(id) => format!("manifest:{}", id),
+            DocType::File { namespace_id, path } => format!("file:{}/{}", namespace_id, path),
         }
     }
 }
@@ -97,6 +113,8 @@ pub enum ServerControlMessage {
     SyncComplete { files_synced: usize },
     /// Focus list changed.
     FocusListChanged { files: Vec<String> },
+    /// File content requested by a peer (relayed by server with requester identity).
+    FileRequested { path: String, requester_id: String },
 }
 
 /// Control messages sent from client to server.
@@ -109,6 +127,12 @@ pub enum ClientControlMessage {
     Focus { files: Vec<String> },
     /// Client wants to unfocus files.
     Unfocus { files: Vec<String> },
+    /// Client requests a file's content be loaded into a CRDT doc.
+    FileRequest { path: String },
+    /// Client signals it has pushed initial content for a file doc.
+    FileReady { path: String },
+    /// Host signals the share session is ending.
+    SessionEnd,
 }
 
 /// State for a client connection during handshake.
@@ -223,5 +247,27 @@ mod tests {
     fn test_doc_type_parse_legacy() {
         let dt = DocType::parse("abc123").unwrap();
         assert_eq!(dt, DocType::Workspace("abc123".to_string()));
+    }
+
+    #[test]
+    fn test_doc_type_parse_manifest() {
+        let dt = DocType::parse("manifest:ns-uuid-123").unwrap();
+        assert_eq!(dt, DocType::Manifest("ns-uuid-123".to_string()));
+        assert_eq!(dt.workspace_id(), "ns-uuid-123");
+        assert_eq!(dt.storage_key(), "manifest:ns-uuid-123");
+    }
+
+    #[test]
+    fn test_doc_type_parse_file() {
+        let dt = DocType::parse("file:ns-uuid-123/notes/foo.md").unwrap();
+        assert_eq!(
+            dt,
+            DocType::File {
+                namespace_id: "ns-uuid-123".to_string(),
+                path: "notes/foo.md".to_string(),
+            }
+        );
+        assert_eq!(dt.workspace_id(), "ns-uuid-123");
+        assert_eq!(dt.storage_key(), "file:ns-uuid-123/notes/foo.md");
     }
 }

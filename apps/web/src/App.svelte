@@ -36,6 +36,7 @@
   import EditorFooter from "./views/editor/EditorFooter.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
   import WelcomeScreen from "./views/WelcomeScreen.svelte";
+  import type { BundleSelectInfo } from "./views/BundleCarousel.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
   import FindBar from "$lib/components/FindBar.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
@@ -43,7 +44,7 @@
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
-  import { PanelLeft, PanelRight, Menu } from "@lucide/svelte";
+  import { PanelLeft, PanelRight, Menu, Loader2 } from "@lucide/svelte";
   import yaml from "js-yaml";
   import { toast } from "svelte-sonner";
   import {
@@ -420,6 +421,17 @@
   /** Bundle pre-selected from welcome screen to apply when creating a new workspace via AddWorkspaceDialog */
   let addWorkspaceBundle = $state<BundleRegistryEntry | null>(null);
   let spotlightSteps = $state<SpotlightStep[] | null>(null);
+
+  // Launch zoom overlay (persists after WelcomeScreen unmounts)
+  let launchOverlay = $state<BundleSelectInfo | null>(null);
+  let launchOverlayDone = $state(false);
+
+  async function dismissLaunchOverlay() {
+    launchOverlayDone = true;
+    await new Promise((r) => setTimeout(r, 500));
+    launchOverlay = null;
+    launchOverlayDone = false;
+  }
 
   // Mobile spotlight actions: open/close sidebars for steps targeting elements inside them
   const mobileSpotlightActions: Record<string, { prepare: () => Promise<(() => void) | null> }> = {
@@ -4492,6 +4504,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   </div>
 {:else if showWelcomeScreen}
   <WelcomeScreen
+    onLaunch={(info) => { launchOverlay = info; }}
     onGetStarted={async (selectedBundle) => {
       entryStore.setLoading(true);
       try {
@@ -4503,6 +4516,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
           await openEntry(tree.path);
         }
         await runValidation();
+        await dismissLaunchOverlay();
 
         // Trigger spotlight onboarding tour if the bundle defines one
         if (selectedBundle?.spotlight?.length) {
@@ -4579,6 +4593,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
           await openEntry(tree.path);
         }
         await runValidation();
+        await dismissLaunchOverlay();
         if (bundle?.spotlight?.length) {
           await tick();
           requestAnimationFrame(() => {
@@ -4948,3 +4963,106 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   onReorderChildren={handleReorderChildren}
   onClose={() => { moveEntryDialogPath = null; }}
 />
+
+<!-- Launch zoom overlay (lives outside WelcomeScreen so it persists during transition) -->
+{#if launchOverlay?.launchRect}
+  <div
+    class="launch-overlay"
+    class:launch-done={launchOverlayDone}
+    style="
+      --start-x: {launchOverlay.launchRect.left}px;
+      --start-y: {launchOverlay.launchRect.top}px;
+      --start-w: {launchOverlay.launchRect.width}px;
+      --start-h: {launchOverlay.launchRect.height}px;
+    "
+  >
+    <div class="launch-zoom">
+      <iframe
+        src={launchOverlay.previewUrl}
+        title="Launching"
+        class="launch-iframe"
+      ></iframe>
+      <div class="launch-loading-overlay">
+        <Loader2 class="size-6 animate-spin text-muted-foreground" />
+        <span class="text-sm text-muted-foreground">Setting up your workspace…</span>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .launch-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    animation: overlayFade 0.3s ease-out forwards;
+  }
+
+  .launch-overlay.launch-done {
+    animation: launchFadeOut 0.5s ease-out forwards;
+  }
+
+  @keyframes overlayFade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes launchFadeOut {
+    from { opacity: 1; }
+    to   { opacity: 0; }
+  }
+
+  .launch-zoom {
+    position: absolute;
+    border-radius: 12px;
+    overflow: hidden;
+    left: var(--start-x);
+    top: var(--start-y);
+    width: var(--start-w);
+    height: var(--start-h);
+    animation: zoomToFull 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes zoomToFull {
+    0% {
+      left: var(--start-x);
+      top: var(--start-y);
+      width: var(--start-w);
+      height: var(--start-h);
+      border-radius: 12px;
+    }
+    100% {
+      left: 0;
+      top: 0;
+      width: 100vw;
+      height: 100vh;
+      border-radius: 0;
+    }
+  }
+
+  .launch-iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    pointer-events: none;
+  }
+
+  .launch-loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    background: color-mix(in oklch, var(--background) 70%, transparent);
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    animation: loadingFadeIn 0.4s ease-out 0.7s forwards;
+  }
+
+  @keyframes loadingFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+</style>

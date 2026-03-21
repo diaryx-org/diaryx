@@ -637,14 +637,264 @@ impl BlobStore for InMemoryBlobStore {
     }
 }
 
+/// Filesystem-backed blob store that persists blobs to a local directory.
+pub struct LocalFsBlobStore {
+    root: std::path::PathBuf,
+    multipart_dir: std::path::PathBuf,
+    prefix: String,
+}
+
+impl LocalFsBlobStore {
+    pub fn new(
+        root: impl Into<std::path::PathBuf>,
+        prefix: impl Into<String>,
+    ) -> Result<Self, ServerCoreError> {
+        let root = root.into();
+        let multipart_dir = root.join(".multipart");
+        std::fs::create_dir_all(&root)
+            .map_err(|e| internal_error(format!("Failed to create blob dir {:?}: {}", root, e)))?;
+        std::fs::create_dir_all(&multipart_dir).map_err(|e| {
+            internal_error(format!(
+                "Failed to create multipart dir {:?}: {}",
+                multipart_dir, e
+            ))
+        })?;
+        Ok(Self {
+            root,
+            multipart_dir,
+            prefix: prefix.into(),
+        })
+    }
+
+    fn key_to_path(&self, key: &str) -> std::path::PathBuf {
+        // Sanitize key: replace potentially problematic chars, keep `/` as dir separator
+        self.root.join(key)
+    }
+
+    fn multipart_session_dir(&self, multipart_id: &str) -> std::path::PathBuf {
+        self.multipart_dir.join(multipart_id)
+    }
+}
+
+#[async_trait]
+impl BlobStore for LocalFsBlobStore {
+    fn blob_key(&self, user_id: &str, hash: &str) -> String {
+        let prefix = self.prefix.trim_matches('/');
+        if prefix.is_empty() {
+            format!("u/{}/blobs/{}", user_id, hash)
+        } else {
+            format!("{}/u/{}/blobs/{}", prefix, user_id, hash)
+        }
+    }
+
+    fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    async fn put(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        _mime_type: &str,
+        _metadata: Option<&HashMap<String, String>>,
+    ) -> Result<(), ServerCoreError> {
+        let path = self.key_to_path(key);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                internal_error(format!("Failed to create dirs for {:?}: {}", path, e))
+            })?;
+        }
+        std::fs::write(&path, bytes)
+            .map_err(|e| internal_error(format!("Failed to write blob {:?}: {}", path, e)))?;
+        Ok(())
+    }
+
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ServerCoreError> {
+        let path = self.key_to_path(key);
+        match std::fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(internal_error(format!(
+                "Failed to read blob {:?}: {}",
+                path, e
+            ))),
+        }
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), ServerCoreError> {
+        let path = self.key_to_path(key);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(internal_error(format!(
+                "Failed to delete blob {:?}: {}",
+                path, e
+            ))),
+        }
+    }
+
+    async fn exists(&self, key: &str) -> Result<bool, ServerCoreError> {
+        Ok(self.key_to_path(key).exists())
+    }
+
+    async fn init_multipart(
+        &self,
+        _key: &str,
+        _mime_type: &str,
+    ) -> Result<String, ServerCoreError> {
+        let upload_id = uuid::Uuid::new_v4().to_string();
+        let session_dir = self.multipart_session_dir(&upload_id);
+        std::fs::create_dir_all(&session_dir).map_err(|e| {
+            internal_error(format!(
+                "Failed to create multipart session dir {:?}: {}",
+                session_dir, e
+            ))
+        })?;
+        Ok(upload_id)
+    }
+
+    async fn upload_part(
+        &self,
+        _key: &str,
+        multipart_id: &str,
+        part_no: u32,
+        bytes: &[u8],
+    ) -> Result<String, ServerCoreError> {
+        let part_path = self
+            .multipart_session_dir(multipart_id)
+            .join(format!("{:08}", part_no));
+        std::fs::write(&part_path, bytes).map_err(|e| {
+            internal_error(format!(
+                "Failed to write multipart part {:?}: {}",
+                part_path, e
+            ))
+        })?;
+        Ok(format!("local-etag-{}-{}", multipart_id, part_no))
+    }
+
+    async fn complete_multipart(
+        &self,
+        key: &str,
+        multipart_id: &str,
+        parts: &[MultipartCompletedPart],
+    ) -> Result<(), ServerCoreError> {
+        let session_dir = self.multipart_session_dir(multipart_id);
+        let mut ordered = parts.to_vec();
+        ordered.sort_by_key(|p| p.part_no);
+
+        let mut assembled = Vec::new();
+        for part in &ordered {
+            let part_path = session_dir.join(format!("{:08}", part.part_no));
+            let chunk = std::fs::read(&part_path).map_err(|e| {
+                internal_error(format!(
+                    "Failed to read multipart part {:?}: {}",
+                    part_path, e
+                ))
+            })?;
+            assembled.extend_from_slice(&chunk);
+        }
+
+        // Write the final blob
+        let path = self.key_to_path(key);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                internal_error(format!("Failed to create dirs for {:?}: {}", path, e))
+            })?;
+        }
+        std::fs::write(&path, &assembled).map_err(|e| {
+            internal_error(format!("Failed to write assembled blob {:?}: {}", path, e))
+        })?;
+
+        // Clean up session dir
+        let _ = std::fs::remove_dir_all(&session_dir);
+        Ok(())
+    }
+
+    async fn abort_multipart(&self, _key: &str, multipart_id: &str) -> Result<(), ServerCoreError> {
+        let session_dir = self.multipart_session_dir(multipart_id);
+        let _ = std::fs::remove_dir_all(&session_dir);
+        Ok(())
+    }
+
+    async fn get_range(
+        &self,
+        key: &str,
+        range_start: u64,
+        range_end: u64,
+    ) -> Result<Option<Vec<u8>>, ServerCoreError> {
+        let path = self.key_to_path(key);
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(internal_error(format!(
+                    "Failed to read blob {:?}: {}",
+                    path, e
+                )));
+            }
+        };
+        if bytes.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let start = (range_start.min(bytes.len() as u64 - 1)) as usize;
+        let end = (range_end.min(bytes.len() as u64 - 1)) as usize;
+        if start > end {
+            return Ok(Some(Vec::new()));
+        }
+        Ok(Some(bytes[start..=end].to_vec()))
+    }
+
+    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<String>, ServerCoreError> {
+        let search_path = self.root.join(prefix);
+        // Walk the directory that the prefix points into
+        let search_dir = if search_path.is_dir() {
+            search_path
+        } else {
+            match search_path.parent() {
+                Some(p) if p.exists() => p.to_path_buf(),
+                _ => return Ok(Vec::new()),
+            }
+        };
+
+        let mut keys = Vec::new();
+        for entry in walkdir::WalkDir::new(&search_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.file_type().is_file() {
+                if let Ok(rel) = entry.path().strip_prefix(&self.root) {
+                    let key = rel.to_string_lossy().to_string();
+                    if key.starts_with(prefix) {
+                        keys.push(key);
+                    }
+                }
+            }
+        }
+        Ok(keys)
+    }
+
+    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, ServerCoreError> {
+        let keys = self.list_by_prefix(prefix).await?;
+        let deleted = keys.len();
+        for key in &keys {
+            let path = self.key_to_path(key);
+            let _ = std::fs::remove_file(&path);
+        }
+        Ok(deleted)
+    }
+}
+
 pub async fn build_blob_store(
     config: &crate::config::Config,
 ) -> Result<Arc<dyn BlobStore>, ServerCoreError> {
     if config.is_r2_configured() {
         let store = R2BlobStore::new(&config.r2).await?;
         Ok(Arc::new(store))
-    } else {
+    } else if config.blob_store_in_memory {
         Ok(Arc::new(InMemoryBlobStore::new(config.r2.prefix.clone())))
+    } else {
+        let store = LocalFsBlobStore::new(&config.blob_store_path, config.r2.prefix.clone())?;
+        Ok(Arc::new(store))
     }
 }
 

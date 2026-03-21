@@ -35,6 +35,10 @@ pub struct Config {
     /// Whether to set the `Secure` flag on session cookies.
     /// Derived from `app_base_url`: true when it starts with `https://`.
     pub secure_cookies: bool,
+    /// Local filesystem path for blob storage (default: sibling of DATABASE_PATH)
+    pub blob_store_path: std::path::PathBuf,
+    /// Use volatile in-memory blob store instead of filesystem (BLOB_STORE_IN_MEMORY=1)
+    pub blob_store_in_memory: bool,
     /// Cloudflare KV API token for writing domain mappings
     pub kv_api_token: Option<String>,
     /// Cloudflare KV namespace ID for domain mappings
@@ -244,6 +248,23 @@ impl Config {
             }
         };
 
+        let blob_store_path = env::var("BLOB_STORE_PATH")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                database_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("blobs")
+            });
+
+        let blob_store_in_memory = env::var("BLOB_STORE_IN_MEMORY")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
         let kv_api_token = env::var("KV_API_TOKEN")
             .ok()
             .map(|v| v.trim().to_string())
@@ -267,6 +288,8 @@ impl Config {
             r2,
             token_signing_key,
             secure_cookies,
+            blob_store_path,
+            blob_store_in_memory,
             admin_secret,
             managed_ai,
             stripe,

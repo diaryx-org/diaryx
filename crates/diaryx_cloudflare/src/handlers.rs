@@ -1536,26 +1536,63 @@ pub async fn passkey_delete(req: Request, ctx: RouteContext<()>) -> Result<Respo
 // ---------------------------------------------------------------------------
 
 /// GET /api/sync/:namespace_id — Upgrade to WebSocket, forward to namespace DO.
+///
+/// Supports two auth paths:
+/// - Owner: authenticated via token, namespace ownership verified
+/// - Guest: authenticated via `?session=CODE` query param, session looked up for namespace access
 pub async fn upgrade_sync_ws(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let namespace_id = ctx
         .param("namespace_id")
         .ok_or_else(|| Error::from("missing namespace_id"))?
         .to_string();
 
-    // Authenticate
-    let user_id = authenticate(&req, &ctx).await?;
+    // Check for session-based guest access
+    let url = req.url()?;
+    let params: std::collections::HashMap<String, String> = url
+        .query_pairs()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let session_code = params.get("session").cloned();
 
-    // Verify namespace ownership
-    let ns_store = D1NamespaceStore::new(db(&ctx)?);
-    let ns = ns_store
-        .get_namespace(&namespace_id)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?
-        .ok_or_else(|| Error::from("Namespace not found"))?;
+    let (user_id, is_guest, read_only) = if let Some(ref code) = session_code {
+        // Guest path: look up session to verify access
+        let ns_store = D1NamespaceStore::new(db(&ctx)?);
+        let session_store = D1SessionStore::new(db(&ctx)?);
+        let service = SessionService::new(&ns_store, &session_store);
 
-    if ns.owner_user_id != user_id {
-        return Response::error("Forbidden", 403);
-    }
+        let session = service
+            .get(code)
+            .await
+            .map_err(|e| Error::from(e.to_string()))?;
+
+        if session.namespace_id != namespace_id {
+            return Response::error("Session does not match namespace", 403);
+        }
+
+        // Guest user_id: try to authenticate, fall back to anonymous
+        let guest_id = match authenticate(&req, &ctx).await {
+            Ok(id) => id,
+            Err(_) => format!("guest:{}", code),
+        };
+
+        (guest_id, true, session.read_only)
+    } else {
+        // Owner path: standard authentication + ownership check
+        let user_id = authenticate(&req, &ctx).await?;
+
+        let ns_store = D1NamespaceStore::new(db(&ctx)?);
+        let ns = ns_store
+            .get_namespace(&namespace_id)
+            .await
+            .map_err(|e| Error::from(e.to_string()))?
+            .ok_or_else(|| Error::from("Namespace not found"))?;
+
+        if ns.owner_user_id != user_id {
+            return Response::error("Forbidden", 403);
+        }
+
+        (user_id, false, false)
+    };
 
     // Get DO stub for this namespace
     let do_namespace = ctx.env.durable_object("NAMESPACE_SYNC")?;
@@ -1563,12 +1600,18 @@ pub async fn upgrade_sync_ws(req: Request, ctx: RouteContext<()>) -> Result<Resp
     let stub = do_id.get_stub()?;
 
     // Forward the request to the DO with auth context in query params
-    let url = req.url()?;
     let mut do_url = url.clone();
-    do_url
-        .query_pairs_mut()
-        .append_pair("user_id", &user_id)
-        .append_pair("workspace_id", &namespace_id);
+    {
+        let mut pairs = do_url.query_pairs_mut();
+        pairs
+            .append_pair("user_id", &user_id)
+            .append_pair("workspace_id", &namespace_id)
+            .append_pair("is_guest", &is_guest.to_string())
+            .append_pair("read_only", &read_only.to_string());
+        if let Some(ref code) = session_code {
+            pairs.append_pair("session_code", code);
+        }
+    }
 
     let mut do_req = Request::new(do_url.as_str(), Method::Get)?;
     // Copy the Upgrade header

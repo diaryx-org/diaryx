@@ -39,6 +39,8 @@
       bundle: BundleRegistryEntry | null,
       providerPluginId: string | null,
     ) => void | Promise<void>;
+    /** Called to show the launch zoom overlay — App.svelte owns rendering */
+    onLaunch?: (info: BundleSelectInfo) => void;
     /** When set, user navigated here from an existing workspace — show a "Return" button */
     returnWorkspaceName?: string | null;
     onReturn?: () => void;
@@ -51,6 +53,7 @@
     onSignInCreateNew,
     onRestoreWorkspace,
     onCreateWithProvider,
+    onLaunch,
     returnWorkspaceName = null,
     onReturn,
     onCreateNewWithBundle,
@@ -75,7 +78,7 @@
 
   // Deferred zoom animation state
   let launchInfo = $state<BundleSelectInfo | null>(null);
-  let launching = $state(false);
+  let fadingOut = $state(false);
 
   // Workspace picker state
   let workspaceNamespaces = $state<NamespaceEntry[]>([]);
@@ -89,9 +92,14 @@
   let providerPluginError = $state<string | null>(null);
 
   async function playZoomThen(callback: () => void | Promise<void>) {
-    if (launchInfo?.launchRect) {
-      launching = true;
-      await new Promise((r) => setTimeout(r, 600));
+    if (launchInfo) {
+      // Fade out the current view
+      fadingOut = true;
+      await new Promise((r) => setTimeout(r, 350));
+      // Tell App.svelte to show the zoom overlay
+      onLaunch?.(launchInfo);
+      // Wait for zoom animation before starting work
+      await new Promise((r) => setTimeout(r, 700));
     }
     await callback();
   }
@@ -289,7 +297,9 @@
   }
 </script>
 
-<div class="flex items-center justify-center min-h-full welcome-bg px-4 overflow-hidden select-none">
+<div class="flex items-center justify-center min-h-full welcome-bg px-4 overflow-hidden select-none"
+  class:fading-out={fadingOut}
+>
   {#key currentView}
     <div class="w-full view-content {transitionDirection === 'forward' ? 'slide-in-right' : 'slide-in-left'}">
 
@@ -585,24 +595,6 @@
   {/key}
 </div>
 
-<!-- Zoom overlay for launch animation (deferred from carousel) -->
-{#if launching && launchInfo?.launchRect}
-  <div class="launch-overlay" style="
-    --start-x: {launchInfo.launchRect.left}px;
-    --start-y: {launchInfo.launchRect.top}px;
-    --start-w: {launchInfo.launchRect.width}px;
-    --start-h: {launchInfo.launchRect.height}px;
-  ">
-    <div class="launch-zoom">
-      <iframe
-        src={launchInfo.previewUrl}
-        title="Launching"
-        class="launch-iframe"
-      ></iframe>
-    </div>
-  </div>
-{/if}
-
 <style>
   @property --orb1-x { syntax: '<percentage>'; initial-value: 20%; inherits: false; }
   @property --orb1-y { syntax: '<percentage>'; initial-value: 25%; inherits: false; }
@@ -673,46 +665,15 @@
     box-shadow: 0 4px 20px color-mix(in oklch, var(--primary) 35%, transparent);
   }
 
-  /* ---- Launch zoom animation ---- */
+  /* ---- Fade out current view before zoom ---- */
 
-  .launch-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
+  .fading-out {
+    animation: viewFadeOut 0.35s ease-in forwards;
   }
 
-  .launch-zoom {
-    position: absolute;
-    border-radius: 12px;
-    overflow: hidden;
-    left: var(--start-x);
-    top: var(--start-y);
-    width: var(--start-w);
-    height: var(--start-h);
-    animation: zoomToFull 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  @keyframes viewFadeOut {
+    from { opacity: 1; transform: scale(1); }
+    to   { opacity: 0; transform: scale(0.97); }
   }
 
-  @keyframes zoomToFull {
-    0% {
-      left: var(--start-x);
-      top: var(--start-y);
-      width: var(--start-w);
-      height: var(--start-h);
-      border-radius: 12px;
-    }
-    100% {
-      left: 0;
-      top: 0;
-      width: 100vw;
-      height: 100vh;
-      border-radius: 0;
-    }
-  }
-
-  .launch-iframe {
-    width: 100%;
-    height: 100%;
-    border: 0;
-    pointer-events: none;
-  }
 </style>

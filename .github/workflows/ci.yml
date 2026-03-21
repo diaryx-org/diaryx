@@ -344,7 +344,7 @@ jobs:
     name: Deploy Web App
     runs-on: ubuntu-latest
     needs: [web, test-web-e2e]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: ${{ always() && !failure() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -367,7 +367,7 @@ jobs:
     name: Deploy API Worker
     runs-on: ubuntu-latest
     needs: [test-server, check-cloudflare]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: ${{ always() && !failure() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

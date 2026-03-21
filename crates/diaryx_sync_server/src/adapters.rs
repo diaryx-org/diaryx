@@ -4,12 +4,13 @@ use diaryx_server::domain::{
     AudienceInfo as CoreAudienceInfo, AuthSessionInfo as CoreAuthSessionInfo,
     CustomDomainInfo as CoreCustomDomainInfo, DeviceInfo as CoreDeviceInfo,
     NamespaceInfo as CoreNamespaceInfo, NamespaceSessionInfo as CoreNamespaceSessionInfo,
-    ObjectMeta as CoreObjectMeta, UsageTotals as CoreUsageTotals, UserInfo as CoreUserInfo,
-    UserTier as CoreUserTier,
+    ObjectMeta as CoreObjectMeta, PasskeyChallengeInfo as CorePasskeyChallengeInfo,
+    PasskeyCredentialInfo as CorePasskeyCredentialInfo, UsageTotals as CoreUsageTotals,
+    UserInfo as CoreUserInfo, UserTier as CoreUserTier,
 };
 use diaryx_server::ports::{
     AuthSessionStore, AuthStore, BillingStore, DeviceStore, DomainMappingCache, MagicLinkStore,
-    NamespaceStore, ObjectMetaStore, ServerCoreError, SessionStore, UserStore,
+    NamespaceStore, ObjectMetaStore, PasskeyStore, ServerCoreError, SessionStore, UserStore,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -316,6 +317,125 @@ impl BillingStore for NativeBillingStore {
         self.repo
             .get_user_id_by_apple_transaction_id(transaction_id)
             .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+}
+
+#[derive(Clone)]
+pub struct NativePasskeyStore {
+    repo: Arc<AuthRepo>,
+}
+
+impl NativePasskeyStore {
+    pub fn new(repo: Arc<AuthRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl PasskeyStore for NativePasskeyStore {
+    async fn store_credential(
+        &self,
+        user_id: &str,
+        name: &str,
+        credential_json: &str,
+    ) -> Result<String, ServerCoreError> {
+        self.repo
+            .store_passkey_credential(user_id, name, credential_json)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn get_credentials(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<CorePasskeyCredentialInfo>, ServerCoreError> {
+        self.repo
+            .get_passkey_credentials(user_id)
+            .map(|creds| creds.into_iter().map(Into::into).collect())
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn get_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Vec<CorePasskeyCredentialInfo>, ServerCoreError> {
+        self.repo
+            .get_passkey_credentials_by_email(email)
+            .map(|creds| creds.into_iter().map(Into::into).collect())
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn update_credential(
+        &self,
+        id: &str,
+        credential_json: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .update_passkey_credential(id, credential_json)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn delete_credential(&self, id: &str, user_id: &str) -> Result<bool, ServerCoreError> {
+        self.repo
+            .delete_passkey_credential(id, user_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn store_challenge(
+        &self,
+        challenge_id: &str,
+        user_id: Option<&str>,
+        email: &str,
+        challenge_type: &str,
+        state_json: &str,
+        expires_at: i64,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .store_passkey_challenge(
+                challenge_id,
+                user_id,
+                email,
+                challenge_type,
+                state_json,
+                expires_at,
+            )
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn get_challenge(
+        &self,
+        challenge_id: &str,
+    ) -> Result<Option<CorePasskeyChallengeInfo>, ServerCoreError> {
+        self.repo
+            .get_passkey_challenge(challenge_id)
+            .map(|opt| opt.map(Into::into))
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+}
+
+impl From<crate::db::PasskeyCredentialInfo> for CorePasskeyCredentialInfo {
+    fn from(value: crate::db::PasskeyCredentialInfo) -> Self {
+        Self {
+            id: value.id,
+            user_id: value.user_id,
+            name: value.name,
+            credential_json: value.credential_json,
+            created_at: value.created_at,
+            last_used_at: value.last_used_at,
+        }
+    }
+}
+
+impl From<crate::db::PasskeyChallengeInfo> for CorePasskeyChallengeInfo {
+    fn from(value: crate::db::PasskeyChallengeInfo) -> Self {
+        Self {
+            challenge_id: value.challenge_id,
+            user_id: value.user_id,
+            email: value.email,
+            challenge_type: value.challenge_type,
+            state_json: value.state_json,
+            expires_at: value.expires_at,
+            created_at: value.created_at,
+        }
     }
 }
 

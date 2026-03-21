@@ -78,6 +78,25 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/auth/magic-link", handlers::request_magic_link)
         .get_async("/api/auth/verify", handlers::verify_magic_link)
         .post_async("/api/auth/verify-code", handlers::verify_code)
+        // Passkeys
+        .post_async(
+            "/api/auth/passkeys/register/start",
+            handlers::passkey_register_start,
+        )
+        .post_async(
+            "/api/auth/passkeys/register/finish",
+            handlers::passkey_register_finish,
+        )
+        .post_async(
+            "/api/auth/passkeys/authenticate/start",
+            handlers::passkey_auth_start,
+        )
+        .post_async(
+            "/api/auth/passkeys/authenticate/finish",
+            handlers::passkey_auth_finish,
+        )
+        .get_async("/api/auth/passkeys", handlers::passkey_list)
+        .delete_async("/api/auth/passkeys/:id", handlers::passkey_delete)
         // Usage
         .get_async("/api/usage", handlers::get_usage)
         // Stripe billing

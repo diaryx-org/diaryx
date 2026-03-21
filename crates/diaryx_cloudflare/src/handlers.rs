@@ -11,6 +11,10 @@ use diaryx_server::api::billing::{
 use diaryx_server::api::namespaces::{
     CreateNamespaceRequest, NamespaceResponse, UpdateNamespaceRequest,
 };
+use diaryx_server::api::passkeys::{
+    PasskeyAuthFinishRequest, PasskeyAuthStartRequest, PasskeyAuthStartResponse,
+    PasskeyRegisterFinishRequest, PasskeyRegisterFinishResponse, PasskeyRegisterStartResponse,
+};
 use diaryx_server::ports::{AuthStore, Mailer, NamespaceStore, ServerCoreError, UserStore};
 use diaryx_server::use_cases::auth::{
     AuthConfig, AuthError, AuthenticationService, SessionValidationService, extract_token,
@@ -1357,6 +1361,172 @@ pub async fn set_tier(mut req: Request, ctx: RouteContext<()>) -> Result<Respons
         Ok(()) => Response::from_json(&serde_json::json!({
             "tier": tier.as_str(),
         })),
+        Err(e) => error_response(e),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Passkey handlers
+// ---------------------------------------------------------------------------
+
+use diaryx_server::use_cases::passkeys::PasskeyService;
+
+fn rp_id(ctx: &RouteContext<()>) -> String {
+    let app_url = config::app_base_url(&ctx.env);
+    url::Url::parse(&app_url)
+        .ok()
+        .and_then(|u| u.host_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "app.diaryx.org".to_string())
+}
+
+/// POST /api/auth/passkeys/register/start (authenticated)
+pub async fn passkey_register_start(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = authenticate(&req, &ctx).await?;
+
+    let auth_store = D1AuthStore::new(db(&ctx)?);
+    let user_info = auth_store
+        .get_user(&user_id)
+        .await
+        .map_err(|e| Error::from(e.to_string()))?
+        .ok_or_else(|| Error::from("User not found"))?;
+
+    let passkey_store = D1PasskeyStore::new(db(&ctx)?);
+    let service = PasskeyService::new(&passkey_store, &rp_id(&ctx));
+
+    match service.start_registration(&user_id, &user_info.email).await {
+        Ok((challenge_id, options)) => Response::from_json(&PasskeyRegisterStartResponse {
+            challenge_id,
+            options,
+        }),
+        Err(e) => error_response(e),
+    }
+}
+
+/// POST /api/auth/passkeys/register/finish (authenticated)
+pub async fn passkey_register_finish(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = authenticate(&req, &ctx).await?;
+    let body: PasskeyRegisterFinishRequest = req.json().await?;
+
+    let passkey_store = D1PasskeyStore::new(db(&ctx)?);
+    let service = PasskeyService::new(&passkey_store, &rp_id(&ctx));
+
+    let credential_bytes =
+        serde_json::to_vec(&body.credential).map_err(|e| Error::from(e.to_string()))?;
+
+    match service
+        .finish_registration(&body.challenge_id, &user_id, &body.name, &credential_bytes)
+        .await
+    {
+        Ok(id) => Response::from_json(&PasskeyRegisterFinishResponse { id }),
+        Err(e) => error_response(e),
+    }
+}
+
+/// POST /api/auth/passkeys/authenticate/start (public)
+pub async fn passkey_auth_start(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let body: PasskeyAuthStartRequest = req.json().await?;
+
+    let email = body
+        .email
+        .as_deref()
+        .map(|e| e.trim())
+        .filter(|e| !e.is_empty())
+        .map(|e| e.to_lowercase());
+
+    let passkey_store = D1PasskeyStore::new(db(&ctx)?);
+    let service = PasskeyService::new(&passkey_store, &rp_id(&ctx));
+
+    match service.start_authentication(email.as_deref()).await {
+        Ok((challenge_id, options)) => Response::from_json(&PasskeyAuthStartResponse {
+            challenge_id,
+            options,
+        }),
+        Err(e) => error_response(e),
+    }
+}
+
+/// POST /api/auth/passkeys/authenticate/finish (public)
+pub async fn passkey_auth_finish(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let body: PasskeyAuthFinishRequest = req.json().await?;
+
+    let passkey_store = D1PasskeyStore::new(db(&ctx)?);
+    let service = PasskeyService::new(&passkey_store, &rp_id(&ctx));
+
+    let credential_bytes =
+        serde_json::to_vec(&body.credential).map_err(|e| Error::from(e.to_string()))?;
+
+    let auth_result = match service
+        .finish_authentication(&body.challenge_id, &credential_bytes)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return error_response(e),
+    };
+
+    // Create session for the authenticated user
+    let ml_store = D1MagicLinkStore::new(db(&ctx)?);
+    let user_store = D1UserStore::new(db(&ctx)?);
+    let device_store = D1DeviceStore::new(db(&ctx)?);
+    let session_store = D1AuthSessionStore::new(db(&ctx)?);
+    let cfg = auth_cfg(&ctx);
+
+    let auth_service =
+        AuthenticationService::new(&ml_store, &user_store, &device_store, &session_store, &cfg);
+
+    match auth_service
+        .create_session_for_email(
+            &auth_result.email,
+            body.device_name.as_deref(),
+            None,
+            body.replace_device_id.as_deref(),
+        )
+        .await
+    {
+        Ok(result) => {
+            let cookie = set_session_cookie(&result.session_token, &ctx.env);
+            let mut resp = Response::from_json(&serde_json::json!({
+                "success": true,
+                "token": result.session_token,
+                "user": { "id": result.user_id, "email": result.email },
+            }))?;
+            resp.headers_mut().set("Set-Cookie", &cookie)?;
+            Ok(resp)
+        }
+        Err(AuthError::DeviceLimitReached { devices, .. }) => {
+            Response::from_json(&serde_json::json!({
+                "error": "Device limit reached. Remove a device to sign in on a new one.",
+                "devices": devices,
+            }))
+            .map(|r| r.with_status(403))
+        }
+        Err(e) => Response::from_json(&serde_json::json!({ "error": e.to_string() }))
+            .map(|r| r.with_status(400)),
+    }
+}
+
+/// GET /api/auth/passkeys (authenticated) — list user's passkeys
+pub async fn passkey_list(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = authenticate(&req, &ctx).await?;
+    let passkey_store = D1PasskeyStore::new(db(&ctx)?);
+    let service = PasskeyService::new(&passkey_store, &rp_id(&ctx));
+
+    match service.list_passkeys(&user_id).await {
+        Ok(items) => Response::from_json(&items),
+        Err(e) => error_response(e),
+    }
+}
+
+/// DELETE /api/auth/passkeys/:id (authenticated)
+pub async fn passkey_delete(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = authenticate(&req, &ctx).await?;
+    let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
+
+    let passkey_store = D1PasskeyStore::new(db(&ctx)?);
+    let service = PasskeyService::new(&passkey_store, &rp_id(&ctx));
+
+    match service.delete_passkey(id, &user_id).await {
+        Ok(true) => Response::empty().map(|r| r.with_status(204)),
+        Ok(false) => Response::empty().map(|r| r.with_status(404)),
         Err(e) => error_response(e),
     }
 }

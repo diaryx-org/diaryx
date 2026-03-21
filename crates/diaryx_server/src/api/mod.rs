@@ -6,3 +6,4 @@
 
 pub mod billing;
 pub mod namespaces;
+pub mod passkeys;

@@ -1,6 +1,7 @@
 use crate::domain::{
     AudienceInfo, AuthSessionInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo,
-    NamespaceSessionInfo, ObjectMeta, UsageTotals, UserInfo, UserTier,
+    NamespaceSessionInfo, ObjectMeta, PasskeyChallengeInfo, PasskeyCredentialInfo, UsageTotals,
+    UserInfo, UserTier,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -397,6 +398,53 @@ pub trait BillingProvider: Send + Sync {
 
 pub trait AppleReceiptVerifier: Send + Sync {
     async fn verify_transaction(&self, signed_payload: &str) -> Result<Value, ServerCoreError>;
+}
+
+pub trait PasskeyStore: Send + Sync {
+    /// Store a passkey credential. Returns the credential ID.
+    async fn store_credential(
+        &self,
+        user_id: &str,
+        name: &str,
+        credential_json: &str,
+    ) -> Result<String, ServerCoreError>;
+    /// Get all passkey credentials for a user.
+    async fn get_credentials(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<PasskeyCredentialInfo>, ServerCoreError>;
+    /// Get passkey credentials by email (joins with users table).
+    async fn get_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Vec<PasskeyCredentialInfo>, ServerCoreError>;
+    /// Update a credential's JSON and last_used_at.
+    async fn update_credential(
+        &self,
+        id: &str,
+        credential_json: &str,
+    ) -> Result<(), ServerCoreError>;
+    /// Delete a passkey credential (must be owned by user_id).
+    async fn delete_credential(
+        &self,
+        id: &str,
+        user_id: &str,
+    ) -> Result<bool, ServerCoreError>;
+    /// Store an ephemeral passkey challenge (one-time use).
+    async fn store_challenge(
+        &self,
+        challenge_id: &str,
+        user_id: Option<&str>,
+        email: &str,
+        challenge_type: &str,
+        state_json: &str,
+        expires_at: i64,
+    ) -> Result<(), ServerCoreError>;
+    /// Retrieve and consume a passkey challenge (one-time use).
+    async fn get_challenge(
+        &self,
+        challenge_id: &str,
+    ) -> Result<Option<PasskeyChallengeInfo>, ServerCoreError>;
 }
 
 pub trait BillingStore: Send + Sync {

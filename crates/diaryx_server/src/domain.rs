@@ -164,6 +164,41 @@ pub struct PublicObjectAccess {
     pub audience_name: String,
 }
 
+/// Registered passkey credential.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasskeyCredentialInfo {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    /// Serialised credential (webauthn-rs `Passkey` JSON or equivalent).
+    pub credential_json: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+/// Ephemeral passkey challenge state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasskeyChallengeInfo {
+    pub challenge_id: String,
+    pub user_id: Option<String>,
+    pub email: String,
+    /// "registration", "authentication", or "discoverable_authentication"
+    pub challenge_type: String,
+    /// Serialised challenge state (webauthn-rs state JSON or equivalent).
+    pub state_json: String,
+    pub expires_at: i64,
+    pub created_at: i64,
+}
+
+/// Info about a registered passkey (for listing in UI).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasskeyInfo {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
 /// Portable result of "load current user context".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurrentUserContext {

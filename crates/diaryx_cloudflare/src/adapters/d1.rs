@@ -1270,6 +1270,226 @@ impl DeviceStore for D1DeviceStore {
 }
 
 // ---------------------------------------------------------------------------
+// PasskeyStore
+// ---------------------------------------------------------------------------
+
+pub struct D1PasskeyStore {
+    db: D1Database,
+}
+
+impl D1PasskeyStore {
+    pub fn new(db: D1Database) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait(?Send)]
+impl PasskeyStore for D1PasskeyStore {
+    async fn store_credential(
+        &self,
+        user_id: &str,
+        name: &str,
+        credential_json: &str,
+    ) -> Result<String, ServerCoreError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp();
+        self.db
+            .prepare(
+                "INSERT INTO passkey_credentials (id, user_id, name, credential_json, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .bind(&[
+                id.as_str().into(),
+                user_id.into(),
+                name.into(),
+                credential_json.into(),
+                ts(now),
+            ])
+            .map_err(e)?
+            .run()
+            .await
+            .map_err(e)?;
+        Ok(id)
+    }
+
+    async fn get_credentials(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<PasskeyCredentialInfo>, ServerCoreError> {
+        let results = self
+            .db
+            .prepare(
+                "SELECT id, user_id, name, credential_json, created_at, last_used_at \
+                 FROM passkey_credentials WHERE user_id = ?1 ORDER BY created_at DESC",
+            )
+            .bind(&[user_id.into()])
+            .map_err(e)?
+            .all()
+            .await
+            .map_err(e)?;
+
+        let rows: Vec<serde_json::Value> = results.results().map_err(e)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| PasskeyCredentialInfo {
+                id: row["id"].as_str().unwrap_or_default().to_string(),
+                user_id: row["user_id"].as_str().unwrap_or_default().to_string(),
+                name: row["name"].as_str().unwrap_or_default().to_string(),
+                credential_json: row["credential_json"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                created_at: row["created_at"].as_i64().unwrap_or_default(),
+                last_used_at: row["last_used_at"].as_i64(),
+            })
+            .collect())
+    }
+
+    async fn get_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Vec<PasskeyCredentialInfo>, ServerCoreError> {
+        let results = self
+            .db
+            .prepare(
+                "SELECT pc.id, pc.user_id, pc.name, pc.credential_json, pc.created_at, pc.last_used_at \
+                 FROM passkey_credentials pc \
+                 JOIN users u ON u.id = pc.user_id \
+                 WHERE u.email = ?1 \
+                 ORDER BY pc.created_at DESC",
+            )
+            .bind(&[email.into()])
+            .map_err(e)?
+            .all()
+            .await
+            .map_err(e)?;
+
+        let rows: Vec<serde_json::Value> = results.results().map_err(e)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| PasskeyCredentialInfo {
+                id: row["id"].as_str().unwrap_or_default().to_string(),
+                user_id: row["user_id"].as_str().unwrap_or_default().to_string(),
+                name: row["name"].as_str().unwrap_or_default().to_string(),
+                credential_json: row["credential_json"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                created_at: row["created_at"].as_i64().unwrap_or_default(),
+                last_used_at: row["last_used_at"].as_i64(),
+            })
+            .collect())
+    }
+
+    async fn update_credential(
+        &self,
+        id: &str,
+        credential_json: &str,
+    ) -> Result<(), ServerCoreError> {
+        let now = chrono::Utc::now().timestamp();
+        self.db
+            .prepare(
+                "UPDATE passkey_credentials SET credential_json = ?1, last_used_at = ?2 WHERE id = ?3",
+            )
+            .bind(&[credential_json.into(), ts(now), id.into()])
+            .map_err(e)?
+            .run()
+            .await
+            .map_err(e)?;
+        Ok(())
+    }
+
+    async fn delete_credential(&self, id: &str, user_id: &str) -> Result<bool, ServerCoreError> {
+        self.db
+            .prepare("DELETE FROM passkey_credentials WHERE id = ?1 AND user_id = ?2")
+            .bind(&[id.into(), user_id.into()])
+            .map_err(e)?
+            .run()
+            .await
+            .map_err(e)?;
+        Ok(true)
+    }
+
+    async fn store_challenge(
+        &self,
+        challenge_id: &str,
+        user_id: Option<&str>,
+        email: &str,
+        challenge_type: &str,
+        state_json: &str,
+        expires_at: i64,
+    ) -> Result<(), ServerCoreError> {
+        let now = chrono::Utc::now().timestamp();
+        self.db
+            .prepare(
+                "INSERT INTO passkey_challenges \
+                 (challenge_id, user_id, email, challenge_type, state_json, expires_at, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )
+            .bind(&[
+                challenge_id.into(),
+                user_id
+                    .map(|s| s.into())
+                    .unwrap_or(worker::wasm_bindgen::JsValue::NULL),
+                email.into(),
+                challenge_type.into(),
+                state_json.into(),
+                ts(expires_at),
+                ts(now),
+            ])
+            .map_err(e)?
+            .run()
+            .await
+            .map_err(e)?;
+        Ok(())
+    }
+
+    async fn get_challenge(
+        &self,
+        challenge_id: &str,
+    ) -> Result<Option<PasskeyChallengeInfo>, ServerCoreError> {
+        let now = chrono::Utc::now().timestamp();
+        let result = self
+            .db
+            .prepare(
+                "SELECT challenge_id, user_id, email, challenge_type, state_json, expires_at, created_at \
+                 FROM passkey_challenges WHERE challenge_id = ?1 AND expires_at > ?2",
+            )
+            .bind(&[challenge_id.into(), ts(now)])
+            .map_err(e)?
+            .first::<serde_json::Value>(None)
+            .await
+            .map_err(e)?;
+
+        if let Some(row) = result {
+            // Consume the challenge (one-time use)
+            self.db
+                .prepare("DELETE FROM passkey_challenges WHERE challenge_id = ?1")
+                .bind(&[challenge_id.into()])
+                .map_err(e)?
+                .run()
+                .await
+                .map_err(e)?;
+
+            Ok(Some(PasskeyChallengeInfo {
+                challenge_id: row["challenge_id"].as_str().unwrap_or_default().to_string(),
+                user_id: row["user_id"].as_str().map(|s| s.to_string()),
+                email: row["email"].as_str().unwrap_or_default().to_string(),
+                challenge_type: row["challenge_type"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                state_json: row["state_json"].as_str().unwrap_or_default().to_string(),
+                expires_at: row["expires_at"].as_i64().unwrap_or_default(),
+                created_at: row["created_at"].as_i64().unwrap_or_default(),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

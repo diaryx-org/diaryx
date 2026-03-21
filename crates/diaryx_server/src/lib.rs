@@ -31,12 +31,12 @@ pub mod use_cases;
 
 pub use domain::{
     AudienceInfo, AuthContext, AuthSessionInfo, CurrentUserContext, CustomDomainInfo, DeviceInfo,
-    NamespaceInfo, NamespaceSessionInfo, ObjectMeta, PublicObjectAccess, TierDefaults, UsageTotals,
-    UserInfo, UserTier,
+    NamespaceInfo, NamespaceSessionInfo, ObjectMeta, PasskeyChallengeInfo, PasskeyCredentialInfo,
+    PasskeyInfo, PublicObjectAccess, TierDefaults, UsageTotals, UserInfo, UserTier,
 };
 pub use ports::{
     AiProvider, AppleReceiptVerifier, AuthSessionStore, AuthStore, BillingProvider, BillingStore,
     BlobStore, Clock, DeviceStore, DomainMappingCache, JobSink, MagicLinkStore, Mailer,
-    MultipartCompletedPart, NamespaceStore, ObjectMetaStore, RateLimitStore, ServerCoreError,
-    SessionStore, TokenClaims, TokenSigner, UserStore,
+    MultipartCompletedPart, NamespaceStore, ObjectMetaStore, PasskeyStore, RateLimitStore,
+    ServerCoreError, SessionStore, TokenClaims, TokenSigner, UserStore,
 };

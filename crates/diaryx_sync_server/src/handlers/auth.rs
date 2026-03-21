@@ -623,11 +623,10 @@ async fn delete_account(
 
 // ===== Passkey handlers =====
 
-#[derive(Debug, Serialize)]
-struct PasskeyRegisterStartResponse {
-    challenge_id: String,
-    options: serde_json::Value,
-}
+use diaryx_server::api::passkeys::{
+    PasskeyAuthFinishRequest, PasskeyAuthStartRequest, PasskeyAuthStartResponse, PasskeyListItem,
+    PasskeyRegisterFinishRequest, PasskeyRegisterFinishResponse, PasskeyRegisterStartResponse,
+};
 
 /// POST /auth/passkeys/register/start (RequireAuth)
 async fn passkey_register_start(
@@ -658,18 +657,6 @@ async fn passkey_register_start(
                 .into_response()
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct PasskeyRegisterFinishRequest {
-    challenge_id: String,
-    name: String,
-    credential: serde_json::Value,
-}
-
-#[derive(Debug, Serialize)]
-struct PasskeyRegisterFinishResponse {
-    id: String,
 }
 
 /// POST /auth/passkeys/register/finish (RequireAuth)
@@ -718,17 +705,6 @@ async fn passkey_register_finish(
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct PasskeyAuthStartRequest {
-    email: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct PasskeyAuthStartResponse {
-    challenge_id: String,
-    options: serde_json::Value,
-}
-
 /// POST /auth/passkeys/authenticate/start (public)
 async fn passkey_auth_start(
     State(state): State<AuthState>,
@@ -773,14 +749,6 @@ async fn passkey_auth_start(
                 .into_response()
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct PasskeyAuthFinishRequest {
-    challenge_id: String,
-    credential: serde_json::Value,
-    device_name: Option<String>,
-    replace_device_id: Option<String>,
 }
 
 /// POST /auth/passkeys/authenticate/finish (public) → VerifyResponse
@@ -866,14 +834,6 @@ async fn passkey_auth_finish(
                 .into_response()
         }
     }
-}
-
-#[derive(Debug, Serialize)]
-struct PasskeyListItem {
-    id: String,
-    name: String,
-    created_at: i64,
-    last_used_at: Option<i64>,
 }
 
 /// GET /auth/passkeys (RequireAuth) — list user's passkeys

@@ -15,7 +15,7 @@ bundles:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/bundles/artifacts/bundle.default/1.0.0/bundle.json"
+      url: "https://cdn.diaryx.org/bundles/artifacts/bundle.default/1.0.0/bundle.json"
       sha256: "982f1af669e2a20a503a4ac8ff0f12a9dc3365935efaafa95dcbf7bd9014d1e0"
       size: 1020
       published_at: "2026-03-10T00:00:00Z"
@@ -77,7 +77,7 @@ bundles:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/bundles/artifacts/bundle.minimal/1.0.0/bundle.json"
+      url: "https://cdn.diaryx.org/bundles/artifacts/bundle.minimal/1.0.0/bundle.json"
       sha256: "57a87fb062674ff40e7edf0054ba554468035648a675cc3849eb22745f646470"
       size: 370
       published_at: "2026-03-10T00:00:00Z"
@@ -100,7 +100,7 @@ bundles:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/bundles/artifacts/bundle.writer-focus/1.0.0/bundle.json"
+      url: "https://cdn.diaryx.org/bundles/artifacts/bundle.writer-focus/1.0.0/bundle.json"
       sha256: "97ebc5962f3aea03da53fa6ccc143a910679e38dd8a4c1ac6a1b4dad13fc57b8"
       size: 606
       published_at: "2026-03-04T23:45:00Z"
@@ -130,7 +130,7 @@ bundles:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/bundles/artifacts/bundle.night-ops/1.0.0/bundle.json"
+      url: "https://cdn.diaryx.org/bundles/artifacts/bundle.night-ops/1.0.0/bundle.json"
       sha256: "27ab6993ec8d22f81c6f2e1fd3ae91cb180f79535c172c629ade68de372359cc"
       size: 623
       published_at: "2026-03-04T23:45:00Z"
@@ -161,7 +161,7 @@ bundles:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/bundles/artifacts/bundle.bright-studio/1.0.0/bundle.json"
+      url: "https://cdn.diaryx.org/bundles/artifacts/bundle.bright-studio/1.0.0/bundle.json"
       sha256: "8e9324eb5be0e9934c7a412db167e9331804046d6a868f7c8803cc50903635f7"
       size: 718
       published_at: "2026-03-04T23:45:00Z"

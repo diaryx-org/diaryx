@@ -1,6 +1,6 @@
 ---
 schema_version: 2
-generated_at: '2026-03-16T22:42:06.992621+00:00'
+generated_at: '2026-03-21T22:45:32.562197+00:00'
 cdn_base: https://app.diaryx.org/cdn
 plugins:
 - id: diaryx.ai
@@ -40,12 +40,22 @@ plugins:
       http_requests:
         include:
         - openrouter.ai
+      read_files:
+        include:
+        - all
+      edit_files:
+        include:
+        - all
       plugin_storage:
         include:
         - all
     reasons:
       http_requests: Send chat requests to the configured OpenAI-compatible API endpoint.
       plugin_storage: Persist conversation history and plugin settings between sessions.
+      read_files: Read existing conversation files so AI chat saves preserve Diaryx
+        frontmatter and hierarchy metadata.
+      edit_files: Update the selected workspace conversation file with the latest
+        chat transcript.
 - id: diaryx.audio
   name: Audio
   version: 0.1.4
@@ -102,6 +112,27 @@ plugins:
   cli:
   - name: daily
     about: Daily entry commands
+  requested_permissions:
+    defaults:
+      read_files:
+        include:
+        - all
+      edit_files:
+        include:
+        - all
+      create_files:
+        include:
+        - all
+      plugin_storage:
+        include:
+        - all
+    reasons:
+      read_files: Read daily entries, index files, and optional templates from the
+        workspace.
+      edit_files: Update existing year, month, and daily entry files when navigating
+        and organizing the daily hierarchy.
+      create_files: Create missing year, month, and daily entry files for new dates.
+      plugin_storage: Persist daily plugin configuration for the current workspace.
 - id: diaryx.drawing
   name: Drawing
   version: 0.1.3
@@ -191,6 +222,10 @@ plugins:
     sha256: 387849493b7b19851046b9e9ab7c20e7eb391f4bcf01639d0ba1c1a99f3109ae
     size: 1224198
     published_at: '2026-03-16T18:37:15Z'
+  ui:
+  - slot: SettingsTab
+    id: import-settings
+    label: Import
   cli:
   - name: import
     about: Import entries from external formats
@@ -276,6 +311,96 @@ plugins:
     about: Publish workspace as HTML
   - name: preview
     about: Preview published workspace
+  requested_permissions:
+    defaults:
+      read_files:
+        include:
+        - all
+      edit_files:
+        include:
+        - all
+      create_files:
+        include:
+        - all
+      http_requests:
+        include:
+        - unpkg.com
+      plugin_storage:
+        include:
+        - all
+    reasons:
+      read_files: Read workspace entries and attachments while building export output.
+      edit_files: Update generated publish artifacts during export and preview workflows.
+      create_files: Create exported HTML, assets, and converted output files.
+      http_requests: Download optional converter WASM modules used for format conversion.
+      plugin_storage: Cache downloaded converter modules between runs.
+- id: diaryx.share
+  name: Live Share
+  version: 0.2.0
+  description: Real-time guest sharing for Diaryx workspaces
+  author: Diaryx Team
+  license: PolyForm Shield 1.0.0
+  repository: https://github.com/diaryx-org/plugin-share
+  categories:
+  - collaboration
+  tags:
+  - share
+  - realtime
+  - guest
+  capabilities:
+  - workspace_events
+  - file_events
+  - sync_transport
+  - custom_commands
+  summary: Realtime live sharing for Diaryx workspaces, with optional runtime reuse
+    through `diaryx.sync`.
+  artifact:
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.share/0.2.0/diaryx_share_extism.wasm
+    sha256: c31b45a021901e2e2cb788f331a0839ec3a6bdbe39b6c9e1ed63b24f8384c876
+    size: 1053360
+    published_at: '2026-03-21T22:44:46Z'
+  ui:
+  - slot: SettingsTab
+    id: share-settings
+    label: Live Share
+  - slot: SidebarTab
+    id: share
+    label: Share
+  requested_permissions:
+    defaults:
+      plugin_storage:
+        include:
+        - all
+      http_requests:
+        include:
+        - all
+      read_files:
+        include:
+        - all
+      edit_files:
+        include:
+        - all
+      create_files:
+        include:
+        - all
+      delete_files:
+        include:
+        - all
+      execute_commands:
+        include:
+        - diaryx.sync:PrepareLiveShareRuntime
+        - diaryx.sync:ConnectLiveShareSession
+        - diaryx.sync:DisconnectLiveShareSession
+    reasons:
+      plugin_storage: Store live-share session state.
+      http_requests: Create, join, update, and end share sessions against the Diaryx
+        server.
+      read_files: Read workspace files when building a temporary share snapshot.
+      edit_files: Apply remote edits during standalone live-share sessions.
+      create_files: Create files received during standalone live-share sessions.
+      delete_files: Delete files removed during standalone live-share sessions.
+      execute_commands: Reuse diaryx.sync runtime commands when sync is installed
+        and available.
 - id: diaryx.spoiler
   name: Spoiler
   version: 0.1.5
@@ -331,6 +456,17 @@ plugins:
   - slot: SettingsTab
     id: gdrive-storage-settings
     label: Google Drive
+  requested_permissions:
+    defaults:
+      http_requests:
+        include:
+        - googleapis.com
+      plugin_storage:
+        include:
+        - all
+    reasons:
+      http_requests: Communicate with Google Drive and Google OAuth API endpoints.
+      plugin_storage: Persist Google Drive settings and cached workspace metadata.
 - id: diaryx.storage.s3
   name: S3 Storage
   version: 0.1.0
@@ -360,10 +496,22 @@ plugins:
   - slot: SettingsTab
     id: s3-storage-settings
     label: S3 Storage
+  requested_permissions:
+    defaults:
+      http_requests:
+        include:
+        - all
+      plugin_storage:
+        include:
+        - all
+    reasons:
+      http_requests: Communicate with the configured S3-compatible object storage
+        endpoint.
+      plugin_storage: Persist S3 connection settings for the current workspace.
 - id: diaryx.sync
   name: Sync
-  version: 0.1.6
-  description: Real-time CRDT sync across devices
+  version: 0.2.0
+  description: Real-time multi-device sync across Diaryx workspaces
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
   repository: https://github.com/diaryx-org/plugin-sync
@@ -380,19 +528,17 @@ plugins:
   - crdt_commands
   - sync_transport
   - custom_commands
-  summary: Realtime multi-device workspace sync.
+  summary: Realtime multi-device workspace sync, snapshots, history, and workspace-provider
+    flows.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.1.6/diaryx_sync_extism.wasm
-    sha256: 99aac49823ea74190b5f2aed5f8aa3527dcd70a1124bf3be8aed6c5856a5d87d
-    size: 2398613
-    published_at: '2026-03-16T18:37:34Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.2.0/diaryx_sync_extism.wasm
+    sha256: 9b1c1ea61c21ca704600975988271ed28824e836dcf6d0fe7f9e0728a7df5b9a
+    size: 567990
+    published_at: '2026-03-21T06:48:45Z'
   ui:
   - slot: SettingsTab
     id: sync-settings
     label: Sync
-  - slot: SidebarTab
-    id: share
-    label: Share
   - slot: SidebarTab
     id: snapshots
     label: Snapshots
@@ -408,6 +554,33 @@ plugins:
   cli:
   - name: sync
     about: Sync workspace across devices
+  requested_permissions:
+    defaults:
+      plugin_storage:
+        include:
+        - all
+      http_requests:
+        include:
+        - all
+      read_files:
+        include:
+        - all
+      edit_files:
+        include:
+        - all
+      create_files:
+        include:
+        - all
+      delete_files:
+        include:
+        - all
+    reasons:
+      plugin_storage: Store sync configuration and CRDT state.
+      http_requests: Communicate with the configured sync server.
+      read_files: Read workspace files for snapshotting, reconciliation, and sync.
+      edit_files: Apply remote changes to existing workspace files.
+      create_files: Create files received from remote sync or restored from snapshots.
+      delete_files: Delete files removed by remote sync or snapshot restore operations.
 - id: diaryx.templating
   name: Templating
   version: 0.1.5
@@ -445,13 +618,36 @@ plugins:
   - slot: BlockPickerItem
     id: templating-for-audience
     label: For Audience
+  requested_permissions:
+    defaults:
+      read_files:
+        include:
+        - all
+      edit_files:
+        include:
+        - all
+      create_files:
+        include:
+        - all
+      delete_files:
+        include:
+        - all
+      plugin_storage:
+        include:
+        - all
+    reasons:
+      read_files: Read workspace templates from the _templates directory.
+      edit_files: Update existing workspace templates when saving changes.
+      create_files: Create new workspace templates in the _templates directory.
+      delete_files: Remove workspace templates that are no longer needed.
+      plugin_storage: Persist templating plugin configuration for the current workspace.
 ---
 
 # Diaryx Plugin Registry
 
-Generated at 2026-03-16T22:42:06.992621+00:00
+Generated at 2026-03-21T22:45:32.562197+00:00
 
-**14** plugins available.
+**15** plugins available.
 
 ## AI Assistant
 **ID:** `diaryx.ai` | **Version:** 0.1.5
@@ -489,6 +685,10 @@ Render inline and block LaTeX.
 **ID:** `diaryx.publish` | **Version:** 0.1.6
 Export and publish workspaces.
 
+## Live Share
+**ID:** `diaryx.share` | **Version:** 0.2.0
+Realtime live sharing for Diaryx workspaces, with optional runtime reuse through `diaryx.sync`.
+
 ## Spoiler
 **ID:** `diaryx.spoiler` | **Version:** 0.1.5
 Hide inline text with spoiler markup.
@@ -502,8 +702,8 @@ Google Drive storage backend.
 S3-compatible storage backend.
 
 ## Sync
-**ID:** `diaryx.sync` | **Version:** 0.1.6
-Realtime multi-device workspace sync.
+**ID:** `diaryx.sync` | **Version:** 0.2.0
+Realtime multi-device workspace sync, snapshots, history, and workspace-provider flows.
 
 ## Templating
 **ID:** `diaryx.templating` | **Version:** 0.1.5

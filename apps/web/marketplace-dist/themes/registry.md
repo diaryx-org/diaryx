@@ -16,7 +16,7 @@ themes:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/themes/artifacts/theme.citrus-bloom/1.0.0/theme.json"
+      url: "https://cdn.diaryx.org/themes/artifacts/theme.citrus-bloom/1.0.0/theme.json"
       sha256: "0bb10afa1bf6a8590ef0e0255e842f6b2a31dec8572824a5f4d25fb9c82a3bed"
       size: 2826
       published_at: "2026-03-14T00:00:00Z"
@@ -96,7 +96,7 @@ themes:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/themes/artifacts/theme.midnight-neon/1.0.0/theme.json"
+      url: "https://cdn.diaryx.org/themes/artifacts/theme.midnight-neon/1.0.0/theme.json"
       sha256: "2396b7bf7ce957ea102abe4daa88a4fa60e4d3d7f50b5e339906b52105a752f3"
       size: 2833
       published_at: "2026-03-14T00:00:00Z"
@@ -176,7 +176,7 @@ themes:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/themes/artifacts/theme.paper-ink/1.0.0/theme.json"
+      url: "https://cdn.diaryx.org/themes/artifacts/theme.paper-ink/1.0.0/theme.json"
       sha256: "79d1692096eb9bab46aaeefe6dffd89ca278ab648d6fe8adbe0e7e508963b8f8"
       size: 2790
       published_at: "2026-03-14T00:00:00Z"
@@ -256,7 +256,7 @@ themes:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/themes/artifacts/theme.coastal-mist/1.0.0/theme.json"
+      url: "https://cdn.diaryx.org/themes/artifacts/theme.coastal-mist/1.0.0/theme.json"
       sha256: "07dc6f9a1f6267d1efa85477eb79e45d58e893c2a4e79c24f400eaf71cbf5afc"
       size: 2849
       published_at: "2026-03-14T00:00:00Z"
@@ -336,7 +336,7 @@ themes:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/themes/artifacts/theme.high-contrast/1.0.0/theme.json"
+      url: "https://cdn.diaryx.org/themes/artifacts/theme.high-contrast/1.0.0/theme.json"
       sha256: "5e887c47ee57814d1b9195ba32eb7bdbf0c19d9d1b14a5bb43190771787736c1"
       size: 2591
       published_at: "2026-03-14T00:00:00Z"
@@ -416,7 +416,7 @@ themes:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/themes/artifacts/theme.golden-hour/1.0.0/theme.json"
+      url: "https://cdn.diaryx.org/themes/artifacts/theme.golden-hour/1.0.0/theme.json"
       sha256: "e2e197a505455aaf7d3febb98cb9621ac3e4ed19208ec6e4c36b6754a6493183"
       size: 2791
       published_at: "2026-03-14T00:00:00Z"
@@ -496,7 +496,7 @@ themes:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/themes/artifacts/theme.electric-blue/1.0.0/theme.json"
+      url: "https://cdn.diaryx.org/themes/artifacts/theme.electric-blue/1.0.0/theme.json"
       sha256: "2690a2afae42baa0380b64bd1a9b9c5d24f2e5062edf29ba6412a729e6cdd43c"
       size: 2843
       published_at: "2026-03-14T00:00:00Z"

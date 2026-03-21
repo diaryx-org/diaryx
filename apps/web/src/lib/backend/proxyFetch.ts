@@ -37,8 +37,12 @@ export async function proxyFetch(
   init?: ProxyFetchInit,
 ): Promise<Response> {
   if (!isTauri()) {
-    // Browser: always send cookies for same-origin /api requests
-    return fetch(input, { ...init, credentials: "include" });
+    // Skip credentials for CDN requests — they're public assets and
+    // credentials: "include" breaks when the origin differs (e.g. localhost dev).
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const isCdn = url.startsWith("/cdn") || url.includes("/cdn/");
+    const credentials = isCdn ? "omit" as const : "include" as const;
+    return fetch(input, { ...init, credentials });
   }
 
   const { invoke } = await import("@tauri-apps/api/core");

@@ -147,7 +147,7 @@
     </button>
 
     <!-- Preview cards -->
-    <div class="relative w-full overflow-hidden" style="height: 420px;">
+    <div class="relative w-full overflow-hidden preview-viewport">
       {#each bundles as bundle, i (bundle.id)}
         {@const offset = i - activeIndex}
         {@const isActive = i === activeIndex}
@@ -173,9 +173,8 @@
 
           <!-- Preview container -->
           <div
-            class="relative rounded-xl overflow-hidden border-2 shadow-2xl transition-colors duration-300
+            class="preview-container relative rounded-xl overflow-hidden border-2 shadow-2xl transition-colors duration-300
               {isActive ? 'border-primary/50' : 'border-border/50'}"
-            style="width: 640px; height: 400px;"
           >
             <!-- Scaled iframe -->
             <iframe
@@ -269,10 +268,19 @@
     padding-bottom: calc(env(safe-area-inset-bottom) + 1rem);
   }
 
+  .preview-viewport {
+    height: min(420px, 56vw);
+  }
+
+  .preview-container {
+    width: min(640px, calc(100vw - 6rem));
+    aspect-ratio: 16 / 10;
+  }
+
   .preview-iframe {
     border: 0;
-    width: 1280px;
-    height: 800px;
+    width: 200%;
+    height: 200%;
     transform: scale(0.5);
     transform-origin: top left;
     pointer-events: none;

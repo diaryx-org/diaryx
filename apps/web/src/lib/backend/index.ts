@@ -89,6 +89,12 @@ function setBackendStorageType(type: StorageType | undefined): void {
  * ```
  */
 export async function getBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType, storagePluginId?: string): Promise<Backend> {
+  // In preview mode, return the pre-created mock backend
+  const preview = getBackendInstance();
+  if ((globalThis as any).__diaryx_preview && preview?.isReady()) {
+    return preview;
+  }
+
   const existing = getBackendInstance();
 
   // If a workspace ID is specified and it matches the current backend, reuse it

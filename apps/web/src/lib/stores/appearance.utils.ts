@@ -152,6 +152,9 @@ export function applyCssVars(
  * Remove all dynamic CSS variables so static app.css values take over.
  */
 export function clearCssVars(): void {
+  // In preview mode, preserve the theme vars applied by main.ts
+  if ((globalThis as any).__diaryx_preview) return;
+
   const style = document.documentElement.style;
 
   for (const key of ALL_COLOR_KEYS) {

@@ -21,7 +21,7 @@ templates:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/templates/artifacts/template.meeting-notes/1.0.0/template.json"
+      url: "https://cdn.diaryx.org/templates/artifacts/template.meeting-notes/1.0.0/template.json"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size: 512
       published_at: "2026-03-10T00:00:00Z"
@@ -56,7 +56,7 @@ templates:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/templates/artifacts/template.book-review/1.0.0/template.json"
+      url: "https://cdn.diaryx.org/templates/artifacts/template.book-review/1.0.0/template.json"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size: 480
       published_at: "2026-03-10T00:00:00Z"
@@ -90,7 +90,7 @@ templates:
     icon: null
     screenshots: []
     artifact:
-      url: "https://app.diaryx.org/cdn/templates/artifacts/template.project-plan/1.0.0/template.json"
+      url: "https://cdn.diaryx.org/templates/artifacts/template.project-plan/1.0.0/template.json"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size: 560
       published_at: "2026-03-10T00:00:00Z"

@@ -35,8 +35,8 @@ pub use domain::{
     UserInfo, UserTier,
 };
 pub use ports::{
-    AiProvider, AppleReceiptVerifier, AuthSessionStore, AuthStore, BillingProvider, BlobStore,
-    Clock, DeviceStore, DomainMappingCache, JobSink, MagicLinkStore, Mailer,
+    AiProvider, AppleReceiptVerifier, AuthSessionStore, AuthStore, BillingProvider, BillingStore,
+    BlobStore, Clock, DeviceStore, DomainMappingCache, JobSink, MagicLinkStore, Mailer,
     MultipartCompletedPart, NamespaceStore, ObjectMetaStore, RateLimitStore, ServerCoreError,
     SessionStore, TokenClaims, TokenSigner, UserStore,
 };

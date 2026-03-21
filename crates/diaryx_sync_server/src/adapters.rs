@@ -8,8 +8,8 @@ use diaryx_server::domain::{
     UserTier as CoreUserTier,
 };
 use diaryx_server::ports::{
-    AuthSessionStore, AuthStore, DeviceStore, DomainMappingCache, MagicLinkStore, NamespaceStore,
-    ObjectMetaStore, ServerCoreError, SessionStore, UserStore,
+    AuthSessionStore, AuthStore, BillingStore, DeviceStore, DomainMappingCache, MagicLinkStore,
+    NamespaceStore, ObjectMetaStore, ServerCoreError, SessionStore, UserStore,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -235,6 +235,86 @@ impl UserStore for NativeUserStore {
         self.repo
             .set_user_tier(user_id, db_tier)
             .map(|_| ())
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeBillingStore {
+    repo: Arc<AuthRepo>,
+}
+
+impl NativeBillingStore {
+    pub fn new(repo: Arc<AuthRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl BillingStore for NativeBillingStore {
+    async fn get_stripe_customer_id(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        self.repo
+            .get_stripe_customer_id(user_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn set_stripe_customer_id(
+        &self,
+        user_id: &str,
+        customer_id: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .set_stripe_customer_id(user_id, customer_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn get_user_id_by_stripe_customer_id(
+        &self,
+        customer_id: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        self.repo
+            .get_user_id_by_stripe_customer_id(customer_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn set_stripe_subscription_id(
+        &self,
+        user_id: &str,
+        subscription_id: Option<&str>,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .set_stripe_subscription_id(user_id, subscription_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn get_apple_original_transaction_id(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        self.repo
+            .get_apple_original_transaction_id(user_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn set_apple_original_transaction_id(
+        &self,
+        user_id: &str,
+        transaction_id: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .set_apple_original_transaction_id(user_id, transaction_id)
+            .map_err(|e| ServerCoreError::internal(e.to_string()))
+    }
+
+    async fn get_user_id_by_apple_transaction_id(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        self.repo
+            .get_user_id_by_apple_transaction_id(transaction_id)
             .map_err(|e| ServerCoreError::internal(e.to_string()))
     }
 }

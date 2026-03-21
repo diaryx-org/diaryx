@@ -49,6 +49,18 @@ export interface UserHasDataResponse {
   file_count: number;
 }
 
+export interface NamespaceEntry {
+  id: string;
+  owner_user_id: string;
+  created_at: number;
+  metadata?: {
+    kind?: string;
+    name?: string;
+    provider?: string;
+    [key: string]: unknown;
+  } | null;
+}
+
 export interface UserStorageUsageResponse {
   used_bytes: number;
   blob_count: number;
@@ -593,6 +605,21 @@ export class AuthService {
 
     if (!response.ok) {
       throw new AuthError("Failed to fetch storage usage", response.status);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * List namespaces owned by the authenticated user.
+   */
+  async listNamespaces(authToken?: string): Promise<NamespaceEntry[]> {
+    const response = await proxyFetch(`${this.serverUrl}/namespaces`, {
+      headers: this.authHeaders(authToken),
+    });
+
+    if (!response.ok) {
+      throw new AuthError("Failed to list namespaces", response.status);
     }
 
     return response.json();

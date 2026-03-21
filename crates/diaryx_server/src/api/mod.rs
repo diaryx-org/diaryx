@@ -4,4 +4,5 @@
 //! Both the Axum (native) and Cloudflare Workers handler layers import
 //! these types, ensuring the two implementations expose identical schemas.
 
+pub mod billing;
 pub mod namespaces;

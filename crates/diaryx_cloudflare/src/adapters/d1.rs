@@ -1273,6 +1273,141 @@ impl DeviceStore for D1DeviceStore {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// BillingStore
+// ---------------------------------------------------------------------------
+
+pub struct D1BillingStore {
+    db: D1Database,
+}
+
+impl D1BillingStore {
+    pub fn new(db: D1Database) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait(?Send)]
+impl BillingStore for D1BillingStore {
+    async fn get_stripe_customer_id(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        let result = self
+            .db
+            .prepare("SELECT stripe_customer_id FROM users WHERE id = ?1")
+            .bind(&[user_id.into()])
+            .map_err(e)?
+            .first::<serde_json::Value>(None)
+            .await
+            .map_err(e)?;
+        Ok(result.and_then(|row| row["stripe_customer_id"].as_str().map(|s| s.to_string())))
+    }
+
+    async fn set_stripe_customer_id(
+        &self,
+        user_id: &str,
+        customer_id: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.db
+            .prepare("UPDATE users SET stripe_customer_id = ?1 WHERE id = ?2")
+            .bind(&[customer_id.into(), user_id.into()])
+            .map_err(e)?
+            .run()
+            .await
+            .map_err(e)?;
+        Ok(())
+    }
+
+    async fn get_user_id_by_stripe_customer_id(
+        &self,
+        customer_id: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        let result = self
+            .db
+            .prepare("SELECT id FROM users WHERE stripe_customer_id = ?1")
+            .bind(&[customer_id.into()])
+            .map_err(e)?
+            .first::<serde_json::Value>(None)
+            .await
+            .map_err(e)?;
+        Ok(result.and_then(|row| row["id"].as_str().map(|s| s.to_string())))
+    }
+
+    async fn set_stripe_subscription_id(
+        &self,
+        user_id: &str,
+        subscription_id: Option<&str>,
+    ) -> Result<(), ServerCoreError> {
+        self.db
+            .prepare("UPDATE users SET stripe_subscription_id = ?1 WHERE id = ?2")
+            .bind(&[
+                subscription_id
+                    .map(|s| s.into())
+                    .unwrap_or(worker::wasm_bindgen::JsValue::NULL),
+                user_id.into(),
+            ])
+            .map_err(e)?
+            .run()
+            .await
+            .map_err(e)?;
+        Ok(())
+    }
+
+    async fn get_apple_original_transaction_id(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        let result = self
+            .db
+            .prepare("SELECT apple_original_transaction_id FROM users WHERE id = ?1")
+            .bind(&[user_id.into()])
+            .map_err(e)?
+            .first::<serde_json::Value>(None)
+            .await
+            .map_err(e)?;
+        Ok(result.and_then(|row| {
+            row["apple_original_transaction_id"]
+                .as_str()
+                .map(|s| s.to_string())
+        }))
+    }
+
+    async fn set_apple_original_transaction_id(
+        &self,
+        user_id: &str,
+        transaction_id: &str,
+    ) -> Result<(), ServerCoreError> {
+        self.db
+            .prepare("UPDATE users SET apple_original_transaction_id = ?1 WHERE id = ?2")
+            .bind(&[transaction_id.into(), user_id.into()])
+            .map_err(e)?
+            .run()
+            .await
+            .map_err(e)?;
+        Ok(())
+    }
+
+    async fn get_user_id_by_apple_transaction_id(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        let result = self
+            .db
+            .prepare("SELECT id FROM users WHERE apple_original_transaction_id = ?1")
+            .bind(&[transaction_id.into()])
+            .map_err(e)?
+            .first::<serde_json::Value>(None)
+            .await
+            .map_err(e)?;
+        Ok(result.and_then(|row| row["id"].as_str().map(|s| s.to_string())))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 fn generate_session_code() -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let part = || -> String {

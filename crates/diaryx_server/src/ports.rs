@@ -399,6 +399,18 @@ pub trait AppleReceiptVerifier: Send + Sync {
     async fn verify_transaction(&self, signed_payload: &str) -> Result<Value, ServerCoreError>;
 }
 
+pub trait BillingStore: Send + Sync {
+    // Stripe
+    async fn get_stripe_customer_id(&self, user_id: &str) -> Result<Option<String>, ServerCoreError>;
+    async fn set_stripe_customer_id(&self, user_id: &str, customer_id: &str) -> Result<(), ServerCoreError>;
+    async fn get_user_id_by_stripe_customer_id(&self, customer_id: &str) -> Result<Option<String>, ServerCoreError>;
+    async fn set_stripe_subscription_id(&self, user_id: &str, subscription_id: Option<&str>) -> Result<(), ServerCoreError>;
+    // Apple
+    async fn get_apple_original_transaction_id(&self, user_id: &str) -> Result<Option<String>, ServerCoreError>;
+    async fn set_apple_original_transaction_id(&self, user_id: &str, transaction_id: &str) -> Result<(), ServerCoreError>;
+    async fn get_user_id_by_apple_transaction_id(&self, transaction_id: &str) -> Result<Option<String>, ServerCoreError>;
+}
+
 pub trait AiProvider: Send + Sync {
     async fn chat_completion(&self, request: Value) -> Result<Value, ServerCoreError>;
 }

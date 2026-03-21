@@ -17,6 +17,7 @@ import {
   type DeviceLimitDevice,
   type PasskeyListItem,
   AuthError,
+  type NamespaceEntry,
   type UserHasDataResponse,
   type UserStorageUsageResponse,
   type InitAttachmentUploadRequest,
@@ -538,6 +539,29 @@ export async function refreshUserInfo(): Promise<void> {
   } catch (err) {
     console.error("[AuthStore] Failed to refresh user info:", err);
   }
+}
+
+/**
+ * List namespaces owned by the authenticated user.
+ * Works before any workspace/plugin is loaded — calls the server directly.
+ */
+export async function listUserNamespaces(): Promise<NamespaceEntry[]> {
+  if (!authService || !state.isAuthenticated) return [];
+  const token = await getTokenAsync();
+  try {
+    return await authService.listNamespaces(token ?? undefined);
+  } catch (err) {
+    console.error("[AuthStore] Failed to list namespaces:", err);
+    return [];
+  }
+}
+
+/**
+ * List namespaces that have workspace metadata (kind === "workspace").
+ */
+export async function listUserWorkspaceNamespaces(): Promise<NamespaceEntry[]> {
+  const all = await listUserNamespaces();
+  return all.filter((ns) => ns.metadata?.kind === "workspace");
 }
 
 /**

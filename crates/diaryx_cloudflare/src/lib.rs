@@ -80,6 +80,17 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/auth/verify-code", handlers::verify_code)
         // Usage
         .get_async("/api/usage", handlers::get_usage)
+        // Stripe billing
+        .post_async("/api/stripe/checkout", handlers::stripe_checkout)
+        .post_async("/api/stripe/portal", handlers::stripe_portal)
+        .post_async("/api/stripe/webhook", handlers::stripe_webhook)
+        .get_async("/api/stripe/config", handlers::stripe_config)
+        // Apple IAP
+        .post_async("/api/apple/verify-receipt", handlers::apple_verify_receipt)
+        .post_async("/api/apple/restore", handlers::apple_restore)
+        .post_async("/api/apple/webhook", handlers::apple_webhook)
+        // Tier
+        .post_async("/api/tier", handlers::set_tier)
         // Run
         .run(req, env.clone())
         .await?;

@@ -1,5 +1,6 @@
 pub mod audiences;
 pub mod auth;
+pub mod billing;
 pub mod current_user;
 pub mod domains;
 pub mod namespaces;

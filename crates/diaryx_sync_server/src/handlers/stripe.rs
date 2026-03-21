@@ -1,3 +1,4 @@
+use crate::adapters::NativeBillingStore;
 use crate::auth::RequireAuth;
 use crate::config::StripeConfig;
 use crate::db::AuthRepo;
@@ -9,17 +10,18 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use diaryx_server::UserTier;
+use diaryx_server::api::billing::{StripeConfigResponse, UrlResponse};
 use diaryx_server::ports::UserStore;
+use diaryx_server::use_cases::billing::BillingService;
 use hmac::{Hmac, Mac};
-use serde::Serialize;
+use serde_json;
 use sha2::Sha256;
 use std::sync::Arc;
 use stripe::{
     BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client, CreateBillingPortalSession,
     CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCustomer, Customer,
 };
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 #[derive(Clone)]
 pub struct StripeState {
@@ -39,20 +41,6 @@ pub fn stripe_routes(state: StripeState) -> Router {
 }
 
 // ============================================================================
-// Types
-// ============================================================================
-
-#[derive(Serialize)]
-struct UrlResponse {
-    url: String,
-}
-
-#[derive(Serialize)]
-struct StripeConfigResponse {
-    publishable_key: String,
-}
-
-// ============================================================================
 // Handlers
 // ============================================================================
 
@@ -65,8 +53,11 @@ async fn create_checkout_session(
     let user_id = &auth.user.id;
     let user_email = &auth.user.email;
 
+    let billing_store = NativeBillingStore::new(state.repo.clone());
+    let billing = BillingService::new(&billing_store, state.user_store.as_ref());
+
     // Look up or create Stripe customer
-    let customer_id = match state.repo.get_stripe_customer_id(user_id) {
+    let customer_id = match billing.get_stripe_customer_id(user_id).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             // Create a new Stripe customer
@@ -76,7 +67,7 @@ async fn create_checkout_session(
             match Customer::create(&client, params).await {
                 Ok(customer) => {
                     let cid = customer.id.as_str().to_string();
-                    if let Err(e) = state.repo.set_stripe_customer_id(user_id, &cid) {
+                    if let Err(e) = billing.set_stripe_customer_id(user_id, &cid).await {
                         error!("Failed to save Stripe customer ID: {}", e);
                         return (StatusCode::INTERNAL_SERVER_ERROR, "Database error")
                             .into_response();
@@ -149,7 +140,10 @@ async fn create_portal_session(
     let client = Client::new(&state.config.secret_key);
     let user_id = &auth.user.id;
 
-    let customer_id = match state.repo.get_stripe_customer_id(user_id) {
+    let billing_store = NativeBillingStore::new(state.repo.clone());
+    let billing = BillingService::new(&billing_store, state.user_store.as_ref());
+
+    let customer_id = match billing.get_stripe_customer_id(user_id).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             return (StatusCode::BAD_REQUEST, "No billing account found").into_response();
@@ -185,9 +179,6 @@ async fn create_portal_session(
 }
 
 /// POST /api/stripe/webhook - Handle Stripe webhook events.
-///
-/// Verifies the webhook signature using HMAC-SHA256, then parses the event
-/// JSON to handle subscription lifecycle events.
 async fn handle_webhook(
     State(state): State<StripeState>,
     headers: HeaderMap,
@@ -226,19 +217,29 @@ async fn handle_webhook(
     let event_type = event["type"].as_str().unwrap_or("");
     let data_object = &event["data"]["object"];
 
+    let billing_store = NativeBillingStore::new(state.repo.clone());
+    let billing = BillingService::new(&billing_store, state.user_store.as_ref());
+
     match event_type {
         "checkout.session.completed" => {
-            handle_checkout_completed(&state, data_object).await;
+            let customer_id = data_object["customer"].as_str().unwrap_or("");
+            let subscription_id = data_object["subscription"].as_str();
+            let _ = billing
+                .handle_checkout_completed(customer_id, subscription_id)
+                .await;
         }
         "customer.subscription.updated" => {
-            handle_subscription_updated(&state, data_object).await;
+            let customer_id = data_object["customer"].as_str().unwrap_or("");
+            let status = data_object["status"].as_str().unwrap_or("");
+            let _ = billing
+                .handle_subscription_updated(customer_id, status)
+                .await;
         }
         "customer.subscription.deleted" => {
-            handle_subscription_deleted(&state, data_object).await;
+            let customer_id = data_object["customer"].as_str().unwrap_or("");
+            let _ = billing.handle_subscription_deleted(customer_id).await;
         }
-        other => {
-            info!("Unhandled Stripe event: {}", other);
-        }
+        _ => {}
     }
 
     StatusCode::OK
@@ -256,9 +257,6 @@ async fn get_stripe_config(State(state): State<StripeState>) -> impl IntoRespons
 // ============================================================================
 
 /// Verify Stripe webhook signature using HMAC-SHA256.
-///
-/// The Stripe-Signature header format is:
-/// `t=<timestamp>,v1=<signature>[,v0=<legacy_signature>]`
 fn verify_stripe_signature(
     payload: &str,
     signature_header: &str,
@@ -317,136 +315,4 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         .zip(b.bytes())
         .fold(0u8, |acc, (x, y)| acc | (x ^ y))
         == 0
-}
-
-// ============================================================================
-// Webhook event handlers
-// ============================================================================
-
-async fn handle_checkout_completed(state: &StripeState, data: &serde_json::Value) {
-    let customer_id = match data["customer"].as_str() {
-        Some(id) => id,
-        None => {
-            warn!("checkout.session.completed without customer ID");
-            return;
-        }
-    };
-
-    let user_id = match state.repo.get_user_id_by_stripe_customer_id(customer_id) {
-        Ok(Some(id)) => id,
-        Ok(None) => {
-            warn!(
-                "checkout.session.completed for unknown customer: {}",
-                customer_id
-            );
-            return;
-        }
-        Err(e) => {
-            error!("Database error in checkout webhook: {}", e);
-            return;
-        }
-    };
-
-    // Save subscription ID
-    if let Some(sub_id) = data["subscription"].as_str()
-        && let Err(e) = state
-            .repo
-            .set_stripe_subscription_id(&user_id, Some(sub_id))
-    {
-        error!("Failed to save subscription ID: {}", e);
-    }
-
-    // Upgrade to Plus
-    match state
-        .user_store
-        .set_user_tier(&user_id, UserTier::Plus)
-        .await
-    {
-        Ok(_) => info!("User {} upgraded to Plus via checkout", user_id),
-        Err(e) => error!("Failed to upgrade user {} to Plus: {}", user_id, e),
-    }
-}
-
-async fn handle_subscription_updated(state: &StripeState, data: &serde_json::Value) {
-    let customer_id = match data["customer"].as_str() {
-        Some(id) => id,
-        None => {
-            warn!("customer.subscription.updated without customer ID");
-            return;
-        }
-    };
-
-    let user_id = match state.repo.get_user_id_by_stripe_customer_id(customer_id) {
-        Ok(Some(id)) => id,
-        Ok(None) => {
-            warn!(
-                "customer.subscription.updated for unknown customer: {}",
-                customer_id
-            );
-            return;
-        }
-        Err(e) => {
-            error!("Database error in subscription webhook: {}", e);
-            return;
-        }
-    };
-
-    let status = data["status"].as_str().unwrap_or("");
-    let tier = match status {
-        "active" | "trialing" => UserTier::Plus,
-        _ => UserTier::Free,
-    };
-
-    match state.user_store.set_user_tier(&user_id, tier).await {
-        Ok(_) => info!(
-            "User {} tier set to {} (subscription status: {})",
-            user_id,
-            tier.as_str(),
-            status
-        ),
-        Err(e) => error!("Failed to update user {} tier: {}", user_id, e),
-    }
-}
-
-async fn handle_subscription_deleted(state: &StripeState, data: &serde_json::Value) {
-    let customer_id = match data["customer"].as_str() {
-        Some(id) => id,
-        None => {
-            warn!("customer.subscription.deleted without customer ID");
-            return;
-        }
-    };
-
-    let user_id = match state.repo.get_user_id_by_stripe_customer_id(customer_id) {
-        Ok(Some(id)) => id,
-        Ok(None) => {
-            warn!(
-                "customer.subscription.deleted for unknown customer: {}",
-                customer_id
-            );
-            return;
-        }
-        Err(e) => {
-            error!("Database error in subscription webhook: {}", e);
-            return;
-        }
-    };
-
-    // Downgrade to Free
-    match state
-        .user_store
-        .set_user_tier(&user_id, UserTier::Free)
-        .await
-    {
-        Ok(_) => info!("User {} downgraded to Free (subscription deleted)", user_id),
-        Err(e) => error!("Failed to downgrade user {}: {}", user_id, e),
-    }
-
-    // Clear subscription ID
-    if let Err(e) = state.repo.set_stripe_subscription_id(&user_id, None) {
-        error!(
-            "Failed to clear subscription ID for user {}: {}",
-            user_id, e
-        );
-    }
 }

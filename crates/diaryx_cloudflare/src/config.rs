@@ -93,6 +93,38 @@ pub fn cf_api_token(env: &Env) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Stripe secret key.
+pub fn stripe_secret_key(env: &Env) -> Option<String> {
+    env.secret("STRIPE_SECRET_KEY")
+        .ok()
+        .map(|v| v.to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Stripe webhook signing secret.
+pub fn stripe_webhook_secret(env: &Env) -> Option<String> {
+    env.secret("STRIPE_WEBHOOK_SECRET")
+        .ok()
+        .map(|v| v.to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Stripe price ID for the Plus plan.
+pub fn stripe_price_id(env: &Env) -> Option<String> {
+    env.var("STRIPE_PRICE_ID")
+        .ok()
+        .map(|v| v.to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Stripe publishable key returned to clients.
+pub fn stripe_publishable_key(env: &Env) -> Option<String> {
+    env.var("STRIPE_PUBLISHABLE_KEY")
+        .ok()
+        .map(|v| v.to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Read CORS allowed origins.
 pub fn cors_origins(env: &Env) -> Vec<String> {
     env.var("CORS_ORIGINS")

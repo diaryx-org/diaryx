@@ -4518,8 +4518,50 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         entryStore.setLoading(false);
       }
     }}
-    onSignIn={() => {
-      showAddWorkspace = true;
+    onSignInCreateNew={async () => {
+      // User signed in but has no existing workspaces — create first synced workspace
+      entryStore.setLoading(true);
+      try {
+        await autoCreateDefaultWorkspace(null);
+        showWelcomeScreen = false;
+        await refreshTree();
+        if (tree) {
+          workspaceStore.expandNode(tree.path);
+          await openEntry(tree.path);
+        }
+        await runValidation();
+      } catch (e) {
+        console.error("[App] Auto-create after sign-in failed:", e);
+        showAddWorkspace = true;
+      } finally {
+        entryStore.setLoading(false);
+      }
+    }}
+    onRestoreWorkspace={async (namespace) => {
+      entryStore.setLoading(true);
+      try {
+        const { downloadWorkspace } = await import("$lib/sync/workspaceProviderService");
+        const name = namespace.metadata?.name ?? "Restored Workspace";
+        const result = await downloadWorkspace("diaryx.sync", {
+          remoteId: namespace.id,
+          name,
+          link: true,
+        });
+        showWelcomeScreen = false;
+        // Switch to the newly downloaded workspace
+        const wsId = result.localId;
+        await switchWorkspace(wsId, name);
+        await refreshTree();
+        if (tree) {
+          workspaceStore.expandNode(tree.path);
+          await openEntry(tree.path);
+        }
+      } catch (e) {
+        console.error("[App] Restore workspace failed:", e);
+        showAddWorkspace = true;
+      } finally {
+        entryStore.setLoading(false);
+      }
     }}
     returnWorkspaceName={welcomeReturnWorkspaceName}
     onReturn={() => {

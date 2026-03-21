@@ -1,3 +1,4 @@
+use crate::adapters::NativeBillingStore;
 use crate::auth::RequireAuth;
 use crate::config::AppleIapConfig;
 use crate::db::AuthRepo;
@@ -7,14 +8,17 @@ use axum::{
 };
 use base64::Engine;
 use diaryx_server::UserTier;
+use diaryx_server::api::billing::{
+    AppleRestoreRequest, AppleRestoreResponse, AppleVerifyReceiptRequest,
+    AppleVerifyReceiptResponse,
+};
 use diaryx_server::ports::UserStore;
-use serde::{Deserialize, Serialize};
+use diaryx_server::use_cases::billing::BillingService;
+use serde::Deserialize;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 // Apple Root CA - G3 certificate (DER, embedded)
-// Downloaded from https://www.apple.com/certificateauthority/
-// This is the root CA used to sign App Store receipts and StoreKit JWS transactions.
 const APPLE_ROOT_CA_G3_DER: &[u8] = include_bytes!("apple_root_ca_g3.der");
 
 #[derive(Clone)]
@@ -30,34 +34,6 @@ pub fn apple_iap_routes(state: AppleIapState) -> Router {
         .route("/apple/restore", post(restore_purchases))
         .route("/apple/webhook", post(handle_webhook))
         .with_state(state)
-}
-
-// ============================================================================
-// Types
-// ============================================================================
-
-#[derive(Deserialize)]
-struct VerifyReceiptRequest {
-    signed_transaction: String,
-    product_id: String,
-}
-
-#[derive(Deserialize)]
-struct RestoreRequest {
-    signed_transactions: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct VerifyReceiptResponse {
-    success: bool,
-    tier: String,
-}
-
-#[derive(Serialize)]
-struct RestoreResponse {
-    success: bool,
-    restored_count: usize,
-    tier: String,
 }
 
 /// Decoded payload from an Apple StoreKit 2 signed transaction (JWS).
@@ -87,7 +63,7 @@ struct TransactionPayload {
 async fn verify_receipt(
     State(state): State<AppleIapState>,
     RequireAuth(auth): RequireAuth,
-    Json(body): Json<VerifyReceiptRequest>,
+    Json(body): Json<AppleVerifyReceiptRequest>,
 ) -> impl IntoResponse {
     let user_id = &auth.user.id;
 
@@ -164,43 +140,24 @@ async fn verify_receipt(
         }
     }
 
-    // Store original transaction ID and upgrade tier
-    if let Err(e) = state
-        .repo
-        .set_apple_original_transaction_id(user_id, &payload.original_transaction_id)
-    {
-        error!("Failed to save Apple transaction ID: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Database error" })),
-        )
-            .into_response();
-    }
+    // Use BillingService to store transaction and upgrade tier
+    let billing_store = NativeBillingStore::new(state.repo.clone());
+    let billing = BillingService::new(&billing_store, state.user_store.as_ref());
 
-    match state
-        .user_store
-        .set_user_tier(user_id, UserTier::Plus)
+    match billing
+        .activate_apple_transaction(user_id, &payload.original_transaction_id)
         .await
     {
-        Ok(_) => {
-            info!(
-                "User {} upgraded to Plus via Apple IAP (tx: {})",
-                user_id, payload.original_transaction_id
-            );
-            Json(VerifyReceiptResponse {
-                success: true,
-                tier: "plus".to_string(),
-            })
-            .into_response()
-        }
-        Err(e) => {
-            error!("Failed to upgrade user {} to Plus: {}", user_id, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Database error" })),
-            )
-                .into_response()
-        }
+        Ok(()) => Json(AppleVerifyReceiptResponse {
+            success: true,
+            tier: "plus".to_string(),
+        })
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -208,11 +165,14 @@ async fn verify_receipt(
 async fn restore_purchases(
     State(state): State<AppleIapState>,
     RequireAuth(auth): RequireAuth,
-    Json(body): Json<RestoreRequest>,
+    Json(body): Json<AppleRestoreRequest>,
 ) -> impl IntoResponse {
     let user_id = &auth.user.id;
     let mut restored_count = 0usize;
     let mut best_tier = UserTier::Free;
+
+    let billing_store = NativeBillingStore::new(state.repo.clone());
+    let billing = BillingService::new(&billing_store, state.user_store.as_ref());
 
     for signed_tx in &body.signed_transactions {
         let payload = match verify_and_decode_transaction(signed_tx, &state.config) {
@@ -244,12 +204,12 @@ async fn restore_purchases(
             continue;
         }
 
-        // Store transaction ID
-        if let Err(e) = state
-            .repo
-            .set_apple_original_transaction_id(user_id, &payload.original_transaction_id)
+        // Store transaction via BillingService
+        if let Err(e) = billing
+            .activate_apple_transaction(user_id, &payload.original_transaction_id)
+            .await
         {
-            error!("Failed to save Apple transaction ID during restore: {}", e);
+            warn!("Failed to activate Apple transaction during restore: {}", e);
             continue;
         }
 
@@ -258,25 +218,13 @@ async fn restore_purchases(
     }
 
     if best_tier == UserTier::Plus {
-        if let Err(e) = state
-            .user_store
-            .set_user_tier(user_id, UserTier::Plus)
-            .await
-        {
-            error!("Failed to upgrade user {} during restore: {}", user_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Database error" })),
-            )
-                .into_response();
-        }
         info!(
             "User {} restored {} Apple IAP transaction(s), upgraded to Plus",
             user_id, restored_count
         );
     }
 
-    Json(RestoreResponse {
+    Json(AppleRestoreResponse {
         success: true,
         restored_count,
         tier: best_tier.as_str().to_string(),
@@ -285,20 +233,13 @@ async fn restore_purchases(
 }
 
 /// POST /api/apple/webhook — App Store Server Notifications V2.
-/// Stub: logs the notification and returns 200.
 async fn handle_webhook(body: Bytes) -> impl IntoResponse {
     let payload_str = std::str::from_utf8(&body).unwrap_or("<binary>");
     info!(
         "Received Apple App Store Server Notification ({} bytes)",
         body.len()
     );
-
-    // TODO: Implement full V2 notification handling:
-    // 1. Decode signedPayload (JWS)
-    // 2. Extract notificationType and subtype
-    // 3. Handle DID_RENEW, EXPIRED, REVOKE, etc.
     let _ = payload_str;
-
     StatusCode::OK
 }
 
@@ -307,16 +248,6 @@ async fn handle_webhook(body: Bytes) -> impl IntoResponse {
 // ============================================================================
 
 /// Verify an Apple StoreKit 2 JWS signed transaction and decode its payload.
-///
-/// Steps:
-/// 1. Split JWS into header.payload.signature
-/// 2. Decode header → extract x5c certificate chain
-/// 3. Verify chain against Apple Root CA-G3
-/// 4. Verify JWS signature (ES256) using leaf certificate
-/// 5. Decode and return payload
-///
-/// When `config.skip_signature_verify` is true, steps 2-4 are skipped and the
-/// payload is decoded directly. This is for local StoreKit testing only.
 fn verify_and_decode_transaction(
     jws: &str,
     config: &AppleIapConfig,
@@ -405,13 +336,10 @@ fn verify_certificate_chain(certs_der: &[Vec<u8>]) -> Result<(), String> {
     let (_, apple_root) = x509_parser::parse_x509_certificate(APPLE_ROOT_CA_G3_DER)
         .map_err(|e| format!("Failed to parse embedded Apple Root CA: {}", e))?;
 
-    // The last certificate in x5c should be signed by the Apple Root CA,
-    // or IS the Apple Root CA itself.
     let last_cert_der = &certs_der[certs_der.len() - 1];
     let (_, last_cert) = x509_parser::parse_x509_certificate(last_cert_der)
         .map_err(|e| format!("Failed to parse last certificate in chain: {}", e))?;
 
-    // Check if the last cert's issuer matches the Apple Root CA's subject
     if last_cert.issuer() != apple_root.subject() {
         return Err("Certificate chain does not terminate at Apple Root CA-G3".to_string());
     }

@@ -11,7 +11,7 @@
     ChevronDown,
     ChevronUp,
   } from "@lucide/svelte";
-  import { getBackend, createApi, isTauri } from "$lib/backend";
+  import { getBackend, createApi } from "$lib/backend";
   import {
     requestMagicLink,
     verifyMagicLink,
@@ -26,7 +26,7 @@
 
   let { onAuthenticated, compact = false }: Props = $props();
 
-  const defaultServerUrl = isTauri() ? "https://app.diaryx.org/api" : "/api";
+  const defaultServerUrl = "https://app.diaryx.org/api";
   let email = $state("");
   let serverUrl = $state(
     typeof window !== "undefined"

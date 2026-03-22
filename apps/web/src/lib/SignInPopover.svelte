@@ -49,7 +49,7 @@
 
   // Sign-in state
   let email = $state("");
-  const defaultServerUrl = isTauri() ? "https://app.diaryx.org/api" : "/api";
+  const defaultServerUrl = "https://app.diaryx.org/api";
   let serverUrl = $state(
     typeof window !== "undefined"
       ? localStorage.getItem("diaryx_sync_server_url") || defaultServerUrl

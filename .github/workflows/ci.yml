@@ -138,7 +138,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p diaryx_cloudflare --target wasm32-unknown-unknown
 
-  # ── WASM & bindings (Nix derivations) ────────────────────────────────────
+  # ── WASM & bindings ─────────────────────────────────────────────────────
 
   build-wasm:
     name: Build WASM & Bindings
@@ -147,14 +147,37 @@ jobs:
     if: needs.changes.outputs.web == 'true'
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli@0.2.114 --locked
+
+      - name: Install binaryen
+        run: sudo apt-get update && sudo apt-get install -y binaryen
 
       - name: Build WASM package
-        run: nix build .#wasm-package -o result-wasm
+        run: |
+          cargo build -p diaryx_wasm --target wasm32-unknown-unknown --release
+          mkdir -p result-wasm
+          wasm-bindgen --target web --out-dir result-wasm \
+            target/wasm32-unknown-unknown/release/diaryx_wasm.wasm
+          wasm-opt -Oz -o result-wasm/diaryx_wasm_bg.wasm result-wasm/diaryx_wasm_bg.wasm
+          cat > result-wasm/package.json <<'EOF'
+          {
+            "name": "diaryx_wasm",
+            "type": "module",
+            "version": "1.4.0",
+            "main": "diaryx_wasm.js",
+            "types": "diaryx_wasm.d.ts",
+            "files": ["diaryx_wasm_bg.wasm", "diaryx_wasm.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]
+          }
+          EOF
 
-      - name: Build TypeScript bindings
-        run: nix build .#ts-bindings -o result-bindings
+      - name: Generate TypeScript bindings
+        run: cargo test -p diaryx_core
 
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
@@ -166,7 +189,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ts-bindings
-          path: result-bindings/
+          path: crates/diaryx_core/bindings/
 
   # ── Web app (build + type-check + unit tests) ───────────────────────────
 
@@ -180,13 +203,13 @@ jobs:
       - uses: ./.github/actions/setup-web
 
       - name: Type check
-        run: cd apps/web && nix develop --command bun run check
+        run: cd apps/web && bun run check
 
       - name: Unit tests
-        run: cd apps/web && nix develop --command bun run test -- --run
+        run: cd apps/web && bun run test -- --run
 
       - name: Build
-        run: cd apps/web && nix develop --command bunx vite build
+        run: cd apps/web && bunx vite build
 
       - name: Upload web build artifact
         uses: actions/upload-artifact@v4
@@ -206,12 +229,12 @@ jobs:
       - uses: ./.github/actions/setup-web
 
       - name: Install Playwright browsers
-        run: cd apps/web && nix develop --command bunx playwright install --with-deps chromium
+        run: cd apps/web && bunx playwright install --with-deps chromium
 
       - name: Run E2E tests
         run: |
           cd apps/web
-          nix develop --command bunx playwright test --project=chromium \
+          bunx playwright test --project=chromium \
             e2e/editor.spec.ts e2e/workspace.spec.ts e2e/attachments.spec.ts
 
       - name: Upload Playwright report

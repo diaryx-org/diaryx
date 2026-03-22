@@ -1,12 +1,10 @@
 name: 'Setup Web Environment'
-description: 'Checkout, install Nix, download WASM + bindings artifacts, and install web dependencies'
+description: 'Download WASM + bindings artifacts and install web dependencies'
 
 runs:
   using: 'composite'
   steps:
-    - uses: DeterminateSystems/nix-installer-action@main
-
-    - uses: DeterminateSystems/magic-nix-cache-action@main
+    - uses: oven-sh/setup-bun@v2
 
     - name: Download WASM artifact
       uses: actions/download-artifact@v4
@@ -22,4 +20,4 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      run: cd apps/web && nix develop --command bun install
+      run: cd apps/web && bun install

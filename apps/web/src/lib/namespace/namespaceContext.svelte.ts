@@ -9,6 +9,7 @@
 
 import { getContext, setContext } from 'svelte';
 import type { Api } from '$lib/backend/api';
+import type { HostAction } from '$lib/backend/generated';
 import * as browserPlugins from '$lib/plugins/browserPluginManager.svelte';
 import { getAuthState, getServerUrl } from '$lib/auth';
 import { getTemplateContextStore } from '$lib/stores/templateContextStore.svelte';
@@ -39,7 +40,8 @@ function normalizeToObject(value: any): any {
 export class NamespaceContext {
   // --- Injected deps (reactive so effects re-trigger on init) ---
   api = $state<Api | null>(null);
-  #onAddWorkspace: (() => void) | undefined;
+  #onHostAction: ((action: { type: string; payload?: unknown }) => void) | undefined;
+  signInAction = $state<HostAction | null>(null);
 
   // --- Reactive state ---
   namespaceId = $state<string | null>(null);
@@ -118,9 +120,9 @@ export class NamespaceContext {
 
   // --- Setup ---
 
-  init(newApi: Api | null, onAddWorkspace?: () => void) {
+  init(newApi: Api | null, onHostAction?: (action: { type: string; payload?: unknown }) => void) {
     this.api = newApi;
-    this.#onAddWorkspace = onAddWorkspace;
+    this.#onHostAction = onHostAction;
   }
 
   /** Called by the first widget that mounts. Loads config if rootPath changed. */
@@ -270,8 +272,15 @@ export class NamespaceContext {
   }
 
   handleOpenSyncSetup() {
-    if (this.#onAddWorkspace) {
-      this.#onAddWorkspace();
+    if (this.signInAction && this.#onHostAction) {
+      this.#onHostAction({
+        type: this.signInAction.action_type,
+        payload: this.signInAction.payload ?? undefined,
+      });
+      return;
+    }
+    if (this.#onHostAction) {
+      this.#onHostAction({ type: 'open-add-workspace' });
       return;
     }
     showInfo('Open account or sync settings to enable faster server-side publishing.');

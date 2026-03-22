@@ -16,10 +16,12 @@ use diaryx_sync_server::{
     db::{AuthRepo, init_database},
     email::EmailService,
     handlers::{
-        AudienceState, DomainState, NamespaceState, NsSessionState, ObjectState, ai_routes,
-        audience_routes, auth_routes, domain_auth_route, domain_routes, namespace_routes,
-        ns_session_routes, object_routes, public_object_routes, usage_routes,
+        AudienceState, DomainState, NamespaceState, NsSessionState, ObjectState, ProxyState,
+        ai_routes, audience_routes, auth_routes, domain_auth_route, domain_routes,
+        namespace_routes, ns_session_routes, object_routes, proxy_routes, public_object_routes,
+        usage_routes,
     },
+    proxy_adapters::{NativeProxySecretResolver, NativeProxyUsageStore, StaticProxyConfigStore},
     sync_v2::SyncV2Server,
 };
 use rusqlite::Connection;
@@ -167,6 +169,18 @@ async fn main() {
         );
     }
 
+    // Generic proxy
+    let proxy_config_store = Arc::new(StaticProxyConfigStore::from_config(&config));
+    let proxy_secret_resolver = Arc::new(NativeProxySecretResolver::new(config.clone()));
+    let proxy_usage_store = Arc::new(NativeProxyUsageStore::new(repo.clone()));
+    let proxy_state = ProxyState {
+        config_store: proxy_config_store,
+        secret_resolver: proxy_secret_resolver,
+        usage_store: proxy_usage_store,
+        rate_limiter: Arc::new(rate_limiter.clone()),
+        http_client: reqwest::Client::new(),
+    };
+
     let session_store = Arc::new(NativeSessionStore::new(ns_repo.clone()));
     let object_meta_store = Arc::new(NativeObjectMetaStore::new(ns_repo.clone()));
 
@@ -270,6 +284,8 @@ async fn main() {
         .nest("/auth", auth_routes(auth_state))
         // AI routes
         .merge(ai_routes(ai_state))
+        // Generic proxy routes
+        .merge(proxy_routes(proxy_state))
         // Generic namespace routes
         .nest("/namespaces", namespace_routes(namespace_state))
         // Object store routes (mounted under /namespaces/{ns_id})
@@ -301,9 +317,10 @@ async fn main() {
 
     // Build the top-level router
     let app = Router::new()
-        // Health check
+        // Health check (at root and under /api)
         .route("/", get(|| async { "Diaryx Sync Server" }))
         .route("/health", get(|| async { "OK" }))
+        .route("/api/health", get(|| async { "OK" }))
         // All API routes under /api
         .nest("/api", api);
 

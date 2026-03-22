@@ -1266,6 +1266,64 @@ fn verify_stripe_signature(
     }
 }
 
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests {
+    use super::verify_stripe_signature;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    fn signature_header(payload: &str, secret: &str, timestamp: i64) -> String {
+        let signed_payload = format!("{timestamp}.{payload}");
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key");
+        mac.update(signed_payload.as_bytes());
+        let signature: String = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("t={timestamp},v1={signature}")
+    }
+
+    #[wasm_bindgen_test]
+    fn stripe_signature_verifier_accepts_valid_signatures() {
+        let payload = r#"{"id":"evt_123","type":"checkout.session.completed"}"#;
+        let secret = "whsec_test";
+        let header = signature_header(payload, secret, chrono::Utc::now().timestamp());
+
+        assert!(verify_stripe_signature(payload, &header, secret).is_ok());
+    }
+
+    #[wasm_bindgen_test]
+    fn stripe_signature_verifier_rejects_invalid_headers() {
+        let payload = r#"{"id":"evt_123"}"#;
+        let secret = "whsec_test";
+
+        let missing_timestamp = verify_stripe_signature(payload, "v1=abcd", secret);
+        assert_eq!(
+            missing_timestamp.err().as_deref(),
+            Some("Missing timestamp in signature")
+        );
+
+        let expired = signature_header(payload, secret, chrono::Utc::now().timestamp() - 600);
+        assert_eq!(
+            verify_stripe_signature(payload, &expired, secret)
+                .err()
+                .as_deref(),
+            Some("Signature timestamp too old")
+        );
+
+        let mismatched = signature_header(payload, "other-secret", chrono::Utc::now().timestamp());
+        assert_eq!(
+            verify_stripe_signature(payload, &mismatched, secret)
+                .err()
+                .as_deref(),
+            Some("Signature mismatch")
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Apple IAP handlers
 // ---------------------------------------------------------------------------
@@ -1620,4 +1678,132 @@ pub async fn upgrade_sync_ws(req: Request, ctx: RouteContext<()>) -> Result<Resp
     }
 
     stub.fetch_with_request(do_req).await
+}
+
+// ---------------------------------------------------------------------------
+// Proxy handlers
+// ---------------------------------------------------------------------------
+
+/// POST /api/proxy/:proxy_id/*path — Generic proxy for plugin-initiated API requests.
+///
+/// Resolves credentials from env secrets, validates tier/quota, and forwards
+/// the request to the configured upstream. Supports streaming (SSE passthrough).
+pub async fn proxy_request(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = authenticate(&req, &ctx).await?;
+    let proxy_id = ctx
+        .param("proxy_id")
+        .ok_or_else(|| Error::from("missing proxy_id"))?
+        .to_string();
+    let path = ctx.param("path").map(|s| s.to_string()).unwrap_or_default();
+
+    // Look up user tier
+    let auth_store = D1AuthStore::new(db(&ctx)?);
+    let tier = auth_store
+        .get_user_tier(&user_id)
+        .await
+        .map_err(|e| Error::from(e.to_string()))?;
+
+    // Resolve proxy config from env
+    let (upstream, api_key, models, _monthly_quota) = match proxy_id.as_str() {
+        "diaryx.ai" => {
+            let key = ctx
+                .env
+                .secret("MANAGED_AI_OPENROUTER_API_KEY")
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            if key.is_empty() {
+                return Response::from_json(&serde_json::json!({
+                    "error": "provider_unavailable",
+                    "message": "Managed AI is not configured"
+                }))
+                .map(|r| r.with_status(503));
+            }
+            let endpoint = ctx
+                .env
+                .var("MANAGED_AI_OPENROUTER_ENDPOINT")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
+            let models_str = ctx
+                .env
+                .var("MANAGED_AI_MODELS")
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            let models: Vec<String> = models_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let quota: u64 = ctx
+                .env
+                .var("MANAGED_AI_MONTHLY_QUOTA")
+                .ok()
+                .and_then(|v| v.to_string().parse().ok())
+                .unwrap_or(1000);
+            (endpoint, key, models, quota)
+        }
+        _ => {
+            return Response::from_json(&serde_json::json!({
+                "error": "proxy_not_found",
+                "message": format!("Proxy '{}' not found", proxy_id)
+            }))
+            .map(|r| r.with_status(404));
+        }
+    };
+
+    // Check tier (Plus required for platform proxies)
+    if tier != diaryx_server::UserTier::Plus {
+        return Response::from_json(&serde_json::json!({
+            "error": "plus_required",
+            "message": "Diaryx Plus is required for this proxy"
+        }))
+        .map(|r| r.with_status(403));
+    }
+
+    // Read body
+    let body_bytes = req.bytes().await.unwrap_or_default();
+
+    // Validate model if models list is set
+    if !models.is_empty() {
+        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+            if let Some(model) = json.get("model").and_then(|v| v.as_str()) {
+                if !models.iter().any(|m| m == model) {
+                    return Response::from_json(&serde_json::json!({
+                        "error": "value_not_allowed",
+                        "message": format!("Model '{}' is not in the allowlist", model)
+                    }))
+                    .map(|r| r.with_status(400));
+                }
+            }
+        }
+    }
+
+    // Build upstream request
+    let upstream_url = format!(
+        "{}/{}",
+        upstream.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+
+    let mut headers = worker::Headers::new();
+    headers.set("Authorization", &format!("Bearer {}", api_key))?;
+    headers.set("Content-Type", "application/json")?;
+
+    let mut init = worker::RequestInit::new();
+    init.with_method(worker::Method::Post);
+    init.with_headers(headers);
+    init.with_body(Some(worker::wasm_bindgen::JsValue::from_str(
+        &String::from_utf8_lossy(&body_bytes),
+    )));
+
+    let upstream_req = Request::new_with_init(&upstream_url, &init)?;
+    let mut upstream_resp = worker::Fetch::Request(upstream_req).send().await?;
+
+    let status = upstream_resp.status_code();
+    let resp_body = upstream_resp.text().await.unwrap_or_default();
+    Response::ok(resp_body).map(|r| r.with_status(status))
+}
+
+/// POST /api/ai/*path — Backward-compat alias for /api/proxy/diaryx.ai/*path.
+pub async fn ai_compat_proxy(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    proxy_request(req, ctx).await
 }

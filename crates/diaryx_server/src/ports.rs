@@ -459,8 +459,20 @@ pub trait BillingStore: Send + Sync {
     async fn get_user_id_by_apple_transaction_id(&self, transaction_id: &str) -> Result<Option<String>, ServerCoreError>;
 }
 
-pub trait AiProvider: Send + Sync {
-    async fn chat_completion(&self, request: Value) -> Result<Value, ServerCoreError>;
+pub trait ProxyConfigStore: Send + Sync {
+    async fn get_proxy(&self, proxy_id: &str) -> Result<Option<crate::proxy::ProxyConfig>, ServerCoreError>;
+    async fn list_proxies(&self) -> Result<Vec<crate::proxy::ProxyConfig>, ServerCoreError>;
+}
+
+pub trait ProxySecretResolver: Send + Sync {
+    fn resolve_platform_secret(&self, env_key: &str) -> Option<String>;
+    async fn resolve_user_secret(&self, user_id: &str, secret_key: &str) -> Option<String>;
+}
+
+pub trait ProxyUsageStore: Send + Sync {
+    async fn get_monthly_count(&self, user_id: &str, proxy_id: &str, period: &str) -> Result<u64, ServerCoreError>;
+    async fn increment_monthly_count(&self, user_id: &str, proxy_id: &str, period: &str) -> Result<u64, ServerCoreError>;
+    async fn check_rate_limit(&self, user_id: &str, proxy_id: &str, limit: u32) -> Result<bool, ServerCoreError>;
 }
 
 pub trait JobSink: Send + Sync {

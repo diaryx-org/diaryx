@@ -66,13 +66,17 @@
     currentStepIndex = index;
     const step = steps[index];
 
-    // On mobile, run prepare action to open sidebar if needed
-    if (isMobileMode && mobileTargetActions[step.target]) {
+    // On mobile, always clean up the previous step (e.g. close sidebar) before preparing the next
+    if (isMobileMode) {
       transitioning = true;
       currentCleanup?.();
       currentCleanup = null;
-      const cleanup = await mobileTargetActions[step.target].prepare();
-      currentCleanup = cleanup;
+
+      if (mobileTargetActions[step.target]) {
+        const cleanup = await mobileTargetActions[step.target].prepare();
+        currentCleanup = cleanup;
+      }
+
       // Wait for DOM to settle after sidebar animation
       await new Promise<void>(r => requestAnimationFrame(() => r()));
       transitioning = false;
@@ -174,6 +178,11 @@
   let cutoutY = $derived(targetRect ? targetRect.top - PAD : 0);
   let cutoutW = $derived(targetRect ? targetRect.width + PAD * 2 : 0);
   let cutoutH = $derived(targetRect ? targetRect.height + PAD * 2 : 0);
+
+  // On mobile, move the card to the top when the target is in the bottom half of the viewport
+  let mobileCardAtTop = $derived(
+    isMobileMode && targetRect != null && targetRect.bottom > window.innerHeight / 2
+  );
 
   // Tooltip positioning (desktop only)
   const TOOLTIP_GAP = 12;
@@ -287,7 +296,7 @@
     <!-- Mobile bottom card — rendered outside the overlay so it's not trapped in its stacking context -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="spotlight-mobile-card"
+      class="spotlight-mobile-card {mobileCardAtTop ? 'spotlight-mobile-card-top' : ''}"
       role="dialog"
       aria-label="Onboarding tour"
       tabindex="-1"
@@ -361,6 +370,18 @@
     padding: 1.25rem 1rem calc(env(safe-area-inset-bottom) + 1rem);
     box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
     animation: slideUp 0.25s ease-out;
+    transition: bottom 0.3s ease-in-out, top 0.3s ease-in-out;
+  }
+
+  .spotlight-mobile-card-top {
+    bottom: auto;
+    top: 0;
+    border-top: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0 0 0.75rem 0.75rem;
+    padding: calc(env(safe-area-inset-top) + 1rem) 1rem 1.25rem;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    animation: slideDown 0.25s ease-out;
   }
 
   @keyframes tooltipFadeIn {
@@ -383,10 +404,20 @@
     }
   }
 
+  @keyframes slideDown {
+    from {
+      transform: translateY(-100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .spotlight-backdrop,
     .spotlight-tooltip,
-    .spotlight-mobile-card {
+    .spotlight-mobile-card,
+    .spotlight-mobile-card-top {
       transition: none;
       animation: none;
     }

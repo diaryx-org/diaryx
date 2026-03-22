@@ -591,7 +591,24 @@ pub enum SettingsField {
     HostWidget {
         /// Identifier of the host widget to render.
         widget_id: String,
+        /// Optional host action to fire when the widget's sign-in CTA is
+        /// clicked. Lets plugins declare which screen to open (e.g.
+        /// account settings) instead of relying on a hard-coded default.
+        #[serde(default)]
+        sign_in_action: Option<HostAction>,
     },
+}
+
+/// A host action declaration used by declarative UI fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub struct HostAction {
+    /// The host action type (e.g. `"open-settings"`).
+    pub action_type: String,
+    /// Optional payload passed to the host action handler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
 }
 
 /// A select dropdown option.

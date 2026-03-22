@@ -66,3 +66,39 @@ impl RateLimiter {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RateLimiter;
+    use std::{thread::sleep, time::Duration};
+
+    #[test]
+    fn check_enforces_limit_and_recovers_after_window() {
+        let limiter = RateLimiter::new();
+        let window = Duration::from_millis(20);
+
+        assert_eq!(limiter.check("user1", "proxy", 1, window), Ok(()));
+        let retry_after = limiter
+            .check("user1", "proxy", 1, window)
+            .expect_err("should be rate limited");
+        assert!(retry_after >= 1);
+
+        sleep(window + Duration::from_millis(10));
+        assert_eq!(limiter.check("user1", "proxy", 1, window), Ok(()));
+    }
+
+    #[test]
+    fn cleanup_removes_expired_windows() {
+        let limiter = RateLimiter::new();
+        assert_eq!(
+            limiter.check("user1", "namespaces", 2, Duration::from_secs(1)),
+            Ok(())
+        );
+        assert_eq!(limiter.windows.len(), 1);
+
+        sleep(Duration::from_millis(15));
+        limiter.cleanup(Duration::from_millis(1));
+
+        assert!(limiter.windows.is_empty());
+    }
+}

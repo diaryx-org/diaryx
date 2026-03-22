@@ -7,7 +7,11 @@ describe("pluginBuiltinCompat", () => {
     const fields = getLegacyBuiltinFields("publish.panel");
 
     expect(fields).toEqual([
-      expect.objectContaining({ type: "HostWidget", widget_id: "namespace.guard" }),
+      expect.objectContaining({
+        type: "HostWidget",
+        widget_id: "namespace.guard",
+        sign_in_action: { action_type: "open-settings", payload: { tab: "account" } },
+      }),
       expect.objectContaining({ type: "HostWidget", widget_id: "namespace.site-url" }),
       expect.objectContaining({ type: "HostWidget", widget_id: "namespace.subdomain" }),
       expect.objectContaining({ type: "HostWidget", widget_id: "namespace.custom-domains" }),

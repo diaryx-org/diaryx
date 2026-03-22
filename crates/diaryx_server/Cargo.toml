@@ -16,6 +16,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = "0.1"
+hex = "0.4"
+hmac = "0.12"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "v5"] }
 webauthn_rp = { version = "0.3", default-features = false, features = ["bin", "custom", "serde", "serde_relaxed", "serializable_server_state"] }

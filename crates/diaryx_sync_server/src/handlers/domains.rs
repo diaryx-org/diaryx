@@ -369,3 +369,314 @@ async fn domain_auth(
             .into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        adapters::{NativeDomainMappingCache, NativeNamespaceStore},
+        auth::AuthUser,
+        blob_store::InMemoryBlobStore,
+        db::{NamespaceRepo, init_database},
+        tokens::create_signed_token,
+    };
+    use axum::{
+        body::to_bytes,
+        response::{IntoResponse, Response},
+    };
+    use chrono::{TimeZone, Utc};
+    use diaryx_server::{AuthSessionInfo, BlobStore, UserInfo, UserTier};
+    use reqwest::Client;
+    use rusqlite::{Connection, params};
+    use serde_json::{Value as JsonValue, json};
+    use std::sync::{Arc, Mutex};
+
+    fn setup_repo(users: &[&str]) -> Arc<NamespaceRepo> {
+        let conn = Connection::open_in_memory().expect("open sqlite");
+        init_database(&conn).expect("init sqlite");
+        for user_id in users {
+            conn.execute(
+                "INSERT INTO users (id, email, created_at, tier) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    user_id,
+                    format!("{user_id}@example.com"),
+                    1_i64,
+                    UserTier::Free.as_str()
+                ],
+            )
+            .expect("seed user");
+        }
+        Arc::new(NamespaceRepo::new(Arc::new(Mutex::new(conn))))
+    }
+
+    fn state(repo: Arc<NamespaceRepo>, blob_store: Arc<InMemoryBlobStore>) -> DomainState {
+        DomainState {
+            ns_repo: repo.clone(),
+            namespace_store: Arc::new(NativeNamespaceStore::new(repo)),
+            domain_mapping_cache: Arc::new(NativeDomainMappingCache::new(
+                Client::new(),
+                "",
+                None,
+                None,
+            )),
+            blob_store,
+            token_signing_key: b"domain-signing-key".to_vec(),
+        }
+    }
+
+    fn auth(user_id: &str) -> RequireAuth {
+        RequireAuth(AuthUser {
+            session: AuthSessionInfo {
+                token: format!("session-{user_id}"),
+                user_id: user_id.to_string(),
+                device_id: format!("device-{user_id}"),
+                expires_at: Utc.timestamp_opt(4_102_444_800, 0).unwrap(),
+                created_at: Utc.timestamp_opt(1, 0).unwrap(),
+            },
+            user: UserInfo {
+                id: user_id.to_string(),
+                email: format!("{user_id}@example.com"),
+                created_at: Utc.timestamp_opt(1, 0).unwrap(),
+                last_login_at: None,
+                attachment_limit_bytes: None,
+                workspace_limit: None,
+                tier: UserTier::Plus,
+                published_site_limit: None,
+            },
+        })
+    }
+
+    async fn json_body(response: Response) -> JsonValue {
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        serde_json::from_slice(&bytes).expect("json body")
+    }
+
+    #[tokio::test]
+    async fn domain_routes_cover_domain_crud() {
+        let repo = setup_repo(&["user1"]);
+        repo.create_namespace("workspace:alpha", "user1", None)
+            .expect("seed namespace");
+        repo.upsert_audience("workspace:alpha", "public", "public")
+            .expect("seed audience");
+        let state = state(repo, Arc::new(InMemoryBlobStore::new("")));
+
+        let registered = register_domain(
+            State(state.clone()),
+            auth("user1"),
+            Path(("workspace:alpha".to_string(), "example.com".to_string())),
+            Json(RegisterDomainRequest {
+                audience_name: "public".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(registered.status(), StatusCode::OK);
+        let registered_body = json_body(registered).await;
+        assert_eq!(registered_body["domain"], "example.com");
+        assert_eq!(registered_body["audience_name"], "public");
+
+        let listed = list_domains(
+            State(state.clone()),
+            auth("user1"),
+            Path("workspace:alpha".to_string()),
+        )
+        .await
+        .into_response();
+        let listed_body = json_body(listed).await;
+        assert_eq!(listed_body.as_array().map(Vec::len), Some(1));
+
+        let removed = remove_domain(
+            State(state.clone()),
+            auth("user1"),
+            Path(("workspace:alpha".to_string(), "example.com".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+        let empty = list_domains(
+            State(state),
+            auth("user1"),
+            Path("workspace:alpha".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(json_body(empty).await, json!([]));
+    }
+
+    #[tokio::test]
+    async fn domain_routes_cover_subdomain_claim_and_release() {
+        let repo = setup_repo(&["user1"]);
+        repo.create_namespace("workspace:alpha", "user1", None)
+            .expect("seed namespace");
+        let state = state(repo.clone(), Arc::new(InMemoryBlobStore::new("")));
+
+        let claimed = claim_subdomain(
+            State(state.clone()),
+            auth("user1"),
+            Path("workspace:alpha".to_string()),
+            Json(ClaimSubdomainRequest {
+                subdomain: "Notes-App".to_string(),
+                default_audience: Some("members".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(claimed.status(), StatusCode::OK);
+        let claimed_body = json_body(claimed).await;
+        assert_eq!(claimed_body["subdomain"], "notes-app");
+        assert_eq!(claimed_body["url"], "https://notes-app.diaryx.org");
+
+        let stored = repo
+            .get_custom_domain("notes-app.diaryx.org")
+            .expect("stored subdomain");
+        assert_eq!(stored.audience_name, "*");
+
+        let released = release_subdomain(
+            State(state),
+            auth("user1"),
+            Path("workspace:alpha".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(released.status(), StatusCode::NO_CONTENT);
+        assert!(repo.get_custom_domain("notes-app.diaryx.org").is_none());
+    }
+
+    #[tokio::test]
+    async fn domain_check_and_public_domain_auth_serve_blob_content() {
+        let repo = setup_repo(&["user1"]);
+        repo.create_namespace("workspace:alpha", "user1", None)
+            .expect("seed namespace");
+        repo.upsert_audience("workspace:alpha", "public", "public")
+            .expect("seed audience");
+        repo.upsert_custom_domain("example.com", "workspace:alpha", "public")
+            .expect("seed domain");
+        repo.upsert_object(
+            "workspace:alpha",
+            "index.html",
+            "ns/workspace:alpha/index.html",
+            "text/html",
+            18,
+            Some("public"),
+            Some("hash"),
+        )
+        .expect("seed object");
+        let blob_store = Arc::new(InMemoryBlobStore::new(""));
+        blob_store
+            .put(
+                "ns/workspace:alpha/index.html",
+                b"<h1>Hello</h1>",
+                "text/html",
+                None,
+            )
+            .await
+            .expect("seed blob");
+        let state = state(repo, blob_store);
+
+        let domain_check_response = domain_check(
+            State(state.clone()),
+            Query(DomainCheckParams {
+                domain: Some("example.com".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(domain_check_response.status(), StatusCode::OK);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-host", "example.com".parse().unwrap());
+        headers.insert("x-forwarded-uri", "/index.html".parse().unwrap());
+
+        let response = domain_auth(
+            State(state),
+            headers,
+            Query(DomainAuthParams {
+                audience_token: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("text/html")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        assert_eq!(&body[..], b"<h1>Hello</h1>");
+    }
+
+    #[tokio::test]
+    async fn domain_auth_requires_valid_token_for_token_audiences() {
+        let repo = setup_repo(&["user1"]);
+        repo.create_namespace("workspace:alpha", "user1", None)
+            .expect("seed namespace");
+        repo.upsert_audience("workspace:alpha", "members", "token")
+            .expect("seed audience");
+        repo.upsert_custom_domain("members.example.com", "workspace:alpha", "members")
+            .expect("seed domain");
+        repo.upsert_object(
+            "workspace:alpha",
+            "page.html",
+            "ns/workspace:alpha/page.html",
+            "text/html",
+            20,
+            Some("members"),
+            Some("hash"),
+        )
+        .expect("seed object");
+        let blob_store = Arc::new(InMemoryBlobStore::new(""));
+        blob_store
+            .put(
+                "ns/workspace:alpha/page.html",
+                b"<p>Members only</p>",
+                "text/html",
+                None,
+            )
+            .await
+            .expect("seed blob");
+        let state = state(repo, blob_store);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-host", "members.example.com".parse().unwrap());
+        headers.insert("x-forwarded-uri", "/page.html".parse().unwrap());
+
+        let forbidden = domain_auth(
+            State(state.clone()),
+            headers.clone(),
+            Query(DomainAuthParams {
+                audience_token: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+        let token = create_signed_token(
+            &state.token_signing_key,
+            "workspace:alpha",
+            "members",
+            "tok-1",
+            None,
+        )
+        .expect("signed token");
+        let allowed = domain_auth(
+            State(state),
+            headers,
+            Query(DomainAuthParams {
+                audience_token: Some(token),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(allowed.status(), StatusCode::OK);
+    }
+}

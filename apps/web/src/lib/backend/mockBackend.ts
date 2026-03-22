@@ -139,6 +139,25 @@ export class MockBackend implements Backend {
     }
   }
 
+  private storeFile(path: string, raw: string) {
+    const { frontmatter, body } = parseFrontmatter(raw);
+    this.files.set(path, { raw, frontmatter, body });
+  }
+
+  private serializeFile(file: MockFile): string {
+    const fmLines = Object.entries(file.frontmatter)
+      .filter(([, v]) => v !== undefined && v !== null)
+      .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+      .join("\n");
+    return `---\n${fmLines}\n---\n${file.body}`;
+  }
+
+  private rebuildTree() {
+    if (this.files.has("workspace/index.md")) {
+      this.tree = buildTree(this.files, "workspace/index.md");
+    }
+  }
+
   private getEntry(path: string): EntryData {
     const file = this.files.get(path);
     if (file) {
@@ -231,10 +250,96 @@ export class MockBackend implements Backend {
           data: { errors: [], warnings: [], root_path: "workspace", scanned_files: 0 },
         } as any;
 
-      case "SaveEntry":
+      case "CreateChildEntry": {
+        const parentPath = params?.parent_path ?? "workspace/index.md";
+        const dir = parentPath.replace(/\/[^/]+$/, "");
+        const childPath = dir + "/untitled.md";
+        // Create the child file
+        this.storeFile(childPath, "---\ntitle: Untitled\npart_of: " + parentPath + "\n---\n");
+        // Add to parent's contents
+        const parent = this.files.get(parentPath);
+        if (parent) {
+          const contents = Array.isArray(parent.frontmatter.contents) ? [...parent.frontmatter.contents] : [];
+          contents.push("untitled.md");
+          parent.frontmatter.contents = contents;
+        }
+        this.rebuildTree();
+        return {
+          type: "CreateChildResult",
+          data: {
+            child_path: childPath,
+            parent_path: parentPath,
+            parent_converted: false,
+            original_parent_path: null,
+          },
+        } as any;
+      }
+
+      case "CreateEntry": {
+        const entryPath = params?.path ?? "workspace/untitled.md";
+        this.storeFile(entryPath, "---\ntitle: Untitled\n---\n");
+        return { type: "String", data: entryPath };
+      }
+
+      case "SetFrontmatterProperty": {
+        const path = params?.path ?? "";
+        const key = params?.key;
+        const value = params?.value;
+        const file = this.files.get(path);
+        if (file && key) {
+          file.frontmatter[key] = value;
+          // Handle title rename
+          if (key === "title" && typeof value === "string") {
+            const dir = path.replace(/\/[^/]+$/, "");
+            const oldFilename = path.split("/").pop()!;
+            const newFilename = value.toLowerCase().replace(/\s+/g, "-") + ".md";
+            const newPath = dir + "/" + newFilename;
+            if (newPath !== path) {
+              this.files.set(newPath, file);
+              this.files.delete(path);
+              // Update parent's contents reference
+              for (const [, parentFile] of this.files) {
+                if (Array.isArray(parentFile.frontmatter.contents)) {
+                  const idx = parentFile.frontmatter.contents.indexOf(oldFilename);
+                  if (idx !== -1) {
+                    parentFile.frontmatter.contents[idx] = newFilename;
+                  }
+                }
+              }
+              this.rebuildTree();
+              return { type: "String", data: newPath };
+            }
+          }
+        }
+        return { type: "String", data: path };
+      }
+
+      case "SaveEntry": {
+        const path = params?.path ?? "";
+        const content = params?.content ?? "";
+        const existing = this.files.get(path);
+        if (existing) {
+          existing.body = content;
+          existing.raw = this.serializeFile(existing);
+        } else {
+          this.storeFile(path, "---\n---\n" + content);
+        }
+        return { type: "Ok" };
+      }
+
+      case "CreateWorkspace": {
+        const wsPath = params?.path ?? "workspace";
+        const wsName = params?.name ?? "My Workspace";
+        const indexPath = wsPath + "/index.md";
+        if (this.files.has(indexPath)) {
+          throw new Error("Workspace already exists");
+        }
+        this.storeFile(indexPath, `---\ntitle: ${wsName}\ncontents: []\n---\n`);
+        this.rebuildTree();
+        return { type: "Ok" };
+      }
+
       case "WriteFile":
-      case "CreateWorkspace":
-      case "SetFrontmatterProperty":
       case "RemoveFrontmatterProperty":
       case "ReorderFrontmatterKeys":
         return { type: "Ok" };

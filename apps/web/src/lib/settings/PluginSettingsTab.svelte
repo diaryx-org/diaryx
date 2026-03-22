@@ -534,7 +534,7 @@
         </div>
       {:else if field.widget_id === "namespace.guard"}
         <div class="px-1">
-          <NamespaceGuardWidget />
+          <NamespaceGuardWidget signInAction={field.sign_in_action} />
         </div>
       {:else if field.widget_id === "namespace.site-url"}
         <div class="px-1">

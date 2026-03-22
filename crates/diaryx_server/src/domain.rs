@@ -207,3 +207,47 @@ pub struct CurrentUserContext {
     pub namespaces: Vec<NamespaceInfo>,
     pub limits: TierDefaults,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{TierDefaults, UserTier};
+
+    #[test]
+    fn user_tier_string_helpers_round_trip() {
+        assert_eq!(UserTier::Free.as_str(), "free");
+        assert_eq!(UserTier::Plus.as_str(), "plus");
+        assert_eq!(UserTier::from_str_lossy("plus"), UserTier::Plus);
+        assert_eq!(UserTier::from_str_lossy("anything-else"), UserTier::Free);
+    }
+
+    #[test]
+    fn user_tier_defaults_match_expected_limits() {
+        assert_eq!(
+            UserTier::Free.defaults(),
+            TierDefaults {
+                device_limit: 2,
+                attachment_limit_bytes: 200 * 1024 * 1024,
+                workspace_limit: 1,
+                published_site_limit: 1,
+            }
+        );
+        assert_eq!(
+            UserTier::Plus.defaults(),
+            TierDefaults {
+                device_limit: 10,
+                attachment_limit_bytes: 2 * 1024 * 1024 * 1024,
+                workspace_limit: 10,
+                published_site_limit: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn user_tier_serializes_in_snake_case() {
+        assert_eq!(serde_json::to_string(&UserTier::Plus).unwrap(), "\"plus\"");
+        assert_eq!(
+            serde_json::from_str::<UserTier>("\"free\"").unwrap(),
+            UserTier::Free
+        );
+    }
+}

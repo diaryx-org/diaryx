@@ -218,10 +218,12 @@ function loadCurrentWorkspaceId(): string | null {
 
 /** Persist the list to localStorage and update reactive state. */
 function saveRegistry(list: LocalWorkspace[]): void {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(REGISTRY_KEY, JSON.stringify(list));
   // Update $state so Svelte re-renders any $derived consumers
   registryState = list.slice().sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
+  // In preview mode, skip localStorage writes to avoid contaminating the parent page
+  if ((globalThis as any).__diaryx_preview) return;
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(REGISTRY_KEY, JSON.stringify(list));
 }
 
 // ============================================================================
@@ -392,7 +394,7 @@ export function removeLocalWorkspace(id: string): void {
  */
 export function setCurrentWorkspaceId(id: string): void {
   currentWorkspaceIdState = id;
-  if (typeof localStorage !== 'undefined') {
+  if (!(globalThis as any).__diaryx_preview && typeof localStorage !== 'undefined') {
     localStorage.setItem(CURRENT_KEY, id);
   }
 
@@ -402,8 +404,7 @@ export function setCurrentWorkspaceId(id: string): void {
   if (ws) {
     ws.lastOpenedAt = Date.now();
     saveRegistry(list);
-    // Keep localStorage workspace name in sync for page reloads
-    if (typeof localStorage !== 'undefined') {
+    if (!(globalThis as any).__diaryx_preview && typeof localStorage !== 'undefined') {
       localStorage.setItem('diaryx-workspace-name', ws.name);
     }
   }

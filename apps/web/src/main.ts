@@ -36,20 +36,7 @@ async function setupPreview(target: HTMLElement, params: URLSearchParams) {
   const backend = await getMockBackend();
   _g.__diaryx_backendInstance = backend as import("./lib/backend/interface").Backend;
 
-  // Pre-seed the local workspace registry so App.svelte finds a workspace
-  const PREVIEW_WS_ID = "preview-workspace";
-  const wsEntry = {
-    id: PREVIEW_WS_ID,
-    name: "My Workspace",
-    isLocal: true,
-    storageType: "opfs",
-    downloadedAt: Date.now(),
-    lastOpenedAt: Date.now(),
-  };
-  localStorage.setItem("diaryx_local_workspaces", JSON.stringify([wsEntry]));
-  localStorage.setItem("diaryx_current_workspace", PREVIEW_WS_ID);
-
-  // Apply bundle theme before mounting (same approach as old PreviewApp)
+  // Apply bundle theme before mounting
   const bundleId = params.get("bundle") ?? "bundle.default";
   const darkMode = params.get("dark") === "1";
   if (darkMode) {

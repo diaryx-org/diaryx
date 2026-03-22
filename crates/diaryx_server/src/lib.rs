@@ -27,6 +27,7 @@ macro_rules! cfg_async_trait {
 pub mod api;
 pub mod domain;
 pub mod ports;
+pub mod proxy;
 pub mod schema;
 pub mod use_cases;
 
@@ -36,8 +37,9 @@ pub use domain::{
     PasskeyInfo, PublicObjectAccess, TierDefaults, UsageTotals, UserInfo, UserTier,
 };
 pub use ports::{
-    AiProvider, AppleReceiptVerifier, AuthSessionStore, AuthStore, BillingProvider, BillingStore,
-    BlobStore, Clock, DeviceStore, DomainMappingCache, JobSink, MagicLinkStore, Mailer,
-    MultipartCompletedPart, NamespaceStore, ObjectMetaStore, PasskeyStore, RateLimitStore,
-    ServerCoreError, SessionStore, TokenClaims, TokenSigner, UserStore,
+    AppleReceiptVerifier, AuthSessionStore, AuthStore, BillingProvider, BillingStore, BlobStore,
+    Clock, DeviceStore, DomainMappingCache, JobSink, MagicLinkStore, Mailer,
+    MultipartCompletedPart, NamespaceStore, ObjectMetaStore, PasskeyStore, ProxyConfigStore,
+    ProxySecretResolver, ProxyUsageStore, RateLimitStore, ServerCoreError, SessionStore,
+    TokenClaims, TokenSigner, UserStore,
 };

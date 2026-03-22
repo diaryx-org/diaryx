@@ -592,8 +592,15 @@ pub fn register_host_functions(
             "host_hash_file",
             [ValType::I64],
             [ValType::I64],
-            user_data,
+            user_data.clone(),
             host_hash_file,
+        )
+        .with_function(
+            "host_proxy_request",
+            [ValType::I64],
+            [ValType::I64],
+            user_data,
+            host_proxy_request,
         )
 }
 
@@ -1363,6 +1370,143 @@ fn host_hash_file(
     Ok(())
 }
 
+/// Host function: `host_proxy_request(input: {proxy_id, path, method, headers, body?}) -> {status, headers, body}`
+///
+/// Routes a request through the server's generic proxy service.
+/// The host resolves the server URL and auth token from the runtime context,
+/// then makes a request to `POST {server}/api/proxy/{proxy_id}/{path}`.
+#[cfg(feature = "http")]
+fn host_proxy_request(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct ProxyInput {
+        proxy_id: String,
+        #[serde(default)]
+        path: String,
+        #[serde(default = "default_method")]
+        method: String,
+        #[serde(default)]
+        headers: std::collections::HashMap<String, String>,
+        body: Option<String>,
+    }
+
+    fn default_method() -> String {
+        "POST".to_string()
+    }
+
+    #[derive(serde::Serialize)]
+    struct ProxyOutput {
+        status: u16,
+        headers: std::collections::HashMap<String, String>,
+        body: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body_base64: Option<String>,
+    }
+
+    let parsed: ProxyInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_proxy_request: invalid input: {e}")))?;
+
+    // Resolve server URL and auth token from runtime context
+    let (server_url, auth_token) = {
+        let ctx = user_data.get()?;
+        let ctx = ctx.lock().unwrap();
+
+        let runtime_json = ctx.runtime_context_provider.get_context();
+        let server_url = runtime_json
+            .get("server_url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim_end_matches('/').to_string())
+            .ok_or_else(|| {
+                ExtismError::msg("host_proxy_request: server_url not available in runtime context")
+            })?;
+        let auth_token = runtime_json
+            .get("auth_token")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        (server_url, auth_token)
+    };
+
+    // Build proxy URL
+    let proxy_url = if parsed.path.is_empty() {
+        format!("{}/api/proxy/{}", server_url, parsed.proxy_id)
+    } else {
+        format!(
+            "{}/api/proxy/{}/{}",
+            server_url,
+            parsed.proxy_id,
+            parsed.path.trim_start_matches('/')
+        )
+    };
+
+    // Build request
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(120)))
+        .build()
+        .into();
+
+    let mut request_builder = ureq::http::Request::builder()
+        .method(parsed.method.as_str())
+        .uri(proxy_url.as_str())
+        .header("Content-Type", "application/json");
+
+    if let Some(ref token) = auth_token {
+        request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
+    }
+
+    for (key, value) in &parsed.headers {
+        request_builder = request_builder.header(key, value);
+    }
+
+    let response = if let Some(body) = &parsed.body {
+        let request = request_builder
+            .body(body.clone())
+            .map_err(|e| ExtismError::msg(format!("host_proxy_request: build request: {e}")))?;
+        agent
+            .run(request)
+            .map_err(|e| ExtismError::msg(format!("host_proxy_request: {e}")))?
+    } else {
+        let request = request_builder
+            .body(())
+            .map_err(|e| ExtismError::msg(format!("host_proxy_request: build request: {e}")))?;
+        agent
+            .run(request)
+            .map_err(|e| ExtismError::msg(format!("host_proxy_request: {e}")))?
+    };
+
+    let status = response.status().as_u16();
+    let mut resp_headers = std::collections::HashMap::new();
+    for (name, value) in response.headers() {
+        if let Ok(v) = value.to_str() {
+            resp_headers.insert(name.to_string(), v.to_string());
+        }
+    }
+    let mut response = response;
+    let body_bytes = response
+        .body_mut()
+        .read_to_vec()
+        .map_err(|e| ExtismError::msg(format!("host_proxy_request: read body: {e}")))?;
+    let body = String::from_utf8_lossy(&body_bytes).to_string();
+    let body_base64 = Some(base64::engine::general_purpose::STANDARD.encode(&body_bytes));
+
+    let output = ProxyOutput {
+        status,
+        headers: resp_headers,
+        body,
+        body_base64,
+    };
+
+    let json = serde_json::to_string(&output)
+        .map_err(|e| ExtismError::msg(format!("host_proxy_request: serialize: {e}")))?;
+    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+    Ok(())
+}
+
 /// Host function: `host_http_request(input: {url, method, headers, body?, timeout_ms?}) -> {status, headers, body}`
 ///
 /// Performs an HTTP request and returns the response. Only available when
@@ -1496,6 +1640,22 @@ fn host_http_request(
         "status": 0,
         "headers": {},
         "body": "host_http_request: http feature not enabled"
+    });
+    plugin.memory_set_val(&mut outputs[0], error.to_string().as_str())?;
+    Ok(())
+}
+
+#[cfg(not(feature = "http"))]
+fn host_proxy_request(
+    plugin: &mut CurrentPlugin,
+    _inputs: &[Val],
+    outputs: &mut [Val],
+    _user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let error = serde_json::json!({
+        "status": 0,
+        "headers": {},
+        "body": "host_proxy_request: http feature not enabled"
     });
     plugin.memory_set_val(&mut outputs[0], error.to_string().as_str())?;
     Ok(())

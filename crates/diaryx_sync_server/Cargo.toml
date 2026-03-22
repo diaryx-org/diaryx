@@ -30,7 +30,7 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 
 # Email (Resend HTTP API)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
 # Git (for history API endpoints)
 git2 = { version = "0.19", default-features = false }

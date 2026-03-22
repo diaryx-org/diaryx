@@ -4,8 +4,19 @@
   import UpgradeBanner from '$lib/components/UpgradeBanner.svelte';
   import { AlertCircle, Globe, Loader2 } from '@lucide/svelte';
   import { getNamespaceContext } from './namespaceContext.svelte';
+  import type { HostAction } from '$lib/backend/generated';
+
+  interface Props {
+    signInAction?: HostAction | null;
+  }
+
+  let { signInAction = null }: Props = $props();
 
   const ctx = getNamespaceContext();
+
+  $effect(() => {
+    ctx.signInAction = signInAction ?? null;
+  });
 
   // Trigger loading when api and rootPath are both available.
   // tryLoad() reads ctx.api and ctx.rootPath (both $state), so

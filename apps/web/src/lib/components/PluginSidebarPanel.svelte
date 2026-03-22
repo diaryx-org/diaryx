@@ -31,7 +31,7 @@
   // namespace host widgets. Lightweight — no work until a widget mounts.
   const nsCtx = createNamespaceContext();
   $effect(() => {
-    nsCtx.init(api, () => onHostAction?.({ type: 'open-add-workspace' }));
+    nsCtx.init(api, (action) => onHostAction?.(action));
   });
 
   let config = $state<Record<string, JsonValue>>({});

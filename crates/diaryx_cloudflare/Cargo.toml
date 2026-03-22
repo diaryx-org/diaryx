@@ -32,5 +32,8 @@ urlencoding = "2"
 [build-dependencies]
 serde_json = "1.0"
 
+[dev-dependencies]
+wasm-bindgen-test = "0.3.57"
+
 [lib]
 crate-type = ["cdylib"]

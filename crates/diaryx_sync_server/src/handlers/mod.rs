@@ -6,6 +6,7 @@ pub mod domains;
 pub mod namespaces;
 pub mod ns_sessions;
 pub mod objects;
+pub mod proxy;
 pub mod stripe;
 
 pub use ai::ai_routes;
@@ -16,6 +17,7 @@ pub use domains::{DomainState, domain_auth_route, domain_routes};
 pub use namespaces::{NamespaceState, namespace_routes};
 pub use ns_sessions::{NsSessionState, ns_session_routes};
 pub use objects::{ObjectState, object_routes, public_object_routes, usage_routes};
+pub use proxy::{ProxyState, proxy_routes};
 pub use stripe::stripe_routes;
 
 use crate::db::NamespaceRepo;

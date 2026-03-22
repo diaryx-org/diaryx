@@ -9,26 +9,35 @@ export function getLegacyBuiltinFields(componentId: string): SettingsField[] | n
     {
       type: "HostWidget",
       widget_id: "namespace.guard",
+      sign_in_action: {
+        action_type: "open-settings",
+        payload: { tab: "account" },
+      },
     },
     {
       type: "HostWidget",
       widget_id: "namespace.site-url",
+      sign_in_action: null,
     },
     {
       type: "HostWidget",
       widget_id: "namespace.subdomain",
+      sign_in_action: null,
     },
     {
       type: "HostWidget",
       widget_id: "namespace.custom-domains",
+      sign_in_action: null,
     },
     {
       type: "HostWidget",
       widget_id: "namespace.audiences",
+      sign_in_action: null,
     },
     {
       type: "HostWidget",
       widget_id: "namespace.publish-button",
+      sign_in_action: null,
     },
     {
       type: "Section",

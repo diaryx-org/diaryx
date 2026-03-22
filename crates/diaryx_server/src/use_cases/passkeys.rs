@@ -445,3 +445,476 @@ impl<'a> PasskeyService<'a> {
         self.store.delete_credential(id, user_id).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PasskeyService, StoredChallengeState, StoredCredential};
+    use crate::domain::{PasskeyChallengeInfo, PasskeyCredentialInfo};
+    use crate::ports::{PasskeyStore, ServerCoreError};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct TestPasskeyStore {
+        user_emails: Mutex<HashMap<String, String>>,
+        credentials: Mutex<HashMap<String, Vec<PasskeyCredentialInfo>>>,
+        challenges: Mutex<HashMap<String, PasskeyChallengeInfo>>,
+        next_credential_id: Mutex<u32>,
+    }
+
+    crate::cfg_async_trait! {
+    impl PasskeyStore for TestPasskeyStore {
+        async fn store_credential(
+            &self,
+            user_id: &str,
+            name: &str,
+            credential_json: &str,
+        ) -> Result<String, ServerCoreError> {
+            let mut next_id = self.next_credential_id.lock().unwrap();
+            *next_id += 1;
+            let id = format!("cred-{}", *next_id);
+            self.credentials
+                .lock()
+                .unwrap()
+                .entry(user_id.to_string())
+                .or_default()
+                .push(PasskeyCredentialInfo {
+                    id: id.clone(),
+                    user_id: user_id.to_string(),
+                    name: name.to_string(),
+                    credential_json: credential_json.to_string(),
+                    created_at: 1,
+                    last_used_at: None,
+                });
+            Ok(id)
+        }
+
+        async fn get_credentials(
+            &self,
+            user_id: &str,
+        ) -> Result<Vec<PasskeyCredentialInfo>, ServerCoreError> {
+            Ok(self
+                .credentials
+                .lock()
+                .unwrap()
+                .get(user_id)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        async fn get_credentials_by_email(
+            &self,
+            email: &str,
+        ) -> Result<Vec<PasskeyCredentialInfo>, ServerCoreError> {
+            let user_ids: Vec<String> = self
+                .user_emails
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, user_email)| user_email.as_str() == email)
+                .map(|(user_id, _)| user_id.clone())
+                .collect();
+
+            let credentials = self.credentials.lock().unwrap();
+            let mut results = Vec::new();
+            for user_id in user_ids {
+                results.extend(credentials.get(&user_id).cloned().unwrap_or_default());
+            }
+            Ok(results)
+        }
+
+        async fn update_credential(
+            &self,
+            id: &str,
+            credential_json: &str,
+        ) -> Result<(), ServerCoreError> {
+            for credentials in self.credentials.lock().unwrap().values_mut() {
+                if let Some(credential) = credentials.iter_mut().find(|cred| cred.id == id) {
+                    credential.credential_json = credential_json.to_string();
+                    credential.last_used_at = Some(2);
+                    return Ok(());
+                }
+            }
+            Err(ServerCoreError::not_found("Credential not found"))
+        }
+
+        async fn delete_credential(
+            &self,
+            id: &str,
+            user_id: &str,
+        ) -> Result<bool, ServerCoreError> {
+            let mut credentials = self.credentials.lock().unwrap();
+            if let Some(user_credentials) = credentials.get_mut(user_id) {
+                let before = user_credentials.len();
+                user_credentials.retain(|credential| credential.id != id);
+                return Ok(user_credentials.len() != before);
+            }
+            Ok(false)
+        }
+
+        async fn store_challenge(
+            &self,
+            challenge_id: &str,
+            user_id: Option<&str>,
+            email: &str,
+            challenge_type: &str,
+            state_json: &str,
+            expires_at: i64,
+        ) -> Result<(), ServerCoreError> {
+            self.challenges.lock().unwrap().insert(
+                challenge_id.to_string(),
+                PasskeyChallengeInfo {
+                    challenge_id: challenge_id.to_string(),
+                    user_id: user_id.map(str::to_string),
+                    email: email.to_string(),
+                    challenge_type: challenge_type.to_string(),
+                    state_json: state_json.to_string(),
+                    expires_at,
+                    created_at: 1,
+                },
+            );
+            Ok(())
+        }
+
+        async fn get_challenge(
+            &self,
+            challenge_id: &str,
+        ) -> Result<Option<PasskeyChallengeInfo>, ServerCoreError> {
+            Ok(self.challenges.lock().unwrap().remove(challenge_id))
+        }
+    }
+    }
+
+    fn service<'a>(store: &'a TestPasskeyStore) -> PasskeyService<'a> {
+        PasskeyService::new(store, "example.com")
+    }
+
+    #[tokio::test]
+    async fn start_registration_stores_challenge_state_and_returns_options() {
+        let store = TestPasskeyStore::default();
+        store
+            .user_emails
+            .lock()
+            .unwrap()
+            .insert("user1".to_string(), "user@example.com".to_string());
+        store.credentials.lock().unwrap().insert(
+            "user1".to_string(),
+            vec![PasskeyCredentialInfo {
+                id: "cred-bad".to_string(),
+                user_id: "user1".to_string(),
+                name: "broken".to_string(),
+                credential_json: "{not-json}".to_string(),
+                created_at: 1,
+                last_used_at: None,
+            }],
+        );
+        let service = service(&store);
+
+        let (challenge_id, options) = service
+            .start_registration("user1", "user@example.com")
+            .await
+            .unwrap();
+
+        let challenge = store
+            .challenges
+            .lock()
+            .unwrap()
+            .get(&challenge_id)
+            .cloned()
+            .unwrap();
+        let state: serde_json::Value = serde_json::from_str(&challenge.state_json).unwrap();
+
+        assert_eq!(challenge.user_id.as_deref(), Some("user1"));
+        assert_eq!(challenge.email, "user@example.com");
+        assert_eq!(challenge.challenge_type, "registration");
+        assert!(state["ceremony"]["state"].as_str().is_some());
+        assert!(state["user_handle"].as_str().is_some());
+        assert!(options.is_object());
+    }
+
+    #[tokio::test]
+    async fn start_registration_rejects_invalid_rp_ids() {
+        let store = TestPasskeyStore::default();
+        let service = PasskeyService::new(&store, "exämple.com");
+
+        let err = service
+            .start_registration("user1", "user@example.com")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServerCoreError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn finish_registration_rejects_missing_challenge() {
+        let store = TestPasskeyStore::default();
+        let service = service(&store);
+
+        let err = service
+            .finish_registration("missing", "user1", "Laptop", br#"{}"#)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServerCoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn finish_registration_rejects_challenge_mismatches() {
+        let store = TestPasskeyStore::default();
+        store.challenges.lock().unwrap().insert(
+            "challenge-1".to_string(),
+            PasskeyChallengeInfo {
+                challenge_id: "challenge-1".to_string(),
+                user_id: Some("other-user".to_string()),
+                email: "user@example.com".to_string(),
+                challenge_type: "registration".to_string(),
+                state_json: "{}".to_string(),
+                expires_at: 1,
+                created_at: 1,
+            },
+        );
+        let service = service(&store);
+
+        let err = service
+            .finish_registration("challenge-1", "user1", "Laptop", br#"{}"#)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServerCoreError::PermissionDenied(_)));
+    }
+
+    #[tokio::test]
+    async fn finish_registration_rejects_invalid_challenge_state_json() {
+        let store = TestPasskeyStore::default();
+        store.challenges.lock().unwrap().insert(
+            "challenge-1".to_string(),
+            PasskeyChallengeInfo {
+                challenge_id: "challenge-1".to_string(),
+                user_id: Some("user1".to_string()),
+                email: "user@example.com".to_string(),
+                challenge_type: "registration".to_string(),
+                state_json: "{not-json}".to_string(),
+                expires_at: 1,
+                created_at: 1,
+            },
+        );
+        let service = service(&store);
+
+        let err = service
+            .finish_registration("challenge-1", "user1", "Laptop", br#"{}"#)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServerCoreError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn finish_registration_requires_user_handle_in_stored_state() {
+        let store = TestPasskeyStore::default();
+        let ceremony = StoredChallengeState {
+            state: "ZmFrZQ==".to_string(),
+        };
+        store.challenges.lock().unwrap().insert(
+            "challenge-1".to_string(),
+            PasskeyChallengeInfo {
+                challenge_id: "challenge-1".to_string(),
+                user_id: Some("user1".to_string()),
+                email: "user@example.com".to_string(),
+                challenge_type: "registration".to_string(),
+                state_json: serde_json::json!({ "ceremony": ceremony }).to_string(),
+                expires_at: 1,
+                created_at: 1,
+            },
+        );
+        let service = service(&store);
+
+        let err = service
+            .finish_registration("challenge-1", "user1", "Laptop", br#"{}"#)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServerCoreError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn start_authentication_stores_email_scoped_challenges() {
+        let store = TestPasskeyStore::default();
+        let service = service(&store);
+
+        let (challenge_id, options) = service
+            .start_authentication(Some("user@example.com"))
+            .await
+            .unwrap();
+
+        let challenge = store
+            .challenges
+            .lock()
+            .unwrap()
+            .get(&challenge_id)
+            .cloned()
+            .unwrap();
+
+        assert_eq!(challenge.user_id, None);
+        assert_eq!(challenge.email, "user@example.com");
+        assert_eq!(challenge.challenge_type, "authentication");
+        assert!(options.is_object());
+    }
+
+    #[tokio::test]
+    async fn start_authentication_uses_empty_email_for_discoverable_flow() {
+        let store = TestPasskeyStore::default();
+        let service = service(&store);
+
+        let (challenge_id, _) = service.start_authentication(None).await.unwrap();
+
+        let challenge = store
+            .challenges
+            .lock()
+            .unwrap()
+            .get(&challenge_id)
+            .cloned()
+            .unwrap();
+        assert_eq!(challenge.email, "");
+    }
+
+    #[tokio::test]
+    async fn finish_authentication_rejects_missing_challenge() {
+        let store = TestPasskeyStore::default();
+        let service = service(&store);
+
+        let err = match service.finish_authentication("missing", br#"{}"#).await {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ServerCoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn finish_authentication_rejects_invalid_challenge_state_json() {
+        let store = TestPasskeyStore::default();
+        store.challenges.lock().unwrap().insert(
+            "challenge-1".to_string(),
+            PasskeyChallengeInfo {
+                challenge_id: "challenge-1".to_string(),
+                user_id: None,
+                email: "user@example.com".to_string(),
+                challenge_type: "authentication".to_string(),
+                state_json: "{not-json}".to_string(),
+                expires_at: 1,
+                created_at: 1,
+            },
+        );
+        let service = service(&store);
+
+        let err = match service.finish_authentication("challenge-1", br#"{}"#).await {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ServerCoreError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn find_credential_by_email_matches_valid_credentials_and_skips_bad_json() {
+        let store = TestPasskeyStore::default();
+        store
+            .user_emails
+            .lock()
+            .unwrap()
+            .insert("user1".to_string(), "user@example.com".to_string());
+        store.credentials.lock().unwrap().insert(
+            "user1".to_string(),
+            vec![
+                PasskeyCredentialInfo {
+                    id: "cred-bad".to_string(),
+                    user_id: "user1".to_string(),
+                    name: "broken".to_string(),
+                    credential_json: "{not-json}".to_string(),
+                    created_at: 1,
+                    last_used_at: None,
+                },
+                PasskeyCredentialInfo {
+                    id: "cred-good".to_string(),
+                    user_id: "user1".to_string(),
+                    name: "Laptop".to_string(),
+                    credential_json: serde_json::to_string(&StoredCredential {
+                        cred_id: "target-cred".to_string(),
+                        user_handle: "handle".to_string(),
+                        static_state: "static".to_string(),
+                        dynamic_state: "dynamic".to_string(),
+                    })
+                    .unwrap(),
+                    created_at: 1,
+                    last_used_at: None,
+                },
+            ],
+        );
+        let service = service(&store);
+
+        let (user_id, credential, credential_id) = service
+            .find_credential_by_email("user@example.com", "target-cred")
+            .await
+            .unwrap();
+
+        assert_eq!(user_id, "user1");
+        assert_eq!(credential.cred_id, "target-cred");
+        assert_eq!(credential_id, "cred-good");
+    }
+
+    #[tokio::test]
+    async fn find_credential_by_email_returns_not_found_for_unknown_ids() {
+        let store = TestPasskeyStore::default();
+        store
+            .user_emails
+            .lock()
+            .unwrap()
+            .insert("user1".to_string(), "user@example.com".to_string());
+        let service = service(&store);
+
+        let err = match service
+            .find_credential_by_email("user@example.com", "missing")
+            .await
+        {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ServerCoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn discoverable_lookup_requires_email_until_user_handle_search_exists() {
+        let store = TestPasskeyStore::default();
+        let service = service(&store);
+
+        let err = match service
+            .find_credential_by_user_handle("handle", "cred")
+            .await
+        {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ServerCoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn list_and_delete_passkeys_delegate_to_store() {
+        let store = TestPasskeyStore::default();
+        store.credentials.lock().unwrap().insert(
+            "user1".to_string(),
+            vec![PasskeyCredentialInfo {
+                id: "cred-1".to_string(),
+                user_id: "user1".to_string(),
+                name: "Laptop".to_string(),
+                credential_json: "{}".to_string(),
+                created_at: 42,
+                last_used_at: Some(99),
+            }],
+        );
+        let service = service(&store);
+
+        let passkeys = service.list_passkeys("user1").await.unwrap();
+        assert_eq!(passkeys.len(), 1);
+        assert_eq!(passkeys[0].id, "cred-1");
+        assert_eq!(passkeys[0].name, "Laptop");
+        assert_eq!(passkeys[0].created_at, 42);
+        assert_eq!(passkeys[0].last_used_at, Some(99));
+
+        let deleted = service.delete_passkey("cred-1", "user1").await.unwrap();
+        assert!(deleted);
+        assert!(store.get_credentials("user1").await.unwrap().is_empty());
+    }
+}

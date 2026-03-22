@@ -2102,7 +2102,7 @@
           sessionStorage.removeItem('diaryx_data_cleared');
         }
 
-        if (shouldBypassWelcomeScreenForE2E()) {
+        if ((globalThis as any).__diaryx_preview || shouldBypassWelcomeScreenForE2E()) {
           try {
             await autoCreateDefaultWorkspace(null);
             defaultWorkspace = getCurrentWorkspace();

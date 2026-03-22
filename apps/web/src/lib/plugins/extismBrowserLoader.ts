@@ -1486,6 +1486,109 @@ function buildHostFunctions(
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
         }
       },
+      async host_proxy_request(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | {
+                proxy_id: string;
+                path?: string;
+                method?: string;
+                headers?: Record<string, string>;
+                body?: string;
+              }
+            | undefined;
+          if (!input?.proxy_id) {
+            return cp.store(
+              JSON.stringify({
+                status: 0,
+                headers: {},
+                body: "host_proxy_request: missing proxy_id",
+              }),
+            );
+          }
+
+          // Build proxy URL — same-origin request to the server's proxy endpoint
+          const path = (input.path ?? "").replace(/^\//, "");
+          const proxyUrl = path
+            ? `/api/proxy/${encodeURIComponent(input.proxy_id)}/${path}`
+            : `/api/proxy/${encodeURIComponent(input.proxy_id)}`;
+
+          // For non-same-origin deployments, resolve server URL
+          let fetchUrl = proxyUrl;
+          try {
+            const authModule = await import("$lib/auth");
+            const serverUrl = authModule.getServerUrl();
+            if (serverUrl) {
+              const serverOrigin = new URL(serverUrl).origin;
+              if (serverOrigin !== globalThis.location?.origin) {
+                fetchUrl = `${serverOrigin}${proxyUrl}`;
+              }
+            }
+          } catch {}
+
+          const abortController =
+            typeof AbortController === "function"
+              ? new AbortController()
+              : null;
+          const timeoutId =
+            abortController !== null
+              ? globalThis.setTimeout(() => abortController.abort(), 120_000)
+              : null;
+
+          let resp: Response;
+          try {
+            resp = await fetch(fetchUrl, {
+              method: input.method ?? "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(input.headers ?? {}),
+              },
+              body: input.body ?? undefined,
+              credentials: "include",
+              signal: abortController?.signal,
+            });
+          } finally {
+            if (timeoutId !== null) {
+              globalThis.clearTimeout(timeoutId);
+            }
+          }
+
+          const respHeaders: Record<string, string> = {};
+          resp.headers.forEach((v, k) => {
+            respHeaders[k] = v;
+          });
+          const bytes = new Uint8Array(await resp.arrayBuffer());
+          let body = "";
+          try {
+            body = new TextDecoder().decode(bytes);
+          } catch {
+            body = "";
+          }
+          let binary = "";
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const body_base64 = btoa(binary);
+          return cp.store(
+            JSON.stringify({
+              status: resp.status,
+              headers: respHeaders,
+              body,
+              body_base64,
+            }),
+          );
+        } catch (e) {
+          const msg =
+            e instanceof Error && e.name === "AbortError"
+              ? "Proxy request timed out"
+              : e instanceof Error
+                ? e.message
+                : String(e);
+          return cp.store(
+            JSON.stringify({ status: 0, headers: {}, body: msg }),
+          );
+        }
+      },
       async host_hash_file(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as

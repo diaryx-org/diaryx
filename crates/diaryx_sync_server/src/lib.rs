@@ -19,6 +19,7 @@ pub mod config;
 pub mod db;
 pub mod email;
 pub mod handlers;
+pub mod proxy_adapters;
 pub mod rate_limit;
 pub mod sync_v2;
 pub mod tokens;

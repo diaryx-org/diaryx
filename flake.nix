@@ -176,6 +176,7 @@
         {
           default = diaryx-cli;
           inherit diaryx-sync-server ts-bindings wasm-package;
+          "wasm-bindgen-cli" = wasm-bindgen-cli;
         });
 
       apps = forAllSystems (system: {
@@ -200,13 +201,15 @@
               "aarch64-apple-ios"
               "aarch64-apple-ios-sim"
             ];
-            extensions = [ "rust-src" "rust-analyzer" ];
+            extensions = [ "rust-src" "rust-analyzer" "llvm-tools-preview" ];
           };
         in
         {
           default = pkgs.mkShellNoCC {
             packages = with pkgs; [
               rustToolchain
+              cargo-llvm-cov
+              self.packages.${system}."wasm-bindgen-cli"
               zig
               cargo-zigbuild
               cargo-tauri
@@ -223,7 +226,10 @@
             buildInputs = [ pkgs.openssl pkgs.libiconv ];
 
             shellHook = ''
+              repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
               export ZIG_GLOBAL_CACHE_DIR="$PWD/.zig-cache"
+              export NODE_PATH="$repo_root/crates/diaryx_cloudflare/test-support/node_modules''${NODE_PATH:+:$NODE_PATH}"
 
               # Force clean the environment of legacy SDK markers
               unset DEVELOPER_DIR
@@ -241,9 +247,15 @@
               export AR_aarch64_apple_ios_sim=/usr/bin/ar
               export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER=/usr/bin/clang
 
+              export LLVM_TOOLS_DIR="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"
+              export LLVM_COV="$LLVM_TOOLS_DIR/llvm-cov"
+              export LLVM_PROFDATA="$LLVM_TOOLS_DIR/llvm-profdata"
+              export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
+
               echo "Welcome to the Diaryx development environment!"
               echo "Targets enabled: x86_64-linux, aarch64-darwin, wasm32"
               echo "Rust: $(rustc --version)"
+              echo "Coverage: $(cargo llvm-cov --version)"
             '';
           };
         });

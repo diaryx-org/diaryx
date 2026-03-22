@@ -6,4 +6,5 @@ pub mod domains;
 pub mod namespaces;
 pub mod objects;
 pub mod passkeys;
+pub mod proxy;
 pub mod sessions;

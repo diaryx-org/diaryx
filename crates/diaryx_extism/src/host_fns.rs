@@ -1417,7 +1417,7 @@ fn host_proxy_request(
         let ctx = user_data.get()?;
         let ctx = ctx.lock().unwrap();
 
-        let runtime_json = ctx.runtime_context_provider.get_context();
+        let runtime_json = ctx.runtime_context_provider.get_context(&ctx.plugin_id);
         let server_url = runtime_json
             .get("server_url")
             .and_then(|v| v.as_str())
@@ -1492,6 +1492,7 @@ fn host_proxy_request(
         .read_to_vec()
         .map_err(|e| ExtismError::msg(format!("host_proxy_request: read body: {e}")))?;
     let body = String::from_utf8_lossy(&body_bytes).to_string();
+    use base64::Engine as _;
     let body_base64 = Some(base64::engine::general_purpose::STANDARD.encode(&body_bytes));
 
     let output = ProxyOutput {

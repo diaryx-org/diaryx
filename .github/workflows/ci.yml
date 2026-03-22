@@ -156,7 +156,9 @@ jobs:
         run: cargo install wasm-bindgen-cli@0.2.114 --locked
 
       - name: Install binaryen
-        run: sudo apt-get update && sudo apt-get install -y binaryen
+        run: |
+          curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_125/binaryen-version_125-x86_64-linux.tar.gz | tar xz
+          echo "$PWD/binaryen-version_125/bin" >> "$GITHUB_PATH"
 
       - name: Build WASM package
         run: |

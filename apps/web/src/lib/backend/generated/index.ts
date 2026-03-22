@@ -31,7 +31,7 @@ export type { FileSystemEvent } from './FileSystemEvent';
 export type { FilenameStyle } from './FilenameStyle';
 export type { FixResult } from './FixResult';
 export type { FixSummary } from './FixSummary';
-export type { HostAction } from './SettingsField';
+export type { HostAction } from './HostAction';
 export type { ImportResult } from './ImportResult';
 export type { InsertCommand } from './InsertCommand';
 export type { InsertCommandPlacement } from './InsertCommandPlacement';

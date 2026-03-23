@@ -50,6 +50,27 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "/api/namespaces/:ns_id/audiences/:name",
             handlers::delete_audience,
         )
+        // Subscribers
+        .post_async(
+            "/api/namespaces/:ns_id/audiences/:audience_name/subscribers",
+            handlers::add_subscriber,
+        )
+        .get_async(
+            "/api/namespaces/:ns_id/audiences/:audience_name/subscribers",
+            handlers::list_subscribers,
+        )
+        .delete_async(
+            "/api/namespaces/:ns_id/audiences/:audience_name/subscribers/:contact_id",
+            handlers::remove_subscriber,
+        )
+        .post_async(
+            "/api/namespaces/:ns_id/audiences/:audience_name/subscribers/import",
+            handlers::bulk_import_subscribers,
+        )
+        .post_async(
+            "/api/namespaces/:ns_id/audiences/:audience_name/send-email",
+            handlers::send_audience_email,
+        )
         // Domains
         .get_async("/api/namespaces/:ns_id/domains", handlers::list_domains)
         .put_async(

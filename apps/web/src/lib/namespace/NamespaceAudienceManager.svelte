@@ -12,19 +12,30 @@
     Settings2,
     Check,
     Copy,
+    Mail,
+    Send,
+    Users,
+    Plus,
+    Trash2,
+    Link,
   } from '@lucide/svelte';
+  import { Input } from '$lib/components/ui/input';
+  import { Switch } from '$lib/components/ui/switch';
+  import { Label } from '$lib/components/ui/label';
   import { showError, showSuccess, showInfo } from '@/models/services/toastService';
   import * as namespaceService from './namespaceService';
+  import type { AudienceConfig } from './namespaceContext.svelte';
 
   interface Props {
     namespaceId: string;
     audiences: string[];
-    audienceStates: Record<string, { state: string; access_method?: string }>;
+    audienceStates: Record<string, AudienceConfig>;
     defaultAudience: string | null;
-    onStateChange: (audience: string, config: { state: string; access_method?: string }) => void;
+    onStateChange: (audience: string, config: AudienceConfig) => void;
+    onSendEmail?: (audience: string) => void;
   }
 
-  let { namespaceId, audiences, audienceStates, defaultAudience, onStateChange }: Props = $props();
+  let { namespaceId, audiences, audienceStates, defaultAudience, onStateChange, onSendEmail }: Props = $props();
 
   const colorStore = getAudienceColorStore();
 
@@ -39,7 +50,22 @@
   let lastCreatedAccessUrl = $state<string | null>(null);
   let copiedAccessUrl = $state(false);
 
-  function getAudienceState(audience: string) {
+  // Email settings dialog state
+  let emailOnPublish = $state(false);
+  let emailSubject = $state('');
+  let emailCover = $state('');
+  let isSendingEmail = $state(false);
+
+  // Subscriber management state
+  let subscribers = $state<namespaceService.SubscriberInfo[]>([]);
+  let subscribersLoading = $state(false);
+  let subscribersExpanded = $state(false);
+  let newSubscriberEmail = $state('');
+  let isAddingSubscriber = $state(false);
+  let copiedSignupUrl = $state(false);
+  let subscriberError = $state<string | null>(null);
+
+  function getAudienceState(audience: string): AudienceConfig {
     return audienceStates[audience] ?? { state: 'unpublished' };
   }
 
@@ -52,15 +78,108 @@
     accessDialogAudience = audience;
     accessDialogState = config.state;
     accessDialogMethod = config.access_method ?? 'access-key';
+    emailOnPublish = config.email_on_publish ?? false;
+    emailSubject = config.email_subject ?? '';
+    emailCover = config.email_cover ?? '';
     accessDialogOpen = true;
     lastCreatedAccessUrl = null;
+    // Reset subscriber state
+    subscribers = [];
+    subscribersExpanded = false;
+    newSubscriberEmail = '';
+    copiedSignupUrl = false;
+    subscriberError = null;
+    // Load subscribers if email is enabled
+    if (emailOnPublish && namespaceId) {
+      loadSubscribers(audience);
+    }
+  }
+
+  async function loadSubscribers(audience: string) {
+    if (!namespaceId) return;
+    subscribersLoading = true;
+    subscriberError = null;
+    try {
+      subscribers = await namespaceService.listSubscribers(namespaceId, audience);
+    } catch (e) {
+      subscribers = [];
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('not configured') || msg.includes('unavailable') || msg.includes('503')) {
+        subscriberError = 'Email service not configured. Set RESEND_API_KEY on the server to manage subscribers.';
+      }
+    } finally {
+      subscribersLoading = false;
+    }
+  }
+
+  async function handleAddSubscriber() {
+    if (!accessDialogAudience || !namespaceId || !newSubscriberEmail.trim()) return;
+    isAddingSubscriber = true;
+    subscriberError = null;
+    try {
+      await namespaceService.addSubscriber(namespaceId, accessDialogAudience, newSubscriberEmail.trim());
+      newSubscriberEmail = '';
+      showSuccess('Subscriber added');
+      await loadSubscribers(accessDialogAudience);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to add subscriber';
+      if (msg.includes('not configured') || msg.includes('unavailable') || msg.includes('503')) {
+        subscriberError = 'Email service not configured. Set RESEND_API_KEY on the server.';
+      } else {
+        showError(msg, 'Subscribers');
+      }
+    } finally {
+      isAddingSubscriber = false;
+    }
+  }
+
+  async function handleRemoveSubscriber(contactId: string) {
+    if (!accessDialogAudience || !namespaceId) return;
+    try {
+      await namespaceService.removeSubscriber(namespaceId, accessDialogAudience, contactId);
+      subscribers = subscribers.filter(s => s.id !== contactId);
+      showSuccess('Subscriber removed');
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Failed to remove subscriber', 'Subscribers');
+    }
+  }
+
+  function getSignupUrl(): string {
+    if (!namespaceId || !accessDialogAudience) return '';
+    return namespaceService.buildSubscribeUrl(namespaceId, accessDialogAudience);
+  }
+
+  async function copySignupUrl() {
+    try {
+      await navigator.clipboard.writeText(getSignupUrl());
+      copiedSignupUrl = true;
+      setTimeout(() => { copiedSignupUrl = false; }, 1800);
+    } catch {
+      showError('Copy failed. Check browser clipboard permissions.', 'Subscribers');
+    }
+  }
+
+  async function handleSendEmail() {
+    if (!accessDialogAudience || !onSendEmail) return;
+    isSendingEmail = true;
+    try {
+      onSendEmail(accessDialogAudience);
+      showSuccess(`Email send triggered for "${accessDialogAudience}"`);
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Failed to send email', 'Email');
+    } finally {
+      isSendingEmail = false;
+    }
   }
 
   async function handleSaveAccessDialog() {
     if (!accessDialogAudience) return;
-    const config = {
+    const config: AudienceConfig = {
       state: accessDialogState,
       access_method: accessDialogState === 'access-control' ? accessDialogMethod : undefined,
+      email_on_publish: emailOnPublish,
+      email_subject: emailSubject || undefined,
+      email_cover: emailCover || undefined,
     };
     try {
       const access = accessDialogState === 'public' ? 'public'
@@ -138,6 +257,9 @@
           {:else}
             <span class="text-muted-foreground/60">Unpublished</span>
           {/if}
+          {#if config.email_on_publish}
+            <Mail class="size-3 text-muted-foreground" />
+          {/if}
         </span>
         <Settings2 class="size-3.5 text-muted-foreground/50" />
       </button>
@@ -195,6 +317,164 @@
           </div>
         </button>
       </div>
+
+      <!-- Email settings -->
+      {#if accessDialogState !== 'unpublished'}
+        <div class="space-y-3 p-3 rounded-md bg-secondary border border-border">
+          <div class="flex items-center justify-between">
+            <Label class="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+              <Mail class="size-3" />
+              Email on publish
+            </Label>
+            <Switch
+              checked={emailOnPublish}
+              onCheckedChange={(checked) => {
+                emailOnPublish = checked;
+                if (checked && accessDialogAudience && namespaceId) {
+                  loadSubscribers(accessDialogAudience);
+                }
+              }}
+            />
+          </div>
+
+          {#if emailOnPublish}
+            <div class="space-y-2">
+              <div class="space-y-1">
+                <label for="email-subject" class="text-xs font-medium text-muted-foreground">Subject template</label>
+                <Input
+                  id="email-subject"
+                  type="text"
+                  placeholder="{'{'}title{'}'} — New posts"
+                  bind:value={emailSubject}
+                  class="h-8 text-xs"
+                />
+                <p class="text-[10px] text-muted-foreground">Use {'{'}title{'}'} for the site title.</p>
+              </div>
+
+              <div class="space-y-1">
+                <label for="email-cover" class="text-xs font-medium text-muted-foreground">Cover file (optional)</label>
+                <Input
+                  id="email-cover"
+                  type="text"
+                  placeholder="newsletters/intro.md"
+                  bind:value={emailCover}
+                  class="h-8 text-xs"
+                />
+                <p class="text-[10px] text-muted-foreground">Markdown file shown as intro above the entry digest.</p>
+              </div>
+
+              {#if namespaceId && onSendEmail}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  class="w-full h-8 text-xs"
+                  onclick={handleSendEmail}
+                  disabled={isSendingEmail || subscribers.length === 0}
+                >
+                  {#if isSendingEmail}
+                    <Loader2 class="size-3.5 mr-1 animate-spin" />
+                    Sending...
+                  {:else}
+                    <Send class="size-3.5 mr-1" />
+                    {subscribers.length > 0 ? `Send to ${subscribers.length} subscriber${subscribers.length === 1 ? '' : 's'}` : 'Add subscribers first'}
+                  {/if}
+                </Button>
+              {/if}
+
+              <!-- Subscriber management -->
+              {#if namespaceId}
+                <div class="border-t border-border pt-2 mt-1">
+                  <button
+                    class="w-full flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors py-1"
+                    onclick={() => {
+                      subscribersExpanded = !subscribersExpanded;
+                      if (subscribersExpanded && accessDialogAudience) loadSubscribers(accessDialogAudience);
+                    }}
+                  >
+                    <span class="flex items-center gap-1.5 font-medium">
+                      <Users class="size-3" />
+                      Subscribers
+                      {#if subscribers.length > 0}
+                        <span class="text-[10px] bg-muted px-1.5 py-0.5 rounded-full">{subscribers.length}</span>
+                      {/if}
+                    </span>
+                    <span class="text-[10px]">{subscribersExpanded ? 'Hide' : 'Show'}</span>
+                  </button>
+
+                  {#if subscribersExpanded}
+                    <div class="space-y-2 pt-1.5">
+                      {#if subscriberError}
+                        <p class="text-[11px] text-destructive bg-destructive/10 rounded px-2 py-1.5">{subscriberError}</p>
+                      {/if}
+                      <!-- Add subscriber -->
+                      <div class="flex gap-1.5">
+                        <Input
+                          type="email"
+                          placeholder="email@example.com"
+                          bind:value={newSubscriberEmail}
+                          class="h-7 text-xs flex-1"
+                          onkeydown={(e) => { if (e.key === 'Enter') handleAddSubscriber(); }}
+                        />
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          class="h-7 text-xs px-2 shrink-0"
+                          onclick={handleAddSubscriber}
+                          disabled={isAddingSubscriber || !newSubscriberEmail.trim()}
+                        >
+                          {#if isAddingSubscriber}
+                            <Loader2 class="size-3 animate-spin" />
+                          {:else}
+                            <Plus class="size-3" />
+                          {/if}
+                        </Button>
+                      </div>
+
+                      <!-- Signup link -->
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="w-full h-7 text-[11px] text-muted-foreground justify-start"
+                        onclick={copySignupUrl}
+                      >
+                        {#if copiedSignupUrl}
+                          <Check class="size-3 mr-1" /> Copied signup URL
+                        {:else}
+                          <Link class="size-3 mr-1" /> Copy public signup URL
+                        {/if}
+                      </Button>
+
+                      <!-- Subscriber list -->
+                      {#if subscribersLoading}
+                        <div class="flex items-center justify-center py-2">
+                          <Loader2 class="size-3.5 animate-spin text-muted-foreground" />
+                        </div>
+                      {:else if subscribers.length === 0}
+                        <p class="text-[11px] text-muted-foreground text-center py-1">No subscribers yet.</p>
+                      {:else}
+                        <div class="max-h-32 overflow-y-auto space-y-0.5">
+                          {#each subscribers as sub (sub.id)}
+                            <div class="flex items-center justify-between px-1.5 py-1 rounded text-xs hover:bg-muted/50 group">
+                              <span class="truncate flex-1 text-[11px]">{sub.email}</span>
+                              <button
+                                class="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity p-0.5"
+                                onclick={() => handleRemoveSubscriber(sub.id)}
+                                aria-label="Remove subscriber"
+                              >
+                                <Trash2 class="size-3" />
+                              </button>
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
 
       {#if accessDialogState === 'access-control'}
         <div class="space-y-3 p-3 rounded-md bg-secondary border border-border">

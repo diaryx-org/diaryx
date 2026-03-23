@@ -125,7 +125,12 @@ impl BlobStore for R2BlobStore {
             }
             Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("NoSuchKey") || msg.contains("404") || msg.contains("Not Found") {
+                let code = e.code().unwrap_or("");
+                if code == "NoSuchKey"
+                    || msg.contains("NoSuchKey")
+                    || msg.contains("404")
+                    || msg.contains("Not Found")
+                {
                     Ok(None)
                 } else {
                     Err(internal_error(format!(
@@ -174,7 +179,12 @@ impl BlobStore for R2BlobStore {
             Ok(_) => Ok(true),
             Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("NoSuchKey") || msg.contains("404") || msg.contains("Not Found") {
+                let code = e.code().unwrap_or("");
+                if code == "NoSuchKey"
+                    || msg.contains("NoSuchKey")
+                    || msg.contains("404")
+                    || msg.contains("Not Found")
+                {
                     Ok(false)
                 } else {
                     Err(internal_error(format!(
@@ -335,7 +345,12 @@ impl BlobStore for R2BlobStore {
             }
             Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("NoSuchKey") || msg.contains("404") || msg.contains("Not Found") {
+                let code = e.code().unwrap_or("");
+                if code == "NoSuchKey"
+                    || msg.contains("NoSuchKey")
+                    || msg.contains("404")
+                    || msg.contains("Not Found")
+                {
                     Ok(None)
                 } else {
                     Err(internal_error(format!(

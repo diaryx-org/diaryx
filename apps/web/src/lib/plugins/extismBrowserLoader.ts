@@ -39,6 +39,21 @@ import { collectFilesystemTreePaths } from "./filesystemTreePaths";
 import { normalizeExtismHostPath } from "./extismHostPaths";
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/** Race a promise against a timeout. Rejects with `message` if the timeout fires first. */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
+// ============================================================================
 // Protocol types (mirrors diaryx_extism::protocol)
 // ============================================================================
 
@@ -1486,6 +1501,33 @@ function buildHostFunctions(
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
         }
       },
+      async host_namespace_send_email(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | {
+                ns_id: string;
+                audience: string;
+                subject: string;
+                reply_to?: string;
+              }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+          const body: Record<string, string> = { subject: input.subject };
+          if (input.reply_to) body.reply_to = input.reply_to;
+          const resp = await namespaceFetch(
+            "POST",
+            `/namespaces/${encodeURIComponent(input.ns_id)}/audiences/${encodeURIComponent(input.audience)}/send-email`,
+            {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            },
+          );
+          const data = await resp.text();
+          return cp.store(data);
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
       async host_proxy_request(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as
@@ -1834,16 +1876,53 @@ export async function loadBrowserPlugin(
         },
       }
     : undefined;
-  const plugin: ExtismPlugin = await createPlugin(wasmBytes, {
-    useWasi: true,
-    runInWorker: support.useWorkerFallback ?? false,
-    functions: buildHostFunctions(transport, effectiveHostOpts),
-  });
+  const PLUGIN_LOAD_TIMEOUT_MS = 30_000;
+  const hostFunctions = buildHostFunctions(transport, effectiveHostOpts);
+
+  let plugin: ExtismPlugin;
+  try {
+    plugin = await withTimeout(
+      createPlugin(wasmBytes, {
+        useWasi: true,
+        runInWorker: support.useWorkerFallback ?? false,
+        functions: hostFunctions,
+      }),
+      PLUGIN_LOAD_TIMEOUT_MS,
+      "Plugin instantiation timed out. This usually means the WASM module " +
+        "imports a host function that the browser runtime does not provide. " +
+        "Check the browser console for details.",
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Log available host functions to help diagnose missing imports
+    const availableFns = Object.keys(
+      (hostFunctions as Record<string, Record<string, unknown>>)?.["extism:host/user"] ?? {},
+    );
+    console.error(
+      `[extism] Failed to instantiate plugin.\n` +
+        `  Error: ${msg}\n` +
+        `  Available host functions (${availableFns.length}): ${availableFns.join(", ")}\n` +
+        `  If the plugin was recently updated, it may require a newer version of the app.`,
+    );
+    throw new Error(
+      `Failed to load plugin: ${msg}`,
+    );
+  }
 
   // Call guest `manifest` export to get the plugin's manifest.
-  const manifestOutput = await plugin.call("manifest", "");
+  let manifestOutput: Awaited<ReturnType<ExtismPlugin["call"]>>;
+  try {
+    manifestOutput = await withTimeout(
+      plugin.call("manifest", ""),
+      10_000,
+      "Plugin manifest() call timed out",
+    );
+  } catch (err) {
+    await plugin.close().catch(() => {});
+    throw err;
+  }
   if (!manifestOutput) {
-    await plugin.close();
+    await plugin.close().catch(() => {});
     throw new Error("Plugin manifest() returned null");
   }
   const guestManifest: GuestManifest = manifestOutput.json();

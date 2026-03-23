@@ -77,6 +77,12 @@ pub fn mailer(env: &Env, magic_link_expiry_minutes: i64) -> Option<ResendMailer>
     ))
 }
 
+/// Build a ResendMailer for email broadcast operations, or None if not configured.
+pub fn email_broadcast(env: &Env) -> Option<ResendMailer> {
+    // Reuse the same config as mailer, with a dummy expiry (not used for broadcasts)
+    mailer(env, 0)
+}
+
 /// Cloudflare zone ID for the SaaS zone (used for custom hostname management).
 pub fn cf_zone_id(env: &Env) -> Option<String> {
     env.var("CF_ZONE_ID")

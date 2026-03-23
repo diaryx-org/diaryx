@@ -1,5 +1,5 @@
 use crate::domain::{
-    AudienceInfo, AuthSessionInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo,
+    AudienceInfo, AuthSessionInfo, ContactInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo,
     NamespaceSessionInfo, ObjectMeta, PasskeyChallengeInfo, PasskeyCredentialInfo, UsageTotals,
     UserInfo, UserTier,
 };
@@ -361,6 +361,44 @@ pub trait Mailer: Send + Sync {
         to_email: &str,
         magic_link_url: &str,
         verification_code: &str,
+    ) -> Result<(), ServerCoreError>;
+}
+
+/// Service for managing email audiences, contacts, and batch sending via Resend.
+pub trait EmailBroadcastService: Send + Sync {
+    /// Whether the service is configured (has API key).
+    fn is_configured(&self) -> bool;
+    /// Configured "from" display name.
+    fn from_name(&self) -> &str;
+    /// Configured "from" email address.
+    fn from_email(&self) -> &str;
+
+    /// Create a Resend audience. Returns the audience ID.
+    async fn create_audience(&self, name: &str) -> Result<String, ServerCoreError>;
+    /// Delete a Resend audience.
+    async fn delete_audience(&self, audience_id: &str) -> Result<(), ServerCoreError>;
+    /// Add a contact to a Resend audience. Returns the contact ID.
+    async fn add_contact(
+        &self,
+        audience_id: &str,
+        email: &str,
+    ) -> Result<String, ServerCoreError>;
+    /// Remove a contact from a Resend audience.
+    async fn remove_contact(
+        &self,
+        audience_id: &str,
+        contact_id: &str,
+    ) -> Result<(), ServerCoreError>;
+    /// List all contacts in a Resend audience.
+    async fn list_contacts(
+        &self,
+        audience_id: &str,
+    ) -> Result<Vec<ContactInfo>, ServerCoreError>;
+    /// Send a batch of emails. Each tuple is (to_email, subject, html, reply_to, headers).
+    async fn send_batch(
+        &self,
+        from: &str,
+        emails: Vec<(String, String, String, Option<String>, Option<HashMap<String, String>>)>,
     ) -> Result<(), ServerCoreError>;
 }
 

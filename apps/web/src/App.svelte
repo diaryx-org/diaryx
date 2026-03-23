@@ -2809,6 +2809,9 @@
         showSettingsDialog = true;
         return { opened: "settings", tab: tab ?? null };
       }
+      case "open-audience-manager":
+        showAudienceManager = true;
+        return { opened: "audience-manager" };
       case "open-marketplace":
         showSettingsDialog = false;
         showMarketplaceDialog = true;

@@ -176,6 +176,80 @@ export async function removeDomain(
   );
 }
 
+// ============================================================================
+// Subscribers
+// ============================================================================
+
+export interface SubscriberInfo {
+  id: string;
+  email: string;
+}
+
+export interface BulkImportResult {
+  added: number;
+  errors: string[];
+}
+
+export async function listSubscribers(
+  nsId: string,
+  audienceName: string,
+): Promise<SubscriberInfo[]> {
+  return apiFetch<SubscriberInfo[]>(
+    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers`,
+  );
+}
+
+export async function addSubscriber(
+  nsId: string,
+  audienceName: string,
+  email: string,
+): Promise<SubscriberInfo> {
+  return apiFetch<SubscriberInfo>(
+    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    },
+  );
+}
+
+export async function removeSubscriber(
+  nsId: string,
+  audienceName: string,
+  contactId: string,
+): Promise<void> {
+  await apiFetch<void>(
+    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers/${encodeURIComponent(contactId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function bulkImportSubscribers(
+  nsId: string,
+  audienceName: string,
+  emails: string[],
+): Promise<BulkImportResult> {
+  return apiFetch<BulkImportResult>(
+    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers/import`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ emails }),
+    },
+  );
+}
+
+/**
+ * Build a subscriber signup URL for an audience.
+ */
+export function buildSubscribeUrl(
+  nsId: string,
+  audienceName: string,
+): string {
+  const base = getApiBase();
+  if (!base) return '';
+  return `${base.serverUrl}/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers`;
+}
+
 /**
  * Check if the namespace API is available (user is authenticated with a server).
  */
@@ -185,16 +259,29 @@ export function isNamespaceAvailable(): boolean {
 
 /**
  * Build an access URL for a namespace audience.
+ *
+ * @param siteBaseUrl - Server's site base URL (from capabilities), e.g. "http://localhost:3030"
+ * @param siteDomain - Domain for subdomain routing (e.g. "diaryx.org"), null if unavailable
  */
 export function buildAccessUrl(
   nsId: string,
   audience: string,
   token?: string,
   subdomain?: string,
+  siteBaseUrl?: string | null,
+  siteDomain?: string | null,
 ): string {
-  const base = subdomain
-    ? `https://${subdomain}.diaryx.org/${encodeURIComponent(audience)}/index.html`
-    : `https://diaryx.org/ns/${nsId}/${encodeURIComponent(audience)}/index.html`;
+  let base: string;
+  if (subdomain && siteDomain) {
+    // Subdomain routing via Caddy or Cloudflare
+    base = `https://${subdomain}.${siteDomain}/${encodeURIComponent(audience)}/index.html`;
+  } else if (siteBaseUrl) {
+    // Direct serving from sync server
+    base = `${siteBaseUrl}/sites/${encodeURIComponent(nsId)}/${encodeURIComponent(audience)}/index.html`;
+  } else {
+    // Fallback
+    base = `/sites/${encodeURIComponent(nsId)}/${encodeURIComponent(audience)}/index.html`;
+  }
 
   if (token) {
     return `${base}?audience_token=${encodeURIComponent(token)}`;

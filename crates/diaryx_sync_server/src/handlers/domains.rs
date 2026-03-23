@@ -31,6 +31,8 @@ pub struct DomainState {
     pub domain_mapping_cache: Arc<dyn DomainMappingCache>,
     pub blob_store: Arc<dyn BlobStore>,
     pub token_signing_key: Vec<u8>,
+    /// Whether subdomain/custom-domain features are available.
+    pub subdomains_available: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +187,13 @@ async fn claim_subdomain(
     Path(ns_id): Path<String>,
     Json(req): Json<ClaimSubdomainRequest>,
 ) -> impl IntoResponse {
+    if !state.subdomains_available {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({"error": "Subdomain features require SITE_DOMAIN configuration"})),
+        )
+            .into_response();
+    }
     if let Err(resp) = require_namespace_owner(&state.ns_repo, &ns_id, &auth.user.id) {
         return resp;
     }
@@ -421,6 +430,7 @@ mod tests {
             )),
             blob_store,
             token_signing_key: b"domain-signing-key".to_vec(),
+            subdomains_available: true,
         }
     }
 

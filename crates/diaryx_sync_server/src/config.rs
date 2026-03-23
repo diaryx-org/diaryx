@@ -43,6 +43,13 @@ pub struct Config {
     pub kv_api_token: Option<String>,
     /// Cloudflare KV namespace ID for domain mappings
     pub kv_namespace_id: Option<String>,
+    /// Public URL for serving published sites. Defaults to `http://{host}:{port}`.
+    /// Override with `SITE_BASE_URL` for tunnels or load balancers.
+    pub site_base_url: String,
+    /// Domain for subdomain-based site serving (e.g., "diaryx.org" or "notes.example.com").
+    /// When set, subdomains are available (requires DNS wildcard + reverse proxy).
+    /// When empty, sites are served at `/sites/{ns_id}/` paths only.
+    pub site_domain: Option<String>,
 }
 
 /// Managed AI proxy configuration.
@@ -276,6 +283,27 @@ impl Config {
 
         let secure_cookies = app_base_url.starts_with("https://");
 
+        let site_base_url = env::var("SITE_BASE_URL")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| {
+                // 0.0.0.0 is a bind address, not browsable — use localhost instead
+                let display_host = if host == "0.0.0.0" || host == "::" {
+                    "localhost"
+                } else {
+                    &host
+                };
+                format!("http://{}:{}", display_host, port)
+            });
+
+        // SITE_DOMAIN enables subdomain/custom-domain features.
+        // Auto-detected from R2+KV (Cloudflare deployment), or set explicitly.
+        let site_domain = env::var("SITE_DOMAIN")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+
         Ok(Config {
             host,
             port,
@@ -296,12 +324,19 @@ impl Config {
             apple_iap,
             kv_api_token,
             kv_namespace_id,
+            site_base_url,
+            site_domain,
         })
     }
 
     /// Check if email sending is configured
     pub fn is_email_configured(&self) -> bool {
         !self.email.api_key.is_empty()
+    }
+
+    /// Whether subdomain/custom-domain features are available.
+    pub fn subdomains_available(&self) -> bool {
+        self.site_domain.is_some()
     }
 
     /// Get the server address

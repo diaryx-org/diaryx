@@ -7,18 +7,34 @@
     namespaceId: string | null;
     subdomain: string | null;
     audienceStates: Record<string, { state: string }>;
+    siteBaseUrl?: string | null;
+    siteDomain?: string | null;
   }
 
-  let { namespaceId, subdomain, audienceStates }: Props = $props();
+  let { namespaceId, subdomain, audienceStates, siteBaseUrl = null, siteDomain = null }: Props = $props();
   let copied = $state(false);
 
   let siteUrl = $derived.by(() => {
     if (!namespaceId) return null;
-    if (subdomain) return `https://${subdomain}.diaryx.org`;
-    const base = `https://diaryx.org/ns/${namespaceId}`;
     const firstPublished = Object.entries(audienceStates).find(([, c]) => c.state !== 'unpublished');
-    if (firstPublished) return `${base}/${firstPublished[0]}/index.html`;
-    return base;
+    const audience = firstPublished?.[0];
+
+    if (subdomain && siteDomain) {
+      // Subdomain routing
+      return audience
+        ? `https://${subdomain}.${siteDomain}/${audience}/index.html`
+        : `https://${subdomain}.${siteDomain}`;
+    }
+    if (siteBaseUrl) {
+      // Direct serving from sync server
+      return audience
+        ? `${siteBaseUrl}/sites/${namespaceId}/${audience}/index.html`
+        : `${siteBaseUrl}/sites/${namespaceId}`;
+    }
+    // Fallback (shouldn't normally render)
+    return audience
+      ? `/sites/${namespaceId}/${audience}/index.html`
+      : null;
   });
 
   async function copyUrl() {

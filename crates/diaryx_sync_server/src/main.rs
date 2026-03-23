@@ -17,9 +17,9 @@ use diaryx_sync_server::{
     email::EmailService,
     handlers::{
         AudienceState, DomainState, NamespaceState, NsSessionState, ObjectState, ProxyState,
-        ai_routes, audience_routes, auth_routes, domain_auth_route, domain_routes,
+        SubscriberState, ai_routes, audience_routes, auth_routes, domain_auth_route, domain_routes,
         namespace_routes, ns_session_routes, object_routes, proxy_routes, public_object_routes,
-        usage_routes,
+        site_routes, subscriber_routes, usage_routes,
     },
     proxy_adapters::{NativeProxySecretResolver, NativeProxyUsageStore, StaticProxyConfigStore},
     sync_v2::SyncV2Server,
@@ -137,7 +137,7 @@ async fn main() {
     // Create handler states
     let auth_state = diaryx_sync_server::handlers::auth::AuthState {
         magic_link_service,
-        email_service,
+        email_service: email_service.clone(),
         auth_store,
         namespace_store: namespace_store.clone(),
         session_store: auth_session_store,
@@ -205,10 +205,18 @@ async fn main() {
         domain_mapping_cache,
         blob_store: blob_store.clone(),
         token_signing_key: config.token_signing_key.clone(),
+        subdomains_available: config.subdomains_available(),
     };
     let ns_session_state = NsSessionState {
         namespace_store: namespace_state.namespace_store.clone(),
         session_store,
+    };
+    let subscriber_state = SubscriberState {
+        namespace_store: namespace_state.namespace_store.clone(),
+        blob_store: blob_store.clone(),
+        object_meta_store: Arc::new(NativeObjectMetaStore::new(ns_repo.clone())),
+        email_service: email_service.clone()
+            as Arc<dyn diaryx_server::ports::EmailBroadcastService>,
     };
 
     // Create Stripe state (if configured)
@@ -292,6 +300,11 @@ async fn main() {
         .nest("/namespaces/{ns_id}", object_routes(object_state.clone()))
         // Audience routes (mounted under /namespaces/{ns_id})
         .nest("/namespaces/{ns_id}", audience_routes(audience_state))
+        // Subscriber routes (mounted under /namespaces/{ns_id}/audiences/{audience_name})
+        .nest(
+            "/namespaces/{ns_id}/audiences/{audience_name}",
+            subscriber_routes(subscriber_state),
+        )
         // Domain management routes (mounted under /namespaces/{ns_id})
         .nest("/namespaces/{ns_id}", domain_routes(domain_state.clone()))
         // Public (unauthenticated) object access
@@ -299,7 +312,7 @@ async fn main() {
         // Caddy forward_auth endpoint
         .merge(domain_auth_route(domain_state))
         // Usage metering route (user-level, not namespace-scoped)
-        .nest("/usage", usage_routes(object_state))
+        .nest("/usage", usage_routes(object_state.clone()))
         // Namespace session routes
         .nest("/sessions", ns_session_routes(ns_session_state))
         // Generic namespace sync endpoint
@@ -315,12 +328,32 @@ async fn main() {
         api = api.merge(apple);
     }
 
+    // Capabilities endpoint (returns server configuration for UI)
+    let capabilities = {
+        let site_base_url = config.site_base_url.clone();
+        let site_domain = config.site_domain.clone();
+        let subdomains_available = config.subdomains_available();
+        let custom_domains_available = config.subdomains_available();
+        move || async move {
+            axum::Json(serde_json::json!({
+                "site_base_url": site_base_url,
+                "site_domain": site_domain,
+                "subdomains_available": subdomains_available,
+                "custom_domains_available": custom_domains_available,
+            }))
+        }
+    };
+
     // Build the top-level router
     let app = Router::new()
         // Health check (at root and under /api)
         .route("/", get(|| async { "Diaryx Sync Server" }))
         .route("/health", get(|| async { "OK" }))
         .route("/api/health", get(|| async { "OK" }))
+        // Server capabilities (unauthenticated)
+        .route("/api/capabilities", get(capabilities))
+        // Published site serving (outside /api, no auth)
+        .merge(site_routes(object_state))
         // All API routes under /api
         .nest("/api", api);
 

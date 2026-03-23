@@ -417,6 +417,18 @@
         {audienceStates}
         {defaultAudience}
         onStateChange={handleAudienceStateChange}
+        onSendEmail={async (audience) => {
+          if (!namespaceId) return;
+          try {
+            await executePublishCommand('SendEmailToAudience', {
+              namespace_id: namespaceId,
+              audience,
+            });
+            showSuccess(`Email sent to "${audience}" subscribers`);
+          } catch (e) {
+            showError(e instanceof Error ? e.message : 'Failed to send email', 'Email');
+          }
+        }}
       />
 
       <NamespacePublishButton

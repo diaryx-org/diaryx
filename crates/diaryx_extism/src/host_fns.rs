@@ -92,6 +92,14 @@ pub trait NamespaceProvider: Send + Sync {
     fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String>;
     fn list_objects(&self, ns_id: &str) -> Result<Vec<NamespaceObjectMeta>, String>;
     fn sync_audience(&self, ns_id: &str, audience: &str, access: &str) -> Result<(), String>;
+    /// Trigger sending the email draft for an audience to all subscribers.
+    fn send_audience_email(
+        &self,
+        ns_id: &str,
+        audience: &str,
+        subject: &str,
+        reply_to: Option<&str>,
+    ) -> Result<serde_json::Value, String>;
 }
 
 /// No-op implementation of [`PluginStorage`] for plugins that don't need persistence.
@@ -299,6 +307,15 @@ impl NamespaceProvider for NoopNamespaceProvider {
         Err("Namespace operations are not available".to_string())
     }
     fn sync_audience(&self, _ns_id: &str, _audience: &str, _access: &str) -> Result<(), String> {
+        Err("Namespace operations are not available".to_string())
+    }
+    fn send_audience_email(
+        &self,
+        _ns_id: &str,
+        _audience: &str,
+        _subject: &str,
+        _reply_to: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
         Err("Namespace operations are not available".to_string())
     }
 }
@@ -580,6 +597,13 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_namespace_sync_audience,
+        )
+        .with_function(
+            "host_namespace_send_email",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_send_email,
         )
         .with_function(
             "host_ws_request",
@@ -1798,6 +1822,43 @@ fn host_namespace_sync_audience(
 
     let json = match result {
         Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_send_email(input: {ns_id, audience, subject, reply_to?}) -> {recipients, send_receipt_key} or {error}`
+fn host_namespace_send_email(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+        audience: String,
+        subject: String,
+        reply_to: Option<String>,
+    }
+
+    let parsed: Input = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_namespace_send_email: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    let result = ctx.namespace_provider.send_audience_email(
+        &parsed.ns_id,
+        &parsed.audience,
+        &parsed.subject,
+        parsed.reply_to.as_deref(),
+    );
+
+    let json = match result {
+        Ok(val) => val,
         Err(e) => serde_json::json!({ "error": e }),
     };
     plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;

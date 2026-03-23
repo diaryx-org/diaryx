@@ -21,7 +21,13 @@ import { createNamespace } from './namespaceService';
 
 const CONTEXT_KEY = Symbol('namespace-context');
 
-export type AudienceConfig = { state: string; access_method?: string };
+export type AudienceConfig = {
+  state: string;
+  access_method?: string;
+  email_on_publish?: boolean;
+  email_subject?: string;
+  email_cover?: string;
+};
 
 function normalizeToObject(value: any): any {
   if (value instanceof Map) {
@@ -58,6 +64,12 @@ export class NamespaceContext {
   // Default audience input
   showDefaultAudienceInput = $state(false);
   defaultAudienceInput = $state('');
+
+  // Server capabilities (fetched once)
+  siteBaseUrl = $state<string | null>(null);
+  siteDomain = $state<string | null>(null);
+  subdomainsAvailable = $state(false);
+  customDomainsAvailable = $state(false);
 
   #initializedRootPath: string | null = null;
 
@@ -97,6 +109,9 @@ export class NamespaceContext {
     return Object.values(this.audienceStates).filter(c => c.state !== 'unpublished').length;
   }
 
+  /** Expose the host action callback for widgets that need to open app-level UI. */
+  get hostAction() { return this.#onHostAction; }
+
   get hasPublishingAccess() {
     return this.isConfigured || this.authState.publishedSiteLimit > 0;
   }
@@ -134,6 +149,25 @@ export class NamespaceContext {
     this.#initializedRootPath = rp;
     this.loadPublishConfig();
     this.configStore.load(rp);
+    this.loadCapabilities();
+  }
+
+  /** Fetch server capabilities (site URL, subdomain availability). */
+  private async loadCapabilities() {
+    try {
+      const serverUrl = this.serverUrl;
+      if (!serverUrl) return;
+      const resp = await fetch(`${serverUrl}/capabilities`);
+      if (resp.ok) {
+        const caps = await resp.json();
+        this.siteBaseUrl = caps.site_base_url ?? null;
+        this.siteDomain = caps.site_domain ?? null;
+        this.subdomainsAvailable = caps.subdomains_available ?? false;
+        this.customDomainsAvailable = caps.custom_domains_available ?? false;
+      }
+    } catch {
+      // Best effort — capabilities are optional enhancements
+    }
   }
 
   loadAudiences() {
@@ -200,7 +234,13 @@ export class NamespaceContext {
       await this.executePublishCommand('SetAudiencePublishState', {
         audience,
         server_url: this.serverUrl,
-        config: { state: config.state, access_method: config.access_method },
+        config: {
+          state: config.state,
+          access_method: config.access_method,
+          email_on_publish: config.email_on_publish,
+          email_subject: config.email_subject,
+          email_cover: config.email_cover,
+        },
       });
     } catch {
       // Best effort — server sync already happened in the component
@@ -211,6 +251,18 @@ export class NamespaceContext {
       this.audienceStates = rest;
     } else {
       this.audienceStates = { ...this.audienceStates, [audience]: config };
+    }
+  }
+
+  async handleSendEmail(audience: string) {
+    if (!this.namespaceId) return;
+    try {
+      await this.executePublishCommand('SendEmailToAudience', {
+        namespace_id: this.namespaceId,
+        audience,
+      });
+    } catch (e) {
+      throw e;
     }
   }
 

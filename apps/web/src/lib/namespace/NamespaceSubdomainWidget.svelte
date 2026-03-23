@@ -5,7 +5,7 @@
   const ctx = getNamespaceContext();
 </script>
 
-{#if ctx.isReady && ctx.isConfigured && ctx.namespaceId}
+{#if ctx.isReady && ctx.isConfigured && ctx.namespaceId && ctx.subdomainsAvailable}
   <NamespaceSubdomainManager
     namespaceId={ctx.namespaceId}
     subdomain={ctx.subdomain}

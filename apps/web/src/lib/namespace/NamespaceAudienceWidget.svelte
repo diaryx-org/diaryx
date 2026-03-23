@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
-  import ManageAudiencesModal from '$lib/components/ManageAudiencesModal.svelte';
   import {
     Globe,
     Settings2,
@@ -15,9 +14,14 @@
     api?: import('$lib/backend/api').Api | null;
   }
 
-  let { api = null }: Props = $props();
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  let { api: _api = null }: Props = $props();
 
   const ctx = getNamespaceContext();
+
+  function openAudienceManager() {
+    ctx.hostAction?.({ type: 'open-audience-manager' });
+  }
 </script>
 
 {#if ctx.isReady}
@@ -39,7 +43,7 @@
           variant="outline"
           size="sm"
           class="text-xs"
-          onclick={() => { ctx.showManageAudiences = true; }}
+          onclick={openAudienceManager}
         >
           <Tags class="size-3.5 mr-1.5" />
           Add audience tags
@@ -83,7 +87,7 @@
         variant="ghost"
         size="icon"
         class="size-6"
-        onclick={() => { ctx.showManageAudiences = true; }}
+        onclick={openAudienceManager}
         aria-label="Manage audiences"
       >
         <Settings2 class="size-3.5" />
@@ -96,16 +100,7 @@
       audienceStates={ctx.audienceStates}
       defaultAudience={ctx.defaultAudience}
       onStateChange={(aud, config) => ctx.handleAudienceStateChange(aud, config)}
+      onSendEmail={(aud) => ctx.handleSendEmail(aud)}
     />
   {/if}
-{/if}
-
-<!-- Manage Audiences Modal (always available even when not ready) -->
-{#if api && ctx.rootPath}
-  <ManageAudiencesModal
-    open={ctx.showManageAudiences}
-    {api}
-    rootPath={ctx.rootPath}
-    onClose={() => { ctx.showManageAudiences = false; ctx.loadAudiences(); }}
-  />
 {/if}

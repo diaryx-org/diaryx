@@ -111,6 +111,23 @@ pub struct AudienceInfo {
     pub access: String,
 }
 
+/// A contact/subscriber in an email audience.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContactInfo {
+    pub id: String,
+    pub email: String,
+    #[serde(default)]
+    pub unsubscribed: bool,
+    pub created_at: Option<String>,
+}
+
+/// Result of a batch email send.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailSendResult {
+    pub recipients: usize,
+    pub send_receipt_key: String,
+}
+
 /// Namespace-scoped share session metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamespaceSessionInfo {

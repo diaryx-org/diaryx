@@ -10,5 +10,7 @@
     namespaceId={ctx.namespaceId}
     subdomain={ctx.subdomain}
     audienceStates={ctx.audienceStates}
+    siteBaseUrl={ctx.siteBaseUrl}
+    siteDomain={ctx.siteDomain}
   />
 {/if}

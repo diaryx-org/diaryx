@@ -28,6 +28,7 @@
   import NamespaceSiteUrlWidget from "$lib/namespace/NamespaceSiteUrlWidget.svelte";
   import NamespaceSubdomainWidget from "$lib/namespace/NamespaceSubdomainWidget.svelte";
   import NamespaceAudienceWidget from "$lib/namespace/NamespaceAudienceWidget.svelte";
+  import AudiencePickerWidget from "$lib/namespace/AudiencePickerWidget.svelte";
   import NamespacePublishWidget from "$lib/namespace/NamespacePublishWidget.svelte";
   import NamespaceCustomDomainManager from "$lib/namespace/NamespaceCustomDomainManager.svelte";
   import { getNamespaceContext } from "$lib/namespace/namespaceContext.svelte";
@@ -548,13 +549,15 @@
         <div class="px-1">
           <NamespaceAudienceWidget {api} />
         </div>
+      {:else if field.widget_id === "audience.picker"}
+        <AudiencePickerWidget {api} />
       {:else if field.widget_id === "namespace.publish-button"}
         <div class="px-1">
           <NamespacePublishWidget />
         </div>
       {:else if field.widget_id === "namespace.custom-domains"}
         {@const nsCtx = getNamespaceContext()}
-        {#if nsCtx.isReady && nsCtx.isConfigured && nsCtx.namespaceId}
+        {#if nsCtx.isReady && nsCtx.isConfigured && nsCtx.namespaceId && nsCtx.customDomainsAvailable}
           <div class="px-1">
             <NamespaceCustomDomainManager namespaceId={nsCtx.namespaceId} />
           </div>

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { proxyFetch } from "$lib/backend/proxyFetch";
-  import { tick } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
@@ -12,10 +11,10 @@
     Link,
     ChevronDown,
     ChevronUp,
-    Server,
     Settings,
     AlertCircle,
     Fingerprint,
+    WifiOff,
   } from "@lucide/svelte";
   import SignOutDialog from "$lib/SignOutDialog.svelte";
   import VerificationCodeInput from "$lib/components/VerificationCodeInput.svelte";
@@ -26,6 +25,7 @@
     setServerUrl,
     requestMagicLink,
     verifyMagicLink,
+    reconnectServer,
   } from "$lib/auth";
   import {
     authenticateWithPasskey,
@@ -38,14 +38,13 @@
 
   interface Props {
     onOpenAccountSettings?: () => void;
-    onAddWorkspace?: () => void;
     onClose?: () => void;
   }
 
-  let { onOpenAccountSettings, onAddWorkspace, onClose }: Props = $props();
+  let { onOpenAccountSettings, onClose }: Props = $props();
 
   let authState = $derived(getAuthState());
-  let syncEnabled = $derived(collaborationStore.collaborationEnabled);
+
 
   // Sign-in state
   let email = $state("");
@@ -67,6 +66,24 @@
   let resendInterval: ReturnType<typeof setInterval> | null = null;
   let urlCheckInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Reconnect state
+  let isReconnecting = $state(false);
+
+  async function handleReconnect() {
+    isReconnecting = true;
+    error = null;
+    try {
+      const success = await reconnectServer();
+      if (!success) {
+        error = "Server still unreachable";
+      }
+    } catch {
+      error = "Reconnection failed";
+    } finally {
+      isReconnecting = false;
+    }
+  }
+
   // Passkey state
   let passkeySupported = $state(false);
   let isAuthenticatingPasskey = $state(false);
@@ -78,11 +95,6 @@
     try {
       await authenticateWithPasskey(email.trim() || undefined);
       email = "";
-      if (getAuthState().workspaces.length > 0 && !syncEnabled) {
-        onClose?.();
-        await tick();
-        onAddWorkspace?.();
-      }
     } catch (e) {
       error = e instanceof Error ? e.message : "Passkey authentication failed";
     } finally {
@@ -175,12 +187,6 @@
       await verifyMagicLink(token.trim());
       verificationSent = false;
       email = "";
-      // Auto-open add workspace dialog for returning users with server workspaces
-      if (getAuthState().workspaces.length > 0 && !syncEnabled) {
-        onClose?.();
-        await tick();
-        onAddWorkspace?.();
-      }
     } catch (e) {
       error = e instanceof Error ? e.message : "Verification failed";
     }
@@ -209,19 +215,25 @@
     <div class="space-y-3">
       <div class="text-sm font-medium truncate">{authState.user.email}</div>
 
-      {#if !syncEnabled && onAddWorkspace}
-        <div class="space-y-2 p-2.5 rounded-md bg-primary/5 border border-primary/20">
-          <p class="text-xs text-muted-foreground">
-            Set up sync to access your notes across devices.
-          </p>
+      {#if collaborationStore.serverOffline}
+        <div class="space-y-2 p-2.5 rounded-md bg-amber-500/10 border border-amber-500/20">
+          <div class="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+            <WifiOff class="size-3.5 shrink-0" />
+            <span>Server unreachable — working offline</span>
+          </div>
           <Button
-            variant="default"
+            variant="outline"
             size="sm"
             class="w-full"
-            onclick={async () => { onClose?.(); await tick(); onAddWorkspace?.(); }}
+            onclick={handleReconnect}
+            disabled={isReconnecting}
           >
-            <Server class="size-3.5 mr-1.5" />
-            Set Up Sync
+            {#if isReconnecting}
+              <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+              Reconnecting…
+            {:else}
+              Reconnect
+            {/if}
           </Button>
         </div>
       {/if}
@@ -375,15 +387,10 @@
 
             <VerificationCodeInput
               {email}
-              onVerified={async () => {
+              onVerified={() => {
                 verificationSent = false;
                 stopMagicLinkDetection();
                 email = "";
-                if (getAuthState().workspaces.length > 0 && !syncEnabled) {
-                  onClose?.();
-                  await tick();
-                  onAddWorkspace?.();
-                }
               }}
               onError={(msg) => { error = msg; }}
             />

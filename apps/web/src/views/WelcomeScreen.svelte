@@ -44,8 +44,6 @@
     /** When set, user navigated here from an existing workspace — show a "Return" button */
     returnWorkspaceName?: string | null;
     onReturn?: () => void;
-    /** Called when a returning user picks a bundle to create a new workspace */
-    onCreateNewWithBundle?: (selectedBundle: BundleRegistryEntry | null) => void | Promise<void>;
   }
 
   let {
@@ -56,7 +54,6 @@
     onLaunch,
     returnWorkspaceName = null,
     onReturn,
-    onCreateNewWithBundle,
   }: Props = $props();
 
   // View state machine
@@ -113,24 +110,9 @@
     }
   }
 
-  async function handleCreateNewWithBundle(bundle: BundleRegistryEntry | null) {
-    if (!onCreateNewWithBundle) return;
-    settingUp = true;
-    try {
-      await onCreateNewWithBundle(bundle);
-    } catch {
-      settingUp = false;
-    }
-  }
-
   async function handleBundleSelected(info: BundleSelectInfo) {
     launchInfo = info;
     const bundle = info.bundle;
-
-    if (returnWorkspaceName && onCreateNewWithBundle) {
-      await handleCreateNewWithBundle(bundle);
-      return;
-    }
 
     selectedBundle = bundle;
     const pluginIds = bundle.plugins.map((p) => p.plugin_id);

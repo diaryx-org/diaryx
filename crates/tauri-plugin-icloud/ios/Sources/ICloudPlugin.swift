@@ -120,8 +120,7 @@ class ICloudPlugin: Plugin {
             }
 
             if let downloadStatus = item.value(forAttribute: NSMetadataUbiquitousItemDownloadingStatusKey) as? String,
-               downloadStatus == NSMetadataUbiquitousItemDownloadingStatusNotDownloaded ||
-               downloadStatus == NSMetadataUbiquitousItemDownloadingStatusDownloading {
+               downloadStatus != NSMetadataUbiquitousItemDownloadingStatusCurrent {
                 downloading += 1
             }
         }
@@ -317,8 +316,7 @@ class ICloudPlugin: Plugin {
             }
 
             if let downloadStatus = item.value(forAttribute: NSMetadataUbiquitousItemDownloadingStatusKey) as? String,
-               downloadStatus == NSMetadataUbiquitousItemDownloadingStatusNotDownloaded ||
-               downloadStatus == NSMetadataUbiquitousItemDownloadingStatusDownloading {
+               downloadStatus != NSMetadataUbiquitousItemDownloadingStatusCurrent {
                 downloading += 1
             }
         }

@@ -35,6 +35,7 @@ import {
 import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
 import { getCurrentWorkspaceId as registryGetCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry.svelte";
 import { isTauri } from "$lib/backend/interface";
+import { proxyFetch } from "$lib/backend/proxyFetch";
 
 function setAuthToken(_token: string | undefined): void {
   // Sync plugin reads token through host callbacks/local auth state.
@@ -266,6 +267,40 @@ export function getStorageUsage(): UserStorageUsageResponse | null {
 // ============================================================================
 
 /**
+ * Check whether the sync server is reachable.
+ * Uses the lightweight `/api/health` endpoint with a short timeout.
+ * Returns true if the server responded with a 2xx status.
+ */
+export async function checkServerHealth(serverUrl: string): Promise<boolean> {
+  try {
+    const base = serverUrl.replace(/\/+$/, '');
+    const url = base.endsWith('/api') ? `${base}/health` : `${base}/api/health`;
+    const resp = await proxyFetch(url, { method: "GET", timeout_ms: 5000 });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Attempt to reconnect to the sync server.
+ * Call this when the user explicitly asks to go back online.
+ */
+export async function reconnectServer(): Promise<boolean> {
+  const serverUrl = state.serverUrl;
+  if (!serverUrl) return false;
+
+  const healthy = await checkServerHealth(serverUrl);
+  if (healthy) {
+    collaborationStore.setServerOffline(false);
+    // Re-run auth initialization to restore session
+    await initAuth();
+    return true;
+  }
+  return false;
+}
+
+/**
  * Initialize auth state.
  *
  * - Browser: validates session via cookie (calls `/api/auth/me` with
@@ -291,6 +326,27 @@ export async function initAuth(): Promise<void> {
   const hasSession = isTauri() ? !!token : !!serverUrl;
 
   if (hasSession && serverUrl) {
+    // Health check: if server is unreachable, enter offline mode
+    const healthy = await checkServerHealth(serverUrl);
+    if (!healthy) {
+      console.warn("[AuthStore] Server unreachable, entering offline mode");
+      collaborationStore.setServerOffline(true);
+      // Restore cached user so UI still shows account info
+      if (savedUser) {
+        try {
+          state.user = JSON.parse(savedUser);
+          state.isAuthenticated = true;
+        } catch {
+          // Invalid saved user
+        }
+      }
+      state.isLoading = false;
+      return;
+    }
+
+    // Server is reachable — clear any previous offline state
+    collaborationStore.setServerOffline(false);
+
     state.isLoading = true;
     state.error = null;
 

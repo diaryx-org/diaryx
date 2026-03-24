@@ -83,6 +83,14 @@ pub fn email_broadcast(env: &Env) -> Option<ResendMailer> {
     mailer(env, 0)
 }
 
+/// Apple IAP bundle ID for transaction validation.
+pub fn apple_iap_bundle_id(env: &Env) -> Option<String> {
+    env.var("APPLE_IAP_BUNDLE_ID")
+        .ok()
+        .map(|v| v.to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Cloudflare zone ID for the SaaS zone (used for custom hostname management).
 pub fn cf_zone_id(env: &Env) -> Option<String> {
     env.var("CF_ZONE_ID")

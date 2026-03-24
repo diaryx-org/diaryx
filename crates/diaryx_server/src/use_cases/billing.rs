@@ -155,6 +155,15 @@ impl<'a> BillingService<'a> {
         Ok(())
     }
 
+    /// Deactivate an Apple IAP subscription (expired, revoked, or refunded).
+    pub async fn deactivate_apple_transaction(&self, user_id: &str) -> Result<(), ServerCoreError> {
+        self.user_store
+            .set_user_tier(user_id, UserTier::Free)
+            .await?;
+        info!("User {} downgraded to Free via Apple IAP webhook", user_id);
+        Ok(())
+    }
+
     /// Get the Stripe customer ID for a user.
     pub async fn get_stripe_customer_id(
         &self,

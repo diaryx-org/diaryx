@@ -7,56 +7,11 @@
 		"command": "bash build.sh"
 	},
 
-	// No public route — reached only via service binding from the web worker.
-	// To expose publicly later (e.g. for API access), add:
-	//   "routes": [{ "pattern": "api.diaryx.org/*", "zone_name": "diaryx.org" }]
-
-	"vars": {
-		"APP_BASE_URL": "https://app.diaryx.org",
-		"CORS_ORIGINS": "https://app.diaryx.org",
-		"EMAIL_FROM_NAME": "Diaryx",
-		"EMAIL_FROM_ADDRESS": "noreply@signin.diaryx.org",
-		"MAGIC_LINK_EXPIRY_MINUTES": "15",
-		"SESSION_EXPIRY_DAYS": "30",
-		"SECURE_COOKIES": "true",
-		"CF_ZONE_ID": "acb726023b2d5fcd83c0490314bb19f1"
-	},
-
-	// Secrets (set via `npx wrangler secret put <NAME>`):
+	// Secrets (set via `npx wrangler secret put <NAME> --env <ENV>`):
 	// - TOKEN_SIGNING_KEY
 	// - RESEND_API_KEY
 	// - CF_API_TOKEN  (Cloudflare API token with Custom Hostnames permission for the SaaS zone)
 
-	"d1_databases": [
-		{
-			"binding": "diaryx_users",
-			"database_name": "diaryx-users",
-			"database_id": "2d952957-b0a4-4172-a617-2cbbb4edcd75",
-			"remote": true
-		}
-	],
-	"r2_buckets": [
-		{
-			"bucket_name": "diaryx-user-data",
-			"binding": "diaryx_objects",
-			"remote": true
-		}
-	],
-	"kv_namespaces": [
-		{
-			"binding": "diaryx_domain_mapping",
-			"id": "92891768520a46e883f4eb111c02b4d8",
-			"remote": true
-		}
-	],
-	"durable_objects": {
-		"bindings": [
-			{
-				"name": "NAMESPACE_SYNC",
-				"class_name": "NamespaceSyncDO"
-			}
-		]
-	},
 	"migrations": [
 		{
 			"tag": "v1",
@@ -65,9 +20,99 @@
 	],
 
 	"observability": {
-    "logs": {
-      "enabled": false,
-      "invocation_logs": true
-    }
-  }
+		"logs": {
+			"enabled": false,
+			"invocation_logs": true
+		}
+	},
+
+	"env": {
+		"production": {
+			// No public route — reached only via service binding from the web worker.
+			// To expose publicly later (e.g. for API access), add:
+			//   "routes": [{ "pattern": "api.diaryx.org/*", "zone_name": "diaryx.org" }]
+			"vars": {
+				"APP_BASE_URL": "https://app.diaryx.org",
+				"CORS_ORIGINS": "https://app.diaryx.org",
+				"EMAIL_FROM_NAME": "Diaryx",
+				"EMAIL_FROM_ADDRESS": "noreply@mail.diaryx.org",
+				"MAGIC_LINK_EXPIRY_MINUTES": "15",
+				"SESSION_EXPIRY_DAYS": "30",
+				"SECURE_COOKIES": "true",
+				"CF_ZONE_ID": "acb726023b2d5fcd83c0490314bb19f1",
+				"STRIPE_PRICE_ID": "price_1T1fVbQ6sfJhR1DJBI5IHOtP",
+				"STRIPE_PUBLISHABLE_KEY": "pk_live_51Sz8EULmoDNjvtZfdFxYrMEdfUySNxHob3jGaTOHMEQEvmAEPqS8L8jKZ7Al6xnVx7Df84iy3qRNlILkWQRkriYI000yhyVTaT",
+				"APPLE_IAP_BUNDLE_ID": "org.diaryx.desktop"
+			},
+			"d1_databases": [
+				{
+					"binding": "diaryx_users",
+					"database_name": "diaryx-users",
+					"database_id": "2d952957-b0a4-4172-a617-2cbbb4edcd75",
+					"remote": true
+				}
+			],
+			"r2_buckets": [
+				{
+					"bucket_name": "diaryx-user-data",
+					"binding": "diaryx_objects",
+					"remote": true
+				}
+			],
+			"kv_namespaces": [
+				{
+					"binding": "diaryx_domain_mapping",
+					"id": "92891768520a46e883f4eb111c02b4d8",
+					"remote": true
+				}
+			],
+			"durable_objects": {
+				"bindings": [
+					{
+						"name": "NAMESPACE_SYNC",
+						"class_name": "NamespaceSyncDO"
+					}
+				]
+			}
+		},
+		"dev": {
+			"vars": {
+				"APP_BASE_URL": "http://localhost:5174",
+				"CORS_ORIGINS": "http://localhost:5174,http://localhost:5175",
+				"EMAIL_FROM_NAME": "Diaryx",
+				"EMAIL_FROM_ADDRESS": "noreply@mail.diaryx.org",
+				"MAGIC_LINK_EXPIRY_MINUTES": "15",
+				"SESSION_EXPIRY_DAYS": "30",
+				"SECURE_COOKIES": "false",
+				"CF_ZONE_ID": "acb726023b2d5fcd83c0490314bb19f1"
+			},
+			"d1_databases": [
+				{
+					"binding": "diaryx_users",
+					"database_name": "diaryx-users-dev",
+					"database_id": "2d952957-b0a4-4172-a617-2cbbb4edcd75"
+				}
+			],
+			"r2_buckets": [
+				{
+					"bucket_name": "diaryx-user-data-dev",
+					"binding": "diaryx_objects"
+				}
+			],
+			"kv_namespaces": [
+				{
+					"binding": "diaryx_domain_mapping",
+					"id": "92891768520a46e883f4eb111c02b4d8"
+				}
+			],
+			"durable_objects": {
+				"bindings": [
+					{
+						"name": "NAMESPACE_SYNC",
+						"class_name": "NamespaceSyncDO"
+					}
+				]
+			}
+		}
+	}
 }

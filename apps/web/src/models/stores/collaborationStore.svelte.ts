@@ -115,6 +115,12 @@ class CollaborationStore {
   collaborationServerUrl = $state<string | null>(getInitialServerUrl());
 
   /**
+   * When true, the sync server was unreachable at startup.
+   * All sync requests should be suppressed until the user triggers a reconnect.
+   */
+  serverOffline = $state(false);
+
+  /**
    * Effective sync status that only shows 'synced' when BOTH metadata AND body are synced.
    * Use this in UI components to accurately represent sync completion.
    *
@@ -122,6 +128,8 @@ class CollaborationStore {
    * in the reactive graph, ensuring reliable UI updates when dependencies change.
    */
   effectiveSyncStatus: SyncStatus = $derived.by(() => {
+    // If server is offline, show error
+    if (this.serverOffline) return 'error';
     // If there's an error, show error
     if (this.syncStatus === 'error') return 'error';
     // If not configured, show not configured
@@ -211,6 +219,13 @@ class CollaborationStore {
   resetBodySyncStatus() {
     this.bodySyncStatus = 'idle';
     this.bodySyncProgress = null;
+  }
+
+  setServerOffline(offline: boolean) {
+    this.serverOffline = offline;
+    if (offline) {
+      this.syncError = 'Server unreachable — working offline';
+    }
   }
 
   // Server URL (in-memory only — the canonical localStorage key

@@ -37,15 +37,31 @@ fn main() {
     let config: serde_json::Value =
         serde_json::from_str(&json_str).expect("failed to parse wrangler.jsonc as JSON");
 
-    let d1_binding = config["d1_databases"][0]["binding"]
-        .as_str()
-        .expect("missing d1_databases[0].binding");
-    let r2_binding = config["r2_buckets"][0]["binding"]
-        .as_str()
-        .expect("missing r2_buckets[0].binding");
-    let kv_binding = config["kv_namespaces"][0]["binding"]
-        .as_str()
-        .expect("missing kv_namespaces[0].binding");
+    // Bindings can be at top level or inside an env. Since they're the same
+    // across environments (only bucket names / remote flags differ), check
+    // top level first, then fall back to the first env that has them.
+    let d1_binding = find_binding(&config, "d1_databases")
+        .expect("missing d1_databases[0].binding in top level or any env");
+    let r2_binding = find_binding(&config, "r2_buckets")
+        .expect("missing r2_buckets[0].binding in top level or any env");
+    let kv_binding = find_binding(&config, "kv_namespaces")
+        .expect("missing kv_namespaces[0].binding in top level or any env");
+
+    fn find_binding(config: &serde_json::Value, key: &str) -> Option<String> {
+        // Try top level first
+        if let Some(s) = config[key][0]["binding"].as_str() {
+            return Some(s.to_string());
+        }
+        // Fall back to first env that has it
+        if let Some(envs) = config["env"].as_object() {
+            for (_name, env_config) in envs {
+                if let Some(s) = env_config[key][0]["binding"].as_str() {
+                    return Some(s.to_string());
+                }
+            }
+        }
+        None
+    }
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let dest = Path::new(&out_dir).join("wrangler_bindings.rs");

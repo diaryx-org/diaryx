@@ -23,7 +23,6 @@
     RefreshCw,
     AlertCircle,
     AlertTriangle,
-    Server,
     Pencil,
     Check,
     X,
@@ -49,19 +48,14 @@
     deletePasskey,
   } from "$lib/auth/authStore.svelte";
   import { isPasskeySupported } from "$lib/auth/webauthnUtils";
-  import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import { onMount } from "svelte";
 
-  interface Props {
-    /** Callback to open the sync setup wizard */
-    onAddWorkspace?: () => void;
-  }
+  interface Props {}
 
-  let { onAddWorkspace }: Props = $props();
+  let {}: Props = $props();
 
   // Auth state
   let authState = $derived(getAuthState());
-  let syncEnabled = $derived(collaborationStore.collaborationEnabled);
 
   // Account management state
   let isLoggingOut = $state(false);
@@ -201,24 +195,6 @@
           <RefreshCw class="size-4" />
         </Button>
       </div>
-
-      <!-- Sync Setup Prompt (when signed in but sync not enabled) -->
-      {#if !syncEnabled && onAddWorkspace}
-        <div class="space-y-2 p-3 rounded-md bg-secondary border border-primary/20">
-          <p class="text-xs text-muted-foreground">
-            Signed in. Set up sync to access your notes across devices. One synced workspace is free.
-          </p>
-          <Button
-            variant="default"
-            size="sm"
-            class="w-full"
-            onclick={onAddWorkspace}
-          >
-            <Server class="size-4 mr-2" />
-            Set Up Sync
-          </Button>
-        </div>
-      {/if}
 
       <Separator />
 
@@ -391,11 +367,6 @@
   {:else}
     <!-- Not Authenticated: Inline sign-in form -->
     <SignInForm
-      onAuthenticated={() => {
-        if (getAuthState().workspaces.length > 0 && !syncEnabled) {
-          onAddWorkspace?.();
-        }
-      }}
     />
   {/if}
 </div>

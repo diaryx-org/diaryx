@@ -17,6 +17,7 @@ import { getAudienceColorStore } from '$lib/stores/audienceColorStore.svelte';
 import { getWorkspaceConfigStore } from '$lib/stores/workspaceConfigStore.svelte';
 import { workspaceStore } from '@/models/stores';
 import { showError, showSuccess, showInfo } from '@/models/services/toastService';
+import { proxyFetch } from '$lib/backend/proxyFetch';
 import { createNamespace } from './namespaceService';
 
 const CONTEXT_KEY = Symbol('namespace-context');
@@ -217,6 +218,13 @@ export class NamespaceContext {
       this.namespaceId = config.namespace_id ?? null;
       this.subdomain = config.subdomain ?? null;
       this.audienceStates = config.audience_states ?? {};
+
+      // Verify the namespace still exists on the current server.
+      // If it was created on a different server (e.g., switching from
+      // native to CF or vice versa), the ID will be stale.
+      if (this.namespaceId) {
+        await this.verifyNamespace();
+      }
     } catch (e) {
       this.error = e instanceof Error ? e.message : 'Failed to load publish config';
       this.namespaceId = null;
@@ -224,6 +232,38 @@ export class NamespaceContext {
       this.audienceStates = {};
     } finally {
       this.isLoading = false;
+    }
+  }
+
+  /** Check if the stored namespace exists on the server. If not, clear it so the next publish creates a fresh one. */
+  private async verifyNamespace() {
+    if (!this.namespaceId) return;
+    try {
+      const serverUrl = this.serverUrl;
+      if (!serverUrl) return;
+      const resp = await proxyFetch(`${serverUrl}/namespaces/${encodeURIComponent(this.namespaceId)}`);
+      if (resp.status === 404) {
+        console.warn(
+          `[NamespaceContext] Namespace ${this.namespaceId} not found on server — clearing stale config`,
+        );
+        this.namespaceId = null;
+        this.subdomain = null;
+        // Persist the cleared config so the stale ID doesn't come back
+        try {
+          await this.executePublishCommand('SetPublishConfig', {
+            namespace_id: null,
+            subdomain: null,
+            audience_states: this.audienceStates,
+            public_audiences: Object.entries(this.audienceStates)
+              .filter(([, c]) => c.state === 'public')
+              .map(([name]) => name),
+          });
+        } catch {
+          // Best effort
+        }
+      }
+    } catch {
+      // Network error — don't clear, might be transient
     }
   }
 
@@ -331,11 +371,7 @@ export class NamespaceContext {
       });
       return;
     }
-    if (this.#onHostAction) {
-      this.#onHostAction({ type: 'open-add-workspace' });
-      return;
-    }
-    showInfo('Open account or sync settings to enable faster server-side publishing.');
+    showInfo('Open account settings to configure publishing.');
   }
 }
 

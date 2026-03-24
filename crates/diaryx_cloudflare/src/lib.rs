@@ -119,6 +119,8 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         )
         .get_async("/api/auth/passkeys", handlers::passkey_list)
         .delete_async("/api/auth/passkeys/:id", handlers::passkey_delete)
+        // Capabilities
+        .get_async("/api/capabilities", handlers::capabilities)
         // Usage
         .get_async("/api/usage", handlers::get_usage)
         // Stripe billing

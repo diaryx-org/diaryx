@@ -25,7 +25,6 @@
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import MarketplaceDialog from "./lib/MarketplaceDialog.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
-  import AddWorkspaceDialog from "./lib/AddWorkspaceDialog.svelte";
   import DeviceReplacementDialog from "./lib/components/DeviceReplacementDialog.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
   import MoveEntryDialog from "./lib/MoveEntryDialog.svelte";
@@ -357,9 +356,6 @@
   // Left sidebar tab control (plugin-owned tabs)
   let requestedLeftTab: string | null = $state(null);
 
-  // Add workspace dialog
-  let showAddWorkspace = $state(false);
-  let justVerifiedMagicLink = false;
 
   // Delete confirmation dialog state
   let showDeleteConfirm = $state(false);
@@ -418,8 +414,6 @@
   let showWelcomeScreen = $state(false);
   /** Non-null when the user navigated to the welcome screen from an active workspace */
   let welcomeReturnWorkspaceName = $state<string | null>(null);
-  /** Bundle pre-selected from welcome screen to apply when creating a new workspace via AddWorkspaceDialog */
-  let addWorkspaceBundle = $state<BundleRegistryEntry | null>(null);
   let spotlightSteps = $state<SpotlightStep[] | null>(null);
 
   // Launch zoom overlay (persists after WelcomeScreen unmounts)
@@ -2045,7 +2039,6 @@
         }
         // Verify automatically and wait for completion before continuing
         await handleMagicLinkToken(token);
-        justVerifiedMagicLink = true;
       }
     }
 
@@ -2261,14 +2254,6 @@
 
       // Run initial validation
       await runValidation();
-
-      // Auto-open the sync wizard only when a magic link was just verified in this
-      // page load, the server already has workspaces, and sync hasn't been enabled yet.
-      // Previously this also fired on normal refreshes for any authenticated session
-      // without sync, causing the dialog to reappear on every reload.
-      if (justVerifiedMagicLink && getWorkspaces().length > 0 && !isSyncEnabled()) {
-        showAddWorkspace = true;
-      }
 
     } catch (e) {
       if (e instanceof FsaGestureRequiredError) {
@@ -2820,9 +2805,6 @@
         exportPath = tree?.path ?? ".";
         showExportDialog = true;
         return { opened: "export-dialog", path: exportPath };
-      case "open-add-workspace":
-        showAddWorkspace = true;
-        return { opened: "add-workspace" };
       case "toggle-left-sidebar":
         toggleLeftSidebar();
         return { toggled: "left" };
@@ -3009,10 +2991,6 @@
     }
   }
 
-  // Open the unified workspace setup flow from an empty workspace.
-  function handleInitializeEmptyWorkspace() {
-    showAddWorkspace = true;
-  }
 
   // Handle welcome screen completion — backend already initialized by switchWorkspace
   async function handleWelcomeComplete(_id: string, _name: string) {
@@ -3020,7 +2998,7 @@
     entryStore.setLoading(true);
 
     try {
-      // Backend already initialized by switchWorkspace (via AddWorkspaceDialog).
+      // Backend already initialized by switchWorkspace.
       // Just refresh UI state.
       const newBackend = await getBackend();
       workspaceStore.setBackend(newBackend);
@@ -4311,11 +4289,6 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   workspacePath={tree?.path}
   initialTab={settingsInitialTab}
   {api}
-  onAddWorkspace={async () => {
-    showSettingsDialog = false;
-    await tick();
-    showAddWorkspace = true;
-  }}
   onHostAction={handlePluginHostAction}
 />
 
@@ -4329,31 +4302,6 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   onOpenChange={(open) => (showExportDialog = open)}
 />
 
-<!-- Add Workspace Dialog -->
-<AddWorkspaceDialog
-  bind:open={showAddWorkspace}
-  onOpenChange={(open) => { if (!open) addWorkspaceBundle = null; showAddWorkspace = open; }}
-  selectedBundle={addWorkspaceBundle}
-  onComplete={async (appliedBundle) => {
-    showAddWorkspace = false;
-    if (showWelcomeScreen) {
-      // Came from the welcome screen — dismiss it and re-initialize
-      await handleWelcomeComplete("", "");
-    } else {
-      // Re-initialize backend references and refresh tree for the new workspace.
-      await handleWorkspaceSwitchComplete();
-    }
-    // Apply bundle (theme, plugins, typography) after workspace is fully initialized
-    if (appliedBundle && appliedBundle.plugins.length > 0) {
-      try {
-        await applyOnboardingBundle(appliedBundle);
-      } catch (e) {
-        console.warn("[App] Bundle apply after workspace creation failed (non-fatal):", e);
-      }
-    }
-    addWorkspaceBundle = null;
-  }}
-/>
 
 <!-- Device Replacement Dialog (shown when sign-in hits device limit) -->
 <DeviceReplacementDialog onAuthenticated={() => handleWelcomeComplete("", "")} />
@@ -4521,8 +4469,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
           });
         }
       } catch (e) {
-        console.error("[App] Auto-create from welcome screen failed, opening dialog:", e);
-        showAddWorkspace = true;
+        console.error("[App] Auto-create from welcome screen failed:", e);
+        toast.error("Failed to create workspace", { description: e instanceof Error ? e.message : String(e) });
       } finally {
         entryStore.setLoading(false);
       }
@@ -4541,7 +4489,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         await runValidation();
       } catch (e) {
         console.error("[App] Auto-create after sign-in failed:", e);
-        showAddWorkspace = true;
+        toast.error("Failed to create workspace", { description: e instanceof Error ? e.message : String(e) });
       } finally {
         entryStore.setLoading(false);
       }
@@ -4568,7 +4516,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         }
       } catch (e) {
         console.error("[App] Restore workspace failed:", e);
-        showAddWorkspace = true;
+        toast.error("Failed to restore workspace", { description: e instanceof Error ? e.message : String(e) });
       } finally {
         entryStore.setLoading(false);
       }
@@ -4597,7 +4545,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         }
       } catch (e) {
         console.error("[App] Create with provider failed:", e);
-        showAddWorkspace = true;
+        toast.error("Failed to create workspace", { description: e instanceof Error ? e.message : String(e) });
       } finally {
         entryStore.setLoading(false);
       }
@@ -4606,10 +4554,6 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onReturn={() => {
       showWelcomeScreen = false;
       welcomeReturnWorkspaceName = null;
-    }}
-    onCreateNewWithBundle={(selectedBundle) => {
-      addWorkspaceBundle = selectedBundle;
-      showAddWorkspace = true;
     }}
   />
 {:else}
@@ -4637,7 +4581,12 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     settingsDialogOpen={showSettingsDialog}
     marketplaceDialogOpen={showMarketplaceDialog}
     onOpenAccountSettings={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
-    onAddWorkspace={() => { showAddWorkspace = true; }}
+    onAddWorkspace={() => {
+      const wsId = getCurrentWorkspaceId();
+      const localWs = wsId ? getLocalWorkspace(wsId) : null;
+      welcomeReturnWorkspaceName = localWs?.name ?? null;
+      showWelcomeScreen = true;
+    }}
     onMoveEntry={handleMoveEntry}
     onReorderChildren={handleReorderChildren}
     onOpenMoveDialog={(path) => { moveEntryDialogPath = path; }}
@@ -4867,7 +4816,12 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         onToggleLeftSidebar={toggleLeftSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
         hasWorkspaceTree={!!tree && tree.path !== '.'}
-        onInitializeWorkspace={handleInitializeEmptyWorkspace}
+        onInitializeWorkspace={() => {
+          const wsId = getCurrentWorkspaceId();
+          const localWs = wsId ? getLocalWorkspace(wsId) : null;
+          welcomeReturnWorkspaceName = localWs?.name ?? null;
+          showWelcomeScreen = true;
+        }}
         onRelocateWorkspace={isTauri() ? handleRelocateWorkspace : undefined}
         onRemoveWorkspace={handleRemoveWorkspace}
       />

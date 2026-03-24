@@ -27,11 +27,10 @@
   import NamespacePublishButton from '$lib/namespace/NamespacePublishButton.svelte';
 
   interface Props {
-    onAddWorkspace?: () => void;
     api: Api | null;
   }
 
-  let { onAddWorkspace, api }: Props = $props();
+  let { api }: Props = $props();
 
   const templateContextStore = getTemplateContextStore();
   const colorStore = getAudienceColorStore();
@@ -281,11 +280,7 @@
   }
 
   function handleOpenSyncSetup() {
-    if (onAddWorkspace) {
-      onAddWorkspace();
-      return;
-    }
-    showInfo('Open account or sync settings to enable faster server-side publishing.');
+    showInfo('Open account settings to configure publishing.');
   }
 </script>
 

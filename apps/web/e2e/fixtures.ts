@@ -150,43 +150,6 @@ export class EditorHelper {
   }
 }
 
-/**
- * Complete the welcome screen onboarding flow if it appears.
- * Creates a default workspace so tests can proceed to the editor.
- */
-async function completeAddWorkspaceDialog(page: Page, timeoutMs: number): Promise<void> {
-  const addWorkspaceDialog = page.getByRole('dialog', { name: 'Add Workspace' })
-  if (!(await addWorkspaceDialog.isVisible().catch(() => false))) {
-    return
-  }
-
-  const startFreshButton = addWorkspaceDialog.getByRole('button', { name: /start fresh/i }).first()
-  if (await startFreshButton.isVisible().catch(() => false)) {
-    await startFreshButton.click().catch(() => undefined)
-  }
-
-  const emptyWorkspaceButton = addWorkspaceDialog.getByRole('button', { name: /empty workspace/i }).first()
-  if (await emptyWorkspaceButton.isVisible().catch(() => false)) {
-    await emptyWorkspaceButton.click().catch(() => undefined)
-  }
-
-  const createWorkspaceButton = addWorkspaceDialog.getByRole('button', {
-    name: /create workspace|create & sync|import workspace|open workspace|download workspace/i,
-  })
-  await expect(createWorkspaceButton).toBeVisible({ timeout: 5000 })
-  await expect(createWorkspaceButton).toBeEnabled({ timeout: timeoutMs })
-  await createWorkspaceButton.click()
-
-  const dialogHideTimeout = Math.min(timeoutMs, 15000)
-  const dialogClosed = await addWorkspaceDialog
-    .waitFor({ state: 'hidden', timeout: dialogHideTimeout })
-    .then(() => true)
-    .catch(() => false)
-
-  if (!dialogClosed) {
-    throw new Error('Add Workspace dialog did not close after submission')
-  }
-}
 
 async function bootstrapWorkspaceFallback(page: Page): Promise<void> {
   await page.evaluate(async () => {
@@ -241,15 +204,13 @@ async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promi
   const editor = page.locator('.ProseMirror, [contenteditable="true"]')
   const appSurface = page.getByRole('application').first()
   const welcomeHeading = page.getByRole('heading', { name: 'Welcome to Diaryx' })
-  const addWorkspaceDialog = page.getByRole('dialog', { name: 'Add Workspace' })
 
   // Wait for the initial app state to settle into either the editor, the
-  // loaded app shell, the welcome screen, or the welcome fallback dialog.
+  // loaded app shell, or the welcome screen.
   await Promise.race([
     editor.first().waitFor({ state: 'visible', timeout: timeoutMs }),
     appSurface.waitFor({ state: 'visible', timeout: timeoutMs }),
     welcomeHeading.waitFor({ state: 'visible', timeout: timeoutMs }),
-    addWorkspaceDialog.waitFor({ state: 'visible', timeout: timeoutMs }),
   ])
 
   // If the welcome screen appeared, select "More options" → "Minimal" bundle
@@ -272,14 +233,7 @@ async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promi
     await Promise.race([
       editor.first().waitFor({ state: 'visible', timeout: timeoutMs }),
       appSurface.waitFor({ state: 'visible', timeout: timeoutMs }),
-      addWorkspaceDialog.waitFor({ state: 'visible', timeout: timeoutMs }),
     ])
-  }
-
-  // New onboarding can fall back to the Add Workspace dialog if auto-create
-  // does not complete. Finish that flow here so tests still land in the editor.
-  if (await addWorkspaceDialog.isVisible().catch(() => false)) {
-    await completeAddWorkspaceDialog(page, timeoutMs)
   }
 
   await Promise.race([

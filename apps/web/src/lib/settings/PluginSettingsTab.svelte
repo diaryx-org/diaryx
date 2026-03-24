@@ -362,9 +362,6 @@
     }
   }
 
-  function handleAddWorkspaceRequest() {
-    return onHostAction?.({ type: "open-add-workspace" });
-  }
 </script>
 
 <div class="space-y-4">
@@ -531,7 +528,7 @@
     {:else if field.type === "HostWidget"}
       {#if field.widget_id === "publish.site-panel"}
         <div class="px-1">
-          <PublishingPanel {api} onAddWorkspace={handleAddWorkspaceRequest} />
+          <PublishingPanel {api} />
         </div>
       {:else if field.widget_id === "namespace.guard"}
         <div class="px-1">

@@ -44,8 +44,6 @@
     workspacePath?: string | null;
     /** Tab to show when the dialog opens */
     initialTab?: string;
-    /** Callback to open the sync setup wizard */
-    onAddWorkspace?: () => void;
     /** API wrapper for plugin config operations */
     api?: Api | null;
     /** Handler for host actions from plugin iframes (e.g. OAuth) */
@@ -57,7 +55,6 @@
     focusMode = $bindable(true),
     workspacePath = null,
     initialTab,
-    onAddWorkspace,
     api = null,
     onHostAction,
   }: Props = $props();
@@ -217,7 +214,7 @@
         </div>
       {:else if activeTab === "account"}
         <div class="space-y-4">
-          <AccountSettings {onAddWorkspace} />
+          <AccountSettings />
           <WorkspaceManagement />
         </div>
       {:else if activeTab === "billing"}

@@ -7,20 +7,30 @@
    * zooms to fill the viewport (app launch animation).
    */
   import { onMount } from "svelte";
-  import { ChevronLeft, ChevronRight, Loader2 } from "@lucide/svelte";
+  import { ChevronLeft, ChevronRight, Loader2, ChevronDown, Upload, X } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
+  import { toast } from "svelte-sonner";
   import type { BundleRegistryEntry, ThemeRegistryEntry } from "$lib/marketplace/types";
 
   export interface BundleSelectInfo {
     bundle: BundleRegistryEntry;
     launchRect: DOMRect | null;
     previewUrl: string;
+    pluginOverrides?: PluginOverride[];
+  }
+
+  /** A local .wasm override for a plugin in the bundle */
+  export interface PluginOverride {
+    /** The plugin ID being replaced (or "__new__" for an addition) */
+    targetPluginId: string;
+    fileName: string;
+    bytes: ArrayBuffer;
   }
 
   interface Props {
     bundles: BundleRegistryEntry[];
     themes: ThemeRegistryEntry[];
-    onSelect: (bundle: BundleRegistryEntry) => void | Promise<void>;
+    onSelect: (bundle: BundleRegistryEntry, pluginOverrides?: PluginOverride[]) => void | Promise<void>;
     /** Called instead of onSelect when deferZoom is true — passes launch info without zooming */
     onDeferredSelect?: (info: BundleSelectInfo) => void | Promise<void>;
     onBack?: () => void;
@@ -48,12 +58,47 @@
 
   let activeBundle = $derived(bundles[activeIndex] ?? null);
 
+  // Advanced: plugin overrides
+  let showAdvanced = $state(false);
+  let pluginOverrides = $state<PluginOverride[]>([]);
+  let overrideFileInput = $state<HTMLInputElement | null>(null);
+  let overrideTargetPluginId = $state<string | null>(null);
+
+  function startOverrideUpload(pluginId: string) {
+    overrideTargetPluginId = pluginId;
+    overrideFileInput?.click();
+  }
+
+  function handleOverrideFile(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    input.value = "";
+    if (!file.name.endsWith(".wasm")) {
+      toast.error("Please select a .wasm file");
+      return;
+    }
+    const targetId = overrideTargetPluginId ?? "__new__";
+    file.arrayBuffer().then((bytes) => {
+      // Replace existing override for same target, or add new
+      pluginOverrides = [
+        ...pluginOverrides.filter((o) => o.targetPluginId !== targetId),
+        { targetPluginId: targetId, fileName: file.name, bytes },
+      ];
+    });
+    overrideTargetPluginId = null;
+  }
+
+  function removeOverride(targetId: string) {
+    pluginOverrides = pluginOverrides.filter((o) => o.targetPluginId !== targetId);
+  }
+
   function prev() {
-    if (activeIndex > 0) activeIndex--;
+    if (activeIndex > 0) { activeIndex--; pluginOverrides = []; showAdvanced = false; }
   }
 
   function next() {
-    if (activeIndex < bundles.length - 1) activeIndex++;
+    if (activeIndex < bundles.length - 1) { activeIndex++; pluginOverrides = []; showAdvanced = false; }
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -71,6 +116,7 @@
         bundle: activeBundle,
         launchRect: card?.getBoundingClientRect() ?? null,
         previewUrl: previewUrl(activeBundle),
+        pluginOverrides: pluginOverrides.length > 0 ? pluginOverrides : undefined,
       });
       return;
     }
@@ -85,7 +131,7 @@
 
     // Let the zoom animation play, then fire the callback
     await new Promise((r) => setTimeout(r, 600));
-    await onSelect(activeBundle);
+    await onSelect(activeBundle, pluginOverrides.length > 0 ? pluginOverrides : undefined);
   }
 
   function previewUrl(bundle: BundleRegistryEntry): string {
@@ -232,13 +278,82 @@
     </Button>
   </div>
 
-  <!-- Plugin count hint -->
+  <!-- Plugin count hint + advanced toggle -->
   {#if activeBundle}
-    <div class="mt-3 text-xs text-muted-foreground/60 z-10">
-      {#if activeBundle.plugins.length > 0}
-        {activeBundle.plugins.length} plugin{activeBundle.plugins.length === 1 ? '' : 's'} included
-      {:else}
-        No plugins
+    <div class="mt-3 z-10 flex flex-col items-center">
+      <button
+        type="button"
+        class="inline-flex items-center gap-1 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+        onclick={() => { showAdvanced = !showAdvanced; }}
+      >
+        {#if activeBundle.plugins.length > 0}
+          {activeBundle.plugins.length} plugin{activeBundle.plugins.length === 1 ? '' : 's'} included
+        {:else}
+          No plugins
+        {/if}
+        <ChevronDown class="size-3 transition-transform {showAdvanced ? 'rotate-180' : ''}" />
+      </button>
+
+      {#if showAdvanced && activeBundle}
+        <div class="mt-3 w-full max-w-xs space-y-2 text-xs fade-in">
+          <input
+            type="file"
+            accept=".wasm"
+            class="hidden"
+            bind:this={overrideFileInput}
+            onchange={handleOverrideFile}
+          />
+
+          {#each activeBundle.plugins as plugin (plugin.plugin_id)}
+            {@const override = pluginOverrides.find((o) => o.targetPluginId === plugin.plugin_id)}
+            <div class="flex items-center gap-2 rounded-md border border-border px-3 py-2 bg-background/60">
+              <span class="flex-1 truncate text-muted-foreground">{plugin.plugin_id}</span>
+              {#if override}
+                <span class="truncate text-primary max-w-[8rem]" title={override.fileName}>{override.fileName}</span>
+                <button
+                  type="button"
+                  class="text-muted-foreground hover:text-foreground"
+                  onclick={() => removeOverride(plugin.plugin_id)}
+                >
+                  <X class="size-3" />
+                </button>
+              {:else}
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+                  onclick={() => startOverrideUpload(plugin.plugin_id)}
+                >
+                  <Upload class="size-3" />
+                  Replace
+                </button>
+              {/if}
+            </div>
+          {/each}
+
+          <!-- Add a plugin not in the bundle -->
+          {#if pluginOverrides.find((o) => o.targetPluginId === "__new__")}
+            {@const newOverride = pluginOverrides.find((o) => o.targetPluginId === "__new__")!}
+            <div class="flex items-center gap-2 rounded-md border border-dashed border-primary/50 px-3 py-2 bg-background/60">
+              <span class="flex-1 truncate text-primary" title={newOverride.fileName}>{newOverride.fileName}</span>
+              <button
+                type="button"
+                class="text-muted-foreground hover:text-foreground"
+                onclick={() => removeOverride("__new__")}
+              >
+                <X class="size-3" />
+              </button>
+            </div>
+          {:else}
+            <button
+              type="button"
+              class="flex items-center gap-2 w-full rounded-md border border-dashed border-border px-3 py-2 text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+              onclick={() => startOverrideUpload("__new__")}
+            >
+              <Upload class="size-3" />
+              Add plugin from file
+            </button>
+          {/if}
+        </div>
       {/if}
     </div>
   {/if}

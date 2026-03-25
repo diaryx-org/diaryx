@@ -138,7 +138,7 @@ let pluginsConfigPersistor:
 /** Reactive version counter — incremented when browser plugins finish loading. */
 let pluginExtensionsVersion = $state(0);
 
-type PluginEventObserver = (event: GuestEvent) => Promise<void> | void;
+export type PluginEventObserver = (event: GuestEvent) => Promise<void> | void;
 const pluginEventObservers = new Set<PluginEventObserver>();
 
 function normalizePluginEventPath(path: string): string {

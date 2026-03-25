@@ -20,6 +20,7 @@ use diaryx_server::ports::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::info;
 
 // ---------------------------------------------------------------------------
 // State
@@ -448,7 +449,53 @@ async fn send_audience_email(
         Err(e) => return core_error_response(e),
     };
 
-    // 2. Get Resend audience ID (must already exist to send)
+    // 2. Dev mode: if email service is not configured, log and return a fake receipt
+    if !state.email_service.is_configured() {
+        info!(
+            audience = %audience_name,
+            subject = %req.subject,
+            draft_bytes = draft_html.len(),
+            "[Dev mode] Email send skipped — no RESEND_API_KEY. Draft content available in object store."
+        );
+
+        let now = chrono::Utc::now();
+        let timestamp = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let receipt = SendReceipt {
+            timestamp: now.to_rfc3339(),
+            audience: audience_name.clone(),
+            recipient_count: 0,
+            subject: req.subject.clone(),
+        };
+        let receipt_key = format!(
+            "ns/{}/_email_log/{}/{}.json",
+            ns_id, audience_name, timestamp
+        );
+        let receipt_bytes = serde_json::to_vec(&receipt).unwrap_or_default();
+        let _ = state
+            .blob_store
+            .put(&receipt_key, &receipt_bytes, "application/json", None)
+            .await;
+
+        // Delete the draft as production would
+        let _ = delete_object(
+            &*state.object_meta_store,
+            &*state.blob_store,
+            &ns_id,
+            &draft_object_key,
+        )
+        .await;
+
+        return (
+            StatusCode::OK,
+            Json(SendEmailResponse {
+                recipients: 0,
+                send_receipt_key: receipt_key,
+            }),
+        )
+            .into_response();
+    }
+
+    // 3. Get Resend audience ID (must already exist to send)
     let resend_audience_id =
         match get_resend_audience(state.blob_store.as_ref(), &ns_id, &audience_name).await {
             Ok(Some(id)) => id,
@@ -460,7 +507,7 @@ async fn send_audience_email(
             Err(e) => return core_error_response(e),
         };
 
-    // 3. List active contacts
+    // 4. List active contacts
     let contacts = match state.email_service.list_contacts(&resend_audience_id).await {
         Ok(c) => c,
         Err(e) => return core_error_response(e),
@@ -478,14 +525,14 @@ async fn send_audience_email(
         ));
     }
 
-    // 4. Build from address from config
+    // 5. Build from address from config
     let from = format!(
         "{} <{}>",
         state.email_service.from_name(),
         state.email_service.from_email()
     );
 
-    // 5. Send via Resend batch API (chunks of 100)
+    // 6. Send via Resend batch API (chunks of 100)
     let mut headers = std::collections::HashMap::new();
     headers.insert(
         "List-Unsubscribe".to_string(),
@@ -517,7 +564,7 @@ async fn send_audience_email(
         }
     }
 
-    // 6. Write send receipt
+    // 7. Write send receipt
     let now = chrono::Utc::now();
     let timestamp = now.format("%Y%m%dT%H%M%SZ").to_string();
     let receipt = SendReceipt {

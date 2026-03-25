@@ -17,7 +17,7 @@
   import type { NamespaceEntry } from "$lib/auth/authService";
   import SignInForm from "$lib/components/SignInForm.svelte";
   import AnimatedLogo from "./AnimatedLogo.svelte";
-  import BundleCarousel, { type BundleSelectInfo } from "./BundleCarousel.svelte";
+  import BundleCarousel, { type BundleSelectInfo, type PluginOverride } from "./BundleCarousel.svelte";
   import { isAuthenticated, listUserWorkspaceNamespaces } from "$lib/auth/authStore.svelte";
   import {
     fetchPluginRegistry,
@@ -29,7 +29,7 @@
 
   interface Props {
     /** Called to create a local workspace (no account) */
-    onGetStarted: (selectedBundle: BundleRegistryEntry | null) => void | Promise<void>;
+    onGetStarted: (selectedBundle: BundleRegistryEntry | null, pluginOverrides?: PluginOverride[]) => void | Promise<void>;
     /** Called after sign-in when user has no existing workspaces — create first synced workspace */
     onSignInCreateNew: () => void | Promise<void>;
     /** Called when user picks an existing workspace to restore */
@@ -38,6 +38,7 @@
     onCreateWithProvider: (
       bundle: BundleRegistryEntry | null,
       providerPluginId: string | null,
+      pluginOverrides?: PluginOverride[],
     ) => void | Promise<void>;
     /** Called to show the launch zoom overlay — App.svelte owns rendering */
     onLaunch?: (info: BundleSelectInfo) => void;
@@ -69,6 +70,7 @@
 
   // Bundle + provider choice state
   let selectedBundle = $state<BundleRegistryEntry | null>(null);
+  let pendingOverrides = $state<PluginOverride[] | undefined>(undefined);
   let bundleProviders = $state<RegistryWorkspaceProvider[]>([]);
   let signInForProvider = $state<string | null>(null);
   let checkingProvider = $state(false);
@@ -88,6 +90,7 @@
   let installingProviderPlugin = $state(false);
   let providerPluginError = $state<string | null>(null);
 
+
   async function playZoomThen(callback: () => void | Promise<void>) {
     if (launchInfo) {
       // Fade out the current view
@@ -101,21 +104,33 @@
     await callback();
   }
 
-  async function handleGetStarted(bundle: BundleRegistryEntry | null) {
+  async function handleGetStarted(bundle: BundleRegistryEntry | null, overrides?: PluginOverride[]) {
     settingUp = true;
     try {
-      await playZoomThen(() => onGetStarted(bundle));
+      await playZoomThen(() => onGetStarted(bundle, overrides));
     } catch {
       settingUp = false;
     }
   }
 
-  async function handleBundleSelected(info: BundleSelectInfo) {
+  async function handleBundleSelected(info: BundleSelectInfo, overrides?: PluginOverride[]) {
     launchInfo = info;
     const bundle = info.bundle;
+    pendingOverrides = overrides;
 
     selectedBundle = bundle;
     const pluginIds = bundle.plugins.map((p) => p.plugin_id);
+
+    // If overrides include a plugin not in the bundle, add its ID to the check list
+    if (overrides) {
+      for (const o of overrides) {
+        if (o.targetPluginId === "__new__" || !pluginIds.includes(o.targetPluginId)) {
+          // New plugin added — we can't know its ID from the bundle, but it
+          // will be inspected during install. For provider detection, we still
+          // check the bundle's declared plugins.
+        }
+      }
+    }
 
     try {
       const registry = await fetchPluginRegistry();
@@ -125,7 +140,7 @@
     }
 
     if (bundleProviders.length === 0) {
-      await handleGetStarted(bundle);
+      await handleGetStarted(bundle, overrides);
     } else {
       navigateTo('provider-choice');
     }
@@ -156,7 +171,7 @@
       } else {
         settingUp = true;
         try {
-          await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId));
+          await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId, pendingOverrides));
         } catch {
           settingUp = false;
         }
@@ -164,7 +179,7 @@
     } catch {
       settingUp = true;
       try {
-        await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId));
+        await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId, pendingOverrides));
       } catch {
         settingUp = false;
       }
@@ -251,6 +266,36 @@
     loadData();
   });
 
+  // When returning from an existing workspace while signed in,
+  // skip the main view and jump to the appropriate screen.
+  async function autoNavigateIfSignedIn() {
+    if (!returnWorkspaceName || !isAuthenticated()) return;
+    loadingWorkspaces = true;
+    navigateTo('workspace-picker');
+    try {
+      workspaceNamespaces = await listUserWorkspaceNamespaces();
+      if (workspaceNamespaces.length > 0) {
+        const providerIds = new Set(
+          workspaceNamespaces
+            .map((n) => n.metadata?.provider)
+            .filter((p): p is string => typeof p === "string"),
+        );
+        const firstProvider = providerIds.values().next().value ?? "diaryx.sync";
+        await fetchProviderPlugin(firstProvider);
+      }
+    } catch {
+      workspaceNamespaces = [];
+    } finally {
+      loadingWorkspaces = false;
+      if (workspaceNamespaces.length === 0) {
+        navigateTo('bundles');
+      }
+    }
+  }
+
+  // Run once on mount
+  autoNavigateIfSignedIn();
+
   async function loadData() {
     loading = true;
     try {
@@ -301,30 +346,31 @@
           </div>
 
           <div class="space-y-3 fade-in" style="animation-delay: 2.4s">
+            <Button
+              class="w-full get-started-btn"
+              onclick={() => navigateTo('sign-in')}
+            >
+              <LogIn class="size-4 mr-2" />
+              Sign in to get your workspace
+            </Button>
+
+            <Button
+              variant="ghost"
+              class="w-full text-muted-foreground"
+              disabled={loading}
+              onclick={() => navigateTo('bundles')}
+            >
+              Continue without an account
+            </Button>
+
             {#if returnWorkspaceName && onReturn}
               <Button
-                class="w-full get-started-btn"
+                variant="ghost"
+                class="w-full text-muted-foreground"
                 onclick={onReturn}
               >
                 <ArrowLeft class="size-4 mr-2" />
                 Return to {returnWorkspaceName}
-              </Button>
-            {:else}
-              <Button
-                class="w-full get-started-btn"
-                onclick={() => navigateTo('sign-in')}
-              >
-                <LogIn class="size-4 mr-2" />
-                Sign in to get your workspace
-              </Button>
-
-              <Button
-                variant="ghost"
-                class="w-full text-muted-foreground"
-                disabled={loading}
-                onclick={() => navigateTo('bundles')}
-              >
-                Continue without an account
               </Button>
             {/if}
           </div>
@@ -447,7 +493,7 @@
             <button
               type="button"
               class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors fade-in"
-              onclick={() => navigateTo('sign-in')}
+              onclick={() => navigateTo(returnWorkspaceName ? 'main' : 'sign-in')}
             >
               <ArrowLeft class="size-4" />
               Back
@@ -566,8 +612,8 @@
             {bundles}
             {themes}
             deferZoom={true}
-            onDeferredSelect={(info) => handleBundleSelected(info)}
-            onSelect={(bundle) => handleGetStarted(bundle)}
+            onDeferredSelect={(info) => handleBundleSelected(info, info.pluginOverrides)}
+            onSelect={(bundle, overrides) => handleGetStarted(bundle, overrides)}
             onBack={() => navigateTo('main')}
           />
         {/if}

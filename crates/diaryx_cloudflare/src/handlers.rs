@@ -750,10 +750,6 @@ pub async fn send_audience_email(mut req: Request, ctx: RouteContext<()>) -> Res
     }
 
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
-    let email_svc = match config::email_broadcast(&ctx.env) {
-        Some(svc) => svc,
-        None => return error_response(ServerCoreError::unavailable("Email not configured")),
-    };
 
     // Read email draft
     let draft_key = format!("ns/{}/_email_draft/{}.html", ns_id, audience_name);
@@ -764,6 +760,46 @@ pub async fn send_audience_email(mut req: Request, ctx: RouteContext<()>) -> Res
     };
     let draft_html =
         String::from_utf8(draft_bytes).map_err(|_| Error::from("Draft is not valid UTF-8"))?;
+
+    let email_svc = config::email_broadcast(&ctx.env);
+
+    // Dev mode: if email service is not configured, log and return a fake receipt
+    if email_svc.is_none() {
+        worker::console_log!(
+            "[Dev mode] Email send skipped — no RESEND_API_KEY. audience={} subject={}",
+            audience_name,
+            body.subject
+        );
+
+        let receipt_key = format!(
+            "ns/{}/_email_log/{}/{}.json",
+            ns_id,
+            audience_name,
+            js_sys::Date::now() as u64
+        );
+        let receipt = serde_json::json!({
+            "timestamp": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default(),
+            "audience": audience_name,
+            "recipient_count": 0,
+            "subject": body.subject,
+        });
+        let _ = blob_store
+            .put(
+                &receipt_key,
+                serde_json::to_vec(&receipt).unwrap_or_default().as_slice(),
+                "application/json",
+                None,
+            )
+            .await;
+        let _ = blob_store.delete(&draft_key).await;
+
+        return Response::from_json(&serde_json::json!({
+            "recipients": 0,
+            "send_receipt_key": receipt_key,
+        }));
+    }
+
+    let email_svc = email_svc.unwrap();
 
     // Get audience contacts
     let audience_id = get_or_create_audience_id(&blob_store, &email_svc, &ns_id, &audience_name)

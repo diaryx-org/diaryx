@@ -72,6 +72,7 @@
   import { buildCommandRegistry } from "$lib/commandRegistry";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
   import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
+  import { startSyncScheduler, stopSyncScheduler } from "$lib/sync/syncScheduler";
   import {
     expandDeleteSelection,
     findTreeNode,
@@ -754,6 +755,9 @@
       console.warn('[App] Failed to load browser plugins:', e),
     );
 
+    // Stop any previous sync scheduler before restarting with new workspace context.
+    stopSyncScheduler();
+
     await mirrorCurrentWorkspaceMutationToLinkedProviders({
       backend: {
         getWorkspacePath: () => activeBackend.getWorkspacePath(),
@@ -771,6 +775,10 @@
     );
 
     getPluginStore().preloadInsertCommandIcons();
+
+    // Start debounced sync scheduler — pushes dirty files to linked providers
+    // after a quiet period following file mutations.
+    startSyncScheduler();
   }
 
   function toCollaborationPath(path: string): string {
@@ -4448,10 +4456,15 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 {:else if showWelcomeScreen}
   <WelcomeScreen
     onLaunch={(info) => { launchOverlay = info; }}
-    onGetStarted={async (selectedBundle) => {
+    onGetStarted={async (selectedBundle, pluginOverrides) => {
       entryStore.setLoading(true);
       try {
         await autoCreateDefaultWorkspace(selectedBundle);
+        if (pluginOverrides?.length) {
+          for (const o of pluginOverrides) {
+            await installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
+          }
+        }
         showWelcomeScreen = false;
         await refreshTree();
         if (tree) {
@@ -4521,10 +4534,15 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         entryStore.setLoading(false);
       }
     }}
-    onCreateWithProvider={async (bundle, providerPluginId) => {
+    onCreateWithProvider={async (bundle, providerPluginId, pluginOverrides) => {
       entryStore.setLoading(true);
       try {
         const { id, name } = await autoCreateDefaultWorkspace(bundle);
+        if (pluginOverrides?.length) {
+          for (const o of pluginOverrides) {
+            await installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
+          }
+        }
         if (providerPluginId) {
           const { linkWorkspace } = await import("$lib/sync/workspaceProviderService");
           await linkWorkspace(providerPluginId, { localId: id, name });

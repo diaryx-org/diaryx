@@ -233,14 +233,187 @@ async fn restore_purchases(
 }
 
 /// POST /api/apple/webhook — App Store Server Notifications V2.
-async fn handle_webhook(body: Bytes) -> impl IntoResponse {
-    let payload_str = std::str::from_utf8(&body).unwrap_or("<binary>");
+///
+/// Verifies the outer JWS signature, extracts the notification type and
+/// inner signed transaction, and acts on subscription lifecycle events.
+async fn handle_webhook(State(state): State<AppleIapState>, body: Bytes) -> impl IntoResponse {
+    let payload_str = match std::str::from_utf8(&body) {
+        Ok(s) => s,
+        Err(_) => {
+            warn!("Apple webhook: body is not valid UTF-8");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let body_json: serde_json::Value = match serde_json::from_str(payload_str) {
+        Ok(v) => v,
+        Err(_) => {
+            warn!("Apple webhook: body is not valid JSON");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let signed_payload = match body_json.get("signedPayload").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => {
+            warn!("Apple webhook: missing signedPayload");
+            return StatusCode::OK;
+        }
+    };
+
+    // Verify and decode the outer notification JWS
+    let notification: AppleNotificationPayload =
+        match verify_and_decode_transaction_generic(signed_payload, &state.config) {
+            Ok(p) => p,
+            Err(msg) => {
+                warn!(
+                    "Apple webhook: notification JWS verification failed: {}",
+                    msg
+                );
+                return StatusCode::FORBIDDEN;
+            }
+        };
+
     info!(
-        "Received Apple App Store Server Notification ({} bytes)",
-        body.len()
+        "Apple webhook: type={} subtype={:?}",
+        notification.notification_type, notification.subtype
     );
-    let _ = payload_str;
+
+    // Verify and decode the inner signed transaction
+    let transaction: Option<TransactionPayload> = notification
+        .data
+        .as_ref()
+        .and_then(|d| d.signed_transaction_info.as_deref())
+        .and_then(|jws| verify_and_decode_transaction(jws, &state.config).ok());
+
+    let billing_store = NativeBillingStore::new(state.repo.clone());
+    let billing = BillingService::new(&billing_store, state.user_store.as_ref());
+
+    match notification.notification_type.as_str() {
+        "DID_RENEW" | "SUBSCRIBED" | "DID_CHANGE_RENEWAL_STATUS" => {
+            if let Some(tx) = &transaction {
+                if let Some(ref user_id) = tx.app_account_token {
+                    let _ = billing
+                        .activate_apple_transaction(user_id, &tx.original_transaction_id)
+                        .await;
+                    info!(
+                        "Apple webhook: activated transaction {} for user {}",
+                        tx.original_transaction_id, user_id
+                    );
+                }
+            }
+        }
+        "EXPIRED" | "REVOKE" | "DID_FAIL_TO_RENEW" => {
+            if let Some(tx) = &transaction {
+                if let Some(ref user_id) = tx.app_account_token {
+                    let _ = billing.deactivate_apple_transaction(user_id).await;
+                    info!("Apple webhook: deactivated for user {}", user_id);
+                }
+            }
+        }
+        "REFUND" => {
+            if let Some(tx) = &transaction {
+                if let Some(ref user_id) = tx.app_account_token {
+                    let _ = billing.deactivate_apple_transaction(user_id).await;
+                    info!("Apple webhook: refund processed for user {}", user_id);
+                }
+            }
+        }
+        other => {
+            info!("Apple webhook: unhandled notification type: {}", other);
+        }
+    }
+
     StatusCode::OK
+}
+
+/// Apple App Store Server Notification V2 payload.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppleNotificationPayload {
+    notification_type: String,
+    subtype: Option<String>,
+    data: Option<AppleNotificationData>,
+}
+
+/// Notification data containing the signed transaction.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppleNotificationData {
+    signed_transaction_info: Option<String>,
+}
+
+/// Verify and decode a JWS into an arbitrary deserializable type.
+/// Same as `verify_and_decode_transaction` but generic over the payload type.
+fn verify_and_decode_transaction_generic<T: serde::de::DeserializeOwned>(
+    jws: &str,
+    config: &AppleIapConfig,
+) -> Result<T, String> {
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    let parts: Vec<&str> = jws.split('.').collect();
+    if parts.len() != 3 {
+        return Err("Invalid JWS format: expected 3 parts".to_string());
+    }
+
+    if config.skip_signature_verify {
+        warn!("APPLE_IAP_SKIP_SIGNATURE_VERIFY is enabled — skipping JWS verification");
+        let payload_bytes = b64
+            .decode(parts[1])
+            .map_err(|e| format!("Failed to decode JWS payload: {}", e))?;
+        return serde_json::from_slice(&payload_bytes)
+            .map_err(|e| format!("Failed to parse JWS payload: {}", e));
+    }
+
+    // Decode header to get x5c chain
+    let header_bytes = b64
+        .decode(parts[0])
+        .map_err(|e| format!("Failed to decode JWS header: {}", e))?;
+    let header: serde_json::Value = serde_json::from_slice(&header_bytes)
+        .map_err(|e| format!("Failed to parse JWS header: {}", e))?;
+
+    let alg = header["alg"].as_str().unwrap_or("");
+    if alg != "ES256" {
+        return Err(format!("Unsupported JWS algorithm: {}", alg));
+    }
+
+    let x5c = header["x5c"]
+        .as_array()
+        .ok_or_else(|| "Missing x5c in JWS header".to_string())?;
+
+    if x5c.is_empty() {
+        return Err("Empty x5c certificate chain".to_string());
+    }
+
+    let std_b64 = base64::engine::general_purpose::STANDARD;
+    let mut certs_der = Vec::new();
+    for cert_b64 in x5c {
+        let cert_str = cert_b64
+            .as_str()
+            .ok_or_else(|| "x5c entry is not a string".to_string())?;
+        let cert_bytes = std_b64
+            .decode(cert_str)
+            .map_err(|e| format!("Failed to decode x5c certificate: {}", e))?;
+        certs_der.push(cert_bytes);
+    }
+
+    verify_certificate_chain(&certs_der)?;
+
+    let leaf_cert = x509_parser::parse_x509_certificate(&certs_der[0])
+        .map_err(|e| format!("Failed to parse leaf certificate: {}", e))?
+        .1;
+
+    let public_key_der = leaf_cert.public_key().subject_public_key.data.clone();
+
+    let decoding_key = jsonwebtoken::DecodingKey::from_ec_der(&public_key_der);
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::ES256);
+    validation.validate_exp = false;
+    validation.required_spec_claims.clear();
+
+    let token_data = jsonwebtoken::decode::<T>(jws, &decoding_key, &validation)
+        .map_err(|e| format!("JWS signature verification failed: {}", e))?;
+
+    Ok(token_data.claims)
 }
 
 // ============================================================================

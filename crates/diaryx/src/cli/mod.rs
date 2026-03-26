@@ -12,6 +12,9 @@ mod config;
 /// Body content manipulation
 mod content;
 
+/// Delete command handler
+mod delete;
+
 /// `open` and `create` commands
 mod entry;
 
@@ -202,6 +205,12 @@ fn dispatch_core_command(cli: Cli) -> bool {
         Commands::Workspace { command } => {
             workspace::handle_workspace_command(command, cli.workspace, &ws, &app_sync)
         }
+
+        Commands::Delete {
+            paths,
+            yes,
+            dry_run,
+        } => delete::handle_delete(&ws, &app_sync, paths, yes, dry_run),
 
         Commands::NormalizeFilename {
             path,

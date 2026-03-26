@@ -13,7 +13,7 @@ import type {
   PluginConfig,
   PluginPermissions,
 } from "@/models/stores/permissionStore.svelte";
-import { inspectPluginWasm } from "$lib/plugins/browserPluginManager.svelte";
+import { inspectPluginWasm, loadAllPlugins } from "$lib/plugins/browserPluginManager.svelte";
 import { executeProviderPluginCommand } from "$lib/sync/providerPluginCommands";
 import {
   addLocalWorkspace,
@@ -297,10 +297,11 @@ export async function downloadWorkspace(
   pluginId: string,
   params: { remoteId: string; name: string; link?: boolean },
   onProgress?: ProgressCallback,
-  api?: Api | null,
+  _api?: Api | null,
+  /** Pre-fetched plugin wasm bytes — used when no existing workspace has the plugin installed. */
+  pluginWasm?: Uint8Array | null,
 ): Promise<{ localId: string; filesImported: number }> {
-  const client = await resolveApi(api);
-  const capturedProviderPlugin = await captureProviderPluginForTransfer(pluginId);
+  const capturedProviderPlugin = pluginWasm ?? await captureProviderPluginForTransfer(pluginId);
   const workspacePluginDefaults = capturedProviderPlugin
     ? (await inspectPluginWasm(toPluginBuffer(capturedProviderPlugin)))
       .requestedPermissions?.defaults
@@ -325,12 +326,15 @@ export async function downloadWorkspace(
 
   await installCapturedProviderPlugin(pluginId, capturedProviderPlugin);
 
+  // Load plugins so the provider plugin is available for commands
+  await loadAllPlugins();
+
   const workspaceApi = createApi(backend);
 
   onProgress?.({ percent: 40, message: "Downloading workspace..." });
 
   const result = await executeProviderPluginCommand<DownloadWorkspaceResponse>({
-    api: client,
+    api: workspaceApi,
     pluginId,
     command: "DownloadWorkspace",
     params: {

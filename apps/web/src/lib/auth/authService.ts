@@ -589,28 +589,6 @@ export class AuthService {
   }
 
   /**
-   * Get attachment storage usage for the authenticated user.
-   */
-  async getUserStorageUsage(
-    authToken?: string,
-  ): Promise<UserStorageUsageResponse> {
-    const response = await proxyFetch(`${this.serverUrl}/api/user/storage`, {
-      cache: "no-store",
-      headers: {
-        ...this.authHeaders(authToken),
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
-      },
-    });
-
-    if (!response.ok) {
-      throw new AuthError("Failed to fetch storage usage", response.status);
-    }
-
-    return response.json();
-  }
-
-  /**
    * List namespaces owned by the authenticated user.
    */
   async listNamespaces(authToken?: string): Promise<NamespaceEntry[]> {

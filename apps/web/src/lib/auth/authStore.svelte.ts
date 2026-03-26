@@ -622,20 +622,12 @@ export async function listUserWorkspaceNamespaces(): Promise<NamespaceEntry[]> {
 
 /**
  * Refresh attachment storage usage from server.
+ *
+ * No-op: the /api/user/storage endpoint was never implemented server-side.
+ * Kept as a stub so existing call sites don't need to be removed yet.
  */
 export async function refreshUserStorageUsage(): Promise<void> {
-  const url = state.serverUrl;
-  if (!url || !authService || !state.isAuthenticated) {
-    state.storageUsage = null;
-    return;
-  }
-  const token = await getTokenAsync();
-
-  try {
-    state.storageUsage = await authService.getUserStorageUsage(token ?? undefined);
-  } catch (err) {
-    console.error("[AuthStore] Failed to refresh storage usage:", err);
-  }
+  state.storageUsage = null;
 }
 
 /**

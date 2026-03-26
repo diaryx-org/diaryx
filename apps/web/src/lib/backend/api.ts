@@ -1267,6 +1267,28 @@ export function createApi(backend: Backend) {
     /** Execute a plugin-specific command. */
     executePluginCommand: pluginCommand,
     getPluginComponentHtml,
+
+    // =========================================================================
+    // Delete Operations
+    // =========================================================================
+
+    /** Prepare a multi-delete plan: prune nested roots, expand descendants, order leaf-first. */
+    async prepareMultiDelete(paths: string[], treePath?: string): Promise<string[]> {
+      const response = await backend.execute({
+        type: 'PrepareMultiDelete',
+        params: { paths, tree_path: treePath ?? null },
+      } as any);
+      return expectResponse(response, 'Strings').data;
+    },
+
+    /** Check whether all descendants of selected paths are included in the selection. */
+    async checkDeleteIncludesDescendants(paths: string[], treePath?: string): Promise<boolean> {
+      const response = await backend.execute({
+        type: 'CheckDeleteIncludesDescendants',
+        params: { paths, tree_path: treePath ?? null },
+      } as any);
+      return expectResponse(response, 'Bool').data;
+    },
   };
 }
 

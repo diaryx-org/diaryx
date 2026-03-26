@@ -9,12 +9,8 @@
   import { switchWorkspace } from "$lib/workspace/switchWorkspace";
   import { installLocalPlugin } from "$lib/plugins/pluginInstallService";
   import { addFilesToZip } from "./lib/settings/zipUtils";
-  import {
-    getMobileSwipeStartContext,
-    hasNonCollapsedSelection,
-  } from "$lib/mobileSwipe";
+  import { useMobileGestures } from "$lib/hooks/useMobileGestures.svelte";
   import { createApi, type Api } from "./lib/backend/api";
-  import type { Backend } from "./lib/backend/interface";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
   import { openOauthWindow } from "$lib/plugins/oauthWindow";
@@ -44,7 +40,6 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { PanelLeft, PanelRight, Menu, Loader2 } from "@lucide/svelte";
-  import yaml from "js-yaml";
   import { toast } from "svelte-sonner";
   import {
     handleStandardPluginHostUiAction,
@@ -74,15 +69,10 @@
   import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
   import { startSyncScheduler, stopSyncScheduler } from "$lib/sync/syncScheduler";
   import {
-    expandDeleteSelection,
-    findTreeNode,
-    hasUnloadedSidebarChildren,
-    orderDeletePaths,
-    pruneNestedDeleteRoots,
-    selectionIncludesDescendants,
-    getRenderableSidebarChildren,
-  } from "./lib/leftSidebarSelection";
-
+    registerE2EBridge,
+    unregisterE2EBridge,
+    toCollaborationPath,
+  } from "$lib/e2e/bridge";
 
   // Import auth
   import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState, getWorkspaces, isSyncEnabled } from "./lib/auth";
@@ -101,22 +91,15 @@
   import type { BundleRegistryEntry, SpotlightStep } from "$lib/marketplace/types";
   import SpotlightOverlay from "$lib/components/SpotlightOverlay.svelte";
   import {
-    fetchStarterWorkspaceRegistry,
-  } from "$lib/marketplace/starterWorkspaceRegistry";
-  import {
-    fetchStarterWorkspaceZip,
-  } from "$lib/marketplace/starterWorkspaceApply";
-  import {
-    planBundleApply,
-    executeBundleApply,
-    createDefaultBundleApplyRuntime,
-  } from "$lib/marketplace/bundleApply";
-  import {
-    hydrateOnboardingPluginPermissionDefaults,
-  } from "$lib/marketplace/onboardingPluginPermissions";
-  import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
-  import { fetchTypographyRegistry } from "$lib/marketplace/typographyRegistry";
-  import { fetchPluginRegistry } from "$lib/plugins/pluginRegistry";
+    shouldBypassWelcomeScreenForE2E,
+    maybeBootstrapIosStarterWorkspace,
+    autoCreateDefaultWorkspace as autoCreateDefaultWorkspaceController,
+    handleGetStarted as handleGetStartedController,
+    handleSignInCreateNew as handleSignInCreateNewController,
+    handleCreateWithProvider as handleCreateWithProviderController,
+    handleWelcomeComplete as handleWelcomeCompleteController,
+    type AutoCreateWorkspaceDeps,
+  } from "./controllers/onboardingController";
 
   // Import services
   import {
@@ -226,6 +209,7 @@
   let Editor: typeof import("./lib/Editor.svelte").default | null =
     $state(null);
   const mobileState = getMobileState();
+  const mobileGestures = useMobileGestures();
 
   // Entry navigation intent tracking (keeps sidebar selection responsive while
   // the backend is still opening the next file).
@@ -413,6 +397,7 @@
 
   // Welcome screen (shown when no workspaces exist, or when user clicks logo)
   let showWelcomeScreen = $state(false);
+  let welcomeScreenRef: ReturnType<typeof WelcomeScreen> | undefined = $state();
   /** Non-null when the user navigated to the welcome screen from an active workspace */
   let welcomeReturnWorkspaceName = $state<string | null>(null);
   let spotlightSteps = $state<SpotlightStep[] | null>(null);
@@ -528,7 +513,6 @@
 
   // Event subscription cleanup (for filesystem events from Rust backend)
   let cleanupEventSubscription: (() => void) | null = null;
-  let cleanupMobileGestureListeners: (() => void) | null = null;
   let guestWorkspaceState:
     | {
         previousBackend: typeof backend;
@@ -537,37 +521,6 @@
         previousStorageType: ReturnType<typeof getWorkspaceStorageType> | undefined;
       }
     | null = null;
-
-  // Mobile shell gesture tracking
-  let touchStartX = 0;
-  let touchStartY = 0;
-  let trackingTouchGesture = false;
-  let touchBlocksShellSwipe = false;
-  let touchStartedInSelectableContent = false;
-  let touchStartTarget: EventTarget | null = null;
-  const COMMAND_PALETTE_EDGE_ZONE_PX = 100;
-
-  // FAB element ref for swipe gesture targeting
-  let editorFabElement: HTMLElement | null = $state(null);
-
-  // Progressive swipe state – drives sidebar width interactively during a gesture.
-  // `swipeTarget` is set once the gesture direction is locked in.
-  const SWIPE_LOCK_PX = 15; // min movement before we lock direction
-  const SWIPE_COMMIT_FRACTION = 0.35; // release past 35% → commit the action
-  const COMMAND_PALETTE_TRAVEL_PX = 320; // distance (px) for a full swipe-up to open command palette
-  type SwipeTarget = "open-left" | "close-left" | "open-right" | "close-right" | "open-command-palette" | null;
-  let swipeTarget: SwipeTarget = $state(null);
-  let swipeProgress = $state(0); // 0 → 1
-  // Exposed to sidebar components: null when no swipe active, 0-1 during gesture
-  let leftSidebarSwipeProgress: number | null = $derived(
-    swipeTarget === "open-left" || swipeTarget === "close-left" ? swipeProgress : null,
-  );
-  let rightSidebarSwipeProgress: number | null = $derived(
-    swipeTarget === "open-right" || swipeTarget === "close-right" ? swipeProgress : null,
-  );
-  let commandPaletteSwipeProgress: number | null = $derived(
-    swipeTarget === "open-command-palette" ? swipeProgress : null,
-  );
 
   function clearMobileFocusChromeRevealTimer(): void {
     if (mobileFocusChromeRevealTimer) {
@@ -781,1110 +734,7 @@
     startSyncScheduler();
   }
 
-  function toCollaborationPath(path: string): string {
-    let workspaceDir = tree?.path || "";
-    if (workspaceDir.endsWith("/")) {
-      workspaceDir = workspaceDir.slice(0, -1);
-    }
-    if (
-      workspaceDir.endsWith("README.md") ||
-      workspaceDir.endsWith("index.md")
-    ) {
-      workspaceDir = workspaceDir.substring(0, workspaceDir.lastIndexOf("/"));
-    }
 
-    if (workspaceDir && path.startsWith(workspaceDir)) {
-      return path.substring(workspaceDir.length + 1);
-    }
-    return path;
-  }
-
-  function toPortableE2EPath(
-    backendInstance: { getWorkspacePath(): string },
-    path: string,
-  ): string {
-    const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
-    if (workspaceDir && path.startsWith(`${workspaceDir}/`)) {
-      return path.substring(workspaceDir.length + 1);
-    }
-    return toCollaborationPath(path).replace(/^\/+/, "");
-  }
-
-  function resolveE2EPath(
-    backendInstance: { getWorkspacePath(): string },
-    path: string,
-  ): string {
-    const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
-    if (!workspaceDir || !path) {
-      return path;
-    }
-    if (path.startsWith(`${workspaceDir}/`)) {
-      return path;
-    }
-
-    const relativePath = toCollaborationPath(path).replace(/^\/+/, "");
-    return relativePath ? `${workspaceDir}/${relativePath}` : workspaceDir;
-  }
-
-  type DiaryxE2EBridge = {
-    getRootEntryPath: () => string | null;
-    createEntryWithMarker: (stem: string, marker: string) => Promise<string>;
-    appendMarkerToEntry: (path: string, marker: string) => Promise<void>;
-    renameEntry: (path: string, newFilename: string) => Promise<string>;
-    moveEntryToParent: (path: string, parentPath: string) => Promise<string>;
-    createIndexEntry: (stem: string) => Promise<string>;
-    readEntryBody: (
-      path: string,
-      options?: { sync?: boolean },
-    ) => Promise<string | null>;
-    readFrontmatter: (path: string) => Promise<Record<string, unknown> | null>;
-    entryExists: (path: string) => Promise<boolean>;
-    setFrontmatterProperty: (
-      path: string,
-      key: string,
-      value: unknown,
-    ) => Promise<string | null>;
-    deleteEntry: (path: string) => Promise<boolean>;
-    openEntryForSync: (path: string) => Promise<void>;
-    queueBodyUpdateForSync: (path: string) => Promise<void>;
-    listSyncedFiles: () => Promise<string[]>;
-    getSyncStatus: () => Promise<string | null>;
-    setAutoAllowPermissions: (enabled: boolean) => void;
-    uploadAttachment: (entryPath: string, filename: string, dataBase64: string) => Promise<string>;
-    getAttachments: (entryPath: string) => Promise<string[]>;
-    getAttachmentData: (entryPath: string, attachmentPath: string) => Promise<number[]>;
-    getPluginDiagnostics: () => { loaded: string[]; enabled: string[] };
-    installPluginInCurrentWorkspace: (wasmBase64: string) => Promise<void>;
-  };
-
-  function isLocalDevE2EBridgeEnabled(): boolean {
-    return import.meta.env.DEV
-      && typeof window !== "undefined"
-      && window.location.hostname === "localhost";
-  }
-
-  function shouldBypassWelcomeScreenForE2E(): boolean {
-    return isLocalDevE2EBridgeEnabled()
-      && typeof localStorage !== "undefined"
-      && localStorage.getItem("diaryx_e2e_skip_onboarding") === "1";
-  }
-
-  async function getCurrentBackendAndApiForE2E(): Promise<{
-    backendInstance: Backend;
-    apiInstance: Api;
-  }> {
-    const backendInstance = await getBackend();
-    return {
-      backendInstance,
-      apiInstance: createApi(backendInstance),
-    };
-  }
-
-  async function getMaterializedEntryContentForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    path: string,
-  ): Promise<string | null> {
-    const relativePath = toPortableE2EPath(backendInstance, path);
-    const result = await apiInstance.executePluginCommand(
-      "diaryx.sync",
-      "MaterializeWorkspace",
-      {},
-    ) as { files?: Array<{ path?: string; content?: string } | string> };
-    const files = result?.files;
-    if (!Array.isArray(files)) {
-      console.debug(`[e2e:materialize] no files array in result, keys=${result ? Object.keys(result) : 'null'}`);
-      return null;
-    }
-
-    const filePaths = files.map((f) => typeof f === "string" ? f : f?.path).filter(Boolean);
-    console.debug(`[e2e:materialize] looking for "${relativePath}" in ${files.length} files: ${JSON.stringify(filePaths)}`);
-
-    for (const file of files) {
-      if (typeof file === "string") {
-        continue;
-      }
-      if (file?.path === relativePath && typeof file.content === "string") {
-        return file.content;
-      }
-    }
-    return null;
-  }
-
-  function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-  }
-
-  function isEmptyFrontmatterValue(value: unknown): boolean {
-    if (value === null || value === undefined) {
-      return true;
-    }
-    if (Array.isArray(value)) {
-      return value.length === 0;
-    }
-    if (isRecord(value)) {
-      return Object.keys(value).length === 0;
-    }
-    return false;
-  }
-
-  function mergeFrontmatterForE2E(
-    localFrontmatter: Record<string, unknown> | null,
-    syncedFrontmatter: Record<string, unknown> | null,
-  ): Record<string, unknown> | null {
-    if (!localFrontmatter) {
-      return syncedFrontmatter;
-    }
-    if (!syncedFrontmatter) {
-      return localFrontmatter;
-    }
-
-    const merged = { ...syncedFrontmatter };
-    for (const [key, localValue] of Object.entries(localFrontmatter)) {
-      const syncedValue = syncedFrontmatter[key];
-      merged[key] = isEmptyFrontmatterValue(localValue) && !isEmptyFrontmatterValue(syncedValue)
-        ? syncedValue
-        : localValue;
-    }
-    return merged;
-  }
-
-  const frontmatterResyncTimestampsForE2E = new Map<string, number>();
-  const materializedRefreshTimestampsForE2E = new Map<string, number>();
-  const frontmatterOverlayKeysForE2E = ["description", "tags"] as const;
-
-  function encodeFrontmatterOverlaySegmentForE2E(value: string): string {
-    return encodeURIComponent(value).replace(/%/g, "_");
-  }
-
-  function getFrontmatterOverlayPathForE2E(
-    backendInstance: Backend,
-    path: string,
-    key: typeof frontmatterOverlayKeysForE2E[number],
-  ): string {
-    const workspaceRoot = getWorkspaceDirectoryPath(backendInstance);
-    const portablePath = toPortableE2EPath(backendInstance, path);
-    const encodedPath = encodeFrontmatterOverlaySegmentForE2E(portablePath);
-    return `${workspaceRoot}/.e2e-fm--${encodedPath}--${key}.json`;
-  }
-
-  async function writeFrontmatterOverlayForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    path: string,
-    key: typeof frontmatterOverlayKeysForE2E[number],
-    value: unknown,
-  ): Promise<void> {
-    const overlayPath = getFrontmatterOverlayPathForE2E(backendInstance, path, key);
-    await apiInstance.writeFile(overlayPath, JSON.stringify({ value }));
-    await browserPlugins.dispatchFileSavedEvent(
-      toPortableE2EPath(backendInstance, overlayPath),
-      { bodyChanged: true },
-    );
-    await requestBodySyncForE2E(backendInstance, overlayPath);
-    await forceWorkspaceSyncForE2E(apiInstance);
-  }
-
-  async function readFrontmatterOverlayForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    path: string,
-  ): Promise<Record<string, unknown>> {
-    if (!path.includes("fm-concurrent-")) {
-      return {};
-    }
-
-    const overlayValues: Record<string, unknown> = {};
-    let refreshedWorkspace = false;
-
-    for (const key of frontmatterOverlayKeysForE2E) {
-      const overlayPath = getFrontmatterOverlayPathForE2E(backendInstance, path, key);
-      if (!(await apiInstance.fileExists(overlayPath))) {
-        if (!refreshedWorkspace) {
-          await forceWorkspaceSyncForE2E(apiInstance);
-          refreshedWorkspace = true;
-        }
-        await requestBodySyncForE2E(backendInstance, overlayPath);
-        await hydrateSyncedEntryForE2E(apiInstance, backendInstance, overlayPath);
-      }
-      if (!(await apiInstance.fileExists(overlayPath))) {
-        continue;
-      }
-      const content = await apiInstance.readFile(overlayPath).catch(() => null);
-      if (!content) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(content) as { value?: unknown };
-        if (parsed.value !== undefined) {
-          overlayValues[key] = parsed.value;
-        }
-      } catch {
-        // Ignore malformed E2E overlay content.
-      }
-    }
-
-    return overlayValues;
-  }
-
-  function frontmatterNeedsResyncForE2E(
-    localFrontmatter: Record<string, unknown> | null,
-    syncedFrontmatter: Record<string, unknown> | null,
-  ): boolean {
-    if (!localFrontmatter || !syncedFrontmatter) {
-      return false;
-    }
-
-    return Object.entries(localFrontmatter).some(([key, localValue]) => {
-      if (isEmptyFrontmatterValue(localValue)) {
-        return false;
-      }
-
-      const syncedValue = syncedFrontmatter[key];
-      if (isEmptyFrontmatterValue(syncedValue)) {
-        return true;
-      }
-
-      if (Array.isArray(localValue) && Array.isArray(syncedValue)) {
-        return localValue.length > syncedValue.length;
-      }
-
-      if (isRecord(localValue) && isRecord(syncedValue)) {
-        return Object.keys(localValue).length > Object.keys(syncedValue).length;
-      }
-
-      return false;
-    });
-  }
-
-  async function requestFrontmatterResyncForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    path: string,
-  ): Promise<void> {
-    const now = Date.now();
-    const lastResyncAt = frontmatterResyncTimestampsForE2E.get(path) ?? 0;
-    if (now - lastResyncAt < 1000) {
-      return;
-    }
-    frontmatterResyncTimestampsForE2E.set(path, now);
-
-    await browserPlugins.dispatchFileSavedEvent(
-      toPortableE2EPath(backendInstance, path),
-      { bodyChanged: true },
-    );
-    await requestBodySyncForE2E(backendInstance, path);
-    await forceWorkspaceSyncForE2E(apiInstance);
-  }
-
-  function parseMaterializedEntryContentForE2E(content: string): {
-    frontmatter: Record<string, unknown>;
-    body: string;
-  } {
-    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n([\s\S]*))?$/);
-    if (!match) {
-      return {
-        frontmatter: {},
-        body: content,
-      };
-    }
-
-    try {
-      const frontmatter = yaml.load(match[1]);
-      return {
-        frontmatter: isRecord(frontmatter) ? frontmatter : {},
-        body: match[2] ?? "",
-      };
-    } catch (error) {
-      console.debug(
-        `[e2e:materialize] failed to parse frontmatter: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return {
-        frontmatter: {},
-        body: content,
-      };
-    }
-  }
-
-  async function pollMaterializedEntryContentForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    path: string,
-    options?: {
-      allowEmpty?: boolean;
-      attempts?: number;
-    },
-  ): Promise<string | null> {
-    const allowEmpty = options?.allowEmpty ?? false;
-    const attempts = options?.attempts ?? 1;
-
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const materializedContent = await getMaterializedEntryContentForE2E(
-        apiInstance,
-        backendInstance,
-        path,
-      );
-      if (materializedContent !== null && (allowEmpty || materializedContent.length > 0)) {
-        return materializedContent;
-      }
-      if (attempt + 1 >= attempts) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    return null;
-  }
-
-  async function isBodySyncedForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    path: string,
-  ): Promise<boolean> {
-    try {
-      const result = await apiInstance.executePluginCommand(
-        "diaryx.sync",
-        "IsBodySynced",
-        {
-          doc_name: toPortableE2EPath(backendInstance, path),
-        },
-      ) as { synced?: boolean };
-      return result?.synced === true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function requestBodySyncForE2E(
-    backendInstance: Backend,
-    path: string,
-  ): Promise<void> {
-    const plugin = browserPlugins.getPlugin("diaryx.sync");
-    if (!plugin) {
-      return;
-    }
-
-    const payload = new TextEncoder().encode(JSON.stringify({
-      file_paths: [toPortableE2EPath(backendInstance, path)],
-    }));
-    await plugin.callBinary("sync_body_files", payload);
-  }
-
-  async function queueBodyUpdateForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    resolvedPath: string,
-  ): Promise<void> {
-    const plugin = browserPlugins.getPlugin("diaryx.sync");
-    if (!plugin) {
-      throw new Error("Sync plugin is not loaded");
-    }
-
-    const rawRegistry = localStorage.getItem("diaryx_local_workspaces");
-    const currentId = localStorage.getItem("diaryx_current_workspace");
-    if (!rawRegistry || !currentId) {
-      throw new Error("No current workspace metadata available for sync E2E");
-    }
-
-    const registry = JSON.parse(rawRegistry) as Array<{
-      id?: string;
-      pluginMetadata?: Record<string, Record<string, unknown>>;
-    }>;
-    const workspace = registry.find((entry) => entry.id === currentId);
-    const metadata = workspace?.pluginMetadata?.["diaryx.sync"]
-      ?? workspace?.pluginMetadata?.sync
-      ?? null;
-    const remoteWorkspaceId =
-      typeof metadata?.remoteWorkspaceId === "string" && metadata.remoteWorkspaceId.trim().length > 0
-        ? metadata.remoteWorkspaceId
-        : typeof metadata?.serverId === "string" && metadata.serverId.trim().length > 0
-          ? metadata.serverId
-          : null;
-
-    if (!remoteWorkspaceId) {
-      throw new Error("Current workspace is not linked to a remote sync workspace");
-    }
-
-    const portablePath = toPortableE2EPath(backendInstance, resolvedPath);
-    let bodyContent = "";
-    try {
-      const rawFileContent = await apiInstance.readFile(resolvedPath);
-      bodyContent = parseMaterializedEntryContentForE2E(rawFileContent).body;
-    } catch {
-      const entry = await apiInstance.getEntry(resolvedPath);
-      bodyContent = entry.content ?? "";
-    }
-
-    const update = await apiInstance.executePluginCommand("diaryx.sync", "CreateBodyUpdate", {
-      doc_name: portablePath,
-      content: bodyContent,
-    }) as { data?: string };
-
-    if (typeof update?.data !== "string" || update.data.length === 0) {
-      return;
-    }
-
-    const payload = new TextEncoder().encode(JSON.stringify({
-      doc_id: `body:${remoteWorkspaceId}/${portablePath}`,
-      data: update.data,
-    }));
-    await plugin.callBinary("queue_local_update", payload);
-  }
-
-  async function hydrateSyncedEntryForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    path: string,
-  ): Promise<boolean> {
-    if (await apiInstance.fileExists(path)) {
-      return true;
-    }
-
-    return await refreshMaterializedEntryForE2E(apiInstance, backendInstance, path, {
-      allowEmpty: true,
-      attempts: 30,
-    });
-  }
-
-  async function syncMaterializedEntryContentForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    path: string,
-    options?: {
-      allowEmpty?: boolean;
-      attempts?: number;
-      syncWorkspace?: boolean;
-      syncBody?: boolean;
-      minSyncIntervalMs?: number;
-    },
-  ): Promise<string | null> {
-    const syncWorkspace = options?.syncWorkspace ?? false;
-    const syncBody = options?.syncBody ?? false;
-    const minSyncIntervalMs = options?.minSyncIntervalMs ?? 1000;
-
-    if (syncWorkspace || syncBody) {
-      const refreshKey = `${path}:${syncWorkspace ? "w" : ""}${syncBody ? "b" : ""}`;
-      const lastRefreshAt = materializedRefreshTimestampsForE2E.get(refreshKey) ?? 0;
-      const now = Date.now();
-
-      // Avoid hammering sync commands during expect.poll loops.
-      if (now - lastRefreshAt >= minSyncIntervalMs) {
-        materializedRefreshTimestampsForE2E.set(refreshKey, now);
-
-        if (syncBody) {
-          await requestBodySyncForE2E(backendInstance, path).catch(() => undefined);
-        }
-
-        if (syncWorkspace) {
-          await forceWorkspaceSyncForE2E(apiInstance).catch(() => undefined);
-        }
-      }
-    }
-
-    return await pollMaterializedEntryContentForE2E(
-      apiInstance,
-      backendInstance,
-      path,
-      options,
-    );
-  }
-
-  async function refreshMaterializedEntryForE2E(
-    apiInstance: Api,
-    backendInstance: Backend,
-    path: string,
-    options?: {
-      allowEmpty?: boolean;
-      attempts?: number;
-      syncWorkspace?: boolean;
-      syncBody?: boolean;
-      minSyncIntervalMs?: number;
-    },
-  ): Promise<boolean> {
-    const materializedContent = await syncMaterializedEntryContentForE2E(
-      apiInstance,
-      backendInstance,
-      path,
-      options,
-    );
-    if (materializedContent === null) {
-      return false;
-    }
-
-    await apiInstance.writeFile(path, materializedContent);
-    return true;
-  }
-
-  async function forceWorkspaceSyncForE2E(apiInstance: Api): Promise<void> {
-    const workspaceRoot = workspaceStore.tree?.path ?? ".";
-
-    try {
-      const initResult = await apiInstance.executePluginCommand("diaryx.sync", "InitializeWorkspaceCrdt", {
-        provider_id: "diaryx.sync",
-        workspace_path: workspaceRoot,
-      });
-      const syncResult = await apiInstance.executePluginCommand("diaryx.sync", "TriggerWorkspaceSync", {
-        provider_id: "diaryx.sync",
-      });
-      const materialized = await apiInstance.executePluginCommand(
-        "diaryx.sync",
-        "MaterializeWorkspace",
-        {},
-      ) as { files?: Array<{ path?: string } | string> };
-      const materializedFiles = Array.isArray(materialized?.files)
-        ? materialized.files.map((file) => typeof file === "string" ? file : file?.path).filter(Boolean)
-        : [];
-      console.debug(
-        `[e2e:sync] forceWorkspaceSync root=${workspaceRoot} init=${JSON.stringify(initResult)} sync=${JSON.stringify(syncResult)} files=${JSON.stringify(materializedFiles)}`,
-      );
-    } catch (error) {
-      console.debug(
-        `[e2e:sync:error] forceWorkspaceSync root=${workspaceRoot} error=${error instanceof Error ? error.message : String(error)}`,
-      );
-      // Some E2E flows use the bridge outside sync-specific tests.
-    }
-  }
-
-  function registerE2EBridge() {
-    if (!isLocalDevE2EBridgeEnabled()) {
-      return;
-    }
-
-    (globalThis as typeof globalThis & { __diaryx_e2e?: DiaryxE2EBridge | null }).__diaryx_e2e = {
-      getRootEntryPath(): string | null {
-        return workspaceStore.tree?.path ?? null;
-      },
-      async createEntryWithMarker(stem: string, marker: string): Promise<string> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const rootPath = workspaceStore.tree?.path;
-        if (!rootPath) {
-          throw new Error("No workspace root available for E2E child entry creation");
-        }
-
-        const childResult = await apiInstance.createChildEntry(rootPath);
-        let entryPath = childResult.child_path;
-        entryPath = await apiInstance.renameEntry(entryPath, `${stem}.md`);
-        await apiInstance.saveEntry(entryPath, marker, rootPath);
-        await forceWorkspaceSyncForE2E(apiInstance);
-        await queueBodyUpdateForE2E(apiInstance, backendInstance, entryPath);
-        await forceWorkspaceSyncForE2E(apiInstance);
-        return toPortableE2EPath(backendInstance, entryPath);
-      },
-      async appendMarkerToEntry(path: string, marker: string): Promise<void> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const resolvedPath = resolveE2EPath(backendInstance, path);
-        const entry = await apiInstance.getEntry(resolvedPath);
-        const newContent = entry.content ? `${entry.content}\n${marker}` : marker;
-        await apiInstance.saveEntry(resolvedPath, newContent, workspaceStore.tree?.path);
-        await queueBodyUpdateForE2E(apiInstance, backendInstance, resolvedPath);
-        await forceWorkspaceSyncForE2E(apiInstance);
-      },
-      async renameEntry(path: string, newFilename: string): Promise<string> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const renamedPath = await apiInstance.renameEntry(resolveE2EPath(backendInstance, path), newFilename);
-        return toPortableE2EPath(backendInstance, renamedPath);
-      },
-      async moveEntryToParent(path: string, parentPath: string): Promise<string> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const movedPath = await apiInstance.attachEntryToParent(
-          resolveE2EPath(backendInstance, path),
-          resolveE2EPath(backendInstance, parentPath),
-        );
-        return toPortableE2EPath(backendInstance, movedPath);
-      },
-      async createIndexEntry(stem: string): Promise<string> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const rootPath = workspaceStore.tree?.path;
-        if (!rootPath) {
-          throw new Error("No workspace root available for E2E index entry creation");
-        }
-        const previouslyOpenPath = currentEntry?.path ?? null;
-
-        const childResult = await apiInstance.createChildEntry(rootPath);
-        let entryPath = childResult.child_path;
-        entryPath = await apiInstance.renameEntry(entryPath, `${stem}.md`);
-        const convertedPath = await apiInstance.convertToIndex(entryPath);
-        if (previouslyOpenPath && previouslyOpenPath !== convertedPath) {
-          await openEntry(previouslyOpenPath);
-        }
-        return toPortableE2EPath(backendInstance, convertedPath);
-      },
-      async readEntryBody(
-        path: string,
-        options?: { sync?: boolean },
-      ): Promise<string | null> {
-        try {
-          const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-          const resolvedPath = resolveE2EPath(backendInstance, path);
-          const fileExists = await apiInstance.fileExists(resolvedPath);
-          const bodySynced = await isBodySyncedForE2E(
-            apiInstance,
-            backendInstance,
-            resolvedPath,
-          );
-          const shouldSync = options?.sync !== false;
-
-          if (shouldSync && !fileExists) {
-            await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
-          }
-
-          const materializedContent = shouldSync
-            ? await syncMaterializedEntryContentForE2E(
-              apiInstance,
-              backendInstance,
-              resolvedPath,
-              {
-                allowEmpty: true,
-                attempts: fileExists ? 1 : 30,
-                syncWorkspace: true,
-                syncBody: true,
-              },
-            )
-            : await pollMaterializedEntryContentForE2E(
-              apiInstance,
-              backendInstance,
-              resolvedPath,
-              {
-                allowEmpty: true,
-                attempts: 1,
-              },
-            );
-          if (materializedContent !== null) {
-            return parseMaterializedEntryContentForE2E(materializedContent).body;
-          }
-
-          const entry = await apiInstance.getEntry(resolvedPath);
-          if (entry.content !== null && entry.content !== undefined) {
-            return entry.content;
-          }
-
-          if (bodySynced) {
-            const fallbackMaterializedContent = await pollMaterializedEntryContentForE2E(
-              apiInstance,
-              backendInstance,
-              resolvedPath,
-              {
-                allowEmpty: true,
-                attempts: 1,
-              },
-            );
-            if (fallbackMaterializedContent !== null) {
-              return parseMaterializedEntryContentForE2E(fallbackMaterializedContent).body;
-            }
-          }
-
-          const fallbackMaterializedContent = await pollMaterializedEntryContentForE2E(
-            apiInstance,
-            backendInstance,
-            resolvedPath,
-            {
-              allowEmpty: true,
-              attempts: 1,
-            },
-          );
-          if (fallbackMaterializedContent !== null) {
-            return parseMaterializedEntryContentForE2E(fallbackMaterializedContent).body;
-          }
-
-          return entry.content ?? null;
-        } catch {
-          return null;
-        }
-      },
-      async readFrontmatter(path: string): Promise<Record<string, unknown> | null> {
-        try {
-          const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-          const resolvedPath = resolveE2EPath(backendInstance, path);
-          if (!(await apiInstance.fileExists(resolvedPath))) {
-            await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
-          }
-          let entry = await apiInstance.getEntry(resolvedPath);
-          const initialLocalFrontmatter = entry.frontmatter && Object.keys(entry.frontmatter).length > 0
-            ? entry.frontmatter
-            : null;
-
-          const materializedContent = await syncMaterializedEntryContentForE2E(
-            apiInstance,
-            backendInstance,
-            resolvedPath,
-            {
-              allowEmpty: true,
-              attempts: initialLocalFrontmatter ? 1 : 30,
-              syncWorkspace: true,
-            },
-          );
-          entry = await apiInstance.getEntry(resolvedPath);
-          const localFrontmatter = entry.frontmatter && Object.keys(entry.frontmatter).length > 0
-            ? entry.frontmatter
-            : null;
-
-          if (materializedContent !== null) {
-            const syncedFrontmatter = parseMaterializedEntryContentForE2E(materializedContent).frontmatter;
-            if (Object.keys(syncedFrontmatter).length > 0) {
-              if (frontmatterNeedsResyncForE2E(localFrontmatter, syncedFrontmatter)) {
-                await requestFrontmatterResyncForE2E(
-                  apiInstance,
-                  backendInstance,
-                  resolvedPath,
-                );
-              }
-              const mergedFrontmatter = mergeFrontmatterForE2E(localFrontmatter, syncedFrontmatter);
-              const overlayFrontmatter = await readFrontmatterOverlayForE2E(
-                apiInstance,
-                backendInstance,
-                resolvedPath,
-              );
-              const mergedWithOverlay = {
-                ...(mergedFrontmatter ?? {}),
-                ...overlayFrontmatter,
-              };
-              if (resolvedPath.includes("fm-concurrent-")) {
-                console.debug(
-                  `[e2e:frontmatter] path=${resolvedPath} local=${JSON.stringify(localFrontmatter)} synced=${JSON.stringify(syncedFrontmatter)} overlay=${JSON.stringify(overlayFrontmatter)} merged=${JSON.stringify(mergedWithOverlay)}`,
-                );
-              }
-              return mergedWithOverlay;
-            }
-          }
-
-          if (resolvedPath.includes("fm-concurrent-")) {
-            console.debug(
-              `[e2e:frontmatter] path=${resolvedPath} local=${JSON.stringify(localFrontmatter)} synced=null merged=${JSON.stringify(localFrontmatter)}`,
-            );
-          }
-          return localFrontmatter;
-        } catch {
-          return null;
-        }
-      },
-      async entryExists(path: string): Promise<boolean> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const resolvedPath = resolveE2EPath(backendInstance, path);
-        if (await apiInstance.fileExists(resolvedPath)) {
-          return true;
-        }
-        return await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
-      },
-      async setFrontmatterProperty(path: string, key: string, value: unknown): Promise<string | null> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const resolvedPath = resolveE2EPath(backendInstance, path);
-        const beforeEntry = await apiInstance.getEntry(resolvedPath).catch(() => null);
-        const updatedPath = await apiInstance.setFrontmatterProperty(
-          resolvedPath,
-          key,
-          value as JsonValue,
-          workspaceStore.tree?.path,
-        );
-        const effectivePath = updatedPath ?? resolvedPath;
-        const afterEntry = await apiInstance.getEntry(effectivePath).catch(() => null);
-        const bodyChanged = (beforeEntry?.content ?? null) !== (afterEntry?.content ?? null);
-        console.debug(
-          `[e2e:setFrontmatterProperty] path=${resolvedPath} effective=${effectivePath} key=${key} beforeLen=${beforeEntry?.content?.length ?? -1} afterLen=${afterEntry?.content?.length ?? -1} bodyChanged=${bodyChanged}`,
-        );
-        if (
-          effectivePath.includes("fm-concurrent-")
-          && (key === "description" || key === "tags")
-        ) {
-          await writeFrontmatterOverlayForE2E(
-            apiInstance,
-            backendInstance,
-            effectivePath,
-            key,
-            value,
-          );
-        }
-        await browserPlugins.dispatchFileSavedEvent(
-          toPortableE2EPath(backendInstance, effectivePath),
-          { bodyChanged },
-        );
-        if (bodyChanged) {
-          await requestBodySyncForE2E(backendInstance, effectivePath);
-        }
-        await forceWorkspaceSyncForE2E(apiInstance);
-        return updatedPath ? toPortableE2EPath(backendInstance, updatedPath) : updatedPath;
-      },
-      async deleteEntry(path: string): Promise<boolean> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const deleted = await deleteEntryWithSync(apiInstance, resolveE2EPath(backendInstance, path), null);
-        return deleted;
-      },
-      async openEntryForSync(path: string): Promise<void> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const resolvedPath = resolveE2EPath(backendInstance, path);
-        await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
-        await openEntryController(apiInstance, resolvedPath, tree, collaborationEnabled, {
-          isCurrentRequest: () => true,
-        });
-
-        if (entryStore.currentEntry?.path !== resolvedPath) {
-          const entry = await apiInstance.getEntry(resolvedPath);
-          entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
-          entryStore.setCurrentEntry(entry);
-          entryStore.setDisplayContent(entry.content);
-          entryStore.markClean();
-          await browserPlugins.dispatchFileOpenedEvent(
-            toPortableE2EPath(backendInstance, resolvedPath),
-          );
-        }
-
-        for (let attempt = 0; attempt < 5; attempt += 1) {
-          await requestBodySyncForE2E(backendInstance, resolvedPath);
-          if (await isBodySyncedForE2E(apiInstance, backendInstance, resolvedPath)) {
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-
-        await tick();
-      },
-      async queueBodyUpdateForSync(path: string): Promise<void> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const resolvedPath = resolveE2EPath(backendInstance, path);
-        await queueBodyUpdateForE2E(apiInstance, backendInstance, resolvedPath);
-        await forceWorkspaceSyncForE2E(apiInstance);
-      },
-      async listSyncedFiles(): Promise<string[]> {
-        try {
-          const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-          const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
-          const result = await apiInstance.executePluginCommand(
-            "diaryx.sync",
-            "MaterializeWorkspace",
-            {},
-          ) as { files?: Array<{ path?: string } | string> } | Array<{ path?: string } | string>;
-          const files = Array.isArray(result) ? result : result?.files;
-          if (!Array.isArray(files)) {
-            return [];
-          }
-          return files
-            .map((file) => {
-              const relativePath = typeof file === "string" ? file : file.path;
-              return relativePath ? `${workspaceDir}/${relativePath}` : null;
-            })
-            .filter((path): path is string => path !== null);
-        } catch (e) {
-          console.log("[extism] listSyncedFiles error:", e);
-          return [];
-        }
-      },
-      async getSyncStatus(): Promise<string | null> {
-        return collaborationStore.effectiveSyncStatus;
-      },
-      setAutoAllowPermissions(enabled: boolean): void {
-        permissionStore.setAutoAllow(enabled);
-      },
-      async uploadAttachment(entryPath: string, filename: string, dataBase64: string): Promise<string> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const resolvedEntryPath = resolveE2EPath(backendInstance, entryPath);
-        const binary = atob(dataBase64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i += 1) {
-          bytes[i] = binary.charCodeAt(i);
-        }
-        const attachmentPath = await apiInstance.uploadAttachment(
-          resolvedEntryPath,
-          filename,
-          bytes,
-        );
-        await browserPlugins.dispatchFileSavedEvent(
-          toPortableE2EPath(backendInstance, resolvedEntryPath),
-          { bodyChanged: false },
-        );
-        await forceWorkspaceSyncForE2E(apiInstance);
-        return attachmentPath;
-      },
-      async getAttachments(entryPath: string): Promise<string[]> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        return await apiInstance.getAttachments(resolveE2EPath(backendInstance, entryPath));
-      },
-      async getAttachmentData(entryPath: string, attachmentPath: string): Promise<number[]> {
-        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        return await apiInstance.getAttachmentData(
-          resolveE2EPath(backendInstance, entryPath),
-          attachmentPath,
-        );
-      },
-      getPluginDiagnostics(): { loaded: string[]; enabled: string[] } {
-        const pluginStore = getPluginStore();
-        const loaded = Array.from(browserPlugins.getBrowserManifests().map((manifest) => manifest.id));
-        const enabled = loaded.filter((id) => pluginStore.isPluginEnabled(id));
-        return { loaded, enabled };
-      },
-      async installPluginInCurrentWorkspace(wasmBase64: string): Promise<void> {
-        const binary = atob(wasmBase64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i += 1) {
-          bytes[i] = binary.charCodeAt(i);
-        }
-        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-        await installLocalPlugin(buffer, "diaryx-sync-e2e");
-      },
-    };
-  }
-
-  function resetTouchGestureTracking() {
-    touchStartX = 0;
-    touchStartY = 0;
-    trackingTouchGesture = false;
-    touchBlocksShellSwipe = false;
-    touchStartedInSelectableContent = false;
-    touchStartTarget = null;
-    swipeTarget = null;
-    swipeProgress = 0;
-  }
-
-  function handleTouchStart(e: TouchEvent) {
-    if (e.touches.length !== 1) {
-      resetTouchGestureTracking();
-      return;
-    }
-
-    const touch = e.touches[0];
-    const swipeContext = getMobileSwipeStartContext(e.target);
-
-    touchStartX = touch.clientX;
-    touchStartY = touch.clientY;
-    trackingTouchGesture = true;
-    touchBlocksShellSwipe = swipeContext.blocksShellSwipe;
-    touchStartedInSelectableContent = swipeContext.startsInSelectableContent;
-    touchStartTarget = e.target;
-    swipeTarget = null;
-    swipeProgress = 0;
-  }
-
-  /** Determine which sidebar gesture to lock into (called once per gesture). */
-  function resolveSwipeTarget(deltaX: number): SwipeTarget {
-    if (deltaX > 0) {
-      // Swiping right → close right sidebar (if open) or open left sidebar
-      if (!rightSidebarCollapsed) return "close-right";
-      if (leftSidebarCollapsed) return "open-left";
-    } else {
-      // Swiping left → close left sidebar (if open) or open right sidebar
-      if (!leftSidebarCollapsed) return "close-left";
-      if (rightSidebarCollapsed) return "open-right";
-    }
-    return null;
-  }
-
-  function handleTouchMove(e: TouchEvent) {
-    if (!trackingTouchGesture || e.touches.length !== 1) return;
-    if (touchBlocksShellSwipe) return;
-
-    const touch = e.touches[0];
-    const deltaX = touch.clientX - touchStartX;
-    const deltaY = touch.clientY - touchStartY;
-    const absDeltaX = Math.abs(deltaX);
-    const absDeltaY = Math.abs(deltaY);
-
-    // If the direction isn't locked yet, try to lock it
-    if (!swipeTarget) {
-      if (absDeltaX < SWIPE_LOCK_PX && absDeltaY < SWIPE_LOCK_PX) return;
-
-      // Check for active text selection before locking
-      if (touchStartedInSelectableContent) {
-        const selection =
-          typeof window.getSelection === "function" ? window.getSelection() : null;
-        if (hasNonCollapsedSelection(selection)) return;
-      }
-
-      if (absDeltaY > absDeltaX) {
-        // Mostly vertical swipe-up → open command palette
-        // On mobile: swipe from the FAB; on desktop: swipe from bottom edge zone
-        const viewportHeight = window.innerHeight;
-        const startedOnFab = editorFabElement
-          && touchStartTarget instanceof Node
-          && editorFabElement.contains(touchStartTarget);
-        const startedInBottomZone = touchStartY > viewportHeight - COMMAND_PALETTE_EDGE_ZONE_PX;
-        if (
-          deltaY < 0 &&
-          (startedOnFab || (!editorFabElement && startedInBottomZone))
-        ) {
-          swipeTarget = "open-command-palette";
-        } else {
-          return; // vertical but not from FAB/footer – ignore
-        }
-      } else {
-        swipeTarget = resolveSwipeTarget(deltaX);
-        if (!swipeTarget) return;
-      }
-    }
-
-    // Compute progress (0–1) based on the swipe target
-    let raw: number;
-    switch (swipeTarget) {
-      case "open-left":
-        raw = deltaX / leftSidebarWidth;
-        break;
-      case "close-left":
-        raw = 1 + deltaX / leftSidebarWidth;
-        break;
-      case "open-right":
-        raw = -deltaX / rightSidebarWidth;
-        break;
-      case "close-right":
-        raw = 1 - deltaX / rightSidebarWidth;
-        break;
-      case "open-command-palette":
-        raw = -deltaY / COMMAND_PALETTE_TRAVEL_PX; // swipe up → negative deltaY → positive progress
-        break;
-      default:
-        return;
-    }
-
-    swipeProgress = Math.max(0, Math.min(1, raw));
-  }
-
-  function handleTouchEnd(e: TouchEvent) {
-    if (!trackingTouchGesture || e.changedTouches.length === 0) {
-      resetTouchGestureTracking();
-      return;
-    }
-
-    // If a progressive gesture was active, commit or revert
-    if (swipeTarget) {
-      const commit = swipeProgress >= SWIPE_COMMIT_FRACTION;
-      switch (swipeTarget) {
-        case "open-left":
-          if (commit) uiStore.setLeftSidebarCollapsed(false);
-          break;
-        case "close-left":
-          if (swipeProgress < (1 - SWIPE_COMMIT_FRACTION)) uiStore.setLeftSidebarCollapsed(true);
-          break;
-        case "open-right":
-          if (commit) uiStore.setRightSidebarCollapsed(false);
-          break;
-        case "close-right":
-          if (swipeProgress < (1 - SWIPE_COMMIT_FRACTION)) uiStore.setRightSidebarCollapsed(true);
-          break;
-        case "open-command-palette":
-          if (commit) uiStore.openCommandPalette();
-          break;
-      }
-      resetTouchGestureTracking();
-      return;
-    }
-
-    resetTouchGestureTracking();
-  }
-
-  function attachMobileGestureListeners() {
-    if (cleanupMobileGestureListeners) return;
-
-    document.addEventListener("touchstart", handleTouchStart, { passive: true });
-    document.addEventListener("touchmove", handleTouchMove, { passive: true });
-    document.addEventListener("touchend", handleTouchEnd, { passive: true });
-    document.addEventListener("touchcancel", resetTouchGestureTracking, {
-      passive: true,
-    });
-
-    cleanupMobileGestureListeners = () => {
-      document.removeEventListener("touchstart", handleTouchStart);
-      document.removeEventListener("touchmove", handleTouchMove);
-      document.removeEventListener("touchend", handleTouchEnd);
-      document.removeEventListener("touchcancel", resetTouchGestureTracking);
-      cleanupMobileGestureListeners = null;
-    };
-  }
 
   // Attachment state
   let attachmentError: string | null = $state(null);
@@ -1922,7 +772,7 @@
       lastAutoDispatchedFileOpenKey = null;
       return;
     }
-    const syncPath = toCollaborationPath(currentEntry.path);
+    const syncPath = toCollaborationPath(currentEntry.path, tree?.path ?? "");
     const dispatchKey = `${activeLocalWorkspaceId ?? "local"}:${pluginManifestCount}:${syncPath}`;
     if (lastAutoDispatchedFileOpenKey === dispatchKey) {
       return;
@@ -1971,7 +821,14 @@
 
   // Check if we're on desktop and expand sidebars by default
   onMount(async () => {
-    registerE2EBridge();
+    registerE2EBridge({
+      getTreeRootPath: () => tree?.path ?? "",
+      getCurrentEntryPath: () => currentEntry?.path ?? null,
+      openEntry,
+      normalizeFrontmatter,
+      getCollaborationEnabled: () => collaborationEnabled,
+      getTree: () => tree,
+    });
 
     // Refresh tree when zip import completes (from ImportSettings)
     window.addEventListener("import:complete", handleImportComplete);
@@ -2007,7 +864,7 @@
     // - Swipe left from the right edge: open right sidebar (or close left sidebar if open)
     // Gestures that begin inside modal surfaces or become text selections are ignored.
     // Attached early so gestures work even if workspace initialisation fails.
-    attachMobileGestureListeners();
+    mobileGestures.attach();
 
     // On macOS Tauri with overlay titlebar, set titlebar area height for traffic light clearance
     if (isTauri() && (navigator.platform === "MacIntel" || navigator.platform.startsWith("Mac"))) {
@@ -2285,14 +1142,12 @@
   });
 
   onDestroy(() => {
-    if (isLocalDevE2EBridgeEnabled()) {
-      (globalThis as typeof globalThis & { __diaryx_e2e?: DiaryxE2EBridge | null }).__diaryx_e2e = null;
-    }
+    unregisterE2EBridge();
     // Cleanup blob URLs
     revokeBlobUrls();
     // Cleanup filesystem event subscription
     cleanupEventSubscription?.();
-    cleanupMobileGestureListeners?.();
+    mobileGestures.cleanup();
     clearMobileFocusChromeRevealTimer();
     // Cleanup import:complete listener
     window.removeEventListener("import:complete", handleImportComplete);
@@ -2473,7 +1328,7 @@
           const updatedEntry = await api.getEntry(result.newPath);
           entryStore.setCurrentEntry(updatedEntry);
           if (collaborationEnabled) {
-            collaborationStore.setCollaborationPath(toCollaborationPath(result.newPath));
+            collaborationStore.setCollaborationPath(toCollaborationPath(result.newPath, tree?.path ?? ""));
           }
         } catch {
           // Fallback: just update the path
@@ -3000,26 +1855,27 @@
   }
 
 
-  // Handle welcome screen completion — backend already initialized by switchWorkspace
+  // Handle welcome screen completion — delegates to onboardingController
   async function handleWelcomeComplete(_id: string, _name: string) {
     showWelcomeScreen = false;
     entryStore.setLoading(true);
 
     try {
-      // Backend already initialized by switchWorkspace.
-      // Just refresh UI state.
-      const newBackend = await getBackend();
-      workspaceStore.setBackend(newBackend);
-      rustApi = null;
-
-      await refreshTree();
-
-      if (tree && !currentEntry) {
-        workspaceStore.expandNode(tree.path);
-        await openEntry(tree.path);
-      }
-
-      await runValidation();
+      await handleWelcomeCompleteController(
+        {
+          getBackend: () => getBackend(),
+          setBackend: (b) => workspaceStore.setBackend(b),
+          clearRustApi: () => { rustApi = null; },
+          refreshTree,
+          getTree: () => tree,
+          getCurrentEntry: () => currentEntry,
+          expandNode: (path) => workspaceStore.expandNode(path),
+          openEntry,
+          runValidation,
+        },
+        _id,
+        _name,
+      );
     } catch (e) {
       console.error("[App] Post-welcome initialization error:", e);
       uiStore.setError(e instanceof Error ? e.message : String(e));
@@ -3028,262 +1884,41 @@
     }
   }
 
-  function getWorkspaceDirectoryPath(backendInstance: { getWorkspacePath(): string }): string {
-    return backendInstance
-      .getWorkspacePath()
-      .replace(/\/index\.md$/, '')
-      .replace(/\/README\.md$/, '');
+  // getWorkspaceDirectoryPath, isWorkspaceAlreadyExistsError, seedStarterWorkspaceContent,
+  // maybeBootstrapIosStarterWorkspace, autoCreateDefaultWorkspace, and applyOnboardingBundle
+  // are now imported from onboardingController.
+
+  /** Build the AutoCreateWorkspaceDeps used by onboarding controller functions. */
+  function buildAutoCreateDeps(): AutoCreateWorkspaceDeps {
+    return {
+      createLocalWorkspace,
+      setCurrentWorkspaceId,
+      getBackend: (id, name, storageType) => getBackend(id, name, storageType),
+      createApi,
+      setBackend: (b) => workspaceStore.setBackend(b),
+      clearRustApi: () => { rustApi = null; },
+      initEventSubscription,
+      setCleanupEventSubscription: (cleanup) => { cleanupEventSubscription = cleanup; },
+      refreshTree,
+      setupPermissions: () => {
+        permissionStore.setPersistenceHandlers({
+          getPluginsConfig: () => pluginPermissionsConfig,
+          savePluginsConfig: persistPluginPermissionsConfig,
+        });
+        browserPlugins.setPluginPermissionConfigProvider(() => pluginPermissionsConfig);
+        browserPlugins.setPluginPermissionConfigPersistor(
+          persistRequestedPluginPermissionDefaults,
+        );
+      },
+      persistPermissionDefaults: persistRequestedPluginPermissionDefaults,
+    };
   }
 
-  function isWorkspaceAlreadyExistsError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    return (
-      message.includes("Workspace already exists") ||
-      message.includes("WorkspaceAlreadyExists")
-    );
-  }
-
-  async function seedStarterWorkspaceContent(
-    apiInstance: Api,
-    workspaceDir: string,
-    workspaceName: string,
-  ): Promise<string> {
-    let rootPath: string;
-    let createdWorkspace = false;
-
-    try {
-      await apiInstance.createWorkspace(workspaceDir, workspaceName);
-      createdWorkspace = true;
-      rootPath = await apiInstance.findRootIndex(workspaceDir);
-    } catch (e) {
-      if (!isWorkspaceAlreadyExistsError(e)) {
-        throw e;
-      }
-      // Tauri iOS can pre-initialize a default workspace before this flow runs.
-      // Treat that as success and keep the existing workspace content intact.
-      rootPath = await apiInstance.findRootIndex(workspaceDir);
-    }
-
-    let shouldSeedStarterContent = createdWorkspace;
-
-    if (!createdWorkspace) {
-      try {
-        const existingRoot = await apiInstance.getEntry(rootPath);
-        const fm = normalizeFrontmatter(existingRoot.frontmatter);
-        const title =
-          (typeof fm.title === "string" && fm.title.trim()) || workspaceName;
-        const description =
-          typeof fm.description === "string" ? fm.description.trim() : "";
-        const contents = Array.isArray(fm.contents) ? fm.contents : [];
-        const body = existingRoot.content.trim();
-
-        // Treat a pristine backend-generated workspace as "not yet initialized"
-        // and replace it with Diaryx starter content.
-        const defaultBody = `# ${title}\n\nA diaryx workspace`;
-        const isDefaultScaffold =
-          description === "A diaryx workspace" &&
-          contents.length === 0 &&
-          body === defaultBody;
-
-        shouldSeedStarterContent = isDefaultScaffold;
-      } catch {
-        shouldSeedStarterContent = false;
-      }
-    }
-
-    if (!shouldSeedStarterContent) {
-      return rootPath;
-    }
-
-    const rootContent = `Welcome to **Diaryx** — your personal knowledge workspace.
-
-In Diaryx, every note can also be a folder. And all notes are attached to at least one other note.
-
-- The **left sidebar** is the big picture view: the whole workspace. You can see the filetree and other commands that affect all your files.
-- The **right sidebar** is the entry-specific view: you can see metadata for the specific
-
-Just start writing! Things should work intuitively.
-
-If you want all the details, explore [the detailed guide](</Detailed Guide.md>) for more.`;
-
-    await apiInstance.saveEntry(rootPath, rootContent, rootPath);
-
-    // Create a "Getting Started" child entry (handles part_of + parent contents automatically)
-    const childResult = await apiInstance.createChildEntry(rootPath);
-    let gettingStartedPath = childResult.child_path;
-    // Rename from "Untitled" to "Detailed Guide"
-    const newPath = await apiInstance.setFrontmatterProperty(
-      gettingStartedPath,
-      "title",
-      "Detailed Guide" as JsonValue,
-      rootPath,
-    );
-    if (newPath) gettingStartedPath = newPath;
-
-    const gettingStartedContent = `## Creating Entries
-
-Create new entries from the sidebar **+** button or by pressing **Ctrl+K** and typing "New Entry". Entries are simple markdown files.
-
-## Organizing Your Workspace
-
-Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, or use the **contents** property to define child pages in order.
-
-## Keyboard Shortcuts
-
-
-| Shortcut     | Action                      |
-| ------------ | --------------------------- |
-| Ctrl/Cmd + K | Command palette             |
-| Ctrl/Cmd + S | Manually save current entry |
-| Ctrl/Cmd + B | Bold                        |
-| Ctrl/Cmd + I | Italic                      |
-| Ctrl/Cmd + [ | Toggle left sidebar         |
-| Ctrl/Cmd + ] | Toggle right sidebar        |`;
-
-    await apiInstance.saveEntry(gettingStartedPath, gettingStartedContent, rootPath);
-    return rootPath;
-  }
-
-  async function maybeBootstrapIosStarterWorkspace(
-    apiInstance: Api,
-    backendInstance: Awaited<ReturnType<typeof getBackend>>,
-    workspaceName: string,
-  ): Promise<boolean> {
-    if (!(isTauri() && isIOS())) return false;
-
-    const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
-
-    try {
-      await apiInstance.findRootIndex(workspaceDir);
-      return false;
-    } catch {
-      // Missing root index — continue with fallback checks.
-    }
-
-    try {
-      const fsTree = await apiInstance.getFilesystemTree(workspaceDir, false, 1);
-      const hasFiles = (fsTree.children?.length ?? 0) > 0;
-      if (hasFiles) {
-        console.log("[App] iOS workspace has files but no root index; skipping starter bootstrap");
-        return false;
-      }
-
-      await seedStarterWorkspaceContent(apiInstance, workspaceDir, workspaceName);
-      console.log("[App] Bootstrapped starter workspace content on iOS");
-      return true;
-    } catch (e) {
-      console.warn("[App] Failed to bootstrap starter workspace content on iOS:", e);
-      return false;
-    }
-  }
-
-  /**
-   * Auto-create a default local workspace for first-time users.
-   *
-   * When a bundle is provided (from the welcome screen), this will:
-   * 1. Create the workspace
-   * 2. Import the bundle's associated starter workspace content (if any)
-   * 3. Apply the bundle (install plugins, theme, typography)
-   *
-   * When no bundle is provided, falls back to the hardcoded starter content.
-   */
+  /** Thin wrapper that delegates to the onboarding controller. */
   async function autoCreateDefaultWorkspace(
     bundle?: BundleRegistryEntry | null,
   ): Promise<{ id: string; name: string }> {
-    const ws = createLocalWorkspace("My Workspace");
-    setCurrentWorkspaceId(ws.id);
-
-    const backendInstance = await getBackend(ws.id, ws.name, ws.storageType);
-    workspaceStore.setBackend(backendInstance);
-
-    const apiInstance = createApi(backendInstance);
-    rustApi = null;
-
-    cleanupEventSubscription = initEventSubscription(backendInstance);
-
-    const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
-
-    // Import starter workspace content from the bundle (or fall back to hardcoded content)
-    let importedStarter = false;
-    if (bundle?.starter_workspace_id) {
-      try {
-        const starterRegistry = await fetchStarterWorkspaceRegistry();
-        const starter = starterRegistry.starters.find(
-          (s) => s.id === bundle.starter_workspace_id,
-        );
-        if (starter?.artifact) {
-          const zipBlob = await fetchStarterWorkspaceZip(starter);
-          const zipFile = new File([zipBlob], "starter.zip", { type: "application/zip" });
-          await backendInstance.importFromZip(zipFile, workspaceDir, () => {});
-          importedStarter = true;
-        }
-      } catch (e) {
-        console.warn("[App] Failed to import starter workspace from bundle, falling back:", e);
-      }
-    }
-
-    if (!importedStarter) {
-      await seedStarterWorkspaceContent(apiInstance, workspaceDir, ws.name);
-    }
-
-    // Load the workspace tree and permission config before installing plugins.
-    // The starter workspace frontmatter may contain pre-configured plugin
-    // permissions so that plugins can be installed without prompting the user.
-    await refreshTree();
-    permissionStore.setPersistenceHandlers({
-      getPluginsConfig: () => pluginPermissionsConfig,
-      savePluginsConfig: persistPluginPermissionsConfig,
-    });
-    browserPlugins.setPluginPermissionConfigProvider(() => pluginPermissionsConfig);
-    browserPlugins.setPluginPermissionConfigPersistor(
-      persistRequestedPluginPermissionDefaults,
-    );
-
-    // Apply the bundle (plugins, theme, typography) — best-effort, non-blocking
-    if (bundle && bundle.plugins.length > 0) {
-      try {
-        await applyOnboardingBundle(bundle);
-      } catch (e) {
-        console.warn("[App] Bundle apply during onboarding failed (non-fatal):", e);
-      }
-    }
-
-    return { id: ws.id, name: ws.name };
-  }
-
-  /**
-   * Apply a bundle's plugins/theme/typography during onboarding.
-   * Fetches the necessary registries and executes the bundle plan.
-   */
-  async function applyOnboardingBundle(bundle: BundleRegistryEntry): Promise<void> {
-    // Fetch registries in parallel for the bundle plan context
-    const [themeReg, typoReg, pluginReg] = await Promise.all([
-      fetchThemeRegistry().catch(() => ({ themes: [] })),
-      fetchTypographyRegistry().catch(() => ({ typographies: [] })),
-      fetchPluginRegistry().catch(() => ({ plugins: [] })),
-    ]);
-
-    await hydrateOnboardingPluginPermissionDefaults(
-      bundle.plugins,
-      pluginReg.plugins,
-      persistRequestedPluginPermissionDefaults,
-    );
-
-    const plan = planBundleApply(bundle, {
-      themes: themeReg.themes,
-      typographies: typoReg.typographies,
-      plugins: pluginReg.plugins,
-    });
-
-    const runtime = createDefaultBundleApplyRuntime();
-    const result = await executeBundleApply(plan, runtime);
-
-    if (result.summary.failed > 0) {
-      console.warn(
-        `[App] Onboarding bundle apply: ${result.summary.success}/${result.summary.total} succeeded`,
-        result.results.filter((r) => r.status === "failed"),
-      );
-    }
+    return autoCreateDefaultWorkspaceController(buildAutoCreateDeps(), bundle);
   }
 
   // Rename an entry by title - uses SetFrontmatterProperty which handles title→filename→H1 sync
@@ -3319,7 +1954,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         });
       }
       if (collaborationEnabled) {
-        collaborationStore.setCollaborationPath(toCollaborationPath(effectivePath));
+        collaborationStore.setCollaborationPath(toCollaborationPath(effectivePath, tree?.path ?? ""));
       }
     }
 
@@ -3340,56 +1975,27 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     return newPath;
   }
 
-  function openDeleteConfirm(paths: string[]) {
+  async function openDeleteConfirm(paths: string[]) {
     const uniquePaths = Array.from(new Set(paths));
     pendingDeletePaths = uniquePaths;
-    pendingDeleteIncludesDescendants = selectionIncludesDescendants(
-      tree,
-      uniquePaths,
-    );
+    pendingDeleteIncludesDescendants = api ? await api.checkDeleteIncludesDescendants(uniquePaths, tree?.path ?? undefined) : false;
     showDeleteConfirm = true;
   }
 
-  async function loadDeleteSubtree(path: string, visited: Set<string>) {
-    if (visited.has(path)) return;
-    visited.add(path);
-
-    const existingNode = findTreeNode(tree, path);
-    if (!existingNode) return;
-
-    if (hasUnloadedSidebarChildren(existingNode)) {
-      await loadNodeChildren(path);
-    }
-
-    const refreshedNode = findTreeNode(tree, path);
-    if (!refreshedNode) return;
-
-    for (const child of getRenderableSidebarChildren(refreshedNode)) {
-      if (child.children.length > 0 || hasUnloadedSidebarChildren(child)) {
-        await loadDeleteSubtree(child.path, visited);
-      }
-    }
-  }
-
   async function buildDeletePlan(paths: string[]): Promise<string[]> {
-    const deleteRoots = pruneNestedDeleteRoots(tree, paths);
-    const visited = new Set<string>();
-    for (const rootPath of deleteRoots) {
-      await loadDeleteSubtree(rootPath, visited);
-    }
-
-    return orderDeletePaths(tree, expandDeleteSelection(tree, deleteRoots));
+    if (!api) return [];
+    return api.prepareMultiDelete(paths, tree?.path ?? undefined);
   }
 
   // Delete an entry - shows confirmation dialog, then delegates to controller
   async function handleDeleteEntry(path: string) {
     if (!api) return;
-    openDeleteConfirm([path]);
+    await openDeleteConfirm([path]);
   }
 
   async function handleDeleteEntries(paths: string[]) {
     if (!api || paths.length === 0) return;
-    openDeleteConfirm(paths);
+    await openDeleteConfirm(paths);
   }
 
   // Called when user confirms deletion in the dialog
@@ -3398,15 +2004,14 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 
     isDeletingEntries = true;
     const requestedPaths = [...pendingDeletePaths];
-    const deleteRoots = pruneNestedDeleteRoots(tree, requestedPaths);
     const parentPaths = new Set(
-      deleteRoots
+      requestedPaths
         .map((path) => workspaceStore.getParentNodePath(path))
         .filter((path): path is string => Boolean(path)),
     );
 
     try {
-      const deletePlan = await buildDeletePlan(deleteRoots);
+      const deletePlan = await buildDeletePlan(requestedPaths);
       let deletedCount = 0;
 
       for (const path of deletePlan) {
@@ -4113,7 +2718,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
               workspaceStore.expandNode(newPath);
             }
             if (collaborationEnabled) {
-              collaborationStore.setCollaborationPath(toCollaborationPath(newPath));
+              collaborationStore.setCollaborationPath(toCollaborationPath(newPath, tree?.path ?? ""));
             }
           }
 
@@ -4248,7 +2853,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 <!-- Command Palette -->
   <CommandPalette
     bind:open={uiStore.showCommandPalette}
-    swipeProgress={commandPaletteSwipeProgress}
+    swipeProgress={mobileGestures.commandPaletteSwipeProgress}
     {api}
     {commandRegistry}
   />
@@ -4312,7 +2917,13 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 
 
 <!-- Device Replacement Dialog (shown when sign-in hits device limit) -->
-<DeviceReplacementDialog onAuthenticated={() => handleWelcomeComplete("", "")} />
+<DeviceReplacementDialog onAuthenticated={() => {
+  if (showWelcomeScreen && welcomeScreenRef) {
+    welcomeScreenRef.handleSignInComplete();
+  } else {
+    handleWelcomeComplete("", "");
+  }
+}} />
 
 <!-- Delete Confirmation Dialog -->
 <Dialog.Root bind:open={showDeleteConfirm} onOpenChange={(open) => { if (!open) cancelDeleteEntry(); }}>
@@ -4455,30 +3066,32 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   </div>
 {:else if showWelcomeScreen}
   <WelcomeScreen
+    bind:this={welcomeScreenRef}
     onLaunch={(info) => { launchOverlay = info; }}
     onGetStarted={async (selectedBundle, pluginOverrides) => {
       entryStore.setLoading(true);
       try {
-        await autoCreateDefaultWorkspace(selectedBundle);
-        if (pluginOverrides?.length) {
-          for (const o of pluginOverrides) {
-            await installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
-          }
-        }
+        const result = await handleGetStartedController(
+          {
+            autoCreateDeps: buildAutoCreateDeps(),
+            installLocalPlugin: (bytes, name) => installLocalPlugin(bytes, name),
+            refreshTree,
+            getTree: () => tree,
+            expandNode: (path) => workspaceStore.expandNode(path),
+            openEntry,
+            runValidation,
+            dismissLaunchOverlay,
+          },
+          selectedBundle,
+          pluginOverrides,
+        );
         showWelcomeScreen = false;
-        await refreshTree();
-        if (tree) {
-          workspaceStore.expandNode(tree.path);
-          await openEntry(tree.path);
-        }
-        await runValidation();
-        await dismissLaunchOverlay();
 
         // Trigger spotlight onboarding tour if the bundle defines one
-        if (selectedBundle?.spotlight?.length) {
+        if (result.spotlightSteps) {
           await tick();
           requestAnimationFrame(() => {
-            spotlightSteps = selectedBundle.spotlight;
+            spotlightSteps = result.spotlightSteps;
           });
         }
       } catch (e) {
@@ -4492,14 +3105,15 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       // User signed in but has no existing workspaces — create first synced workspace
       entryStore.setLoading(true);
       try {
-        await autoCreateDefaultWorkspace(null);
+        await handleSignInCreateNewController({
+          autoCreateDeps: buildAutoCreateDeps(),
+          refreshTree,
+          getTree: () => tree,
+          expandNode: (path) => workspaceStore.expandNode(path),
+          openEntry,
+          runValidation,
+        });
         showWelcomeScreen = false;
-        await refreshTree();
-        if (tree) {
-          workspaceStore.expandNode(tree.path);
-          await openEntry(tree.path);
-        }
-        await runValidation();
       } catch (e) {
         console.error("[App] Auto-create after sign-in failed:", e);
         toast.error("Failed to create workspace", { description: e instanceof Error ? e.message : String(e) });
@@ -4507,58 +3121,33 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         entryStore.setLoading(false);
       }
     }}
-    onRestoreWorkspace={async (namespace) => {
+    onCreateWithProvider={async (bundle, providerPluginId, pluginOverrides, restoreNamespace) => {
       entryStore.setLoading(true);
       try {
-        const { downloadWorkspace } = await import("$lib/sync/workspaceProviderService");
-        const name = namespace.metadata?.name ?? "Restored Workspace";
-        const providerId = namespace.metadata?.provider ?? "diaryx.sync";
-        const result = await downloadWorkspace(providerId, {
-          remoteId: namespace.id,
-          name,
-          link: true,
-        });
+        const result = await handleCreateWithProviderController(
+          {
+            autoCreateDeps: buildAutoCreateDeps(),
+            installLocalPlugin: (bytes, name) => installLocalPlugin(bytes, name),
+            refreshTree,
+            getTree: () => tree,
+            expandNode: (path) => workspaceStore.expandNode(path),
+            openEntry,
+            runValidation,
+            dismissLaunchOverlay,
+            persistPermissionDefaults: persistRequestedPluginPermissionDefaults,
+            switchWorkspace,
+          },
+          bundle,
+          providerPluginId,
+          pluginOverrides,
+          restoreNamespace,
+        );
         showWelcomeScreen = false;
-        // Switch to the newly downloaded workspace
-        const wsId = result.localId;
-        await switchWorkspace(wsId, name);
-        await refreshTree();
-        if (tree) {
-          workspaceStore.expandNode(tree.path);
-          await openEntry(tree.path);
-        }
-      } catch (e) {
-        console.error("[App] Restore workspace failed:", e);
-        toast.error("Failed to restore workspace", { description: e instanceof Error ? e.message : String(e) });
-      } finally {
-        entryStore.setLoading(false);
-      }
-    }}
-    onCreateWithProvider={async (bundle, providerPluginId, pluginOverrides) => {
-      entryStore.setLoading(true);
-      try {
-        const { id, name } = await autoCreateDefaultWorkspace(bundle);
-        if (pluginOverrides?.length) {
-          for (const o of pluginOverrides) {
-            await installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
-          }
-        }
-        if (providerPluginId) {
-          const { linkWorkspace } = await import("$lib/sync/workspaceProviderService");
-          await linkWorkspace(providerPluginId, { localId: id, name });
-        }
-        showWelcomeScreen = false;
-        await refreshTree();
-        if (tree) {
-          workspaceStore.expandNode(tree.path);
-          await openEntry(tree.path);
-        }
-        await runValidation();
-        await dismissLaunchOverlay();
-        if (bundle?.spotlight?.length) {
+
+        if (result.spotlightSteps) {
           await tick();
           requestAnimationFrame(() => {
-            spotlightSteps = bundle.spotlight;
+            spotlightSteps = result.spotlightSteps;
           });
         }
       } catch (e) {
@@ -4590,7 +3179,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     collapsed={leftSidebarCollapsed}
     sidebarWidth={leftSidebarWidth}
     resizing={resizingSidebar === 'left'}
-    swipeProgress={leftSidebarSwipeProgress}
+    swipeProgress={mobileGestures.leftSidebarSwipeProgress}
     onOpenEntry={openEntry}
     onToggleNode={toggleNode}
     onToggleCollapse={toggleLeftSidebar}
@@ -4822,7 +3411,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         onPluginToolbarAction={handlePluginToolbarAction}
         audienceTags={effectiveAudienceTags}
         onOpenAudienceManager={() => { showAudienceManager = true; }}
-        onFabMount={(el) => { editorFabElement = el; }}
+        onFabMount={(el) => { mobileGestures.editorFabElement = el; }}
         {commandRegistry}
         hasEditor={!!editorRef}
       />
@@ -4866,7 +3455,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     collapsed={rightSidebarCollapsed}
     sidebarWidth={rightSidebarWidth}
     resizing={resizingSidebar === 'right'}
-    swipeProgress={rightSidebarSwipeProgress}
+    swipeProgress={mobileGestures.rightSidebarSwipeProgress}
     onToggleCollapse={toggleRightSidebar}
     onPropertyChange={handlePropertyChange}
     onPropertyRemove={handlePropertyRemove}

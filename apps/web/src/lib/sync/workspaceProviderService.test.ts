@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   captureProviderPluginForTransfer: vi.fn(),
   installCapturedProviderPlugin: vi.fn(),
   inspectPluginWasm: vi.fn(),
+  loadAllPlugins: vi.fn(),
 }));
 
 vi.mock("$lib/backend", () => ({
@@ -35,6 +36,7 @@ vi.mock("$lib/sync/browserProviderBootstrap", () => ({
 
 vi.mock("$lib/plugins/browserPluginManager.svelte", () => ({
   inspectPluginWasm: mocks.inspectPluginWasm,
+  loadAllPlugins: mocks.loadAllPlugins,
 }));
 
 import {
@@ -59,6 +61,7 @@ describe("workspaceProviderService", () => {
     mocks.getWorkspaceStorageType.mockReturnValue("memory");
     mocks.captureProviderPluginForTransfer.mockResolvedValue(new Uint8Array([1, 2, 3]));
     mocks.installCapturedProviderPlugin.mockResolvedValue(undefined);
+    mocks.loadAllPlugins.mockResolvedValue(undefined);
     mocks.inspectPluginWasm.mockResolvedValue({
       pluginId: "diaryx.sync",
       requestedPermissions: undefined,
@@ -67,6 +70,7 @@ describe("workspaceProviderService", () => {
       getWorkspacePath: () => "/tmp/remote-notes/index.md",
     });
     downloadedWorkspaceApi = {
+      executePluginCommand: vi.fn().mockResolvedValue({ files_imported: 7 }),
       getPluginConfig: vi.fn().mockResolvedValue({}),
       setPluginConfig: vi.fn().mockResolvedValue(undefined),
       findRootIndex: vi.fn().mockResolvedValue("/tmp/remote-notes/index.md"),
@@ -223,18 +227,12 @@ describe("workspaceProviderService", () => {
   });
 
   it("downloads a remote workspace, registers it locally, and links when requested", async () => {
-    const api = {
-      executePluginCommand: vi.fn().mockResolvedValue({
-        files_imported: 7,
-      }),
-    } as any;
     const onProgress = vi.fn();
 
     const result = await downloadWorkspace(
       "diaryx.sync",
       { remoteId: "remote-1", name: "Remote Notes", link: true },
       onProgress,
-      api,
     );
 
     expect(mocks.captureProviderPluginForTransfer).toHaveBeenCalledWith("diaryx.sync");
@@ -253,7 +251,8 @@ describe("workspaceProviderService", () => {
       "diaryx.sync",
       new Uint8Array([1, 2, 3]),
     );
-    expect(api.executePluginCommand).toHaveBeenCalledWith(
+    expect(mocks.loadAllPlugins).toHaveBeenCalled();
+    expect(downloadedWorkspaceApi.executePluginCommand).toHaveBeenCalledWith(
       "diaryx.sync",
       "DownloadWorkspace",
       {
@@ -287,29 +286,19 @@ describe("workspaceProviderService", () => {
   });
 
   it("downloads without enabling sync metadata when link is false", async () => {
-    const api = {
-      executePluginCommand: vi.fn().mockResolvedValue({
-        files_imported: 2,
-      }),
-    } as any;
+    downloadedWorkspaceApi.executePluginCommand.mockResolvedValue({ files_imported: 2 });
 
     await downloadWorkspace(
       "diaryx.sync",
       { remoteId: "remote-1", name: "Remote Notes", link: false },
-      undefined,
-      api,
     );
 
     expect(mocks.setPluginMetadata).not.toHaveBeenCalled();
   });
 
   it("persists transferred plugin default permissions into the downloaded workspace", async () => {
-    const api = {
-      executePluginCommand: vi.fn().mockResolvedValue({
-        files_imported: 2,
-      }),
-    } as any;
     const workspaceApi = {
+      executePluginCommand: vi.fn().mockResolvedValue({ files_imported: 2 }),
       getPluginConfig: vi.fn().mockResolvedValue({}),
       setPluginConfig: vi.fn().mockResolvedValue(undefined),
       findRootIndex: vi.fn().mockResolvedValue("/tmp/remote-notes/index.md"),
@@ -330,8 +319,6 @@ describe("workspaceProviderService", () => {
     await downloadWorkspace(
       "diaryx.sync",
       { remoteId: "remote-1", name: "Remote Notes", link: true },
-      undefined,
-      api,
     );
 
     expect(mocks.inspectPluginWasm).toHaveBeenCalled();
@@ -348,6 +335,34 @@ describe("workspaceProviderService", () => {
         },
       },
       "/tmp/remote-notes/index.md",
+    );
+  });
+
+  it("uses pre-fetched pluginWasm bytes instead of capturing from current workspace", async () => {
+    const preFetchedWasm = new Uint8Array([10, 20, 30]);
+
+    await downloadWorkspace(
+      "diaryx.sync",
+      { remoteId: "remote-1", name: "Remote Notes", link: true },
+      undefined,
+      undefined,
+      preFetchedWasm,
+    );
+
+    // Should NOT try to capture from current workspace
+    expect(mocks.captureProviderPluginForTransfer).not.toHaveBeenCalled();
+    // Should install the pre-fetched bytes
+    expect(mocks.installCapturedProviderPlugin).toHaveBeenCalledWith(
+      "diaryx.sync",
+      preFetchedWasm,
+    );
+    expect(mocks.loadAllPlugins).toHaveBeenCalled();
+    expect(downloadedWorkspaceApi.executePluginCommand).toHaveBeenCalledWith(
+      "diaryx.sync",
+      "DownloadWorkspace",
+      expect.objectContaining({
+        remote_id: "remote-1",
+      }),
     );
   });
 });

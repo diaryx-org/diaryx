@@ -10,9 +10,11 @@
   interface Props {
     /** px size of the logo box */
     size?: number;
+    /** When true, skip intro animation and show final state immediately */
+    skipAnimation?: boolean;
   }
 
-  let { size = 64 }: Props = $props();
+  let { size = 64, skipAnimation = false }: Props = $props();
 
   let wrapEl: HTMLDivElement;
 
@@ -119,14 +121,21 @@
     <img
       src="/diaryx_icon.svg"
       alt=""
-      class="nib-svg draw-nib"
+      class="nib-svg {skipAnimation ? 'skip-nib' : 'draw-nib'}"
       ondragstart={e => e.preventDefault()}
     />
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <img
       src="/icon.png"
       alt="Diaryx"
-      class="icon-png reveal-png"
+      class="icon-png light-icon {skipAnimation ? 'skip-png' : 'reveal-png'}"
+      ondragstart={e => e.preventDefault()}
+    />
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <img
+      src="/icon-dark.png"
+      alt="Diaryx"
+      class="icon-png dark-icon {skipAnimation ? 'skip-png' : 'reveal-png'}"
       ondragstart={e => e.preventDefault()}
     />
   </div>
@@ -214,6 +223,34 @@
   @keyframes logoFadeIn {
     from { opacity: 0; }
     to   { opacity: 1; }
+  }
+
+  /* Dark mode: show dark icon, hide light icon, and invert SVG to white */
+  .dark-icon {
+    display: none;
+  }
+
+  :global(.dark) .dark-icon {
+    display: block;
+  }
+
+  :global(.dark) .light-icon {
+    display: none;
+  }
+
+  :global(.dark) .nib-svg {
+    filter: invert(1);
+  }
+
+  .skip-nib {
+    animation: none;
+    clip-path: none;
+    opacity: 0;
+  }
+
+  .skip-png {
+    animation: none;
+    opacity: 1;
   }
 
   @media (prefers-reduced-motion: reduce) {

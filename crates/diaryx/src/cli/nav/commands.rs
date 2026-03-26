@@ -4,12 +4,13 @@
 //! Operations that resolve links need a root-aware workspace, so we
 //! construct one from the original ws + workspace root directory.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use diaryx_core::config::Config;
 use diaryx_core::entry::{DiaryxApp, slugify_title, sync_h1_in_body};
 use diaryx_core::link_parser::LinkFormat;
-use diaryx_core::workspace::Workspace;
+use diaryx_core::workspace::{Workspace, prepare_delete_plan, selection_includes_descendants};
 
 use crate::cli::{CliWorkspace, block_on};
 
@@ -38,10 +39,61 @@ pub fn exec_create(
         .map_err(|e| format!("Create failed: {}", e))
 }
 
-/// Delete the selected entry.
-pub fn exec_delete(ws: &CliWorkspace, workspace_root: &Path, path: &Path) -> Result<(), String> {
+/// Result of computing a deletion plan for TUI confirmation.
+pub struct DeletePlanResult {
+    /// Ordered list of paths to delete (children-first).
+    pub paths: Vec<PathBuf>,
+    /// Whether the plan includes descendant entries beyond the selected path.
+    pub includes_descendants: bool,
+}
+
+/// Compute a deletion plan for the selected path.
+/// Builds the tree, expands to descendants, and orders children-first.
+pub fn exec_delete(
+    ws: &CliWorkspace,
+    workspace_root: &Path,
+    path: &Path,
+) -> Result<DeletePlanResult, String> {
     let rws = rooted_ws(ws, workspace_root);
-    block_on(rws.delete_entry(path)).map_err(|e| format!("Delete failed: {}", e))
+
+    // Find root index for tree building
+    let root_index = block_on(rws.detect_workspace(path))
+        .map_err(|e| format!("Delete failed: {}", e))?
+        .ok_or_else(|| "Delete failed: could not detect workspace root".to_string())?;
+
+    let mut visited = HashSet::new();
+    let tree = block_on(rws.build_tree_with_depth(&root_index, None, &mut visited))
+        .map_err(|e| format!("Delete failed: could not build tree: {}", e))?;
+
+    let selected = vec![path.to_path_buf()];
+    let plan = prepare_delete_plan(&tree, &selected);
+    let includes_descendants = selection_includes_descendants(&tree, &selected);
+
+    if plan.is_empty() {
+        return Err("Delete failed: nothing to delete".to_string());
+    }
+
+    Ok(DeletePlanResult {
+        paths: plan,
+        includes_descendants,
+    })
+}
+
+/// Execute a previously computed deletion plan.
+/// Returns the count of successfully deleted entries.
+pub fn exec_delete_plan(
+    ws: &CliWorkspace,
+    workspace_root: &Path,
+    plan: &[PathBuf],
+) -> Result<usize, String> {
+    let rws = rooted_ws(ws, workspace_root);
+    let mut deleted = 0usize;
+    for path in plan {
+        block_on(rws.delete_entry(path))
+            .map_err(|e| format!("Delete failed at {}: {}", path.display(), e))?;
+        deleted += 1;
+    }
+    Ok(deleted)
 }
 
 /// Duplicate the selected entry.

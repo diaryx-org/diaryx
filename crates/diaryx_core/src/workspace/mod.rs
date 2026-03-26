@@ -15,9 +15,11 @@
 //! For synchronous contexts (CLI, tests), wrap a sync filesystem with
 //! `SyncToAsyncFs` and use `futures_lite::future::block_on()`.
 
+mod tree_selection;
 mod types;
 
 // Re-export types for backwards compatibility
+pub use tree_selection::*;
 pub use types::{IndexFile, IndexFrontmatter, TreeNode, format_tree_node};
 
 use std::collections::HashSet;

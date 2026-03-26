@@ -100,6 +100,9 @@ pub struct NavState {
 
     /// Depth limit for tree building (None = unlimited)
     pub depth_limit: Option<usize>,
+
+    /// Pending deletion plan (computed before confirmation, executed after)
+    pub pending_delete_plan: Option<Vec<PathBuf>>,
 }
 
 impl NavState {
@@ -130,6 +133,7 @@ impl NavState {
             status_message: None,
             root_path,
             depth_limit,
+            pending_delete_plan: None,
         }
     }
 

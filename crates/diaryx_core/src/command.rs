@@ -199,6 +199,24 @@ pub enum Command {
         audience: Option<String>,
     },
 
+    /// Compute an ordered deletion plan: prune roots, expand descendants, order children-first.
+    PrepareMultiDelete {
+        /// Paths the user selected for deletion.
+        paths: Vec<String>,
+        /// Workspace root index path (to build the tree for ordering).
+        #[serde(default)]
+        tree_path: Option<String>,
+    },
+
+    /// Check whether deleting the given paths will also remove descendant entries.
+    CheckDeleteIncludesDescendants {
+        /// Paths the user selected for deletion.
+        paths: Vec<String>,
+        /// Workspace root index path.
+        #[serde(default)]
+        tree_path: Option<String>,
+    },
+
     /// Get the filesystem tree (for "Show All Files" mode).
     GetFilesystemTree {
         /// Optional path to the workspace directory.
@@ -671,6 +689,17 @@ impl Command {
             Command::GetWorkspaceTree { path, .. } | Command::ValidateWorkspace { path } => {
                 if let Some(p) = path {
                     *p = normalizer(p);
+                }
+            }
+
+            // --- Multi-path commands with optional tree_path ---
+            Command::PrepareMultiDelete { paths, tree_path }
+            | Command::CheckDeleteIncludesDescendants { paths, tree_path } => {
+                for p in paths.iter_mut() {
+                    *p = normalizer(p);
+                }
+                if let Some(tp) = tree_path {
+                    *tp = normalizer(tp);
                 }
             }
 

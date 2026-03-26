@@ -35,23 +35,57 @@
   import { classifyMarketplacePlugins } from "./marketplacePluginClassification";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import { openExternalUrl } from "$lib/billing";
+  import { useMarketplacePanel, type ExtraFilterDimension } from "./useMarketplacePanel.svelte";
 
   const pluginStore = getPluginStore();
 
-  let registryPlugins = $state<RegistryPlugin[]>([]);
-  let registryLoading = $state(true);
-  let registryError = $state<string | null>(null);
+  const CAPABILITY_FILTER_INDEX = 0;
+
+  const panel = useMarketplacePanel<RegistryPlugin>({
+    async fetchItems() {
+      const registry = await fetchPluginRegistry();
+      return registry.plugins;
+    },
+    buildHaystack(plugin) {
+      return [
+        plugin.id, plugin.name, plugin.summary, plugin.description,
+        plugin.author, plugin.license, ...plugin.tags, ...plugin.categories,
+      ];
+    },
+    getTimestamp(plugin) {
+      return Date.parse(plugin.artifact.published_at) || 0;
+    },
+    sortOptions: ["name", "recent", "version"],
+    sourceFilterOptions: [
+      ["all", "All"],
+      ["installed", "Installed"],
+    ],
+    matchesSourceFilter(plugin, filter) {
+      if (filter === "installed") return installedIds.has(plugin.id);
+      return true;
+    },
+    extraFilters: [
+      {
+        initial: "all",
+        getOptions(items) {
+          const all = new Set<string>();
+          for (const plugin of items) {
+            for (const capability of plugin.capabilities) all.add(capability);
+          }
+          return ["all", ...Array.from(all).sort()];
+        },
+        matches(item, filterValue) {
+          return item.capabilities.includes(filterValue);
+        },
+      } satisfies ExtraFilterDimension<RegistryPlugin>,
+    ],
+  });
+
+  // Domain-specific plugin state
   let installingIds = $state<Set<string>>(new Set());
   let removingIds = $state<Set<string>>(new Set());
   let uploadingLocal = $state(false);
   let fileInputRef = $state<HTMLInputElement | null>(null);
-
-  let search = $state("");
-  let filtersOpen = $state(false);
-  let categoryFilter = $state("all");
-  let capabilityFilter = $state("all");
-  let sourceFilter = $state<"all" | "installed">("all");
-  let sortBy = $state<"name" | "version" | "recent">("name");
   let detailPlugin = $state<RegistryPlugin | null>(null);
 
   const browserPluginSupport = $derived(getBrowserPluginSupport());
@@ -67,7 +101,7 @@
   const marketplaceClassification = $derived.by(() =>
     classifyMarketplacePlugins(
       pluginStore.allManifests,
-      registryPlugins,
+      panel.items,
       installedPluginSources,
     ),
   );
@@ -91,55 +125,17 @@
     return map;
   });
 
-  const categories = $derived.by(() => {
-    const all = new Set<string>();
-    for (const plugin of registryPlugins) {
-      for (const category of plugin.categories) all.add(category);
-    }
-    return ["all", ...Array.from(all).sort()];
-  });
-
-  const capabilities = $derived.by(() => {
-    const all = new Set<string>();
-    for (const plugin of registryPlugins) {
-      for (const capability of plugin.capabilities) all.add(capability);
-    }
-    return ["all", ...Array.from(all).sort()];
-  });
-
+  // Use composable's filteredItems but additionally exclude localOverrideIds
   const filteredPlugins = $derived.by(() => {
-    const query = search.trim().toLowerCase();
-
-    const filtered = registryPlugins.filter((plugin) => {
-      if (localOverrideIds.has(plugin.id)) return false;
-      if (sourceFilter === "installed" && !installedIds.has(plugin.id)) return false;
-      if (categoryFilter !== "all" && !plugin.categories.includes(categoryFilter)) return false;
-      if (capabilityFilter !== "all" && !plugin.capabilities.includes(capabilityFilter)) return false;
-
-      if (!query) return true;
-      const haystack = [
-        plugin.id, plugin.name, plugin.summary, plugin.description,
-        plugin.author, plugin.license, ...plugin.tags, ...plugin.categories,
-      ].join(" ").toLowerCase();
-      return haystack.includes(query);
-    });
-
-    filtered.sort((a, b) => {
-      if (sortBy === "name") return a.name.localeCompare(b.name);
-      if (sortBy === "version") return b.version.localeCompare(a.version);
-      const aTs = Date.parse(a.artifact.published_at) || 0;
-      const bTs = Date.parse(b.artifact.published_at) || 0;
-      return bTs - aTs;
-    });
-
-    return filtered;
+    return panel.filteredItems.filter((plugin) => !localOverrideIds.has(plugin.id));
   });
 
   const filteredLocalOverrides = $derived.by(() => {
-    const query = search.trim().toLowerCase();
+    const query = panel.search.trim().toLowerCase();
     const filtered = localOverrides.filter(({ registry, installed }) => {
-      if (categoryFilter !== "all" && !registry.categories.includes(categoryFilter)) return false;
-      if (capabilityFilter !== "all" && !registry.capabilities.includes(capabilityFilter)) return false;
+      if (panel.categoryFilter !== "all" && !registry.categories.includes(panel.categoryFilter)) return false;
+      const capFilter = panel.getExtraFilter(CAPABILITY_FILTER_INDEX);
+      if (capFilter !== "all" && !registry.capabilities.includes(capFilter)) return false;
       if (!query) return true;
       const haystack = [
         registry.id,
@@ -168,7 +164,7 @@
   });
 
   const filteredLocalPlugins = $derived.by(() => {
-    const query = search.trim().toLowerCase();
+    const query = panel.search.trim().toLowerCase();
     const filtered = localPlugins.filter((plugin) => {
       if (!query) return true;
       const haystack = [
@@ -194,24 +190,6 @@
       filteredLocalOverrides.length > 0 ||
       filteredLocalPlugins.length > 0,
   );
-
-  $effect(() => {
-    loadRegistry();
-  });
-
-  async function loadRegistry() {
-    registryLoading = true;
-    registryError = null;
-    try {
-      const registry = await fetchPluginRegistry();
-      registryPlugins = registry.plugins;
-    } catch (e) {
-      registryError = e instanceof Error ? e.message : "Failed to load plugin registry";
-      registryPlugins = [];
-    } finally {
-      registryLoading = false;
-    }
-  }
 
   async function installFromRegistry(plugin: RegistryPlugin): Promise<void> {
     const isUpdate = updatableIds.has(plugin.id);
@@ -405,13 +383,13 @@
 
     <!-- Plugin List -->
     <div class="flex-1 overflow-y-auto">
-      {#if registryLoading}
+      {#if panel.loading}
         <div class="flex items-center justify-center py-8 text-muted-foreground gap-2">
           <Loader2 class="size-4 animate-spin" />
           <span class="text-xs">Loading...</span>
         </div>
-      {:else if registryError}
-        <div class="px-3 py-4 text-xs text-muted-foreground">{registryError}</div>
+      {:else if panel.loadError}
+        <div class="px-3 py-4 text-xs text-muted-foreground">{panel.loadError}</div>
       {:else if !hasAnyVisiblePlugins}
         <div class="px-3 py-4 text-xs text-muted-foreground">No plugins match your filters.</div>
       {:else}
@@ -586,24 +564,24 @@
 
     <!-- Search + Filters + Add Local -->
     <div class="px-3 py-2 space-y-2 border-t shrink-0">
-      {#if filtersOpen}
+      {#if panel.filtersOpen}
         <div class="space-y-1.5">
-          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" bind:value={categoryFilter}>
-            {#each categories as category}
+          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" bind:value={panel.categoryFilter}>
+            {#each panel.categories as category}
               <option value={category}>{category === "all" ? "All categories" : category}</option>
             {/each}
           </select>
-          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" bind:value={capabilityFilter}>
-            {#each capabilities as capability}
+          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" value={panel.getExtraFilter(CAPABILITY_FILTER_INDEX)} onchange={(e) => panel.setExtraFilter(CAPABILITY_FILTER_INDEX, (e.target as HTMLSelectElement).value)}>
+            {#each panel.extraFilterOptions[CAPABILITY_FILTER_INDEX] ?? [] as capability}
               <option value={capability}>{capability === "all" ? "All capabilities" : capability}</option>
             {/each}
           </select>
           <div class="flex gap-1.5">
-            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={sourceFilter}>
+            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={panel.sourceFilter}>
               <option value="all">All</option>
               <option value="installed">Installed</option>
             </select>
-            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={sortBy}>
+            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={panel.sortBy}>
               <option value="name">Name</option>
               <option value="recent">Recent</option>
               <option value="version">Version</option>
@@ -614,9 +592,9 @@
       <div class="flex items-center gap-2">
         <div class="relative flex-1 min-w-0">
           <Search class="size-3.5 absolute left-2 top-2 text-muted-foreground" />
-          <Input class="pl-7 h-7 text-xs" placeholder="Search plugins" bind:value={search} />
+          <Input class="pl-7 h-7 text-xs" placeholder="Search plugins" bind:value={panel.search} />
         </div>
-        <Button variant="outline" size="icon" class="size-7 shrink-0 {filtersOpen ? 'border-primary' : ''}" onclick={() => (filtersOpen = !filtersOpen)} aria-label="Toggle filters">
+        <Button variant="outline" size="icon" class="size-7 shrink-0 {panel.filtersOpen ? 'border-primary' : ''}" onclick={() => (panel.filtersOpen = !panel.filtersOpen)} aria-label="Toggle filters">
           <SlidersHorizontal class="size-3.5" />
         </Button>
         <Button variant="outline" size="icon" class="size-7 shrink-0" onclick={triggerUpload} disabled={uploadingLocal || !pluginsSupported} aria-label="Add local plugin">

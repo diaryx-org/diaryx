@@ -22,3 +22,5 @@ apps/web/upload.sh
 apps/web/test.sh
 .claude
 **/blobs/**
+.playwright-mcp
+.diaryx

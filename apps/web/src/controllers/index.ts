@@ -63,3 +63,25 @@ export {
 } from './attachmentController';
 
 export { handleLinkClick } from './linkController';
+
+export {
+  shouldBypassWelcomeScreenForE2E,
+  getWorkspaceDirectoryPath,
+  isWorkspaceAlreadyExistsError,
+  seedStarterWorkspaceContent,
+  maybeBootstrapIosStarterWorkspace,
+  applyOnboardingBundle,
+  autoCreateDefaultWorkspace,
+  handleGetStarted,
+  handleSignInCreateNew,
+  handleCreateWithProvider,
+  handleWelcomeComplete,
+} from './onboardingController';
+
+export type {
+  AutoCreateWorkspaceDeps,
+  OnGetStartedDeps,
+  OnSignInCreateNewDeps,
+  OnCreateWithProviderDeps,
+  HandleWelcomeCompleteDeps,
+} from './onboardingController';

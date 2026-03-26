@@ -21,9 +21,7 @@
   import { fetchThemeRegistry, type ThemeRegistry } from "$lib/marketplace/themeRegistry";
   import type { ThemeRegistryEntry } from "$lib/marketplace/types";
   import AccentHuePicker from "$lib/settings/AccentHuePicker.svelte";
-
-  type SourceFilter = "all" | "installed" | "available";
-  type SortBy = "name" | "recent";
+  import { useMarketplacePanel, isRecord } from "./useMarketplacePanel.svelte";
 
   interface ThemeListEntry {
     id: string;
@@ -47,25 +45,126 @@
     publishedAt: number | null;
   }
 
+  const STYLE_FILTER_INDEX = 0;
+
   const appearanceStore = getAppearanceStore();
 
-  let registryThemes = $state<ThemeRegistryEntry[]>([]);
-  let registryLoading = $state(true);
-  let registryError = $state<string | null>(null);
+  const panel = useMarketplacePanel<ThemeListEntry>({
+    async fetchItems() {
+      const registry: ThemeRegistry = await fetchThemeRegistry();
+      const registryThemes = registry.themes;
 
-  let search = $state("");
-  let filtersOpen = $state(false);
-  let sourceFilter = $state<SourceFilter>("all");
-  let categoryFilter = $state("all");
-  let styleFilter = $state("all");
-  let sortBy = $state<SortBy>("name");
+      // Build merged ThemeListEntry array from installed + registry
+      const installedThemes = appearanceStore.listThemes();
+      const installedById = new Map(installedThemes.map((entry) => [entry.theme.id, entry]));
+      const registryById = new Map(registryThemes.map((entry) => [entry.id, entry]));
 
-  let importingLocal = $state(false);
-  let detailThemeId = $state<string | null>(null);
-  let localFileInputRef = $state<HTMLInputElement | null>(null);
+      const ids = new Set<string>([
+        ...Array.from(installedById.keys()),
+        ...Array.from(registryById.keys()),
+      ]);
 
-  function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
+      const entries: ThemeListEntry[] = [];
+
+      for (const id of ids) {
+        const installed = installedById.get(id);
+        const reg = registryById.get(id) ?? null;
+        const theme = installed?.theme ?? reg?.theme;
+        if (!theme) continue;
+
+        const installedAt =
+          typeof installed?.source.installedAt === "number"
+            ? installed.source.installedAt
+            : null;
+        const publishedAt = reg?.artifact?.published_at
+          ? Date.parse(reg.artifact.published_at) || null
+          : null;
+
+        entries.push({
+          id,
+          theme,
+          name: reg?.name ?? theme.name,
+          version: reg?.version ?? `${theme.version}`,
+          summary:
+            reg?.summary ??
+            theme.description ??
+            "A custom Diaryx theme.",
+          description:
+            reg?.description ??
+            theme.description ??
+            "No description provided.",
+          author: reg?.author ?? theme.author ?? "Unknown",
+          license: reg?.license ?? "Custom",
+          repository: reg?.repository ?? null,
+          categories: reg?.categories ?? [],
+          tags: reg?.tags ?? [],
+          styles: reg?.styles ?? [],
+          screenshots: reg?.screenshots ?? [],
+          installed: !!installed,
+          builtin: installed?.builtin ?? false,
+          active: appearanceStore.presetId === id,
+          registry: reg,
+          installedAt,
+          publishedAt,
+        });
+      }
+
+      return entries;
+    },
+    buildHaystack(item) {
+      return [
+        item.id,
+        item.name,
+        item.summary,
+        item.description,
+        item.author,
+        ...item.tags,
+        ...item.categories,
+        ...item.styles,
+      ];
+    },
+    getTimestamp(item) {
+      return item.publishedAt ?? item.installedAt ?? 0;
+    },
+    sourceFilterOptions: [
+      ["all", "All sources"],
+      ["installed", "Installed"],
+      ["available", "Curated"],
+    ],
+    matchesSourceFilter(item, filter) {
+      if (filter === "installed") return item.installed;
+      if (filter === "available") return !!item.registry;
+      return true;
+    },
+    extraFilters: [
+      {
+        initial: "all",
+        getOptions(items) {
+          const all = new Set<string>();
+          for (const entry of items) {
+            for (const style of entry.styles) all.add(style);
+          }
+          return ["all", ...Array.from(all).sort()];
+        },
+        matches(item, filterValue) {
+          return item.styles.includes(filterValue);
+        },
+      },
+    ],
+  });
+
+  // Bind the style filter for the template
+  let styleFilter = $derived(panel.getExtraFilter(STYLE_FILTER_INDEX));
+
+  function themeSwatches(theme: ThemeDefinition, mode: "light" | "dark"): string[] {
+    const palette = mode === "dark" ? theme.colors.dark : theme.colors.light;
+    return [
+      palette.background,
+      palette.primary,
+      palette.accent,
+      palette.muted,
+      palette.foreground,
+    ];
   }
 
   function isThemeDefinition(value: unknown): value is ThemeDefinition {
@@ -84,157 +183,11 @@
     if (isRecord(value) && "theme" in value && isThemeDefinition(value.theme)) {
       return value.theme;
     }
-
     if (isThemeDefinition(value)) {
       return value;
     }
-
     return null;
   }
-
-  function themeSwatches(theme: ThemeDefinition, mode: "light" | "dark"): string[] {
-    const palette = mode === "dark" ? theme.colors.dark : theme.colors.light;
-    return [
-      palette.background,
-      palette.primary,
-      palette.accent,
-      palette.muted,
-      palette.foreground,
-    ];
-  }
-
-  async function loadRegistry(): Promise<void> {
-    registryLoading = true;
-    registryError = null;
-    try {
-      const registry: ThemeRegistry = await fetchThemeRegistry();
-      registryThemes = registry.themes;
-    } catch (error) {
-      registryThemes = [];
-      registryError =
-        error instanceof Error ? error.message : "Failed to load theme registry";
-    } finally {
-      registryLoading = false;
-    }
-  }
-
-  $effect(() => {
-    loadRegistry();
-  });
-
-  const allEntries = $derived.by(() => {
-    const installedThemes = appearanceStore.listThemes();
-    const installedById = new Map(installedThemes.map((entry) => [entry.theme.id, entry]));
-    const registryById = new Map(registryThemes.map((entry) => [entry.id, entry]));
-
-    const ids = new Set<string>([
-      ...Array.from(installedById.keys()),
-      ...Array.from(registryById.keys()),
-    ]);
-
-    const entries: ThemeListEntry[] = [];
-
-    for (const id of ids) {
-      const installed = installedById.get(id);
-      const registry = registryById.get(id) ?? null;
-      const theme = installed?.theme ?? registry?.theme;
-      if (!theme) continue;
-
-      const installedAt =
-        typeof installed?.source.installedAt === "number"
-          ? installed.source.installedAt
-          : null;
-      const publishedAt = registry?.artifact?.published_at
-        ? Date.parse(registry.artifact.published_at) || null
-        : null;
-
-      entries.push({
-        id,
-        theme,
-        name: registry?.name ?? theme.name,
-        version: registry?.version ?? `${theme.version}`,
-        summary:
-          registry?.summary ??
-          theme.description ??
-          "A custom Diaryx theme.",
-        description:
-          registry?.description ??
-          theme.description ??
-          "No description provided.",
-        author: registry?.author ?? theme.author ?? "Unknown",
-        license: registry?.license ?? "Custom",
-        repository: registry?.repository ?? null,
-        categories: registry?.categories ?? [],
-        tags: registry?.tags ?? [],
-        styles: registry?.styles ?? [],
-        screenshots: registry?.screenshots ?? [],
-        installed: !!installed,
-        builtin: installed?.builtin ?? false,
-        active: appearanceStore.presetId === id,
-        registry,
-        installedAt,
-        publishedAt,
-      });
-    }
-
-    return entries;
-  });
-
-  const categories = $derived.by(() => {
-    const all = new Set<string>();
-    for (const entry of allEntries) {
-      for (const category of entry.categories) all.add(category);
-    }
-    return ["all", ...Array.from(all).sort()];
-  });
-
-  const styles = $derived.by(() => {
-    const all = new Set<string>();
-    for (const entry of allEntries) {
-      for (const style of entry.styles) all.add(style);
-    }
-    return ["all", ...Array.from(all).sort()];
-  });
-
-  const filteredEntries = $derived.by(() => {
-    const query = search.trim().toLowerCase();
-
-    const filtered = allEntries.filter((entry) => {
-      if (sourceFilter === "installed" && !entry.installed) return false;
-      if (sourceFilter === "available" && !entry.registry) return false;
-      if (categoryFilter !== "all" && !entry.categories.includes(categoryFilter)) return false;
-      if (styleFilter !== "all" && !entry.styles.includes(styleFilter)) return false;
-
-      if (!query) return true;
-      const haystack = [
-        entry.id,
-        entry.name,
-        entry.summary,
-        entry.description,
-        entry.author,
-        ...entry.tags,
-        ...entry.categories,
-        ...entry.styles,
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-
-    filtered.sort((a, b) => {
-      if (sortBy === "name") return a.name.localeCompare(b.name);
-      const aTs = a.publishedAt ?? a.installedAt ?? 0;
-      const bTs = b.publishedAt ?? b.installedAt ?? 0;
-      return bTs - aTs;
-    });
-
-    return filtered;
-  });
-
-  const detailEntry = $derived.by(() => {
-    if (!detailThemeId) return null;
-    return allEntries.find((entry) => entry.id === detailThemeId) ?? null;
-  });
 
   async function installTheme(entry: ThemeListEntry): Promise<void> {
     if (!entry.registry) {
@@ -272,8 +225,8 @@
     const ok = appearanceStore.uninstallTheme(entry.id);
     if (ok) {
       toast.success(`Removed ${entry.name}`);
-      if (detailThemeId === entry.id) {
-        detailThemeId = null;
+      if (panel.detailId === entry.id) {
+        panel.detailId = null;
       }
     } else {
       toast.error(`Failed to remove ${entry.name}`);
@@ -292,17 +245,12 @@
     URL.revokeObjectURL(url);
   }
 
-  function triggerLocalImport(): void {
-    localFileInputRef?.click();
-  }
-
-  async function onLocalFileSelected(event: Event): Promise<void> {
+  async function handleLocalFileSelected(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
     input.value = "";
 
-    importingLocal = true;
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -322,10 +270,10 @@
       }
 
       toast.success(`Imported ${theme.name}`);
+      // Reload to pick up the new installed theme
+      panel.reload();
     } catch {
       toast.error("Failed to read theme file.");
-    } finally {
-      importingLocal = false;
     }
   }
 </script>
@@ -334,15 +282,15 @@
   type="file"
   accept=".json"
   class="hidden"
-  bind:this={localFileInputRef}
-  onchange={onLocalFileSelected}
+  bind:this={panel.localFileInputRef}
+  onchange={handleLocalFileSelected}
 />
 
-{#if detailEntry}
-  {@const entry = detailEntry}
+{#if panel.detailItem}
+  {@const entry = panel.detailItem}
   <div class="flex flex-col h-full">
     <div class="flex items-center gap-2 px-3 py-2 border-b shrink-0">
-      <Button variant="ghost" size="icon" class="size-7" onclick={() => (detailThemeId = null)} aria-label="Back">
+      <Button variant="ghost" size="icon" class="size-7" onclick={() => (panel.detailId = null)} aria-label="Back">
         <ArrowLeft class="size-4" />
       </Button>
       <h3 class="text-sm font-medium truncate">{entry.name}</h3>
@@ -451,28 +399,28 @@
 {:else}
   <div class="flex flex-col h-full">
     <div class="flex-1 overflow-y-auto">
-      {#if registryError}
+      {#if panel.loadError}
         <div class="px-3 pt-2">
           <div class="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-[11px] text-amber-700 dark:text-amber-300">
-            {registryError}
+            {panel.loadError}
           </div>
         </div>
       {/if}
 
-      {#if registryLoading}
+      {#if panel.loading}
         <div class="flex items-center justify-center py-8 text-muted-foreground gap-2">
           <Loader2 class="size-4 animate-spin" />
           <span class="text-xs">Loading themes...</span>
         </div>
-      {:else if filteredEntries.length === 0}
+      {:else if panel.filteredItems.length === 0}
         <div class="px-3 py-4 text-xs text-muted-foreground">No themes match your filters.</div>
       {:else}
         <div class="p-2 space-y-1.5">
-          {#each filteredEntries as entry}
+          {#each panel.filteredItems as entry}
             <button
               type="button"
               class="w-full text-left rounded-md border p-2.5 transition hover:border-muted-foreground"
-              onclick={() => (detailThemeId = entry.id)}
+              onclick={() => (panel.detailId = entry.id)}
             >
               <div class="flex gap-1.5 mb-1.5">
                 <div class="flex items-center gap-px">
@@ -538,27 +486,27 @@
     </div>
 
     <div class="px-3 py-2 space-y-2 border-t shrink-0">
-      {#if filtersOpen}
+      {#if panel.filtersOpen}
         <div class="space-y-1.5">
-          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" bind:value={categoryFilter}>
-            {#each categories as category}
+          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" bind:value={panel.categoryFilter}>
+            {#each panel.categories as category}
               <option value={category}>{category === "all" ? "All categories" : category}</option>
             {/each}
           </select>
 
-          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" bind:value={styleFilter}>
-            {#each styles as style}
+          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" value={styleFilter} onchange={(e) => panel.setExtraFilter(STYLE_FILTER_INDEX, (e.target as HTMLSelectElement).value)}>
+            {#each panel.extraFilterOptions[STYLE_FILTER_INDEX] ?? [] as style}
               <option value={style}>{style === "all" ? "All styles" : style}</option>
             {/each}
           </select>
 
           <div class="flex gap-1.5">
-            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={sourceFilter}>
+            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={panel.sourceFilter}>
               <option value="all">All sources</option>
               <option value="installed">Installed</option>
               <option value="available">Curated</option>
             </select>
-            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={sortBy}>
+            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={panel.sortBy}>
               <option value="name">Name</option>
               <option value="recent">Recent</option>
             </select>
@@ -569,21 +517,21 @@
       <div class="flex items-center gap-2">
         <div class="relative flex-1 min-w-0">
           <Search class="size-3.5 absolute left-2 top-2 text-muted-foreground" />
-          <Input class="pl-7 h-7 text-xs" placeholder="Search themes" bind:value={search} />
+          <Input class="pl-7 h-7 text-xs" placeholder="Search themes" bind:value={panel.search} />
         </div>
 
         <Button
           variant="outline"
           size="icon"
-          class="size-7 shrink-0 {filtersOpen ? 'border-primary' : ''}"
-          onclick={() => (filtersOpen = !filtersOpen)}
+          class="size-7 shrink-0 {panel.filtersOpen ? 'border-primary' : ''}"
+          onclick={() => (panel.filtersOpen = !panel.filtersOpen)}
           aria-label="Toggle filters"
         >
           <SlidersHorizontal class="size-3.5" />
         </Button>
 
-        <Button variant="outline" size="icon" class="size-7 shrink-0" onclick={triggerLocalImport} aria-label="Import local theme">
-          {#if importingLocal}
+        <Button variant="outline" size="icon" class="size-7 shrink-0" onclick={panel.triggerLocalImport} aria-label="Import local theme">
+          {#if panel.importingLocal}
             <Loader2 class="size-3.5 animate-spin" />
           {:else}
             <Upload class="size-3.5" />

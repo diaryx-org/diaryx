@@ -9,6 +9,7 @@ attachments:
   - '[entryController.ts](/apps/web/src/controllers/entryController.ts)'
   - '[linkController.ts](/apps/web/src/controllers/linkController.ts)'
   - '[workspaceController.ts](/apps/web/src/controllers/workspaceController.ts)'
+  - '[onboardingController.ts](/apps/web/src/controllers/onboardingController.ts)'
 exclude:
   - '*.lock'
 ---
@@ -25,6 +26,7 @@ Controller logic for UI actions, mediating between views and models.
 | `commandPaletteController.ts` | Command palette actions |
 | `entryController.ts` | Entry creation, editing, deletion, and frontmatter-safe property updates (normalizes `Map` frontmatter before merges/removals). Title changes delegate rename logic to the Rust backend (`SetFrontmatterProperty` handler reads workspace config for `auto_rename_to_title` and `filename_style`). Entry-open flow supports request-scoped guards so stale `openEntry` results do not overwrite newer navigation intents. |
 | `linkController.ts` | Link handling and navigation |
+| `onboardingController.ts` | Onboarding orchestration (E2E bypass, starter workspace seeding, iOS first-run bootstrap, default workspace auto-creation, bundle application, welcome screen callback orchestration). Pure .ts with dependency injection for testability. |
 | `workspaceController.ts` | Workspace operations (tree refresh, lazy child loading, validation). |
 
 ## Sync-time tree refresh behavior

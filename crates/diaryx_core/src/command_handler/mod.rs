@@ -509,6 +509,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 depth,
                 audience,
             } => self.cmd_get_workspace_tree(path, depth, audience).await,
+            Command::PrepareMultiDelete { paths, tree_path } => {
+                self.cmd_prepare_multi_delete(paths, tree_path).await
+            }
+            Command::CheckDeleteIncludesDescendants { paths, tree_path } => {
+                self.cmd_check_delete_includes_descendants(paths, tree_path)
+                    .await
+            }
             Command::GetFilesystemTree {
                 path,
                 show_hidden,

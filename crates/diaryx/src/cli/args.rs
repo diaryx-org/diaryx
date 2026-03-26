@@ -106,6 +106,22 @@ pub enum Commands {
         command: WorkspaceCommands,
     },
 
+    /// Delete one or more entries and their descendants
+    #[command(alias = "rm")]
+    Delete {
+        /// Paths to delete (supports fuzzy matching, globs, directories)
+        /// Examples: "notes/old.md", "archive/*", "draft"
+        paths: Vec<String>,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Normalize filename(s) to match their title property
     /// Converts title to snake_case slug and renames file
     #[command(alias = "norm")]

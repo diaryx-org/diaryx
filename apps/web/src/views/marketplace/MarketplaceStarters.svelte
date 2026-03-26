@@ -25,168 +25,51 @@
     fetchStarterWorkspaceZip,
   } from "$lib/marketplace/starterWorkspaceApply";
   import { getBackend } from "$lib/backend";
-
-  type SourceFilter = "all" | "curated" | "local";
-  type SortBy = "name" | "recent";
+  import { useMarketplacePanel, isRecord } from "./useMarketplacePanel.svelte";
 
   interface DisplayStarter extends StarterWorkspaceRegistryEntry {
     source: "registry" | "local";
   }
 
-  let registryStarters = $state<StarterWorkspaceRegistryEntry[]>([]);
-  let localStarters = $state<StarterWorkspaceRegistryEntry[]>([]);
-
-  let loading = $state(true);
-  let loadError = $state<string | null>(null);
-
-  let search = $state("");
-  let filtersOpen = $state(false);
-  let sourceFilter = $state<SourceFilter>("all");
-  let categoryFilter = $state("all");
-  let sortBy = $state<SortBy>("name");
-
-  let detailStarterId = $state<string | null>(null);
-  let importingLocal = $state(false);
-  let applyingIds = $state<Set<string>>(new Set());
-  let applyProgress = $state<string | null>(null);
-  let localFileInputRef = $state<HTMLInputElement | null>(null);
-
-  function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
-  }
-
-  async function loadCatalog(): Promise<void> {
-    loading = true;
-    loadError = null;
-
-    try {
+  const panel = useMarketplacePanel<DisplayStarter>({
+    async fetchItems() {
       const registry = await fetchStarterWorkspaceRegistry();
-      registryStarters = (registry as StarterWorkspaceRegistry).starters;
-    } catch (error) {
-      loadError =
-        error instanceof Error
-          ? error.message
-          : "Failed to load starter workspace catalog";
-      registryStarters = [];
-    } finally {
-      loading = false;
-    }
-  }
+      return (registry as StarterWorkspaceRegistry).starters.map(
+        (entry) => ({ ...entry, source: "registry" as const }),
+      );
+    },
+    getTimestamp(item) {
+      return item.artifact?.published_at ? Date.parse(item.artifact.published_at) || 0 : 0;
+    },
+    sourceFilterOptions: [
+      ["all", "All sources"],
+      ["curated", "Curated"],
+      ["local", "Local"],
+    ],
+    matchesSourceFilter(item, filter) {
+      if (filter === "curated") return item.source === "registry";
+      if (filter === "local") return item.source === "local";
+      return true;
+    },
+    parseLocalPayload(payload) {
+      if (!payload) throw new Error("Starter file is empty");
 
-  $effect(() => {
-    loadCatalog();
+      if (isRecord(payload) && Array.isArray(payload.starters)) {
+        return payload.starters.map(
+          (entry) => ({ ...normalizeStarterWorkspaceRegistryEntry(entry), source: "local" as const }),
+        );
+      }
+      if (isRecord(payload) && "starter" in payload) {
+        return [{ ...normalizeStarterWorkspaceRegistryEntry(payload.starter), source: "local" as const }];
+      }
+      return [{ ...normalizeStarterWorkspaceRegistryEntry(payload), source: "local" as const }];
+    },
   });
 
-  const allStarters = $derived.by(() => {
-    const map = new Map<string, DisplayStarter>();
-
-    for (const entry of registryStarters) {
-      map.set(entry.id, { ...entry, source: "registry" });
-    }
-
-    for (const entry of localStarters) {
-      map.set(entry.id, { ...entry, source: "local" });
-    }
-
-    return Array.from(map.values());
-  });
-
-  const categories = $derived.by(() => {
-    const all = new Set<string>();
-    for (const starter of allStarters) {
-      for (const category of starter.categories) all.add(category);
-    }
-    return ["all", ...Array.from(all).sort()];
-  });
-
-  const filteredStarters = $derived.by(() => {
-    const query = search.trim().toLowerCase();
-
-    const filtered = allStarters.filter((starter) => {
-      if (sourceFilter === "curated" && starter.source !== "registry") return false;
-      if (sourceFilter === "local" && starter.source !== "local") return false;
-      if (categoryFilter !== "all" && !starter.categories.includes(categoryFilter)) return false;
-
-      if (!query) return true;
-      const haystack = [
-        starter.id,
-        starter.name,
-        starter.summary,
-        starter.description,
-        starter.author,
-        ...starter.tags,
-        ...starter.categories,
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-
-    filtered.sort((a, b) => {
-      if (sortBy === "name") return a.name.localeCompare(b.name);
-      const aTs = a.artifact?.published_at ? Date.parse(a.artifact.published_at) || 0 : 0;
-      const bTs = b.artifact?.published_at ? Date.parse(b.artifact.published_at) || 0 : 0;
-      return bTs - aTs;
-    });
-
-    return filtered;
-  });
-
-  const detailStarter = $derived.by(() => {
-    if (!detailStarterId) return null;
-    return allStarters.find((s) => s.id === detailStarterId) ?? null;
-  });
-
-  function triggerLocalImport(): void {
-    localFileInputRef?.click();
-  }
-
-  function addLocalStarters(entries: StarterWorkspaceRegistryEntry[]): void {
-    const next = new Map(localStarters.map((s) => [s.id, s]));
-    for (const entry of entries) {
-      next.set(entry.id, entry);
-    }
-    localStarters = Array.from(next.values());
-  }
-
-  function parseLocalStarterPayload(payload: unknown): StarterWorkspaceRegistryEntry[] {
-    if (!payload) {
-      throw new Error("Starter file is empty");
-    }
-
-    if (isRecord(payload) && Array.isArray(payload.starters)) {
-      return payload.starters.map((entry) => normalizeStarterWorkspaceRegistryEntry(entry));
-    }
-
-    if (isRecord(payload) && "starter" in payload) {
-      return [normalizeStarterWorkspaceRegistryEntry(payload.starter)];
-    }
-
-    return [normalizeStarterWorkspaceRegistryEntry(payload)];
-  }
-
-  async function onLocalFileSelected(event: Event): Promise<void> {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    input.value = "";
-
-    importingLocal = true;
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
-      const starters = parseLocalStarterPayload(parsed);
-      addLocalStarters(starters);
-      toast.success(`Imported ${starters.length} starter${starters.length === 1 ? "" : "s"}`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Invalid starter file");
-    } finally {
-      importingLocal = false;
-    }
-  }
+  let applyProgress = $state<string | null>(null);
 
   async function handleApply(starter: DisplayStarter): Promise<void> {
-    applyingIds = new Set([...applyingIds, starter.id]);
+    panel.addActiveId(starter.id);
     applyProgress = "Downloading starter...";
 
     try {
@@ -215,10 +98,19 @@
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to apply starter");
     } finally {
-      applyingIds = new Set(
-        Array.from(applyingIds).filter((id) => id !== starter.id),
-      );
+      panel.removeActiveId(starter.id);
       applyProgress = null;
+    }
+  }
+
+  async function handleLocalFileSelected(event: Event): Promise<void> {
+    try {
+      const items = await panel.onLocalFileSelected(event);
+      if (items.length > 0) {
+        toast.success(`Imported ${items.length} starter${items.length === 1 ? "" : "s"}`);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Invalid starter file");
     }
   }
 </script>
@@ -227,16 +119,16 @@
   type="file"
   accept=".json"
   class="hidden"
-  bind:this={localFileInputRef}
-  onchange={onLocalFileSelected}
+  bind:this={panel.localFileInputRef}
+  onchange={handleLocalFileSelected}
 />
 
-{#if detailStarter}
-  {@const starter = detailStarter}
-  {@const applying = applyingIds.has(starter.id)}
+{#if panel.detailItem}
+  {@const starter = panel.detailItem}
+  {@const applying = panel.isActive(starter.id)}
   <div class="flex flex-col h-full">
     <div class="flex items-center gap-2 px-3 py-2 border-b shrink-0">
-      <Button variant="ghost" size="icon" class="size-7" onclick={() => (detailStarterId = null)} aria-label="Back">
+      <Button variant="ghost" size="icon" class="size-7" onclick={() => (panel.detailId = null)} aria-label="Back">
         <ArrowLeft class="size-4" />
       </Button>
       <h3 class="text-sm font-medium truncate">{starter.name}</h3>
@@ -314,29 +206,29 @@
 {:else}
   <div class="flex flex-col h-full">
     <div class="flex-1 overflow-y-auto">
-      {#if loadError}
+      {#if panel.loadError}
         <div class="px-3 pt-2">
           <div class="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-[11px] text-amber-700 dark:text-amber-300">
-            {loadError}
+            {panel.loadError}
           </div>
         </div>
       {/if}
 
-      {#if loading}
+      {#if panel.loading}
         <div class="flex items-center justify-center py-8 text-muted-foreground gap-2">
           <Loader2 class="size-4 animate-spin" />
           <span class="text-xs">Loading starters...</span>
         </div>
-      {:else if filteredStarters.length === 0}
+      {:else if panel.filteredItems.length === 0}
         <div class="px-3 py-4 text-xs text-muted-foreground">No starters match your filters.</div>
       {:else}
         <div class="p-2 space-y-1.5">
-          {#each filteredStarters as starter}
-            {@const applying = applyingIds.has(starter.id)}
+          {#each panel.filteredItems as starter}
+            {@const applying = panel.isActive(starter.id)}
             <button
               type="button"
               class="w-full text-left rounded-md border p-2.5 transition hover:border-muted-foreground"
-              onclick={() => (detailStarterId = starter.id)}
+              onclick={() => (panel.detailId = starter.id)}
             >
               <div class="flex items-center gap-2 mb-1">
                 <FolderTree class="size-3.5 text-muted-foreground shrink-0" />
@@ -382,20 +274,20 @@
     </div>
 
     <div class="px-3 py-2 space-y-2 border-t shrink-0">
-      {#if filtersOpen}
+      {#if panel.filtersOpen}
         <div class="space-y-1.5">
-          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" bind:value={categoryFilter}>
-            {#each categories as category}
+          <select class="w-full h-7 rounded-md border bg-background px-2 text-xs" bind:value={panel.categoryFilter}>
+            {#each panel.categories as category}
               <option value={category}>{category === "all" ? "All categories" : category}</option>
             {/each}
           </select>
           <div class="flex gap-1.5">
-            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={sourceFilter}>
+            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={panel.sourceFilter}>
               <option value="all">All sources</option>
               <option value="curated">Curated</option>
               <option value="local">Local</option>
             </select>
-            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={sortBy}>
+            <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={panel.sortBy}>
               <option value="name">Name</option>
               <option value="recent">Recent</option>
             </select>
@@ -406,21 +298,21 @@
       <div class="flex items-center gap-2">
         <div class="relative flex-1 min-w-0">
           <Search class="size-3.5 absolute left-2 top-2 text-muted-foreground" />
-          <Input class="pl-7 h-7 text-xs" placeholder="Search starters" bind:value={search} />
+          <Input class="pl-7 h-7 text-xs" placeholder="Search starters" bind:value={panel.search} />
         </div>
 
         <Button
           variant="outline"
           size="icon"
-          class="size-7 shrink-0 {filtersOpen ? 'border-primary' : ''}"
-          onclick={() => (filtersOpen = !filtersOpen)}
+          class="size-7 shrink-0 {panel.filtersOpen ? 'border-primary' : ''}"
+          onclick={() => (panel.filtersOpen = !panel.filtersOpen)}
           aria-label="Toggle filters"
         >
           <SlidersHorizontal class="size-3.5" />
         </Button>
 
-        <Button variant="outline" size="icon" class="size-7 shrink-0" onclick={triggerLocalImport} aria-label="Import local starter">
-          {#if importingLocal}
+        <Button variant="outline" size="icon" class="size-7 shrink-0" onclick={panel.triggerLocalImport} aria-label="Import local starter">
+          {#if panel.importingLocal}
             <Loader2 class="size-3.5 animate-spin" />
           {:else}
             <Upload class="size-3.5" />

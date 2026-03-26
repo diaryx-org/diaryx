@@ -242,6 +242,54 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         Ok(Response::String(readme_path.to_string_lossy().to_string()))
     }
 
+    pub(crate) async fn cmd_prepare_multi_delete(
+        &self,
+        paths: Vec<String>,
+        tree_path: Option<String>,
+    ) -> Result<Response> {
+        let root_path = tree_path.unwrap_or_else(|| "workspace/index.md".to_string());
+        let resolved_root_path = self.resolve_fs_path(&root_path);
+        let tree = self
+            .workspace()
+            .inner()
+            .build_tree_with_depth(
+                &resolved_root_path,
+                None,
+                &mut std::collections::HashSet::new(),
+            )
+            .await?;
+        let path_bufs: Vec<std::path::PathBuf> =
+            paths.iter().map(std::path::PathBuf::from).collect();
+        let plan = crate::workspace::prepare_delete_plan(&tree, &path_bufs);
+        Ok(Response::Strings(
+            plan.into_iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect(),
+        ))
+    }
+
+    pub(crate) async fn cmd_check_delete_includes_descendants(
+        &self,
+        paths: Vec<String>,
+        tree_path: Option<String>,
+    ) -> Result<Response> {
+        let root_path = tree_path.unwrap_or_else(|| "workspace/index.md".to_string());
+        let resolved_root_path = self.resolve_fs_path(&root_path);
+        let tree = self
+            .workspace()
+            .inner()
+            .build_tree_with_depth(
+                &resolved_root_path,
+                None,
+                &mut std::collections::HashSet::new(),
+            )
+            .await?;
+        let path_bufs: Vec<std::path::PathBuf> =
+            paths.iter().map(std::path::PathBuf::from).collect();
+        let result = crate::workspace::selection_includes_descendants(&tree, &path_bufs);
+        Ok(Response::Bool(result))
+    }
+
     pub(crate) async fn cmd_get_available_parent_indexes(
         &self,
         file_path: String,

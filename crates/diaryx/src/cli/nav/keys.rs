@@ -93,14 +93,30 @@ fn handle_normal_key(state: &mut NavState, key: KeyEvent, ws: &CliWorkspace) {
             }
         }
 
-        // Delete selected entry
+        // Delete selected entry (with subtree awareness)
         KeyCode::Char('x') => {
-            if let Some(title) = &state.selected_title {
-                let message = format!("Delete '{}'?", title);
-                state.mode = InputMode::Confirm {
-                    message,
-                    action: ConfirmAction::Delete,
-                };
+            if let (Some(path), Some(title)) = (&state.selected_path, &state.selected_title) {
+                match commands::exec_delete(ws, &state.workspace_root, path) {
+                    Ok(plan) => {
+                        let message = if plan.includes_descendants {
+                            let descendant_count = plan.paths.len() - 1;
+                            format!(
+                                "Delete '{}' and {} descendants? (y/n)",
+                                title, descendant_count
+                            )
+                        } else {
+                            format!("Delete '{}'? (y/n)", title)
+                        };
+                        state.pending_delete_plan = Some(plan.paths);
+                        state.mode = InputMode::Confirm {
+                            message,
+                            action: ConfirmAction::Delete,
+                        };
+                    }
+                    Err(e) => {
+                        state.set_status(e, true);
+                    }
+                }
             }
         }
 
@@ -300,10 +316,10 @@ fn handle_confirm_key(state: &mut NavState, key: KeyEvent, ws: &CliWorkspace) {
             state.mode = InputMode::Normal;
             match action {
                 ConfirmAction::Delete => {
-                    if let Some(path) = state.selected_path.clone() {
-                        match commands::exec_delete(ws, &state.workspace_root, &path) {
-                            Ok(()) => {
-                                state.set_status("Deleted".to_string(), false);
+                    if let Some(plan) = state.pending_delete_plan.take() {
+                        match commands::exec_delete_plan(ws, &state.workspace_root, &plan) {
+                            Ok(count) => {
+                                state.set_status(format!("Deleted {} entries", count), false);
                                 state.rebuild_tree(ws);
                             }
                             Err(e) => {
@@ -316,6 +332,7 @@ fn handle_confirm_key(state: &mut NavState, key: KeyEvent, ws: &CliWorkspace) {
         }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
             state.mode = InputMode::Normal;
+            state.pending_delete_plan = None;
         }
         _ => {}
     }

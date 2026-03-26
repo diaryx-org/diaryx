@@ -10,7 +10,7 @@
    * - provider-choice: Choose where workspace lives (after bundle selection)
    */
   import { Button } from "$lib/components/ui/button";
-  import { ArrowLeft, LogIn, Loader2, Cloud, Download, Check, HardDrive, Lock } from "@lucide/svelte";
+  import { ArrowLeft, LogIn, Loader2, Cloud, Download, HardDrive, Lock, Plus } from "@lucide/svelte";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
   import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
   import type { BundleRegistryEntry, ThemeRegistryEntry } from "$lib/marketplace/types";
@@ -22,23 +22,20 @@
   import {
     fetchPluginRegistry,
     getRegistryWorkspaceProviders,
-    type RegistryPlugin,
     type RegistryWorkspaceProvider,
   } from "$lib/plugins/pluginRegistry";
-  import { installRegistryPlugin } from "$lib/plugins/pluginInstallService";
 
   interface Props {
     /** Called to create a local workspace (no account) */
     onGetStarted: (selectedBundle: BundleRegistryEntry | null, pluginOverrides?: PluginOverride[]) => void | Promise<void>;
     /** Called after sign-in when user has no existing workspaces — create first synced workspace */
     onSignInCreateNew: () => void | Promise<void>;
-    /** Called when user picks an existing workspace to restore */
-    onRestoreWorkspace: (namespace: NamespaceEntry) => void | Promise<void>;
-    /** Called when user picks a provider for a new workspace */
+    /** Called when user picks a provider for a new workspace (or restores from remote) */
     onCreateWithProvider: (
       bundle: BundleRegistryEntry | null,
       providerPluginId: string | null,
       pluginOverrides?: PluginOverride[],
+      restoreNamespace?: NamespaceEntry,
     ) => void | Promise<void>;
     /** Called to show the launch zoom overlay — App.svelte owns rendering */
     onLaunch?: (info: BundleSelectInfo) => void;
@@ -50,7 +47,6 @@
   let {
     onGetStarted,
     onSignInCreateNew,
-    onRestoreWorkspace,
     onCreateWithProvider,
     onLaunch,
     returnWorkspaceName = null,
@@ -79,16 +75,30 @@
   let launchInfo = $state<BundleSelectInfo | null>(null);
   let fadingOut = $state(false);
 
+  // Onboarding animation state — buttons disabled until complete
+  const ANIMATION_DURATION_MS = 2800;
+  let animationDone = $state(false);
+  let animationSkipped = $state(false);
+  let animationTimer: ReturnType<typeof setTimeout> | undefined;
+
+  $effect(() => {
+    animationTimer = setTimeout(() => { animationDone = true; }, ANIMATION_DURATION_MS);
+    return () => clearTimeout(animationTimer);
+  });
+
+  function skipAnimation() {
+    if (animationDone || currentView !== 'main') return;
+    clearTimeout(animationTimer);
+    animationSkipped = true;
+    animationDone = true;
+  }
+
   // Workspace picker state
   let workspaceNamespaces = $state<NamespaceEntry[]>([]);
   let loadingWorkspaces = $state(false);
-  let restoringNamespace = $state<string | null>(null);
-
-  // Provider plugin install state (for workspace-picker)
-  let providerPlugin = $state<RegistryPlugin | null>(null);
-  let providerPluginInstalled = $state(false);
-  let installingProviderPlugin = $state(false);
-  let providerPluginError = $state<string | null>(null);
+  // Remote workspace restore state — when set, bundle selection creates from this remote
+  let selectedNamespace = $state<NamespaceEntry | null>(null);
+  let selectedNamespaceProvider = $state<string | null>(null);
 
 
   async function playZoomThen(callback: () => void | Promise<void>) {
@@ -119,6 +129,18 @@
     pendingOverrides = overrides;
 
     selectedBundle = bundle;
+
+    // If restoring from a remote workspace, skip provider detection — go straight to create + restore
+    if (selectedNamespace && selectedNamespaceProvider) {
+      settingUp = true;
+      try {
+        await playZoomThen(() => onCreateWithProvider(bundle, selectedNamespaceProvider, overrides, selectedNamespace!));
+      } catch {
+        settingUp = false;
+      }
+      return;
+    }
+
     const pluginIds = bundle.plugins.map((p) => p.plugin_id);
 
     // If overrides include a plugin not in the bundle, add its ID to the check list
@@ -166,7 +188,6 @@
 
       if (providerNs.length > 0) {
         workspaceNamespaces = providerNs;
-        await fetchProviderPlugin(providerPluginId);
         navigateTo('workspace-picker');
       } else {
         settingUp = true;
@@ -188,7 +209,7 @@
     }
   }
 
-  async function handleSignInComplete() {
+  export async function handleSignInComplete() {
     if (signInForProvider) {
       // User signed in specifically to use a provider
       const providerPluginId = signInForProvider;
@@ -208,26 +229,14 @@
       loadingWorkspaces = false;
       if (workspaceNamespaces.length === 0) {
         navigateTo('bundles');
-      } else {
-        // Determine provider plugin(s) needed from namespace metadata
-        const providerIds = new Set(
-          workspaceNamespaces
-            .map((ns) => ns.metadata?.provider)
-            .filter((p): p is string => typeof p === "string"),
-        );
-        const firstProvider = providerIds.values().next().value ?? "diaryx.sync";
-        await fetchProviderPlugin(firstProvider);
       }
     }
   }
 
-  async function handleRestoreWorkspace(ns: NamespaceEntry) {
-    restoringNamespace = ns.id;
-    try {
-      await onRestoreWorkspace(ns);
-    } catch {
-      restoringNamespace = null;
-    }
+  function handlePickNamespace(ns: NamespaceEntry) {
+    selectedNamespace = ns;
+    selectedNamespaceProvider = ns.metadata?.provider ?? "diaryx.sync";
+    navigateTo('bundles');
   }
 
   async function handleCreateFirstWorkspace() {
@@ -236,29 +245,6 @@
       await onSignInCreateNew();
     } catch {
       settingUp = false;
-    }
-  }
-
-  async function fetchProviderPlugin(pluginId: string) {
-    try {
-      const registry = await fetchPluginRegistry();
-      providerPlugin = registry.plugins.find((p) => p.id === pluginId) ?? null;
-    } catch {
-      providerPlugin = null;
-    }
-  }
-
-  async function handleInstallProviderPlugin() {
-    if (!providerPlugin) return;
-    installingProviderPlugin = true;
-    providerPluginError = null;
-    try {
-      await installRegistryPlugin(providerPlugin);
-      providerPluginInstalled = true;
-    } catch (e) {
-      providerPluginError = e instanceof Error ? e.message : "Installation failed";
-    } finally {
-      installingProviderPlugin = false;
     }
   }
 
@@ -274,15 +260,6 @@
     navigateTo('workspace-picker');
     try {
       workspaceNamespaces = await listUserWorkspaceNamespaces();
-      if (workspaceNamespaces.length > 0) {
-        const providerIds = new Set(
-          workspaceNamespaces
-            .map((n) => n.metadata?.provider)
-            .filter((p): p is string => typeof p === "string"),
-        );
-        const firstProvider = providerIds.values().next().value ?? "diaryx.sync";
-        await fetchProviderPlugin(firstProvider);
-      }
     } catch {
       workspaceNamespaces = [];
     } finally {
@@ -324,8 +301,12 @@
   }
 </script>
 
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex items-center justify-center min-h-full welcome-bg px-4 overflow-hidden select-none"
   class:fading-out={fadingOut}
+  class:animation-skipped={animationSkipped}
+  onclick={skipAnimation}
 >
   {#key currentView}
     <div class="w-full view-content {transitionDirection === 'forward' ? 'slide-in-right' : 'slide-in-left'}">
@@ -335,7 +316,7 @@
         <div class="w-full max-w-sm mx-auto space-y-6">
           <div class="text-center space-y-4">
             <div class="mx-auto size-24 fade-in" style="animation-delay: 0s">
-              <AnimatedLogo size={96} />
+              <AnimatedLogo size={96} skipAnimation={animationSkipped} />
             </div>
             <h1 class="text-3xl font-bold tracking-tight text-foreground fade-in" style="animation-delay: 2.0s">
               Welcome to Diaryx
@@ -346,27 +327,55 @@
           </div>
 
           <div class="space-y-3 fade-in" style="animation-delay: 2.4s">
-            <Button
-              class="w-full get-started-btn"
-              onclick={() => navigateTo('sign-in')}
-            >
-              <LogIn class="size-4 mr-2" />
-              Sign in to get your workspace
-            </Button>
+            {#if isAuthenticated()}
+              <Button
+                class="w-full get-started-btn"
+                disabled={!animationDone || loadingWorkspaces}
+                onclick={() => handleSignInComplete()}
+              >
+                {#if loadingWorkspaces}
+                  <Loader2 class="size-4 animate-spin mr-2" />
+                  Looking for workspaces…
+                {:else}
+                  <Download class="size-4 mr-2" />
+                  Download remote workspace
+                {/if}
+              </Button>
 
-            <Button
-              variant="ghost"
-              class="w-full text-muted-foreground"
-              disabled={loading}
-              onclick={() => navigateTo('bundles')}
-            >
-              Continue without an account
-            </Button>
+              <Button
+                variant="ghost"
+                class="w-full text-muted-foreground"
+                disabled={!animationDone || loading}
+                onclick={() => navigateTo('bundles')}
+              >
+                <Plus class="size-4 mr-2" />
+                Create new workspace
+              </Button>
+            {:else}
+              <Button
+                class="w-full get-started-btn"
+                disabled={!animationDone}
+                onclick={() => navigateTo('sign-in')}
+              >
+                <LogIn class="size-4 mr-2" />
+                Sign in to get your workspace
+              </Button>
+
+              <Button
+                variant="ghost"
+                class="w-full text-muted-foreground"
+                disabled={!animationDone || loading}
+                onclick={() => navigateTo('bundles')}
+              >
+                Continue without an account
+              </Button>
+            {/if}
 
             {#if returnWorkspaceName && onReturn}
               <Button
                 variant="ghost"
                 class="w-full text-muted-foreground"
+                disabled={!animationDone}
                 onclick={onReturn}
               >
                 <ArrowLeft class="size-4 mr-2" />
@@ -511,67 +520,19 @@
                 Your workspaces
               </h1>
               <p class="text-muted-foreground text-sm">
-                Pick a workspace to restore on this device.
+                Pick a workspace to restore, then choose a bundle.
               </p>
             </div>
 
-            <!-- Provider plugin install card -->
-            {#if !providerPluginInstalled}
-              <div class="rounded-lg border border-border bg-secondary/30 p-4 space-y-3 fade-in" style="animation-delay: 0.15s">
-                <div class="flex items-start gap-3">
-                  <Download class="size-5 text-primary shrink-0 mt-0.5" />
-                  <div class="space-y-1">
-                    <div class="font-medium text-sm">
-                      {providerPlugin?.name ?? 'Sync'} plugin required
-                    </div>
-                    <p class="text-xs text-muted-foreground">
-                      Install to restore and keep your workspaces in sync.
-                    </p>
-                  </div>
-                </div>
-                {#if providerPluginError}
-                  <p class="text-xs text-destructive">{providerPluginError}</p>
-                {/if}
-                <Button
-                  class="w-full"
-                  size="sm"
-                  disabled={!providerPlugin || installingProviderPlugin}
-                  onclick={handleInstallProviderPlugin}
-                >
-                  {#if installingProviderPlugin}
-                    <Loader2 class="size-4 animate-spin mr-2" />
-                    Installing…
-                  {:else if !providerPlugin}
-                    <Loader2 class="size-4 animate-spin mr-2" />
-                    Loading…
-                  {:else}
-                    <Download class="size-4 mr-2" />
-                    Install {providerPlugin.name} Plugin
-                  {/if}
-                </Button>
-              </div>
-            {:else}
-              <div class="rounded-lg border border-border bg-secondary/30 p-3 flex items-center gap-2 text-sm text-muted-foreground fade-in" style="animation-delay: 0.15s">
-                <Check class="size-4 text-primary shrink-0" />
-                {providerPlugin?.name ?? 'Sync'} plugin installed
-              </div>
-            {/if}
-
-            <div class="space-y-2 fade-in" style="animation-delay: 0.2s">
+            <div class="space-y-2 fade-in" style="animation-delay: 0.15s">
               {#each workspaceNamespaces as ns (ns.id)}
                 <button
                   type="button"
-                  class="w-full text-left p-4 rounded-lg border border-border transition-colors disabled:opacity-50
-                    {providerPluginInstalled ? 'hover:border-primary/50 hover:bg-secondary/50' : 'opacity-60 cursor-not-allowed'}"
-                  disabled={!providerPluginInstalled || restoringNamespace !== null}
-                  onclick={() => handleRestoreWorkspace(ns)}
+                  class="w-full text-left p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-secondary/50 transition-colors"
+                  onclick={() => handlePickNamespace(ns)}
                 >
                   <div class="flex items-center gap-3">
-                    {#if restoringNamespace === ns.id}
-                      <Loader2 class="size-5 animate-spin text-primary shrink-0" />
-                    {:else}
-                      <Cloud class="size-5 text-muted-foreground shrink-0" />
-                    {/if}
+                    <Cloud class="size-5 text-muted-foreground shrink-0" />
                     <div class="min-w-0">
                       <div class="font-medium text-sm truncate">
                         {workspaceName(ns)}
@@ -587,7 +548,7 @@
               {/each}
             </div>
 
-            <div class="text-center fade-in" style="animation-delay: 0.3s">
+            <div class="text-center fade-in" style="animation-delay: 0.25s">
               <button
                 type="button"
                 class="text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -614,7 +575,15 @@
             deferZoom={true}
             onDeferredSelect={(info) => handleBundleSelected(info, info.pluginOverrides)}
             onSelect={(bundle, overrides) => handleGetStarted(bundle, overrides)}
-            onBack={() => navigateTo('main')}
+            onBack={() => {
+              if (selectedNamespace) {
+                selectedNamespace = null;
+                selectedNamespaceProvider = null;
+                navigateTo('workspace-picker');
+              } else {
+                navigateTo('main');
+              }
+            }}
           />
         {/if}
       {/if}
@@ -683,6 +652,12 @@
   .slide-in-right { animation: slideInRight 0.3s ease-out; }
   .slide-in-left { animation: slideInLeft 0.3s ease-out; }
   .fade-in { animation: fadeIn 0.4s ease-out backwards; }
+
+  .animation-skipped .fade-in {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
 
   :global(.get-started-btn) {
     transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;

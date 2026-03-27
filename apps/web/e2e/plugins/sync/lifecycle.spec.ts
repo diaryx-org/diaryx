@@ -17,25 +17,24 @@ import {
   signInWithDevMagicLink,
   removeCurrentDeviceFromAccount,
   waitForE2EBridge,
-  waitForSyncSession,
+  waitForSyncSettled,
   createSyncedWorkspaceViaUi,
   downloadRemoteWorkspaceViaUi,
   currentWorkspaceName,
   currentWorkspaceProviderLink,
   uploadWorkspaceSnapshot,
   executePluginCommand,
+  triggerSync,
   rootEntryPath,
   readEntryBody,
   createEntryWithMarker,
-  openEntryForSync,
-  queueBodyUpdateForSync,
   escapeRegex,
   waitForAppReady,
 } from "./helpers";
 
 const SHOULD_LOG_SYNC_E2E_DEBUG = process.env.SYNC_E2E_DEBUG === "1";
 
-test.describe("Sync › Lifecycle", () => {
+test.describe("Sync > Lifecycle", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeAll(async ({ browserName }) => {
@@ -70,23 +69,18 @@ test.describe("Sync › Lifecycle", () => {
     test.setTimeout(300000);
 
     const pair = await setupSyncedPair(browser, "lifecycle");
-    const { pageA, pageB, rootPathA, rootPathB } = pair;
+    const { pageA, pageB } = pair;
 
     try {
       const runId = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
       const marker = `LIFECYCLE_BODY_${runId}`;
 
-      // Create entry on A, verify it arrives on B.
+      // Create entry on A (bridge dispatches file event + triggers sync push).
       const entryPath = await createEntryWithMarker(pageA, `lifecycle-${runId}`, marker);
-      await openEntryForSync(pageA, entryPath);
-      await queueBodyUpdateForSync(pageA, entryPath);
-      await openEntryForSync(pageB, entryPath);
 
+      // Pull on B and verify the entry arrived.
       await expect
-        .poll(async () => {
-          await openEntryForSync(pageB, entryPath);
-          return await readEntryBody(pageB, entryPath);
-        }, { timeout: 30000 })
+        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
         .toContain(marker);
     } finally {
       await Promise.allSettled([pair.contextA.close(), pair.contextB.close()]);
@@ -110,11 +104,7 @@ test.describe("Sync › Lifecycle", () => {
       console.log("[sync-e2e:unlink] step: unlinking workspace");
       await executePluginCommand(page, "diaryx.sync", "UnlinkWorkspace", {});
 
-      // Provider link should be cleared.
-      // The plugin clears its internal workspace_id on unlink, but the host
-      // metadata is cleared by the workspaceProviderService.  Since we called
-      // the plugin command directly (not the UI flow), the host metadata may
-      // still be present.  Verify the plugin itself reports no workspace.
+      // After unlink the plugin should no longer be in "synced" state.
       const statusAfter = await executePluginCommand(
         page,
         "diaryx.sync",
@@ -122,7 +112,6 @@ test.describe("Sync › Lifecycle", () => {
         {},
       ) as { state?: string } | null;
 
-      // After unlink the plugin should no longer be in "synced" state.
       expect(statusAfter).toBeTruthy();
       expect((statusAfter as { state: string }).state).not.toBe("synced");
     } finally {
@@ -142,30 +131,16 @@ test.describe("Sync › Lifecycle", () => {
       const marker1 = `SNAP_ENTRY1_${runId}`;
       const marker2 = `SNAP_ENTRY2_${runId}`;
 
-      // Create two entries on A with live sync.
+      // Create two entries on A.
       const entry1 = await createEntryWithMarker(pageA, `snap-1-${runId}`, marker1);
       const entry2 = await createEntryWithMarker(pageA, `snap-2-${runId}`, marker2);
-      await openEntryForSync(pageA, entry1);
-      await openEntryForSync(pageA, entry2);
-      await Promise.all([
-        queueBodyUpdateForSync(pageA, entry1),
-        queueBodyUpdateForSync(pageA, entry2),
-      ]);
 
-      // Wait for them to arrive on B.
-      await openEntryForSync(pageB, entry1);
-      await openEntryForSync(pageB, entry2);
+      // Wait for them to arrive on B via sync pull.
       await expect
-        .poll(async () => {
-          await openEntryForSync(pageB, entry1);
-          return await readEntryBody(pageB, entry1);
-        }, { timeout: 30000 })
+        .poll(async () => await readEntryBody(pageB, entry1), { timeout: 30000 })
         .toContain(marker1);
       await expect
-        .poll(async () => {
-          await openEntryForSync(pageB, entry2);
-          return await readEntryBody(pageB, entry2);
-        }, { timeout: 30000 })
+        .poll(async () => await readEntryBody(pageB, entry2), { timeout: 30000 })
         .toContain(marker2);
 
       // Re-upload a snapshot from A.
@@ -213,15 +188,13 @@ test.describe("Sync › Lifecycle", () => {
         await downloadRemoteWorkspaceViaUi(pageC, `Sync E2E re-snapshot ${runId}`, pair.remoteId);
         console.log("[sync-e2e:re-snapshot] step: installing workspace plugin on pageC");
         await installSyncPluginInCurrentWorkspace(pageC, wasmBase64);
-        console.log("[sync-e2e:re-snapshot] step: waiting for pageC sync session");
-        await waitForSyncSession(pageC);
+        console.log("[sync-e2e:re-snapshot] step: waiting for pageC sync");
+        await waitForSyncSettled(pageC);
 
         console.log("[sync-e2e:re-snapshot] step: verifying entries in fresh download");
-        await openEntryForSync(pageC, entry1);
         await expect
           .poll(async () => await readEntryBody(pageC, entry1), { timeout: 30000 })
           .toContain(marker1);
-        await openEntryForSync(pageC, entry2);
         await expect
           .poll(async () => await readEntryBody(pageC, entry2), { timeout: 30000 })
           .toContain(marker2);

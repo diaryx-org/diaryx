@@ -24,8 +24,5 @@ export async function installCapturedProviderPlugin(
   }
 
   const installPath = getPluginInstallPath(pluginId);
-  const existing = await readWorkspaceBinary(installPath);
-  if (!existing) {
-    await writeWorkspaceBinary(installPath, wasmBytes);
-  }
+  await writeWorkspaceBinary(installPath, wasmBytes);
 }

@@ -286,16 +286,15 @@ export class AuthService {
       body: JSON.stringify({ email }),
     });
 
-    const data = await response.json();
-
     if (!response.ok) {
-      throw new AuthError(
-        data.error || "Failed to request magic link",
-        response.status,
-      );
+      const data = await this.parseErrorBody(response);
+      const message = data && typeof data === "object" && "error" in data
+        ? (data as any).error
+        : `Server returned ${response.status}. Make sure this is a valid Diaryx sync server.`;
+      throw new AuthError(message, response.status);
     }
 
-    return data;
+    return response.json();
   }
 
   /**
@@ -316,18 +315,19 @@ export class AuthService {
     }
 
     const response = await proxyFetch(url.toString());
-    const data = await response.json();
 
     if (!response.ok) {
+      const data = await this.parseErrorBody(response);
+      const errorObj = data && typeof data === "object" ? data as any : {};
       throw new AuthError(
-        data.error || "Failed to verify magic link",
+        errorObj.error || "Failed to verify magic link",
         response.status,
         undefined,
-        data.devices,
+        errorObj.devices,
       );
     }
 
-    return data;
+    return response.json();
   }
 
   /**
@@ -352,18 +352,18 @@ export class AuthService {
       }),
     });
 
-    const data = await response.json();
-
     if (!response.ok) {
+      const data = await this.parseErrorBody(response);
+      const errorObj = data && typeof data === "object" ? data as any : {};
       throw new AuthError(
-        data.error || "Failed to verify code",
+        errorObj.error || "Failed to verify code",
         response.status,
         undefined,
-        data.devices,
+        errorObj.devices,
       );
     }
 
-    return data;
+    return response.json();
   }
 
   /**

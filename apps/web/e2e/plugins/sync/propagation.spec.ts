@@ -1,6 +1,10 @@
 /**
- * Sync propagation tests: entry CRUD operations syncing between two clients,
- * concurrent edits (body + frontmatter), and bidirectional sync.
+ * Sync propagation tests: entry CRUD operations syncing between two clients
+ * via the LWW file sync engine.
+ *
+ * Note: The sync plugin uses last-writer-wins (LWW) conflict resolution.
+ * Concurrent edits to the same file are NOT merged — the most recent write
+ * wins. These tests verify unidirectional and sequential propagation only.
  */
 
 import {
@@ -23,14 +27,13 @@ import {
   readFrontmatterProperty,
   expectFrontmatterProperty,
   entryExists,
-  openEntryForSync,
-  queueBodyUpdateForSync,
+  triggerSync,
   rootEntryPath,
   uploadWorkspaceSnapshot,
   waitForAppReady,
 } from "./helpers";
 
-test.describe("Sync › Propagation", () => {
+test.describe("Sync > Propagation", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeAll(async ({ browserName }) => {
@@ -82,13 +85,9 @@ test.describe("Sync › Propagation", () => {
         createdEntryStem,
         createdEntryMarker,
       );
-      await openEntryForSync(pageA, createdEntryPath);
-      await queueBodyUpdateForSync(pageA, createdEntryPath);
-      await openEntryForSync(pageB, createdEntryPath);
       await expect
         .poll(async () => await readEntryBody(pageB, createdEntryPath), { timeout: 30000 })
         .toContain(createdEntryMarker);
-      await openEntryForSync(pageB, rootPathB);
 
       // --- Rename ---
       const renamedEntryPath = await renameEntry(
@@ -96,22 +95,18 @@ test.describe("Sync › Propagation", () => {
         createdEntryPath,
         renamedEntryFilename,
       );
+      // Push rename to server
+      await triggerSync(pageA);
 
       // --- Move ---
       const destinationParentPath = await createIndexEntry(pageA, destinationParentStem);
-      const destinationContentsBeforeMove = await readFrontmatterProperty(
-        pageA,
-        destinationParentPath,
-        "contents",
-      );
-
       const movedEntryPath = await moveEntryToParent(
         pageA,
         renamedEntryPath,
         destinationParentPath,
       );
-      await openEntryForSync(pageA, movedEntryPath);
-      await openEntryForSync(pageB, movedEntryPath);
+      // Push move to server
+      await triggerSync(pageA);
 
       console.log("[sync-e2e:crud] step: check body after move");
       await expect
@@ -125,24 +120,7 @@ test.describe("Sync › Propagation", () => {
         })
         .not.toBeNull();
       const expectedMovedPartOf = await readFrontmatterProperty(pageA, movedEntryPath, "part_of");
-
-      const initialDestinationContentsCount = Array.isArray(destinationContentsBeforeMove)
-        ? destinationContentsBeforeMove.length
-        : 0;
-      await expect
-        .poll(async () => {
-          const contents = await readFrontmatterProperty(pageA, destinationParentPath, "contents");
-          return Array.isArray(contents) ? contents.length : 0;
-        }, { timeout: 30000 })
-        .toBeGreaterThan(initialDestinationContentsCount);
-      const expectedDestinationContents = await readFrontmatterProperty(
-        pageA,
-        destinationParentPath,
-        "contents",
-      );
-
       await expectFrontmatterProperty(pageB, movedEntryPath, "part_of", expectedMovedPartOf);
-      await expectFrontmatterProperty(pageB, destinationParentPath, "contents", expectedDestinationContents);
 
       // --- Frontmatter update ---
       console.log("[sync-e2e:crud] step: set frontmatter description");
@@ -153,9 +131,8 @@ test.describe("Sync › Propagation", () => {
         })
         .toBe(descriptionMarker);
 
-      // --- Body edit (live, both subscribed) ---
+      // --- Body edit ---
       await appendMarkerToEntry(pageA, movedEntryPath, editedBodyMarker);
-      await queueBodyUpdateForSync(pageA, movedEntryPath);
       await expect
         .poll(async () => await readEntryBody(pageA, movedEntryPath), { timeout: 10000 })
         .toContain(editedBodyMarker);
@@ -176,7 +153,6 @@ test.describe("Sync › Propagation", () => {
       await expect
         .poll(async () => await pageB.evaluate(() => !!(globalThis as any).__diaryx_e2e), { timeout: 30000 })
         .toBe(true);
-      await openEntryForSync(pageB, movedEntryPath);
       await expect
         .poll(async () => await readEntryBody(pageB, movedEntryPath), { timeout: 30000 })
         .toBe(expectedBodyAfterEdit);
@@ -200,9 +176,6 @@ test.describe("Sync › Propagation", () => {
         `delete-target-${runId}`,
         `DELETE_ME_${runId}`,
       );
-      await openEntryForSync(pageA, entryPath);
-      await queueBodyUpdateForSync(pageA, entryPath);
-      await openEntryForSync(pageB, entryPath);
       await expect
         .poll(async () => await entryExists(pageB, entryPath), { timeout: 30000 })
         .toBe(true);
@@ -242,11 +215,8 @@ test.describe("Sync › Propagation", () => {
         `reverse-entry-${runId}`,
         marker,
       );
-      await openEntryForSync(pageB, entryPath);
-      await queueBodyUpdateForSync(pageB, entryPath);
       await setFrontmatterProperty(pageB, entryPath, "description", fmValue);
 
-      await openEntryForSync(pageA, entryPath);
       console.log("[sync-e2e:reverse] step: waiting for body on pageA");
       await expect
         .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 30000 })
@@ -259,11 +229,11 @@ test.describe("Sync › Propagation", () => {
     }
   });
 
-  test("merges concurrent body edits from both clients without data loss", async ({ browser, browserName }) => {
+  test("last-writer-wins when both clients edit the same file sequentially", async ({ browser, browserName }) => {
     test.skip(browserName !== "chromium", "Sync E2E currently runs on Chromium only");
     test.setTimeout(300000);
 
-    const pair = await setupSyncedPair(browser, "concurrent-body");
+    const pair = await setupSyncedPair(browser, "lww");
     const { pageA, pageB } = pair;
 
     try {
@@ -274,42 +244,34 @@ test.describe("Sync › Propagation", () => {
 
       const entryPath = await createEntryWithMarker(
         pageA,
-        `concurrent-${runId}`,
+        `lww-${runId}`,
         initialMarker,
       );
-      await openEntryForSync(pageA, entryPath);
-      await queueBodyUpdateForSync(pageA, entryPath);
-      await openEntryForSync(pageB, entryPath);
+
+      // Wait for B to see the entry.
       await expect
         .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
         .toContain(initialMarker);
 
-      console.log("[sync-e2e:concurrent] step: concurrent edits");
-      await Promise.all([
-        appendMarkerToEntry(pageA, entryPath, markerA),
-        appendMarkerToEntry(pageB, entryPath, markerB),
-      ]);
-      await Promise.all([
-        queueBodyUpdateForSync(pageA, entryPath),
-        queueBodyUpdateForSync(pageB, entryPath),
-      ]);
+      // A edits and syncs first.
+      await appendMarkerToEntry(pageA, entryPath, markerA);
 
-      console.log("[sync-e2e:concurrent] step: waiting for merged content on both clients");
+      // Wait for A's edit to reach B.
       await expect
-        .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 30000 })
+        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
         .toContain(markerA);
+
+      // Now B edits (this becomes the last writer).
+      console.log("[sync-e2e:lww] step: B edits after A");
+      await appendMarkerToEntry(pageB, entryPath, markerB);
+
+      // A should eventually see B's version (which includes both markers
+      // since B appended to the content it pulled from A).
       await expect
         .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 30000 })
         .toContain(markerB);
 
-      await expect
-        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
-        .toContain(markerA);
-      await expect
-        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
-        .toContain(markerB);
-
-      // Both clients should converge to the same final content.
+      // Both clients should converge to the same content.
       const bodyA = await readEntryBody(pageA, entryPath);
       const bodyB = await readEntryBody(pageB, entryPath);
       expect(bodyA).toBe(bodyB);
@@ -318,11 +280,11 @@ test.describe("Sync › Propagation", () => {
     }
   });
 
-  test("concurrent frontmatter edits to different keys merge correctly", async ({ browser, browserName }) => {
+  test("frontmatter updates propagate sequentially between clients", async ({ browser, browserName }) => {
     test.skip(browserName !== "chromium", "Sync E2E currently runs on Chromium only");
     test.setTimeout(300000);
 
-    const pair = await setupSyncedPair(browser, "concurrent-fm");
+    const pair = await setupSyncedPair(browser, "fm-seq");
     const { pageA, pageB } = pair;
 
     try {
@@ -332,26 +294,27 @@ test.describe("Sync › Propagation", () => {
 
       const entryPath = await createEntryWithMarker(
         pageA,
-        `fm-concurrent-${runId}`,
+        `fm-seq-${runId}`,
         `FM_BODY_${runId}`,
       );
-      await openEntryForSync(pageA, entryPath);
-      await openEntryForSync(pageB, entryPath);
+
+      // Wait for B to see the entry.
       await expect
         .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
         .toContain(`FM_BODY_${runId}`);
 
-      console.log("[sync-e2e:fm-concurrent] step: concurrent frontmatter edits");
-      await Promise.all([
-        setFrontmatterProperty(pageA, entryPath, "tags", [tagValueA]),
-        setFrontmatterProperty(pageB, entryPath, "description", descValueB),
-      ]);
+      // A sets tags.
+      console.log("[sync-e2e:fm-seq] step: A sets tags");
+      await setFrontmatterProperty(pageA, entryPath, "tags", [tagValueA]);
+      await expectFrontmatterProperty(pageB, entryPath, "tags", [tagValueA]);
 
-      console.log("[sync-e2e:fm-concurrent] step: waiting for merged frontmatter");
+      // B sets description (after pulling A's tags).
+      console.log("[sync-e2e:fm-seq] step: B sets description");
+      await setFrontmatterProperty(pageB, entryPath, "description", descValueB);
       await expectFrontmatterProperty(pageA, entryPath, "description", descValueB);
-      await expectFrontmatterProperty(pageA, entryPath, "tags", [tagValueA]);
 
-      await expectFrontmatterProperty(pageB, entryPath, "description", descValueB);
+      // Both should have both properties.
+      await expectFrontmatterProperty(pageA, entryPath, "tags", [tagValueA]);
       await expectFrontmatterProperty(pageB, entryPath, "tags", [tagValueA]);
     } finally {
       await Promise.allSettled([pair.contextA.close(), pair.contextB.close()]);

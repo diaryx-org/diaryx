@@ -275,6 +275,62 @@ export async function installPlugin(
 }
 
 /**
+ * Load a plugin from raw WASM bytes with a **custom** init payload.
+ *
+ * Used during `downloadWorkspace` where the workspace is empty and has no
+ * root index yet — the default `buildBrowserPluginInitPayload` would fail
+ * with "Workspace root is not available".  The caller supplies a minimal
+ * payload containing auth/server info and a raw workspace root (`"."`)
+ * so the plugin can connect to the server and download data.
+ *
+ * After the download completes and the workspace has content, a normal
+ * `loadAllPlugins()` re-initialises everything with the standard payload.
+ */
+export async function loadPluginWithCustomInit(
+  wasmBytes: ArrayBuffer,
+  initPayload: Record<string, unknown>,
+): Promise<PluginManifest> {
+  const support = getBrowserPluginRuntimeSupport();
+  if (!support.supported) {
+    throw new Error(support.reason ?? "Browser plugins are not supported in this runtime.");
+  }
+
+  const runtimeIdentity = {
+    pluginId: "unknown-plugin",
+    pluginName: "Unknown Plugin",
+  };
+  const plugin = await loadBrowserPlugin(wasmBytes, {
+    getPluginId: () => runtimeIdentity.pluginId,
+    getPluginName: () => runtimeIdentity.pluginName,
+    getPluginsConfig: () => pluginsConfigProvider?.(),
+  }, {
+    initializeLifecycle: false,
+  });
+  const id = plugin.manifest.id as unknown as string;
+  runtimeIdentity.pluginId = id;
+  runtimeIdentity.pluginName = String(plugin.manifest.name ?? id);
+
+  // Close and remove any existing instance with the same ID
+  const existing = loadedPlugins.get(id);
+  if (existing) {
+    await existing.close();
+    loadedPlugins.delete(id);
+    browserManifests = browserManifests.filter(
+      (m) => (m.id as unknown as string) !== id,
+    );
+  }
+
+  // Run init with the caller-provided payload
+  await plugin.callLifecycle("init", initPayload);
+
+  loadedPlugins.set(id, plugin);
+  browserManifests = [...browserManifests, plugin.manifest];
+  registerTranscodersFromManifest(id, plugin);
+
+  return plugin.manifest;
+}
+
+/**
  * Uninstall a plugin by ID.
  *
  * Closes the plugin instance and removes it from the current workspace.

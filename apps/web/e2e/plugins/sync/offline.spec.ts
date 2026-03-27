@@ -1,6 +1,10 @@
 /**
  * Sync offline/reconnect tests: verifies that changes made while offline
  * are queued and synced when the connection is restored.
+ *
+ * The sync plugin uses LWW (last-writer-wins) conflict resolution:
+ * - When one client edits offline, its changes push on reconnect.
+ * - When both clients edit offline, only the most recent write survives.
  */
 
 import {
@@ -16,12 +20,11 @@ import {
   setFrontmatterProperty,
   readEntryBody,
   expectFrontmatterProperty,
-  openEntryForSync,
-  queueBodyUpdateForSync,
-  waitForSyncSession,
+  triggerSync,
+  waitForSyncSettled,
 } from "./helpers";
 
-test.describe("Sync › Offline / Reconnect", () => {
+test.describe("Sync > Offline / Reconnect", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeAll(async ({ browserName }) => {
@@ -70,9 +73,6 @@ test.describe("Sync › Offline / Reconnect", () => {
         `offline-${runId}`,
         initialMarker,
       );
-      await openEntryForSync(pageA, entryPath);
-      await queueBodyUpdateForSync(pageA, entryPath);
-      await openEntryForSync(pageB, entryPath);
       await expect
         .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
         .toContain(initialMarker);
@@ -81,7 +81,7 @@ test.describe("Sync › Offline / Reconnect", () => {
       console.log("[sync-e2e:offline] step: taking pageA offline");
       await contextA.setOffline(true);
 
-      // Make edits on A while offline.
+      // Make edits on A while offline (these are saved locally but can't push).
       await appendMarkerToEntry(pageA, entryPath, offlineMarkerA);
       await setFrontmatterProperty(pageA, entryPath, "description", offlineDesc);
 
@@ -91,7 +91,6 @@ test.describe("Sync › Offline / Reconnect", () => {
         .toContain(offlineMarkerA);
 
       // B should NOT see the offline changes yet.
-      // Wait a few seconds to confirm no sync happens.
       await pageB.waitForTimeout(3000);
       const bodyBWhileOffline = await readEntryBody(pageB, entryPath, { sync: false });
       expect(bodyBWhileOffline).not.toContain(offlineMarkerA);
@@ -100,15 +99,8 @@ test.describe("Sync › Offline / Reconnect", () => {
       console.log("[sync-e2e:offline] step: bringing pageA back online");
       await contextA.setOffline(false);
 
-      // Wait for sync to resume. The global status can remain "syncing" while
-      // unrelated body docs settle, so push the local offline body first and
-      // only then ask the remote client to re-open/resubscribe that entry.
-      await waitForSyncSession(pageA);
-      await expect
-        .poll(async () => await readEntryBody(pageA, entryPath, { sync: false }), { timeout: 10000 })
-        .toContain(offlineMarkerA);
-      await queueBodyUpdateForSync(pageA, entryPath);
-      await openEntryForSync(pageB, entryPath);
+      // Trigger sync on A to push the offline edits.
+      await triggerSync(pageA);
 
       // B should eventually see the changes that were queued offline.
       console.log("[sync-e2e:offline] step: waiting for offline edits to propagate to pageB");
@@ -117,13 +109,12 @@ test.describe("Sync › Offline / Reconnect", () => {
         .toContain(offlineMarkerA);
       await expectFrontmatterProperty(pageB, entryPath, "description", offlineDesc, 30000);
     } finally {
-      // Ensure we restore online state before closing.
       await contextA.setOffline(false).catch(() => undefined);
       await Promise.allSettled([contextA.close(), contextB.close()]);
     }
   });
 
-  test("both clients edit offline and merge on reconnect", async ({ browser, browserName }) => {
+  test("last writer wins when both clients edit offline", async ({ browser, browserName }) => {
     test.skip(browserName !== "chromium", "Sync E2E currently runs on Chromium only");
     test.setTimeout(300000);
 
@@ -142,9 +133,6 @@ test.describe("Sync › Offline / Reconnect", () => {
         `dual-offline-${runId}`,
         initialMarker,
       );
-      await openEntryForSync(pageA, entryPath);
-      await queueBodyUpdateForSync(pageA, entryPath);
-      await openEntryForSync(pageB, entryPath);
       await expect
         .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
         .toContain(initialMarker);
@@ -158,66 +146,41 @@ test.describe("Sync › Offline / Reconnect", () => {
 
       // Each client makes independent edits.
       await appendMarkerToEntry(pageA, entryPath, offlineA);
+      // Small delay so B's edit has a later timestamp (LWW).
+      await pageB.waitForTimeout(1000);
       await appendMarkerToEntry(pageB, entryPath, offlineB);
 
       // Verify local state.
       await expect
-        .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 10000 })
+        .poll(async () => await readEntryBody(pageA, entryPath, { sync: false }), { timeout: 10000 })
         .toContain(offlineA);
       await expect
-        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 10000 })
+        .poll(async () => await readEntryBody(pageB, entryPath, { sync: false }), { timeout: 10000 })
         .toContain(offlineB);
 
-      // Bring both clients back online.
-      console.log("[sync-e2e:dual-offline] step: bringing both clients back online");
-      await Promise.all([
-        contextA.setOffline(false),
-        contextB.setOffline(false),
-      ]);
+      // Bring A online first, let it push.
+      console.log("[sync-e2e:dual-offline] step: bringing A back online");
+      await contextA.setOffline(false);
+      await triggerSync(pageA);
 
-      await Promise.all([
-        waitForSyncSession(pageA),
-        waitForSyncSession(pageB),
-      ]);
+      // Bring B online — B's edit has a later timestamp, so it should win.
+      console.log("[sync-e2e:dual-offline] step: bringing B back online");
+      await contextB.setOffline(false);
+      await triggerSync(pageB);
 
-      // Re-open the entry for sync on both clients to re-establish body CRDT
-      // subscriptions that may have been lost during the offline period.
-      await Promise.all([
-        expect
-          .poll(async () => await readEntryBody(pageA, entryPath, { sync: false }), { timeout: 10000 })
-          .toContain(offlineA),
-        expect
-          .poll(async () => await readEntryBody(pageB, entryPath, { sync: false }), { timeout: 10000 })
-          .toContain(offlineB),
-      ]);
-
-      // Push each client's offline body first, then re-open to re-establish
-      // subscriptions against the merged server state.
-      await Promise.all([
-        queueBodyUpdateForSync(pageA, entryPath),
-        queueBodyUpdateForSync(pageB, entryPath),
-      ]);
-      console.log("[sync-e2e:dual-offline] step: re-opening entry for sync after reconnect");
-      await openEntryForSync(pageA, entryPath);
-      await openEntryForSync(pageB, entryPath);
-
-      // Both clients should eventually see both offline markers (CRDT merge).
-      console.log("[sync-e2e:dual-offline] step: waiting for merged content");
+      // After B pushes, both clients should converge.
+      // B was the last writer, so its content should win.
+      console.log("[sync-e2e:dual-offline] step: waiting for convergence");
       await expect
-        .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 45000 })
-        .toContain(offlineA);
+        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 45000 })
+        .toContain(offlineB);
+
+      // A should pull B's version.
       await expect
         .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 30000 })
         .toContain(offlineB);
 
-      await expect
-        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 45000 })
-        .toContain(offlineA);
-      await expect
-        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
-        .toContain(offlineB);
-
-      // Content should converge.
+      // Both clients should have the same content.
       const bodyA = await readEntryBody(pageA, entryPath, { sync: false });
       const bodyB = await readEntryBody(pageB, entryPath, { sync: false });
       expect(bodyA).toBe(bodyB);

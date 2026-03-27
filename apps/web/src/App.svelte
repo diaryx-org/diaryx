@@ -3096,9 +3096,12 @@
         }
       } catch (e) {
         console.error("[App] Auto-create from welcome screen failed:", e);
-        toast.error("Failed to create workspace", { description: e instanceof Error ? e.message : String(e) });
+        throw e;
       } finally {
         entryStore.setLoading(false);
+        // Clear the launch zoom overlay so it doesn't block the welcome screen on error
+        launchOverlay = null;
+        launchOverlayDone = false;
       }
     }}
     onSignInCreateNew={async () => {
@@ -3116,7 +3119,7 @@
         showWelcomeScreen = false;
       } catch (e) {
         console.error("[App] Auto-create after sign-in failed:", e);
-        toast.error("Failed to create workspace", { description: e instanceof Error ? e.message : String(e) });
+        throw e;
       } finally {
         entryStore.setLoading(false);
       }
@@ -3152,9 +3155,12 @@
         }
       } catch (e) {
         console.error("[App] Create with provider failed:", e);
-        toast.error("Failed to create workspace", { description: e instanceof Error ? e.message : String(e) });
+        throw e;
       } finally {
         entryStore.setLoading(false);
+        // Clear the launch zoom overlay so it doesn't block the welcome screen on error
+        launchOverlay = null;
+        launchOverlayDone = false;
       }
     }}
     returnWorkspaceName={welcomeReturnWorkspaceName}

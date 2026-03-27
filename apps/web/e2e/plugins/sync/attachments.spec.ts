@@ -12,16 +12,15 @@ import {
   stopSpawnedSyncServer,
   setupSyncedPair,
   createEntryWithMarker,
-  openEntryForSync,
+  triggerSync,
   readEntryBody,
   readFrontmatter,
   uploadAttachment,
   getAttachments,
   getAttachmentData,
-  allowPermissionPrompts,
 } from "./helpers";
 
-test.describe("Sync › Attachments", () => {
+test.describe("Sync > Attachments", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeAll(async ({ browserName }) => {
@@ -67,8 +66,6 @@ test.describe("Sync › Attachments", () => {
         `attach-${runId}`,
         `ATTACH_BODY_${runId}`,
       );
-      await openEntryForSync(pageA, entryPath);
-      await openEntryForSync(pageB, entryPath);
 
       // Wait for B to see the entry body.
       await expect
@@ -89,8 +86,6 @@ test.describe("Sync › Attachments", () => {
       expect(attachmentsA.length).toBeGreaterThan(0);
 
       // Verify attachment metadata propagates to B via frontmatter sync.
-      // The attachment registration updates the entry's frontmatter with
-      // binary_refs, which should sync through the CRDT.
       console.log("[sync-e2e:attach] step: waiting for attachment metadata on pageB");
       await expect
         .poll(async () => {
@@ -122,10 +117,6 @@ test.describe("Sync › Attachments", () => {
       // Create two entries on A.
       const entry1 = await createEntryWithMarker(pageA, `attach-multi-1-${runId}`, `BODY1_${runId}`);
       const entry2 = await createEntryWithMarker(pageA, `attach-multi-2-${runId}`, `BODY2_${runId}`);
-      await openEntryForSync(pageA, entry1);
-      await openEntryForSync(pageA, entry2);
-      await openEntryForSync(pageB, entry1);
-      await openEntryForSync(pageB, entry2);
 
       // Wait for both entries on B.
       await expect
@@ -142,7 +133,7 @@ test.describe("Sync › Attachments", () => {
       const attach1 = await uploadAttachment(pageA, entry1, `one-${runId}.txt`, data1);
       const attach2 = await uploadAttachment(pageA, entry2, `two-${runId}.txt`, data2);
 
-      // Verify each entry has exactly its own attachment.
+      // Verify each entry has its own attachment.
       const attachments1 = await getAttachments(pageA, entry1);
       const attachments2 = await getAttachments(pageA, entry2);
       expect(attachments1.length).toBeGreaterThan(0);

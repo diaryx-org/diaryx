@@ -10,7 +10,8 @@
    * - provider-choice: Choose where workspace lives (after bundle selection)
    */
   import { Button } from "$lib/components/ui/button";
-  import { ArrowLeft, LogIn, Loader2, Cloud, Download, HardDrive, Lock, Plus } from "@lucide/svelte";
+  import { ArrowLeft, LogIn, Loader2, Cloud, Download, HardDrive, Lock, Plus, Upload, X, ChevronDown, ChevronUp } from "@lucide/svelte";
+  import { toast } from "svelte-sonner";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
   import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
   import type { BundleRegistryEntry, ThemeRegistryEntry } from "$lib/marketplace/types";
@@ -100,6 +101,42 @@
   let selectedNamespace = $state<NamespaceEntry | null>(null);
   let selectedNamespaceProvider = $state<string | null>(null);
 
+  // Provider plugin override for restore path
+  let providerOverride = $state<{ bytes: ArrayBuffer; fileName: string } | null>(null);
+  let providerOverrideError = $state<string | null>(null);
+  let showProviderOverride = $state(false);
+  let providerOverrideFileInput = $state<HTMLInputElement | null>(null);
+
+  async function handleProviderOverrideFile(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    input.value = "";
+
+    if (!file.name.endsWith(".wasm")) {
+      providerOverrideError = "Please select a .wasm file.";
+      return;
+    }
+
+    providerOverrideError = null;
+    const expectedId = selectedNamespaceProvider ?? "diaryx.sync";
+
+    try {
+      const bytes = await file.arrayBuffer();
+      const { inspectBrowserPlugin } = await import("$lib/plugins/extismBrowserLoader");
+      const { manifest } = await inspectBrowserPlugin(bytes);
+      const pluginId = String(manifest.id);
+
+      if (pluginId !== expectedId) {
+        providerOverrideError = `Plugin ID mismatch: expected "${expectedId}", got "${pluginId}".`;
+        return;
+      }
+
+      providerOverride = { bytes, fileName: file.name };
+    } catch (e) {
+      providerOverrideError = `Failed to inspect plugin: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
 
   async function playZoomThen(callback: () => void | Promise<void>) {
     if (launchInfo) {
@@ -111,15 +148,23 @@
       // Wait for zoom animation before starting work
       await new Promise((r) => setTimeout(r, 700));
     }
-    await callback();
+    try {
+      await callback();
+    } catch (err) {
+      fadingOut = false;
+      throw err;
+    }
   }
 
   async function handleGetStarted(bundle: BundleRegistryEntry | null, overrides?: PluginOverride[]) {
     settingUp = true;
     try {
       await playZoomThen(() => onGetStarted(bundle, overrides));
-    } catch {
+    } catch (e) {
       settingUp = false;
+      toast.error("Failed to create workspace", {
+        description: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -132,11 +177,26 @@
 
     // If restoring from a remote workspace, skip provider detection — go straight to create + restore
     if (selectedNamespace && selectedNamespaceProvider) {
+      // Merge the provider override (if any) into the overrides list
+      let effectiveOverrides = overrides ? [...overrides] : [];
+      if (providerOverride) {
+        effectiveOverrides = [
+          ...effectiveOverrides.filter((o) => o.targetPluginId !== selectedNamespaceProvider),
+          { targetPluginId: selectedNamespaceProvider!, fileName: providerOverride.fileName, bytes: providerOverride.bytes },
+        ];
+      }
       settingUp = true;
       try {
-        await playZoomThen(() => onCreateWithProvider(bundle, selectedNamespaceProvider, overrides, selectedNamespace!));
-      } catch {
+        await playZoomThen(() => onCreateWithProvider(
+          bundle, selectedNamespaceProvider,
+          effectiveOverrides.length > 0 ? effectiveOverrides : undefined,
+          selectedNamespace!,
+        ));
+      } catch (e) {
         settingUp = false;
+        toast.error("Failed to set up workspace", {
+          description: e instanceof Error ? e.message : String(e),
+        });
       }
       return;
     }
@@ -193,16 +253,23 @@
         settingUp = true;
         try {
           await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId, pendingOverrides));
-        } catch {
+        } catch (e) {
           settingUp = false;
+          toast.error("Failed to set up workspace", {
+            description: e instanceof Error ? e.message : String(e),
+          });
         }
       }
     } catch {
+      // Namespace listing failed — fall through to create new workspace
       settingUp = true;
       try {
         await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId, pendingOverrides));
-      } catch {
+      } catch (e) {
         settingUp = false;
+        toast.error("Failed to set up workspace", {
+          description: e instanceof Error ? e.message : String(e),
+        });
       }
     } finally {
       checkingProvider = false;
@@ -243,8 +310,11 @@
     settingUp = true;
     try {
       await onSignInCreateNew();
-    } catch {
+    } catch (e) {
       settingUp = false;
+      toast.error("Failed to create workspace", {
+        description: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -569,6 +639,63 @@
             Loading…
           </div>
         {:else}
+          {#if selectedNamespace && selectedNamespaceProvider}
+            <div class="w-full max-w-md mx-auto mb-4 rounded-lg border border-border bg-background/80 px-4 py-3 text-sm space-y-2">
+              <input
+                type="file"
+                accept=".wasm"
+                class="hidden"
+                bind:this={providerOverrideFileInput}
+                onchange={handleProviderOverrideFile}
+              />
+              <p class="text-muted-foreground">
+                <span class="font-medium text-foreground">{selectedNamespaceProvider}</span> will be installed to download
+                <span class="font-medium text-foreground">{selectedNamespace.metadata?.name ?? "this workspace"}</span>.
+              </p>
+
+              {#if providerOverride}
+                <div class="flex items-center gap-2 rounded-md border border-primary/50 bg-primary/5 px-3 py-2 text-xs">
+                  <span class="text-muted-foreground">Using local build:</span>
+                  <span class="flex-1 truncate font-medium text-primary" title={providerOverride.fileName}>{providerOverride.fileName}</span>
+                  <button
+                    type="button"
+                    class="text-muted-foreground hover:text-foreground shrink-0"
+                    onclick={() => { providerOverride = null; providerOverrideError = null; }}
+                  >
+                    <X class="size-3" />
+                  </button>
+                </div>
+              {:else}
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                  onclick={() => { showProviderOverride = !showProviderOverride; }}
+                >
+                  Override with local build
+                  {#if showProviderOverride}
+                    <ChevronUp class="size-3" />
+                  {:else}
+                    <ChevronDown class="size-3" />
+                  {/if}
+                </button>
+                {#if showProviderOverride}
+                  <button
+                    type="button"
+                    class="flex items-center gap-2 w-full rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+                    onclick={() => providerOverrideFileInput?.click()}
+                  >
+                    <Upload class="size-3" />
+                    Upload .wasm file
+                  </button>
+                {/if}
+              {/if}
+
+              {#if providerOverrideError}
+                <p class="text-xs text-destructive">{providerOverrideError}</p>
+              {/if}
+            </div>
+          {/if}
+
           <BundleCarousel
             {bundles}
             {themes}
@@ -579,6 +706,9 @@
               if (selectedNamespace) {
                 selectedNamespace = null;
                 selectedNamespaceProvider = null;
+                providerOverride = null;
+                providerOverrideError = null;
+                showProviderOverride = false;
                 navigateTo('workspace-picker');
               } else {
                 navigateTo('main');

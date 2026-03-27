@@ -8,7 +8,6 @@ const reuseExistingServer = process.env.PW_REUSE_EXISTING_SERVER === '1'
 
 export default defineConfig({
   testDir: './e2e',
-  testIgnore: ['plugins/**/*.spec.ts'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 1,
@@ -32,11 +31,22 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      testIgnore: ['plugins/**/*.spec.ts'],
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'webkit',
+      testIgnore: ['plugins/**/*.spec.ts'],
       use: { ...devices['Desktop Safari'] },
+    },
+    {
+      name: 'sync-e2e',
+      testMatch: ['plugins/sync/**/*.spec.ts'],
+      use: {
+        ...devices['Desktop Chrome'],
+      },
+      fullyParallel: false,
+      timeout: 300000,
     },
   ],
   webServer: {

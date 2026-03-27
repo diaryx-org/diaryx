@@ -18,8 +18,14 @@ import path from "node:path";
 export const WEB_HOST = process.env.PW_WEB_HOST ?? "127.0.0.1";
 export const WEB_PORT = process.env.PW_WEB_PORT ?? "5174";
 export const APP_BASE_URL = process.env.PW_BASE_URL ?? `http://localhost:${WEB_PORT}`;
-export const SYNC_SERVER_URL = process.env.SYNC_SERVER_URL
-  ?? `http://${process.env.SYNC_SERVER_HOST ?? "127.0.0.1"}:${process.env.SYNC_SERVER_PORT ?? "3030"}`;
+/** Direct server origin used for health checks and spawning. */
+const SYNC_SERVER_ORIGIN = `http://${process.env.SYNC_SERVER_HOST ?? "127.0.0.1"}:${process.env.SYNC_SERVER_PORT ?? "3030"}`;
+/**
+ * The URL the browser uses to reach the sync API. In dev, Vite proxies
+ * /api to the sync server, so we use the app origin to stay same-origin
+ * (cookies work without cross-origin issues).
+ */
+export const SYNC_SERVER_URL = process.env.SYNC_SERVER_URL ?? `${APP_BASE_URL}/api`;
 const SHOULD_START_SYNC_SERVER = process.env.SYNC_E2E_START_SERVER !== "0";
 const SHOULD_LOG_SYNC_E2E_DEBUG = process.env.SYNC_E2E_DEBUG === "1";
 
@@ -104,10 +110,10 @@ export async function waitForHttpOk(url: string, timeoutMs: number): Promise<voi
 }
 
 export async function ensureSyncServer(): Promise<void> {
-  await waitForHttpOk(`${SYNC_SERVER_URL}/health`, 1000).catch(() => undefined);
+  await waitForHttpOk(`${SYNC_SERVER_ORIGIN}/health`, 1000).catch(() => undefined);
 
   try {
-    await waitForHttpOk(`${SYNC_SERVER_URL}/health`, 1000);
+    await waitForHttpOk(`${SYNC_SERVER_ORIGIN}/health`, 1000);
     return;
   } catch {
     // Fall through to optional auto-start.
@@ -115,16 +121,16 @@ export async function ensureSyncServer(): Promise<void> {
 
   if (!SHOULD_START_SYNC_SERVER) {
     throw new Error(
-      `Sync server is not reachable at ${SYNC_SERVER_URL}. Start it manually or unset SYNC_E2E_START_SERVER=0.`,
+      `Sync server is not reachable at ${SYNC_SERVER_ORIGIN}. Start it manually or unset SYNC_E2E_START_SERVER=0.`,
     );
   }
 
   if (spawnedSyncServer) {
-    await waitForHttpOk(`${SYNC_SERVER_URL}/health`, 60000);
+    await waitForHttpOk(`${SYNC_SERVER_ORIGIN}/health`, 60000);
     return;
   }
 
-  const parsed = new URL(SYNC_SERVER_URL);
+  const parsed = new URL(SYNC_SERVER_ORIGIN);
   const syncHost = parsed.hostname;
   const syncPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
   const corsOrigins = [APP_BASE_URL, `http://${WEB_HOST}:${WEB_PORT}`].join(",");
@@ -165,7 +171,7 @@ export async function ensureSyncServer(): Promise<void> {
     }
   });
 
-  await waitForHttpOk(`${SYNC_SERVER_URL}/health`, 60000);
+  await waitForHttpOk(`${SYNC_SERVER_ORIGIN}/health`, 60000);
 }
 
 export async function stopSpawnedSyncServer(): Promise<void> {
@@ -173,19 +179,6 @@ export async function stopSpawnedSyncServer(): Promise<void> {
 }
 
 async function stopSyncServerInternal(forceCleanup: boolean): Promise<void> {
-  // Only stop the server if this process spawned it. When multiple Playwright
-  // workers import this module, each gets its own copy of spawnedSyncServer.
-  // The first worker that spawned the server is the only one with a non-null
-  // reference, so only that worker can (and should) kill it. However, in a
-  // multi-file setup the first worker to finish would kill the shared server
-  // while other workers are still using it.
-  //
-  // To avoid this, we intentionally skip cleanup here and let the child
-  // process be reaped when the parent Playwright process exits. The temp
-  // DB directory is cleaned up by the OS or a subsequent run.
-  //
-  // For explicit cleanup (e.g. running a single file), set
-  // SYNC_E2E_CLEANUP_SERVER=1.
   if (!forceCleanup) {
     return;
   }
@@ -346,64 +339,45 @@ export async function signInWithDevMagicLink(
   console.log(`[sync-e2e:sign-in] step: following verify link for ${email}`);
   await verifyLink.click();
 
-  let authPollCount = 0;
-  console.log(`[sync-e2e:sign-in] step: waiting for auth token for ${email}`);
-  await expect
-    .poll(async () => {
-      const hasToken = await page.evaluate(() => !!localStorage.getItem("diaryx_auth_token"));
-      if (!hasToken && authPollCount++ % 5 === 0) {
-        process.stderr.write(`[sync-e2e] auth_token poll #${authPollCount}: no token yet\n`);
-        writeSyncE2EDebug(`[sync-e2e] auth_token poll #${authPollCount}: no token yet\n`);
-      }
-      if (hasToken && authPollCount < 100) {
-        process.stderr.write(`[sync-e2e] auth_token poll: token found after ${authPollCount} polls\n`);
-        writeSyncE2EDebug(`[sync-e2e] auth_token poll: token found after ${authPollCount} polls\n`);
-        authPollCount = 100;
-      }
-      return hasToken;
-    },
-      { timeout: 45000 },
-    )
-    .toBe(true);
+  // Wait for sign-in to complete. On browser, auth uses HttpOnly cookies
+  // (not localStorage), so we detect success via the email appearing in the UI.
+  console.log(`[sync-e2e:sign-in] step: waiting for auth to complete for ${email}`);
+  await expect(page.getByText(email).first()).toBeVisible({ timeout: 45000 });
 
-  if (options?.waitForProviderReady === false) {
-    await page.locator("main").click({ position: { x: 40, y: 40 } }).catch(() => undefined);
-    return;
+  // On browser, plugin HTTP requests use cookies (credentials: "include")
+  // so the plugin can authenticate even without an explicit auth_token.
+  // GetProviderStatus may falsely report "not ready" because it checks for
+  // a token in config, but actual sync commands work fine via cookies.
+  // Skip the provider readiness poll unless explicitly requested.
+  if (options?.waitForProviderReady === true) {
+    let providerPollCount = 0;
+    console.log(`[sync-e2e:sign-in] step: waiting for provider readiness for ${email}`);
+    await expect
+      .poll(async () => {
+        const result = await page.evaluate(async () => {
+          const { getBackend, createApi } = await import("/src/lib/backend");
+          const backend = await getBackend();
+          const api = createApi(backend);
+
+          try {
+            const res = await api.executePluginCommand("diaryx.sync", "GetProviderStatus", {});
+            return res;
+          } catch (e) {
+            return { error: String(e) };
+          }
+        });
+        const ready = (result as { ready?: boolean })?.ready ?? false;
+        if (!ready && providerPollCount++ % 5 === 0) {
+          process.stderr.write(`[sync-e2e] GetProviderStatus poll #${providerPollCount}: ${JSON.stringify(result)}\n`);
+          writeSyncE2EDebug(`[sync-e2e] GetProviderStatus poll #${providerPollCount}: ${JSON.stringify(result)}\n`);
+        }
+        return ready;
+      },
+        { timeout: 45000 },
+      )
+      .toBe(true);
   }
 
-  let providerPollCount = 0;
-  console.log(`[sync-e2e:sign-in] step: waiting for provider readiness for ${email}`);
-  await expect
-    .poll(async () => {
-      const result = await page.evaluate(async () => {
-        const { getBackend, createApi } = await import("/src/lib/backend");
-        const backend = await getBackend();
-        const api = createApi(backend);
-
-        try {
-          const res = await api.executePluginCommand("diaryx.sync", "GetProviderStatus", {});
-          return res;
-        } catch (e) {
-          return { error: String(e) };
-        }
-      });
-      const ready = (result as { ready?: boolean })?.ready ?? false;
-      if (!ready && providerPollCount++ % 5 === 0) {
-        process.stderr.write(`[sync-e2e] GetProviderStatus poll #${providerPollCount}: ${JSON.stringify(result)}\n`);
-        writeSyncE2EDebug(`[sync-e2e] GetProviderStatus poll #${providerPollCount}: ${JSON.stringify(result)}\n`);
-      }
-      if (ready && providerPollCount < 100) {
-        process.stderr.write(`[sync-e2e] GetProviderStatus: ready after ${providerPollCount} polls\n`);
-        writeSyncE2EDebug(`[sync-e2e] GetProviderStatus: ready after ${providerPollCount} polls\n`);
-        providerPollCount = 100;
-      }
-      return ready;
-    },
-      { timeout: 45000 },
-    )
-    .toBe(true);
-
-  await expect(page.getByText(email).first()).toBeVisible({ timeout: 15000 });
   await page.locator("main").click({ position: { x: 40, y: 40 } }).catch(() => undefined);
 }
 
@@ -411,20 +385,15 @@ export async function removeCurrentDeviceFromAccount(
   page: import("@playwright/test").Page,
 ): Promise<string> {
   return page.evaluate(async () => {
-    const token = localStorage.getItem("diaryx_auth_token");
     const serverUrl = localStorage.getItem("diaryx_sync_server_url");
-    if (!token || !serverUrl) {
+    if (!serverUrl) {
       throw new Error("Expected authenticated sync session before removing device");
     }
 
+    // On browser, auth uses HttpOnly cookies — proxyFetch sends them automatically.
     const { proxyFetch } = await import("/src/lib/backend/proxyFetch");
 
-    const listResponse = await proxyFetch(`${serverUrl}/auth/devices`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
+    const listResponse = await proxyFetch(`${serverUrl}/auth/devices`);
     if (!listResponse.ok) {
       throw new Error(`Failed to list devices: HTTP ${listResponse.status}`);
     }
@@ -442,17 +411,12 @@ export async function removeCurrentDeviceFromAccount(
 
       const response = await proxyFetch(`${serverUrl}/auth/devices/${device.id}`, {
         method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
       });
 
       if (response.ok) {
         return device.id;
       }
 
-      // The server rejects deleting the currently authenticated device with 400.
-      // That is fine here; we only need to free any removable device slot.
       if (response.status === 400 || response.status === 404) {
         attempts.push(`${device.id}:${response.status}`);
         continue;
@@ -577,7 +541,7 @@ export async function createSyncedWorkspaceViaUi(
     .poll(async () => await currentWorkspaceName(page), { timeout: 45000 })
     .toBe(workspaceName);
 
-  await waitForSyncSession(page);
+  await waitForSyncSettled(page);
 
   await expect
     .poll(async () => await currentWorkspaceProviderLink(page), { timeout: 30000 })
@@ -717,55 +681,61 @@ export async function downloadRemoteWorkspaceViaUi(
 }
 
 // ---------------------------------------------------------------------------
-// Sync status helpers
+// Sync helpers
 // ---------------------------------------------------------------------------
 
-export async function readSyncState(
+/**
+ * Trigger a full push+pull sync cycle on the given page.
+ */
+export async function triggerSync(
   page: import("@playwright/test").Page,
-): Promise<string | null> {
-  return page.evaluate(() => {
-    const bridge = (globalThis as {
-      __diaryx_e2e?: {
-        getSyncStatus: () => Promise<string | null>;
-      };
-    }).__diaryx_e2e;
-
-    return (async () => {
-      try {
-        const { getBackend, createApi } = await import("/src/lib/backend");
-        const backend = await getBackend();
-        const api = createApi(backend);
-        const status = await api.executePluginCommand("diaryx.sync", "GetSyncStatus", {});
-
-        if (
-          status
-          && typeof status === "object"
-          && "state" in status
-          && typeof (status as { state?: unknown }).state === "string"
-        ) {
-          return (status as { state: string }).state;
-        }
-      } catch {
-        // Fall back to the UI bridge while the plugin/backend is still booting.
-      }
-
-      if (!bridge) {
-        return null;
-      }
-
-      return bridge.getSyncStatus();
-    })();
+): Promise<void> {
+  await page.evaluate(async () => {
+    const bridge = (globalThis as any).__diaryx_e2e;
+    if (bridge?.triggerSync) {
+      return bridge.triggerSync();
+    }
+    // Fallback: call plugin command directly
+    const { getBackend, createApi } = await import("/src/lib/backend");
+    const backend = await getBackend();
+    const api = createApi(backend);
+    await api.executePluginCommand("diaryx.sync", "Sync", {});
   });
 }
 
-export async function waitForSyncSession(
+/**
+ * Read the current sync status from the plugin.
+ * Returns the `state` field: "synced", "dirty", or null.
+ */
+export async function readSyncState(
   page: import("@playwright/test").Page,
-): Promise<void> {
-  await expect
-    .poll(async () => await readSyncState(page), { timeout: 45000 })
-    .toMatch(/^(syncing|synced)$/);
+): Promise<string | null> {
+  return page.evaluate(async () => {
+    try {
+      const { getBackend, createApi } = await import("/src/lib/backend");
+      const backend = await getBackend();
+      const api = createApi(backend);
+      const status = await api.executePluginCommand("diaryx.sync", "GetSyncStatus", {});
+
+      if (
+        status
+        && typeof status === "object"
+        && "state" in status
+        && typeof (status as { state?: unknown }).state === "string"
+      ) {
+        return (status as { state: string }).state;
+      }
+    } catch {
+      // Plugin may not be ready yet.
+    }
+
+    return null;
+  });
 }
 
+/**
+ * Wait until the sync plugin reports "synced" state.
+ */
 export async function waitForSyncSettled(
   page: import("@playwright/test").Page,
   timeoutMs: number = 60000,
@@ -1004,7 +974,7 @@ export async function readFrontmatter(
     }
 
     return bridge.readFrontmatter(pathToRead);
-  }, entryPath);
+  }, pathToRead);
 }
 
 function normalizeJsonValue(value: unknown): unknown {
@@ -1092,7 +1062,7 @@ export async function entryExists(
     }
 
     return bridge.entryExists(pathToCheck);
-  }, entryPath);
+  }, pathToCheck);
 }
 
 export async function rootEntryPath(
@@ -1114,95 +1084,8 @@ export async function rootEntryPath(
 }
 
 // ---------------------------------------------------------------------------
-// Sync-specific helpers
+// Plugin command execution
 // ---------------------------------------------------------------------------
-
-export async function openEntryForSync(
-  page: import("@playwright/test").Page,
-  entryPath: string,
-): Promise<void> {
-  const openPromise = page.evaluate((pathToOpen) => {
-    const bridge = (globalThis as {
-      __diaryx_e2e?: {
-        openEntryForSync: (path: string) => Promise<void>;
-      };
-    }).__diaryx_e2e;
-
-    if (!bridge) {
-      throw new Error("Diaryx E2E bridge is not available");
-    }
-
-    return bridge.openEntryForSync(pathToOpen);
-  }, entryPath);
-
-  await Promise.all([
-    openPromise,
-    allowPermissionPrompts(page, 1000, 15000),
-  ]);
-}
-
-export async function queueBodyUpdateForSync(
-  page: import("@playwright/test").Page,
-  entryPath: string,
-): Promise<void> {
-  const queuePromise = page.evaluate((pathToQueue) => {
-    const bridge = (globalThis as {
-      __diaryx_e2e?: {
-        queueBodyUpdateForSync: (path: string) => Promise<void>;
-      };
-    }).__diaryx_e2e;
-
-    if (!bridge) {
-      throw new Error("Diaryx E2E bridge is not available");
-    }
-
-    return bridge.queueBodyUpdateForSync(pathToQueue);
-  }, entryPath);
-
-  await Promise.all([
-    queuePromise,
-    allowPermissionPrompts(page, 1000, 15000),
-  ]);
-}
-
-export async function listSyncedFiles(
-  page: import("@playwright/test").Page,
-): Promise<string[]> {
-  return page.evaluate(() => {
-    const bridge = (globalThis as {
-      __diaryx_e2e?: {
-        listSyncedFiles: () => Promise<string[]>;
-      };
-    }).__diaryx_e2e;
-
-    if (!bridge) {
-      throw new Error("Diaryx E2E bridge is not available");
-    }
-
-    return bridge.listSyncedFiles();
-  });
-}
-
-export async function uploadWorkspaceSnapshot(
-  page: import("@playwright/test").Page,
-  remoteId: string,
-): Promise<void> {
-  const uploadPromise = page.evaluate(async (linkedRemoteId) => {
-    const { getBackend, createApi } = await import("/src/lib/backend");
-    const backend = await getBackend();
-    const api = createApi(backend);
-    await api.executePluginCommand("diaryx.sync", "UploadWorkspaceSnapshot", {
-      remote_id: linkedRemoteId,
-      mode: "replace",
-      include_attachments: true,
-    });
-  }, remoteId);
-
-  await Promise.all([
-    uploadPromise,
-    allowPermissionPrompts(page, 1000, 15000),
-  ]);
-}
 
 export async function executePluginCommand(
   page: import("@playwright/test").Page,
@@ -1234,6 +1117,31 @@ export async function executePluginCommand(
   }
 
   throw new Error(`Failed to execute ${pluginId}:${command}`);
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot helpers
+// ---------------------------------------------------------------------------
+
+export async function uploadWorkspaceSnapshot(
+  page: import("@playwright/test").Page,
+  remoteId: string,
+): Promise<void> {
+  const uploadPromise = page.evaluate(async (linkedRemoteId) => {
+    const { getBackend, createApi } = await import("/src/lib/backend");
+    const backend = await getBackend();
+    const api = createApi(backend);
+    await api.executePluginCommand("diaryx.sync", "UploadWorkspaceSnapshot", {
+      remote_id: linkedRemoteId,
+      mode: "replace",
+      include_attachments: true,
+    });
+  }, remoteId);
+
+  await Promise.all([
+    uploadPromise,
+    allowPermissionPrompts(page, 1000, 15000),
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1369,7 +1277,7 @@ export async function setupSyncedPair(
 
   const linked = await createSyncedWorkspaceViaUi(pageA, remoteWorkspaceName);
   await installSyncPluginInCurrentWorkspace(pageA, wasmBase64);
-  await waitForSyncSession(pageA);
+  await waitForSyncSettled(pageA);
 
   await expect
     .poll(async () => await rootEntryPath(pageA), { timeout: 15000 })
@@ -1390,7 +1298,7 @@ export async function setupSyncedPair(
     });
 
   await installSyncPluginInCurrentWorkspace(pageB, wasmBase64);
-  await waitForSyncSession(pageB);
+  await waitForSyncSettled(pageB);
 
   await expect
     .poll(async () => await rootEntryPath(pageB), { timeout: 15000 })
@@ -1464,7 +1372,7 @@ export async function setupSingleSyncClient(
 
   const linked = await createSyncedWorkspaceViaUi(page, workspaceName);
   await installSyncPluginInCurrentWorkspace(page, wasmBase64);
-  await waitForSyncSession(page);
+  await waitForSyncSettled(page);
 
   await expect
     .poll(async () => await rootEntryPath(page), { timeout: 15000 })

@@ -13,7 +13,7 @@ import type {
   PluginConfig,
   PluginPermissions,
 } from "@/models/stores/permissionStore.svelte";
-import { inspectPluginWasm, loadAllPlugins } from "$lib/plugins/browserPluginManager.svelte";
+import { inspectPluginWasm, loadAllPlugins, loadPluginWithCustomInit } from "$lib/plugins/browserPluginManager.svelte";
 import { executeProviderPluginCommand } from "$lib/sync/providerPluginCommands";
 import {
   addLocalWorkspace,
@@ -22,7 +22,9 @@ import {
   createLocalWorkspace,
   getLocalWorkspace,
   getWorkspaceStorageType,
+  removeLocalWorkspace,
 } from "$lib/storage/localWorkspaceRegistry.svelte";
+import { resetBackend } from "$lib/backend";
 import {
   captureProviderPluginForTransfer,
   installCapturedProviderPlugin,
@@ -326,25 +328,69 @@ export async function downloadWorkspace(
 
   await installCapturedProviderPlugin(pluginId, capturedProviderPlugin);
 
-  // Load plugins so the provider plugin is available for commands
-  await loadAllPlugins();
+  // Load the provider plugin with a minimal init payload.
+  // The workspace is empty (no root index yet) so the standard
+  // buildBrowserPluginInitPayload would fail trying to resolve the
+  // workspace root.  We provide "." (the OPFS root) plus auth/server
+  // context so the plugin can connect and download.
+  if (capturedProviderPlugin) {
+    const buf = capturedProviderPlugin.buffer.slice(
+      capturedProviderPlugin.byteOffset,
+      capturedProviderPlugin.byteOffset + capturedProviderPlugin.byteLength,
+    ) as ArrayBuffer;
+
+    const { getServerUrl, getToken } = await import("$lib/auth");
+    await loadPluginWithCustomInit(buf, {
+      workspace_root: workspaceRoot || ".",
+      workspace_id: localWs.id,
+      write_to_disk: true,
+      server_url: getServerUrl() ?? null,
+      auth_token: getToken() ?? null,
+    });
+  } else {
+    // Fallback: full load (existing workspace may already have content)
+    await loadAllPlugins();
+  }
 
   const workspaceApi = createApi(backend);
 
   onProgress?.({ percent: 40, message: "Downloading workspace..." });
 
-  const result = await executeProviderPluginCommand<DownloadWorkspaceResponse>({
-    api: workspaceApi,
-    pluginId,
-    command: "DownloadWorkspace",
-    params: {
-      workspace_root: workspaceRoot,
-      remote_id: params.remoteId,
-      link: !!params.link,
-    },
-  });
+  let result: DownloadWorkspaceResponse | null;
+  try {
+    const downloadPromise = executeProviderPluginCommand<DownloadWorkspaceResponse>({
+      api: workspaceApi,
+      pluginId,
+      command: "DownloadWorkspace",
+      params: {
+        workspace_root: workspaceRoot,
+        remote_id: params.remoteId,
+        link: !!params.link,
+      },
+    });
 
-  if (workspacePluginDefaults) {
+    const DOWNLOAD_TIMEOUT_MS = 120_000; // 2 minutes
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(
+        "Workspace download timed out. The server may be unreachable or the workspace may be too large. Please try again.",
+      )), DOWNLOAD_TIMEOUT_MS),
+    );
+
+    result = await Promise.race([downloadPromise, timeoutPromise]);
+  } catch (err) {
+    // Rollback: remove the half-created workspace from the registry and reset backend
+    console.error("[workspaceProviderService] DownloadWorkspace failed, rolling back:", err);
+    removeLocalWorkspace(localWs.id);
+    resetBackend();
+    throw err;
+  }
+
+  // Persist default plugin permissions — but only for fresh workspaces.
+  // When restoring from remote, the downloaded root index already has its
+  // own frontmatter/content; writing permission defaults would overwrite it
+  // because the WASM backend's in-memory state doesn't reflect the
+  // plugin-written files yet.
+  if (workspacePluginDefaults && !params.link) {
     try {
       const rootIndexPath = await workspaceApi.findRootIndex(workspaceRoot);
       await persistPluginDefaultPermissions({

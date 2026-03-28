@@ -37,7 +37,7 @@ Settings panel components for `SettingsDialog.svelte`.
 | `DebugInfo.svelte` | Runtime app/config path diagnostics. On Tauri it can read the active log file into the panel and, on desktop, reveal that file in the system file manager. |
 | `ImportSettings.svelte` | ZIP import flow for importing a Diaryx workspace export. |
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
-| `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified, and local installs review requested permissions on both browser and Tauri paths before install. |
+| `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified, and local installs review requested permissions on both browser and Tauri paths before install. Uninstall also clears workspace-level `plugins.<id>` / `disabled_plugins` entries through the Rust backend command path and drops plugin-owned local metadata / namespaces when present. |
 | `PluginSettingsTab.svelte` | Declarative plugin field renderer, including generic host actions, follow-up commands, workspace metadata patch handling, and temporary file-byte bridging for plugin commands that call `host_request_file`. |
 | `ICloudSettings.svelte` | iCloud Drive toggle and sync status (iOS Apple builds only). Conditionally rendered in the Data tab. |
 | `syncSettingsLogic.ts` | Shared sync/storage usage helpers used by settings UIs. |

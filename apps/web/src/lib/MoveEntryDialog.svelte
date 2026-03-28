@@ -4,8 +4,16 @@
   import type { TreeNode } from "./backend";
   import {
     getRenderableSidebarChildren,
-    findTreeNode,
   } from "./leftSidebarSelection";
+  import {
+    collectInitiallyExpandedMovePaths,
+    collectMoveDisabledPaths,
+    collectMoveMatchingPaths,
+    computeMoveDialogAction,
+    highlightMoveQueryMatch,
+    isMoveNodeExpanded,
+    isMoveNodeVisible,
+  } from "./moveEntryDialog";
   import {
     ChevronRight,
     FolderClosed,
@@ -37,73 +45,21 @@
   let hoverTarget = $state<{ path: string; position: 'above' | 'below' | 'on' } | null>(null);
   let expandedNodes = $state(new Set<string>());
 
-  // Compute the set of paths that are descendants of the entry being moved (including itself)
   let disabledPaths = $derived.by(() => {
-    const paths = new Set<string>();
-    if (!tree || !entryPath) return paths;
-    const entryNode = findTreeNode(tree, entryPath);
-    if (!entryNode) return paths;
-    function collectDescendants(node: TreeNode) {
-      paths.add(node.path);
-      for (const child of getRenderableSidebarChildren(node)) {
-        collectDescendants(child);
-      }
-    }
-    collectDescendants(entryNode);
-    return paths;
+    return collectMoveDisabledPaths(tree, entryPath);
   });
 
-  // Compute which nodes match the search query (and their ancestors)
   let matchingPaths = $derived.by(() => {
-    if (!searchQuery.trim() || !tree) return null;
-    const query = searchQuery.toLowerCase();
-    const matches = new Set<string>();
-    const ancestors = new Set<string>();
-
-    function visit(node: TreeNode, parentChain: string[]) {
-      const name = node.name.replace(".md", "").toLowerCase();
-      if (name.includes(query)) {
-        matches.add(node.path);
-        for (const p of parentChain) ancestors.add(p);
-      }
-      const children = getRenderableSidebarChildren(node);
-      for (const child of children) {
-        visit(child, [...parentChain, node.path]);
-      }
-    }
-    visit(tree, []);
-    return { matches, ancestors };
+    return collectMoveMatchingPaths(tree, searchQuery);
   });
 
-  // Auto-expand the branch containing the entry being moved on open
   $effect(() => {
     if (open && tree && entryPath) {
-      const initial = new Set<string>();
-      function findAndExpand(node: TreeNode, chain: string[]): boolean {
-        if (node.path === entryPath) {
-          for (const p of chain) initial.add(p);
-          return true;
-        }
-        for (const child of getRenderableSidebarChildren(node)) {
-          if (findAndExpand(child, [...chain, node.path])) return true;
-        }
-        return false;
-      }
-      findAndExpand(tree, []);
-      expandedNodes = initial;
+      expandedNodes = collectInitiallyExpandedMovePaths(tree, entryPath);
       searchQuery = "";
       hoverTarget = null;
     }
   });
-
-  function findParentNode(root: TreeNode, targetPath: string): TreeNode | null {
-    for (const child of root.children) {
-      if (child.path === targetPath) return root;
-      const found = findParentNode(child, targetPath);
-      if (found) return found;
-    }
-    return null;
-  }
 
   function toggleExpand(path: string) {
     const next = new Set(expandedNodes);
@@ -152,36 +108,13 @@
   }
 
   function handleClick(path: string) {
-    if (!hoverTarget || !tree) return;
-    const { position } = hoverTarget;
+    const action = computeMoveDialogAction(tree, entryPath, hoverTarget && { ...hoverTarget, path });
+    if (!action) return;
 
-    if (position === 'on') {
-      onMove(entryPath, path);
+    if (action.type === "reorder") {
+      onReorderChildren(action.parentPath, action.childPaths);
     } else {
-      const targetParent = findParentNode(tree, path);
-      const sourceParent = findParentNode(tree, entryPath);
-
-      if (targetParent && sourceParent && targetParent.path === sourceParent.path) {
-        // Same parent — reorder
-        const children = getRenderableSidebarChildren(targetParent);
-        const childPaths = children.map(c => c.path);
-        const fromIndex = childPaths.indexOf(entryPath);
-        const toIndex = childPaths.indexOf(path);
-        if (fromIndex !== -1 && toIndex !== -1 && fromIndex !== toIndex) {
-          childPaths.splice(fromIndex, 1);
-          const insertIndex = position === 'below'
-            ? childPaths.indexOf(path) + 1
-            : childPaths.indexOf(path);
-          childPaths.splice(insertIndex, 0, entryPath);
-          onReorderChildren(targetParent.path, childPaths);
-        }
-      } else if (targetParent) {
-        // Different parent — reparent with position hint
-        onMove(entryPath, targetParent.path, {
-          beforePath: position === 'above' ? path : undefined,
-          afterPath: position === 'below' ? path : undefined,
-        });
-      }
+      onMove(entryPath, action.targetPath, action.position);
     }
 
     open = false;
@@ -189,28 +122,15 @@
   }
 
   function isNodeVisible(node: TreeNode): boolean {
-    if (!matchingPaths) return true;
-    return matchingPaths.matches.has(node.path) || matchingPaths.ancestors.has(node.path);
+    return isMoveNodeVisible(node.path, matchingPaths);
   }
 
   function isNodeExpanded(path: string): boolean {
-    if (matchingPaths) {
-      // When searching, auto-expand ancestors of matches
-      return matchingPaths.ancestors.has(path) || matchingPaths.matches.has(path);
-    }
-    return expandedNodes.has(path);
+    return isMoveNodeExpanded(path, expandedNodes, matchingPaths);
   }
 
   function highlightMatch(text: string): string {
-    if (!searchQuery.trim()) return text;
-    const query = searchQuery.toLowerCase();
-    const lower = text.toLowerCase();
-    const idx = lower.indexOf(query);
-    if (idx === -1) return text;
-    const before = text.slice(0, idx);
-    const match = text.slice(idx, idx + query.length);
-    const after = text.slice(idx + query.length);
-    return `${before}<mark class="bg-yellow-200 dark:bg-yellow-800 rounded-sm">${match}</mark>${after}`;
+    return highlightMoveQueryMatch(text, searchQuery);
   }
 
   function handleOpenChange(newOpen: boolean) {

@@ -19,6 +19,8 @@ async function loadPluginInstallService(options?: {
   frontmatterPlugins?: Record<string, { permissions: Record<string, unknown> }>;
   resolvedRootIndexPath?: string;
   workspaceTreePath?: string | null;
+  currentWorkspaceId?: string | null;
+  pluginMetadata?: Record<string, Record<string, unknown>>;
 }) {
   vi.resetModules();
 
@@ -68,6 +70,8 @@ async function loadPluginInstallService(options?: {
       plugins: options?.frontmatterPlugins ?? {},
     }),
     setFrontmatterProperty: vi.fn().mockResolvedValue(null),
+    removeFrontmatterProperty: vi.fn().mockResolvedValue(undefined),
+    removeWorkspacePluginData: vi.fn().mockResolvedValue(undefined),
   };
   const createApi = vi.fn(() => api);
   const getBackend = vi.fn().mockResolvedValue(backend);
@@ -110,6 +114,18 @@ async function loadPluginInstallService(options?: {
             : { path: options.workspaceTreePath },
     },
   }));
+  vi.doMock("$lib/storage/localWorkspaceRegistry.svelte", () => ({
+    getCurrentWorkspaceId: vi.fn(() => options?.currentWorkspaceId ?? "local-1"),
+    getPluginMetadata: vi.fn((workspaceId: string, pluginId: string) =>
+      workspaceId === (options?.currentWorkspaceId ?? "local-1")
+        ? options?.pluginMetadata?.[pluginId]
+        : undefined,
+    ),
+    setPluginMetadata: vi.fn(),
+  }));
+  vi.doMock("$lib/namespace/namespaceService", () => ({
+    deleteNamespace: vi.fn().mockResolvedValue(undefined),
+  }));
   vi.doMock("@/models/stores/permissionStore.svelte", () => ({
     permissionStore: {
       getPluginsConfig: vi.fn(() => undefined),
@@ -121,6 +137,8 @@ async function loadPluginInstallService(options?: {
 
   const service = await import("./pluginInstallService");
   const installSource = await import("./pluginInstallSource.svelte");
+  const workspaceRegistry = await import("$lib/storage/localWorkspaceRegistry.svelte");
+  const namespaceService = await import("$lib/namespace/namespaceService");
 
   return {
     backend,
@@ -133,13 +151,17 @@ async function loadPluginInstallService(options?: {
     pluginStore,
     proxyFetch,
     preservePluginEditorExtensions,
+    namespaceService,
     service,
+    workspaceRegistry,
   };
 }
 
 async function loadBrowserPluginInstallService(options?: {
   inMemoryPluginsConfig?: Record<string, { permissions: Record<string, unknown> }>;
   frontmatterPlugins?: Record<string, { permissions: Record<string, unknown> }>;
+  currentWorkspaceId?: string | null;
+  pluginMetadata?: Record<string, Record<string, unknown>>;
 }) {
   vi.resetModules();
 
@@ -162,6 +184,8 @@ async function loadBrowserPluginInstallService(options?: {
     getFrontmatter: vi.fn().mockResolvedValue({
       plugins: options?.frontmatterPlugins ?? {},
     }),
+    removeFrontmatterProperty: vi.fn().mockResolvedValue(undefined),
+    removeWorkspacePluginData: vi.fn().mockResolvedValue(undefined),
     executePluginCommand: vi.fn().mockResolvedValue({ success: true }),
   };
   const createApi = vi.fn(() => api);
@@ -199,6 +223,18 @@ async function loadBrowserPluginInstallService(options?: {
   vi.doMock("@/models/stores/workspaceStore.svelte", () => ({
     workspaceStore: { tree: { path: "index.md" } },
   }));
+  vi.doMock("$lib/storage/localWorkspaceRegistry.svelte", () => ({
+    getCurrentWorkspaceId: vi.fn(() => options?.currentWorkspaceId ?? "local-1"),
+    getPluginMetadata: vi.fn((workspaceId: string, pluginId: string) =>
+      workspaceId === (options?.currentWorkspaceId ?? "local-1")
+        ? options?.pluginMetadata?.[pluginId]
+        : undefined,
+    ),
+    setPluginMetadata: vi.fn(),
+  }));
+  vi.doMock("$lib/namespace/namespaceService", () => ({
+    deleteNamespace: vi.fn().mockResolvedValue(undefined),
+  }));
   vi.doMock("@/models/stores/permissionStore.svelte", () => ({
     permissionStore: {
       getPluginsConfig: vi.fn(() => options?.inMemoryPluginsConfig),
@@ -209,6 +245,8 @@ async function loadBrowserPluginInstallService(options?: {
   }));
 
   const service = await import("./pluginInstallService");
+  const workspaceRegistry = await import("$lib/storage/localWorkspaceRegistry.svelte");
+  const namespaceService = await import("$lib/namespace/namespaceService");
 
   return {
     api,
@@ -217,8 +255,10 @@ async function loadBrowserPluginInstallService(options?: {
     getBackend,
     inspectPluginWasm,
     installPlugin,
+    namespaceService,
     proxyFetch,
     service,
+    workspaceRegistry,
   };
 }
 
@@ -258,8 +298,27 @@ describe("pluginInstallService", () => {
   });
 
   it("clears enabled state and refreshes manifests after a Tauri uninstall", async () => {
-    const { backend, createApi, installSource, pluginStore, preservePluginEditorExtensions, service } =
-      await loadPluginInstallService();
+    const {
+      api,
+      backend,
+      createApi,
+      installSource,
+      namespaceService,
+      pluginStore,
+      preservePluginEditorExtensions,
+      service,
+      workspaceRegistry,
+    } = await loadPluginInstallService({
+      frontmatterPlugins: {
+        "diaryx.spoiler": { permissions: {} },
+        "diaryx.other": { permissions: {} },
+      },
+      pluginMetadata: {
+        "diaryx.spoiler": {
+          namespace_id: "ns-123",
+        },
+      },
+    });
 
     installSource.setInstalledPluginSource("diaryx.spoiler", "local");
 
@@ -277,7 +336,39 @@ describe("pluginInstallService", () => {
       expect.objectContaining({ kind: "mock-api" }),
     );
     expect(pluginStore.preloadInsertCommandIcons).toHaveBeenCalledTimes(1);
+    expect(api.removeWorkspacePluginData).toHaveBeenCalledWith(
+      "workspace/index.md",
+      "diaryx.spoiler",
+    );
+    expect(namespaceService.deleteNamespace).toHaveBeenCalledWith("ns-123");
+    expect(workspaceRegistry.setPluginMetadata).toHaveBeenCalledWith(
+      "local-1",
+      "diaryx.spoiler",
+      null,
+    );
     expect(installSource.getInstalledPluginSource("diaryx.spoiler")).toBeNull();
+  });
+
+  it("removes workspace plugin data through the backend helper on browser uninstall", async () => {
+    const { api, service, workspaceRegistry } = await loadBrowserPluginInstallService({
+      pluginMetadata: {
+        "diaryx.spoiler": {
+          remoteWorkspaceId: "remote-1",
+        },
+      },
+    });
+
+    await service.uninstallPlugin("diaryx.spoiler");
+
+    expect(api.removeWorkspacePluginData).toHaveBeenCalledWith(
+      "index.md",
+      "diaryx.spoiler",
+    );
+    expect(workspaceRegistry.setPluginMetadata).toHaveBeenCalledWith(
+      "local-1",
+      "diaryx.spoiler",
+      null,
+    );
   });
 
   it("reviews requested permissions before a Tauri install", async () => {

@@ -644,6 +644,14 @@ pub enum Command {
         /// New configuration value.
         config: JsonValue,
     },
+
+    /// Remove workspace-level plugin metadata from the root index frontmatter.
+    RemoveWorkspacePluginData {
+        /// Root index path for the current workspace.
+        root_index_path: String,
+        /// Plugin identifier to remove.
+        plugin: String,
+    },
 }
 
 impl Command {
@@ -683,6 +691,12 @@ impl Command {
             | Command::GetAvailableAudiences { path }
             | Command::GetEffectiveAudience { path } => {
                 *path = normalizer(path);
+            }
+
+            Command::RemoveWorkspacePluginData {
+                root_index_path, ..
+            } => {
+                *root_index_path = normalizer(root_index_path);
             }
 
             // --- Variants with `path` as Option<String> (file paths, not directories) ---

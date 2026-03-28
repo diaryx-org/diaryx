@@ -138,9 +138,18 @@ to the same setup flow (`AddWorkspaceDialog.svelte`) instead of exposing separat
 running the selected command action. This prevents overlapping Radix dialogs
 when a command opens another modal (for example, `New Entry`).
 
+Favorite-command selection, command grouping, and mobile dismiss-threshold
+rules now live in `commandPalette.ts` so the palette shell can stay focused on
+rendering and gesture wiring while the data-shaping logic is unit-tested
+directly.
+
 `NewEntryModal.svelte` also guards its parent-picker root expansion effect so it
 does not continuously rewrite `pickerExpanded`. This avoids reactive update-loop
 errors that can leave overlapping dialogs/focus traps on screen.
+
+`MoveEntryDialog.svelte` keeps its tree search, disabled-path collection, and
+same-parent reorder planning in `moveEntryDialog.ts` so the modal shell stays
+focused on rendering while the move rules are unit-tested directly.
 
 The command palette can now be plugin-owned via a `UiContribution::CommandPalette`
 surface contribution. When no plugin owns the surface, the built-in fallback is

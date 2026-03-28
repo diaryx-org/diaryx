@@ -2,8 +2,6 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use diaryx_core::frontmatter::extract_body;
-
 fn main() {
     println!("cargo:rerun-if-changed=README.md");
 
@@ -13,4 +11,22 @@ fn main() {
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set by Cargo");
     fs::write(Path::new(&out_dir).join("README.md"), body).expect("Failed to write README.md");
+}
+
+fn extract_body(content: &str) -> &str {
+    if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
+        return content;
+    }
+
+    let rest = &content[4..];
+    if let Some(end_idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
+        let body_start = end_idx + 5;
+        if body_start < rest.len() {
+            &rest[body_start..]
+        } else {
+            ""
+        }
+    } else {
+        content
+    }
 }

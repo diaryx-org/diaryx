@@ -24,7 +24,7 @@ exclude:
 
 Host-side namespace management extracted from the publish plugin.
 
-Namespace operations (create namespace, manage audiences, claim subdomains,
+Namespace operations (create/delete namespace, manage audiences, claim subdomains,
 generate tokens, custom domains) talk directly to the sync server via
 `proxyFetch` instead of round-tripping through the WASM plugin guest. This
 makes namespace management available to any plugin and removes the WASM

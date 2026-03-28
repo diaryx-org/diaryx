@@ -125,6 +125,10 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   ancestor index (not just the immediate directory) and clears stale `part_of`
   when no destination index exists, so `contents`/`part_of` stay consistent
   after external moves into unindexed folders.
+- `Command::RemoveWorkspacePluginData` owns uninstall-time cleanup for the root
+  index's `plugins.<id>` entry and matching `disabled_plugins` entry, so
+  frontends do not need to hand-edit workspace frontmatter when removing a
+  plugin.
 
 ## TypeScript Binding Notes
 

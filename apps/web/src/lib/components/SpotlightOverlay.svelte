@@ -3,6 +3,14 @@
   import { Button } from "$lib/components/ui/button";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import type { SpotlightStep } from "$lib/marketplace/types";
+  import {
+    getSpotlightCutout,
+    getSpotlightSwipeDirection,
+    getSpotlightTooltipStyle,
+    shouldAdvanceWhenTargetCollapses,
+    shouldPlaceMobileCardAtTop,
+    SPOTLIGHT_RADIUS,
+  } from "./spotlightOverlay";
 
   interface MobileTargetAction {
     prepare: () => Promise<(() => void) | null>;
@@ -40,8 +48,7 @@
   function updateTargetRect() {
     if (currentTarget) {
       const rect = currentTarget.getBoundingClientRect();
-      // On mobile, detect if sidebar was closed externally (element has no dimensions)
-      if (isMobileMode && rect.width === 0 && rect.height === 0) {
+      if (shouldAdvanceWhenTargetCollapses(isMobileMode, rect)) {
         next();
         return;
       }
@@ -143,13 +150,12 @@
   function handleTouchEnd(e: TouchEvent) {
     const dx = e.changedTouches[0].clientX - touchStartX;
     const dy = e.changedTouches[0].clientY - touchStartY;
-    // Only count horizontal swipes (ignore vertical)
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
-      if (dx < 0) {
-        next(); // swipe left = next
-      } else {
-        prev(); // swipe right = previous
-      }
+    const swipeDirection = getSpotlightSwipeDirection(dx, dy);
+
+    if (swipeDirection === "next") {
+      next();
+    } else if (swipeDirection === "previous") {
+      prev();
     }
   }
 
@@ -170,62 +176,26 @@
     };
   });
 
-  // Cutout dimensions with padding
-  const PAD = 8;
-  const RADIUS = 8;
+  const RADIUS = SPOTLIGHT_RADIUS;
 
-  let cutoutX = $derived(targetRect ? targetRect.left - PAD : 0);
-  let cutoutY = $derived(targetRect ? targetRect.top - PAD : 0);
-  let cutoutW = $derived(targetRect ? targetRect.width + PAD * 2 : 0);
-  let cutoutH = $derived(targetRect ? targetRect.height + PAD * 2 : 0);
+  let cutout = $derived(getSpotlightCutout(targetRect));
+  let cutoutX = $derived(cutout.x);
+  let cutoutY = $derived(cutout.y);
+  let cutoutW = $derived(cutout.width);
+  let cutoutH = $derived(cutout.height);
 
-  // On mobile, move the card to the top when the target is in the bottom half of the viewport
   let mobileCardAtTop = $derived(
-    isMobileMode && targetRect != null && targetRect.bottom > window.innerHeight / 2
+    shouldPlaceMobileCardAtTop(isMobileMode, targetRect, window.innerHeight)
   );
 
-  // Tooltip positioning (desktop only)
-  const TOOLTIP_GAP = 12;
-  const TOOLTIP_WIDTH = 320;
-  const TOOLTIP_HEIGHT_ESTIMATE = 140; // approximate height for clamping
-  const VIEWPORT_MARGIN = 16;
-
-  let tooltipStyle = $derived.by(() => {
-    if (!targetRect || !currentStep || isMobileMode) return "display: none";
-
-    const { placement } = currentStep;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    let top = 0;
-    let left = 0;
-
-    switch (placement) {
-      case "right":
-        top = targetRect.top + targetRect.height / 2 - TOOLTIP_HEIGHT_ESTIMATE / 2;
-        left = targetRect.right + PAD + TOOLTIP_GAP;
-        break;
-      case "left":
-        top = targetRect.top + targetRect.height / 2 - TOOLTIP_HEIGHT_ESTIMATE / 2;
-        left = targetRect.left - PAD - TOOLTIP_GAP - TOOLTIP_WIDTH;
-        break;
-      case "bottom":
-        top = targetRect.bottom + PAD + TOOLTIP_GAP;
-        left = targetRect.left + targetRect.width / 2 - TOOLTIP_WIDTH / 2;
-        break;
-      case "top":
-        top = targetRect.top - PAD - TOOLTIP_GAP - TOOLTIP_HEIGHT_ESTIMATE;
-        left = targetRect.left + targetRect.width / 2 - TOOLTIP_WIDTH / 2;
-        break;
-      default:
-        return "display: none";
-    }
-
-    // Clamp to viewport
-    top = Math.max(VIEWPORT_MARGIN, Math.min(top, vh - TOOLTIP_HEIGHT_ESTIMATE - VIEWPORT_MARGIN));
-    left = Math.max(VIEWPORT_MARGIN, Math.min(left, vw - TOOLTIP_WIDTH - VIEWPORT_MARGIN));
-
-    return `top: ${top}px; left: ${left}px; width: ${TOOLTIP_WIDTH}px`;
-  });
+  let tooltipStyle = $derived.by(() =>
+    getSpotlightTooltipStyle(
+      targetRect,
+      currentStep?.placement ?? null,
+      isMobileMode,
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+  );
 </script>
 
 <svelte:window onkeydown={handleKeydown} />

@@ -696,6 +696,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             Command::SetPluginConfig { plugin, config } => {
                 self.cmd_set_plugin_config(plugin, config).await
             }
+            Command::RemoveWorkspacePluginData {
+                root_index_path,
+                plugin,
+            } => {
+                self.cmd_remove_workspace_plugin_data(root_index_path, plugin)
+                    .await
+            }
         }
     }
 

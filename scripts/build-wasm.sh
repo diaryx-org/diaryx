@@ -38,6 +38,13 @@ if [[ "$OSTYPE" == darwin* ]]; then
             fi
             export SDKROOT="$SDK_PATH"
         fi
+
+        # Force host build scripts and proc-macro crates to use the Xcode toolchain
+        # instead of any ambient Nix cc-wrapper state.
+        export CC=/usr/bin/cc
+        export CXX=/usr/bin/c++
+        export AR=/usr/bin/ar
+        export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/cc
     fi
 fi
 

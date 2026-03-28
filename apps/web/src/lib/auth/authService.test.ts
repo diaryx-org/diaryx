@@ -86,7 +86,7 @@ describe("AuthService", () => {
       stubFetch(mockResponse({}, { status: 500, ok: false }));
 
       await expect(service.requestMagicLink("user@example.com")).rejects.toMatchObject({
-        message: "Failed to request magic link",
+        message: "Server returned 500. Make sure this is a valid Diaryx sync server.",
         statusCode: 500,
       });
     });

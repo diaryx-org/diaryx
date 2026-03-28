@@ -78,9 +78,19 @@ bun run check
 # Unit tests
 bunx vitest run
 
+# Coverage
+bun run test:coverage
+
 # E2E tests
 bun run test:e2e
 ```
+
+Coverage excludes generated typings/assets, the shared shadcn-style `ui/`
+primitive layer, bootstrap-only entrypoints, and files that are currently poor
+fits for V8 instrumentation (for example the WASM worker bridge). When Svelte
+components accumulate reusable geometry/filtering/state-transition logic, prefer
+moving that logic into nearby `.ts` helpers with direct Vitest coverage rather
+than forcing line coverage through large UI shells.
 
 ### Sync E2E Notes
 

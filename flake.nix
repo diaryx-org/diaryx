@@ -237,6 +237,11 @@
               unset MACOSX_DEPLOYMENT_TARGET
 
               # Bypass Nix's cc-wrapper for iOS targets because it injects macOS min version flags
+              export CC=/usr/bin/cc
+              export CXX=/usr/bin/c++
+              export AR=/usr/bin/ar
+              export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/cc
+
               export CC_aarch64_apple_ios=/usr/bin/clang
               export CXX_aarch64_apple_ios=/usr/bin/clang++
               export AR_aarch64_apple_ios=/usr/bin/ar

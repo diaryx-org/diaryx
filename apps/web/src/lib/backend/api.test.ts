@@ -1661,6 +1661,17 @@ describe('api', () => {
         params: { plugin: 'diaryx.daily', config: { theme: 'light' } },
       })
     })
+
+    it('should remove workspace plugin data', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({ type: 'Ok' })
+
+      await api.removeWorkspacePluginData('README.md', 'diaryx.daily')
+
+      expect(mockBackend.execute).toHaveBeenCalledWith({
+        type: 'RemoveWorkspacePluginData',
+        params: { root_index_path: 'README.md', plugin: 'diaryx.daily' },
+      })
+    })
   })
 
   describe('permission denial handling', () => {

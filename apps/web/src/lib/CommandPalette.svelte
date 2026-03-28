@@ -7,6 +7,11 @@
   import { getFavoritesStore } from "$lib/stores/favoritesStore.svelte";
   import type { CommandDefinition } from "$lib/commandRegistry";
   import {
+    getFavoriteCommands,
+    getGroupedCommands,
+    shouldDismissPalette,
+  } from "$lib/commandPalette";
+  import {
     Star,
     GripVertical,
     ChevronUp,
@@ -38,21 +43,11 @@
   // ── Derived command lists ────────────────────────────────────────────
 
   const favoriteCommands = $derived(
-    favoritesStore.ids
-      .map((id) => commandRegistry.get(id))
-      .filter((cmd): cmd is CommandDefinition => !!cmd && cmd.available()),
+    getFavoriteCommands(commandRegistry, favoritesStore.ids),
   );
 
   const groupedCommands = $derived(
-    (["insert", "entry", "editor", "workspace"] as const)
-      .map((g) => ({
-        key: g,
-        label: g.charAt(0).toUpperCase() + g.slice(1),
-        commands: [...commandRegistry.values()].filter(
-          (c) => c.group === g && c.available(),
-        ),
-      }))
-      .filter((g) => g.commands.length > 0),
+    getGroupedCommands(commandRegistry),
   );
 
   // ── Command execution ────────────────────────────────────────────────
@@ -166,7 +161,7 @@
 
   function handleHandleTouchEnd() {
     if (!dismissDragging) return;
-    if (dismissDragY > 80) {
+    if (shouldDismissPalette(dismissDragY)) {
       closeWithAnimation();
     }
     dismissDragY = 0;

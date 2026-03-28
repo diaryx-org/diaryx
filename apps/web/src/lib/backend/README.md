@@ -182,6 +182,11 @@ other fetch null-body statuses) to `Response` objects with `null` bodies so
 no-content endpoints (for example, `DELETE /api/workspaces/{id}`) do not throw
 `Response cannot have a body with the given status`.
 
+The proxy helper also has direct unit coverage for browser-vs-Tauri routing,
+credential injection, and null-body response construction so fetch callers can
+rely on one shared transport contract instead of testing those branches through
+higher-level auth/marketplace surfaces only.
+
 Marketplace plugin registry fetches and `.wasm` artifact downloads now also go
 through `proxyFetch` on Tauri, which keeps TestFlight iOS plugin installs off
 the WKWebView network path and routes them through native `reqwest` instead.

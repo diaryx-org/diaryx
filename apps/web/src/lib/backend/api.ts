@@ -1264,6 +1264,16 @@ export function createApi(backend: Backend) {
       });
     },
 
+    /** Remove workspace-level plugin data from the root index frontmatter. */
+    async removeWorkspacePluginData(rootIndexPath: string, plugin: string): Promise<void> {
+      await backend.execute({
+        type: 'RemoveWorkspacePluginData' as any,
+        params: { root_index_path: rootIndexPath, plugin },
+      } as any);
+      await dispatchFileSavedEvent(rootIndexPath, { bodyChanged: false });
+      await mirrorWorkspaceMutation();
+    },
+
     /** Execute a plugin-specific command. */
     executePluginCommand: pluginCommand,
     getPluginComponentHtml,

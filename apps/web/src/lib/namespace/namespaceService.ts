@@ -94,6 +94,13 @@ export async function createNamespace(id?: string): Promise<NamespaceInfo> {
   });
 }
 
+export async function deleteNamespace(nsId: string): Promise<void> {
+  await apiFetch<void>(
+    `/namespaces/${encodeURIComponent(nsId)}`,
+    { method: 'DELETE' },
+  );
+}
+
 export async function listAudiences(nsId: string): Promise<AudienceInfo[]> {
   return apiFetch<AudienceInfo[]>(
     `/namespaces/${encodeURIComponent(nsId)}/audiences`,

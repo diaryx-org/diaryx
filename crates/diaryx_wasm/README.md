@@ -51,6 +51,18 @@ Current filesystem test suites live in:
 which provides a unified command API (`execute()`/`executeJs()`) backed by native
 browser storage (OPFS, IndexedDB, File System Access API).
 
+The crate's `build.rs` is intentionally self-contained and does not link
+`diaryx_core` as a native build-dependency; it only strips frontmatter from the
+crate README before embedding it. That keeps `wasm-pack` host-tool builds
+lighter and avoids pulling the full core crate into the native build-script
+link step.
+
+On macOS, the surrounding build should also prefer the Xcode host linker
+(`/usr/bin/cc`) for native build scripts and proc-macro helpers. Mixing Rust's
+host artifacts with a Nix cc-wrapper / Nix-provided libiconv without the
+matching Apple SDK can break even third-party build scripts before wasm
+compilation starts.
+
 Sync and publish functionality are provided by Extism guest plugins
 (`diaryx_sync.wasm`, `diaryx_publish.wasm`) loaded at runtime by the browser
 plugin manager. CRDT commands are routed to the sync plugin via the frontend

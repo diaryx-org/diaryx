@@ -25,6 +25,12 @@ import {
   setInstalledPluginSource,
 } from "$lib/plugins/pluginInstallSource.svelte";
 import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
+import {
+  getCurrentWorkspaceId,
+  getPluginMetadata,
+  setPluginMetadata,
+} from "$lib/storage/localWorkspaceRegistry.svelte";
+import { deleteNamespace } from "$lib/namespace/namespaceService";
 
 const PERMISSION_LABELS: Record<PermissionType, string> = {
   read_files: "Read files",
@@ -216,12 +222,16 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
       getPluginStore().clearPluginEnabled(pluginId);
       preservePluginEditorExtensions(removedManifest);
       await refreshTauriPluginStore(backend);
+      await removePluginWorkspaceConfig(pluginId);
+      await cleanupPluginLocalMetadata(pluginId);
       return;
     }
   }
 
   await browserUninstallPlugin(pluginId);
   clearInstalledPluginSource(pluginId);
+  await removePluginWorkspaceConfig(pluginId);
+  await cleanupPluginLocalMetadata(pluginId);
 }
 
 function normalizeSha256(value: string): string {
@@ -259,6 +269,39 @@ async function getWorkspaceRootIndexContext(): Promise<{
     workspaceStore.tree?.path,
   );
   return { api, rootIndexPath };
+}
+
+async function removePluginWorkspaceConfig(pluginId: string): Promise<void> {
+  const { api, rootIndexPath } = await getWorkspaceRootIndexContext();
+  if (!rootIndexPath) return;
+  await api.removeWorkspacePluginData(rootIndexPath, pluginId);
+}
+
+function readPluginNamespaceId(
+  metadata: Record<string, unknown> | undefined,
+): string | null {
+  const raw = metadata?.namespace_id ?? metadata?.namespaceId;
+  return typeof raw === "string" && raw.trim() ? raw : null;
+}
+
+async function cleanupPluginLocalMetadata(pluginId: string): Promise<void> {
+  const workspaceId = getCurrentWorkspaceId();
+  if (!workspaceId) return;
+
+  const metadata = getPluginMetadata(workspaceId, pluginId);
+  const namespaceId = readPluginNamespaceId(metadata);
+  if (namespaceId) {
+    try {
+      await deleteNamespace(namespaceId);
+    } catch (error) {
+      console.warn(
+        `[pluginInstallService] Failed to delete namespace '${namespaceId}' during uninstall:`,
+        error,
+      );
+    }
+  }
+
+  setPluginMetadata(workspaceId, pluginId, null);
 }
 
 async function persistDefaultPermissions(

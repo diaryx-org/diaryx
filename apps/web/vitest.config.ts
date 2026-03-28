@@ -1,9 +1,10 @@
 import { defineConfig } from 'vitest/config'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+import { svelteTesting } from '@testing-library/svelte/vite'
 import { resolve } from 'path'
 
 export default defineConfig({
-  plugins: [svelte({ hot: !process.env.VITEST })],
+  plugins: [svelte({ hot: !process.env.VITEST }), svelteTesting()],
   resolve: {
     alias: {
       '$lib': resolve(__dirname, './src/lib'),
@@ -22,9 +23,15 @@ export default defineConfig({
       exclude: [
         'src/**/*.test.ts',
         'src/**/*.spec.ts',
+        'src/**/*.d.ts',
         'src/test/**',
+        'src/lib/test/**',
         'src/lib/backend/generated/**',
+        'src/lib/backend/serde_json/**',
+        'src/lib/backend/wasmWorkerNew.ts',
         'src/lib/components/ui/**',
+        'src/lib/wasm/**',
+        'src/main.ts',
       ],
     },
   },

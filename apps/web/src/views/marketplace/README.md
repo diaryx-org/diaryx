@@ -30,4 +30,4 @@ Marketplace UI for theme/style presets and plugin discovery/management.
 | `MarketplaceBundles.svelte` | Bundle catalog browsing with guided apply (theme + typography preset/overrides + plugin dependencies) |
 | `MarketplaceTemplates.svelte` | Creation-time template catalog browsing with install to workspace `_templates/` |
 | `MarketplaceStarters.svelte` | Starter workspace catalog browsing with apply (seed files + templates into workspace) |
-| `PluginMarketplace.svelte` | Full-screen marketplace implementation (legacy/alternate surface) |
+| `PluginMarketplace.svelte` | Full-screen marketplace implementation (legacy/alternate surface); now has focused component coverage for registry loading, search filtering, and registry install flows under mocked host/runtime dependencies. |

@@ -18,6 +18,10 @@ import {
   loadPluginIcon,
   getCachedPluginIcon,
 } from "$lib/plugins/pluginIconResolver";
+import {
+  getBuiltinWorkspaceProviders,
+} from "$lib/sync/builtinProviders";
+import type { WorkspaceProviderDescriptor } from "$lib/sync/providerTypes";
 
 /** Where an insert command appears in editor UI surfaces. */
 export type InsertCommandPlacement = "Picker" | "PickerAndStylePicker" | "All";
@@ -54,11 +58,6 @@ const WORKSPACE_PROVIDER_COMMANDS = [
 ] as const;
 
 type LegacyUiContribution = Record<string, unknown>;
-type LegacyWorkspaceProviderContribution = {
-  id: string;
-  label: string;
-  description?: string | null;
-};
 type LegacyStorageProviderContribution = {
   id: string;
   label: string;
@@ -370,14 +369,8 @@ function getStatusBarItems(): Array<{
 }
 
 /** Workspace provider entries (legacy slot or command-capability synthesis). */
-function getWorkspaceProviders(): Array<{
-  pluginId: PluginId;
-  contribution: LegacyWorkspaceProviderContribution;
-}> {
-  const result: Array<{
-    pluginId: PluginId;
-    contribution: LegacyWorkspaceProviderContribution;
-  }> = [];
+function getWorkspaceProviders(): WorkspaceProviderDescriptor[] {
+  const result: WorkspaceProviderDescriptor[] = [];
 
   for (const manifest of manifests) {
     const pluginId = String(manifest.id);
@@ -395,6 +388,7 @@ function getWorkspaceProviders(): Array<{
       result.push({
         pluginId: manifest.id,
         contribution: { id, label, description },
+        source: "plugin",
       });
     }
 
@@ -412,11 +406,12 @@ function getWorkspaceProviders(): Array<{
               ? manifest.description
               : null,
         },
+        source: "plugin",
       });
     }
   }
 
-  return result;
+  return [...result, ...getBuiltinWorkspaceProviders()];
 }
 
 /** Storage provider entries (legacy slot only). */

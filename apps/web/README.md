@@ -61,7 +61,8 @@ Web sync/share/provider/history/status behavior is plugin-owned:
 
 - Runtime: `diaryx_sync_extism` loaded as `sync`
 - Host rendering: generic plugin surfaces (sidebar/settings/status)
-- Host responsibilities: plugin dispatch + filesystem-event-driven refresh
+- Host responsibilities: provider routing (plugin + built-in) +
+  filesystem-event-driven refresh
 - No host CRDT bridge layer in `apps/web/src/lib/crdt`
 
 ## Validation

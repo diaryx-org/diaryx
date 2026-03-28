@@ -4,6 +4,8 @@ description: Host-side sync plugin integration services
 part_of: "[README](/apps/web/src/lib/README.md)"
 attachments:
   - "[extismBrowserLoader.ts](/apps/web/src/lib/plugins/extismBrowserLoader.ts)"
+  - "[builtinProviders.ts](/apps/web/src/lib/sync/builtinProviders.ts)"
+  - "[providerRouter.ts](/apps/web/src/lib/sync/providerRouter.ts)"
   - "[providerPluginCommands.ts](/apps/web/src/lib/sync/providerPluginCommands.ts)"
   - "[workspaceProviderService.ts](/apps/web/src/lib/sync/workspaceProviderService.ts)"
   - "[attachmentSyncService.ts](/apps/web/src/lib/sync/attachmentSyncService.ts)"
@@ -14,20 +16,25 @@ exclude:
 
 # Sync
 
-Host-side adapters for the external sync plugin runtime.
+Host-side adapters for workspace providers and the external sync plugin runtime.
 
 The web app does not own CRDT or sync protocol logic. It hosts plugins and
 routes plugin commands/events to backend APIs and UI stores. Workspace link
 state is tracked as provider-generic metadata in the local workspace registry,
 so the host only needs opaque `{ pluginId, remoteWorkspaceId }` links.
 
-Provider command dispatch is now a thin wrapper that adds `provider_id`.
-Provider guests resolve `server_url`, `auth_token`, and current workspace link
-state from the generic host runtime context. The host only passes an explicit
-`workspace_root` when a provider operation targets a known local workspace that
-is not necessarily the one currently open in the runtime context. Host UI
-surfaces also treat provider IDs as opaque links instead of special-casing
-`diaryx.sync` in status rendering or overwrite flows.
+Provider discovery can now come from either Extism plugin manifests or
+host-registered built-ins. Built-ins use the same provider ID and workspace
+link metadata model as plugins, but their commands are routed to host adapters
+instead of `executePluginCommand(...)`.
+
+Provider command dispatch adds `provider_id` for both plugin-backed and
+built-in providers. Provider guests resolve `server_url`, `auth_token`, and
+current workspace link state from the generic host runtime context. The host
+only passes an explicit `workspace_root` when a provider operation targets a
+known local workspace that is not necessarily the one currently open in the
+runtime context. Host UI surfaces also treat provider IDs as opaque links
+instead of special-casing `diaryx.sync` in status rendering or overwrite flows.
 
 Browser snapshot upload relies on the Extism host's filesystem-tree flattening
 to include index-backed directories. The browser loader therefore treats root
@@ -65,7 +72,9 @@ context and linked remote workspace ID.
 
 | File | Purpose |
 | --- | --- |
+| `builtinProviders.ts` | Host-registered workspace providers that only exist on specific runtimes (for example Apple/Tauri iCloud) |
+| `providerRouter.ts` | Routes provider commands to either built-in host adapters or Extism plugin commands |
 | `../plugins/extismBrowserLoader.ts` | Browser Extism host functions, including sync transport bridging |
-| `providerPluginCommands.ts` | Thin provider-command wrapper that adds `provider_id` and delegates execution to the guest |
+| `providerPluginCommands.ts` | Thin provider-command wrapper that delegates through the provider router |
 | `workspaceProviderService.ts` | Provider/workspace link, snapshot upload, download bootstrap, and explicit local workspace targeting via provider plugins |
 | `attachmentSyncService.ts` | Attachment transfer queue and metadata indexing |

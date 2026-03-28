@@ -209,6 +209,11 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+function throwHostFsError(action: string, error: unknown): never {
+  const detail = error instanceof Error ? error.message : String(error);
+  throw new Error(`${action} failed: ${detail}`);
+}
+
 function extractWorkspaceUpdateBase64(result: unknown): string | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -1214,11 +1219,11 @@ function buildHostFunctions(
         }
       },
       async host_write_file(cp: CallContext, offs: bigint) {
+        const input = cp.read(offs)?.json() as
+          | { path: string; content: string }
+          | undefined;
+        if (!input) return cp.store("");
         try {
-          const input = cp.read(offs)?.json() as
-            | { path: string; content: string }
-            | undefined;
-          if (!input) return cp.store("");
           const path = normalizeExtismHostPath(input.path);
           const backend = getBackendSync();
           const existsResp: any = await backend.execute({
@@ -1236,16 +1241,16 @@ function buildHostFunctions(
             params: { path, content: input.content },
           } as any);
         } catch (error) {
-          console.error("[extism] host_write_file failed:", error);
+          throwHostFsError("host_write_file", error);
         }
         return cp.store("");
       },
       async host_delete_file(cp: CallContext, offs: bigint) {
+        const input = cp.read(offs)?.json() as
+          | { path: string }
+          | undefined;
+        if (!input) return cp.store("");
         try {
-          const input = cp.read(offs)?.json() as
-            | { path: string }
-            | undefined;
-          if (!input) return cp.store("");
           const path = normalizeExtismHostPath(input.path);
           await requirePermission(opts, "delete_files", path);
           const backend = getBackendSync();
@@ -1254,16 +1259,16 @@ function buildHostFunctions(
             params: { path },
           } as any);
         } catch (error) {
-          console.error("[extism] host_delete_file failed:", error);
+          throwHostFsError("host_delete_file", error);
         }
         return cp.store("");
       },
       async host_write_binary(cp: CallContext, offs: bigint) {
+        const input = cp.read(offs)?.json() as
+          | { path: string; content: string }
+          | undefined;
+        if (!input) return cp.store("");
         try {
-          const input = cp.read(offs)?.json() as
-            | { path: string; content: string }
-            | undefined;
-          if (!input) return cp.store("");
           const path = normalizeExtismHostPath(input.path);
           const backend = getBackendSync();
           const existsResp: any = await backend.execute({
@@ -1284,7 +1289,7 @@ function buildHostFunctions(
           }
           await backend.writeBinary(path, bytes);
         } catch (error) {
-          console.error("[extism] host_write_binary failed:", error);
+          throwHostFsError("host_write_binary", error);
         }
         return cp.store("");
       },

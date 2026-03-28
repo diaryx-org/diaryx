@@ -1,6 +1,6 @@
 ---
 schema_version: 2
-generated_at: '2026-03-25T16:39:08.170573+00:00'
+generated_at: '2026-03-28T15:05:56.129637+00:00'
 cdn_base: https://app.diaryx.org/cdn
 plugins:
 - id: diaryx.ai
@@ -510,7 +510,7 @@ plugins:
       plugin_storage: Persist S3 connection settings for the current workspace.
 - id: diaryx.sync
   name: Sync
-  version: 0.2.1
+  version: 0.2.2
   description: Real-time multi-device sync across Diaryx workspaces
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -531,10 +531,10 @@ plugins:
   summary: Realtime multi-device workspace sync, snapshots, history, and workspace-provider
     flows.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.2.1/diaryx_sync_extism.wasm
-    sha256: 6e1661dc2296a0e6d9db9ddd3ddeac472a16a8a244d86384b1daad31fc277b04
-    size: 570587
-    published_at: '2026-03-25T01:00:15Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.2.2/diaryx_sync_extism.wasm
+    sha256: e44376798105d5d949f7ff37d8c1822675865dc71e0d49cb4ddf20aa88d8570b
+    size: 576462
+    published_at: '2026-03-26T19:58:28Z'
   ui:
   - slot: SettingsTab
     id: sync-settings
@@ -645,7 +645,7 @@ plugins:
 
 # Diaryx Plugin Registry
 
-Generated at 2026-03-25T16:39:08.170573+00:00
+Generated at 2026-03-28T15:05:56.129637+00:00
 
 **15** plugins available.
 
@@ -702,7 +702,7 @@ Google Drive storage backend.
 S3-compatible storage backend.
 
 ## Sync
-**ID:** `diaryx.sync` | **Version:** 0.2.1
+**ID:** `diaryx.sync` | **Version:** 0.2.2
 Realtime multi-device workspace sync, snapshots, history, and workspace-provider flows.
 
 ## Templating

@@ -35,6 +35,7 @@
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import {
     isStorageTypeSupported,
+    resolveStorageType,
     storeWorkspaceFileSystemHandle,
   } from "$lib/backend/storageType";
   import { switchWorkspace } from "$lib/workspace/switchWorkspace";
@@ -441,7 +442,11 @@
     if (isTauri() && workspacePathWasPicked && wsPath) {
       wsPath = await authorizeWorkspacePath(wsPath);
     }
-    const localWs = createLocalWorkspace(wsName, undefined, wsPath);
+    const localWs = createLocalWorkspace(
+      wsName,
+      await resolveStorageType(),
+      wsPath,
+    );
     await switchWorkspace(localWs.id, localWs.name);
 
     // If a starter workspace is selected, apply its content by importing the
@@ -505,7 +510,11 @@
     if (isTauri() && workspacePathWasPicked && wsPath) {
       wsPath = await authorizeWorkspacePath(wsPath);
     }
-    const localWs = createLocalWorkspace(wsName, undefined, wsPath);
+    const localWs = createLocalWorkspace(
+      wsName,
+      await resolveStorageType(),
+      wsPath,
+    );
     await switchWorkspace(localWs.id, localWs.name);
 
     const backend = await getBackend();

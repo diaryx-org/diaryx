@@ -35,6 +35,12 @@ to include index-backed directories. The browser loader therefore treats root
 so provider snapshots include workspace roots instead of uploading empty ZIPs
 for freshly created workspaces.
 
+Workspace download/bootstrap now uses a longer browser-side timeout window
+because provider restores pull files sequentially through the Extism host. The
+host still fails fast on per-request plugin/network errors, but it avoids
+aborting active restores just because a larger workspace exceeds a fixed
+two-minute wall clock budget.
+
 For live sync, the host forwards only generic file events. That includes
 emitting `file_saved` after non-title frontmatter edits so the guest can
 refresh workspace metadata and propagate create, rename, move, metadata, and

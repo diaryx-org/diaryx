@@ -95,12 +95,39 @@ When worker startup fails due browser restrictions, `WorkerBackendNew` now
 automatically falls back to an in-process (main-thread) WASM backend path so
 local workspace flows can still proceed without plugins/worker-only features.
 
+## OPFS Runtime Probe
+
+`storageType.ts` now distinguishes between nominal OPFS support and actual
+runtime usability. Async callers can resolve `opfs` to `indexeddb` up front
+when browsers expose `navigator.storage.getDirectory()` but the storage backend
+is unavailable in the current mode (for example Safari private browsing).
+
+`workerBackendNew.ts` uses that probe before both worker and main-thread
+initialization, which avoids misleading "Initializing with storage: opfs" logs
+and reduces restore/create noise before the backend falls back to IndexedDB.
+
+`localWorkspaceRegistry.svelte.ts` also uses the same probe before scanning the
+OPFS root, so unsupported runtimes skip best-effort workspace discovery instead
+of logging transient OPFS discovery warnings on every startup.
+
 ## Main-Thread WASM Fallback Loading
 
 `wasmWorkerNew.ts` now prefers an explicit WASM asset URL
 (`$lib/wasm/diaryx_wasm_bg.wasm`) when initializing `$wasm` outside the
 worker path. This avoids WebKit/dev fallback failures where wasm-pack's implicit
 `import.meta.url` resolution can fail to fetch the `.wasm` binary.
+
+## Preview Mock Backend
+
+`mockBackend.ts` backs preview/onboarding iframe flows with an in-memory
+backend. It now explicitly implements `GetFilesystemTree`, including subtree
+selection, hidden-file filtering, and depth pruning, so preview mode satisfies
+the same `Response::Tree` contract used by workspace asset storage and browser
+plugin startup.
+
+Unsupported mock commands now throw instead of silently returning `Ok`. That
+keeps preview/test failures localized to the missing command rather than
+surfacing later as confusing response-type mismatches.
 
 ## Sync Boundary (Plugin-Owned)
 
@@ -193,6 +220,10 @@ flow for browser and Tauri installs.
 - Browser plugin loading now enforces the same protocol-version compatibility
   range as the native Extism loader and preserves guest CLI declarations in the
   normalized manifest.
+- Browser Extism host file writes/deletes now propagate storage failures back to
+  the guest instead of logging and returning success. Provider-owned restore
+  flows therefore fail fast with a surfaced error when workspace writes are not
+  possible, rather than stalling indefinitely behind the launch overlay.
 
 ## Reveal In File Manager
 

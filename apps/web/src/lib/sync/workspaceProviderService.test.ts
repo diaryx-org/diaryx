@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getBackend: vi.fn(),
   createApi: vi.fn(),
+  resolveStorageType: vi.fn(),
   addLocalWorkspace: vi.fn(),
   setCurrentWorkspaceId: vi.fn(),
   setPluginMetadata: vi.fn(),
@@ -13,11 +14,16 @@ const mocks = vi.hoisted(() => ({
   installCapturedProviderPlugin: vi.fn(),
   inspectPluginWasm: vi.fn(),
   loadAllPlugins: vi.fn(),
+  loadPluginWithCustomInit: vi.fn(),
 }));
 
 vi.mock("$lib/backend", () => ({
   getBackend: mocks.getBackend,
   createApi: mocks.createApi,
+}));
+
+vi.mock("$lib/backend/storageType", () => ({
+  resolveStorageType: mocks.resolveStorageType,
 }));
 
 vi.mock("$lib/storage/localWorkspaceRegistry.svelte", () => ({
@@ -37,6 +43,12 @@ vi.mock("$lib/sync/browserProviderBootstrap", () => ({
 vi.mock("$lib/plugins/browserPluginManager.svelte", () => ({
   inspectPluginWasm: mocks.inspectPluginWasm,
   loadAllPlugins: mocks.loadAllPlugins,
+  loadPluginWithCustomInit: mocks.loadPluginWithCustomInit,
+}));
+
+vi.mock("$lib/auth", () => ({
+  getServerUrl: vi.fn(() => null),
+  getToken: vi.fn(() => null),
 }));
 
 import {
@@ -57,11 +69,13 @@ describe("workspaceProviderService", () => {
       name: "Journal",
       path: "/tmp/journal",
     });
+    mocks.resolveStorageType.mockResolvedValue("memory");
     mocks.createLocalWorkspace.mockReturnValue({ id: "local-1" });
     mocks.getWorkspaceStorageType.mockReturnValue("memory");
     mocks.captureProviderPluginForTransfer.mockResolvedValue(new Uint8Array([1, 2, 3]));
     mocks.installCapturedProviderPlugin.mockResolvedValue(undefined);
     mocks.loadAllPlugins.mockResolvedValue(undefined);
+    mocks.loadPluginWithCustomInit.mockResolvedValue(undefined);
     mocks.inspectPluginWasm.mockResolvedValue({
       pluginId: "diaryx.sync",
       requestedPermissions: undefined,
@@ -251,7 +265,17 @@ describe("workspaceProviderService", () => {
       "diaryx.sync",
       new Uint8Array([1, 2, 3]),
     );
-    expect(mocks.loadAllPlugins).toHaveBeenCalled();
+    expect(mocks.loadPluginWithCustomInit).toHaveBeenCalledWith(
+      new Uint8Array([1, 2, 3]).buffer,
+      {
+        workspace_root: "/tmp/remote-notes",
+        workspace_id: "local-1",
+        write_to_disk: true,
+        server_url: null,
+        auth_token: null,
+      },
+    );
+    expect(mocks.loadAllPlugins).not.toHaveBeenCalled();
     expect(downloadedWorkspaceApi.executePluginCommand).toHaveBeenCalledWith(
       "diaryx.sync",
       "DownloadWorkspace",
@@ -318,7 +342,7 @@ describe("workspaceProviderService", () => {
 
     await downloadWorkspace(
       "diaryx.sync",
-      { remoteId: "remote-1", name: "Remote Notes", link: true },
+      { remoteId: "remote-1", name: "Remote Notes", link: false },
     );
 
     expect(mocks.inspectPluginWasm).toHaveBeenCalled();
@@ -356,7 +380,17 @@ describe("workspaceProviderService", () => {
       "diaryx.sync",
       preFetchedWasm,
     );
-    expect(mocks.loadAllPlugins).toHaveBeenCalled();
+    expect(mocks.loadPluginWithCustomInit).toHaveBeenCalledWith(
+      preFetchedWasm.buffer,
+      {
+        workspace_root: "/tmp/remote-notes",
+        workspace_id: "local-1",
+        write_to_disk: true,
+        server_url: null,
+        auth_token: null,
+      },
+    );
+    expect(mocks.loadAllPlugins).not.toHaveBeenCalled();
     expect(downloadedWorkspaceApi.executePluginCommand).toHaveBeenCalledWith(
       "diaryx.sync",
       "DownloadWorkspace",

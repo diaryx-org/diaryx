@@ -17,6 +17,7 @@ export type StorageType = 'opfs' | 'indexeddb' | 'filesystem-access' | 'memory' 
 
 const STORAGE_TYPE_KEY = 'diaryx-storage-type';
 const FS_HANDLE_KEY = 'diaryx-fs-handle';
+let opfsRuntimeSupportPromise: Promise<boolean> | null = null;
 
 // ============================================================================
 // Browser Support Detection
@@ -57,6 +58,33 @@ export function isStorageTypeSupported(type: StorageType): boolean {
 }
 
 /**
+ * Probe whether OPFS is actually usable in the current runtime.
+ *
+ * Some browsers expose `navigator.storage.getDirectory()` even when the
+ * underlying storage is unavailable in the current mode (for example Safari
+ * private browsing). This check lets async callers downgrade before backend
+ * initialization rather than relying on late runtime fallback.
+ */
+export async function isOpfsUsable(): Promise<boolean> {
+  if (!isStorageTypeSupported('opfs')) {
+    return false;
+  }
+
+  if (!opfsRuntimeSupportPromise) {
+    opfsRuntimeSupportPromise = (async () => {
+      try {
+        await navigator.storage.getDirectory();
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+  }
+
+  return await opfsRuntimeSupportPromise;
+}
+
+/**
  * Get all supported storage types for the current browser.
  */
 export function getSupportedStorageTypes(): StorageType[] {
@@ -93,6 +121,28 @@ export function getStorageType(): StorageType {
   }
 
   return 'indexeddb';
+}
+
+/**
+ * Resolve the preferred storage type against runtime availability.
+ *
+ * This preserves the synchronous `getStorageType()` API for most callers while
+ * allowing async flows to avoid selecting OPFS in runtimes where it is exposed
+ * but unusable.
+ */
+export async function resolveStorageType(
+  preferred?: StorageType,
+): Promise<StorageType> {
+  const candidate = preferred ?? getStorageType();
+  if (candidate !== 'opfs') {
+    return candidate;
+  }
+
+  return (await isOpfsUsable()) ? 'opfs' : 'indexeddb';
+}
+
+export function resetStorageTypeRuntimeProbeForTests(): void {
+  opfsRuntimeSupportPromise = null;
 }
 
 /**

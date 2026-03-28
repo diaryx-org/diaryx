@@ -8,6 +8,7 @@
 import { getBackend, createApi } from "$lib/backend";
 import type { Api } from "$lib/backend/api";
 import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
+import { resolveStorageType } from "$lib/backend/storageType";
 import type {
   PermissionRule,
   PluginConfig,
@@ -308,15 +309,19 @@ export async function downloadWorkspace(
     ? (await inspectPluginWasm(toPluginBuffer(capturedProviderPlugin)))
       .requestedPermissions?.defaults
     : undefined;
+  const storageType = await resolveStorageType();
 
   onProgress?.({ percent: 10, message: "Creating local workspace..." });
 
-  const localWs = createLocalWorkspace(params.name);
+  const localWs = createLocalWorkspace(params.name, storageType);
   addLocalWorkspace({ id: localWs.id, name: params.name });
   setCurrentWorkspaceId(localWs.id);
 
-  const storageType = getWorkspaceStorageType(localWs.id);
-  const backend = await getBackend(localWs.id, params.name, storageType);
+  const backend = await getBackend(
+    localWs.id,
+    params.name,
+    getWorkspaceStorageType(localWs.id),
+  );
   const workspaceRoot = backend
     .getWorkspacePath()
     .replace(/\/index\.md$/, "")
@@ -369,10 +374,10 @@ export async function downloadWorkspace(
       },
     });
 
-    const DOWNLOAD_TIMEOUT_MS = 120_000; // 2 minutes
+    const DOWNLOAD_TIMEOUT_MS = 600_000; // 10 minutes for sequential browser pulls
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error(
-        "Workspace download timed out. The server may be unreachable or the workspace may be too large. Please try again.",
+        "Workspace download timed out. The server may be unreachable, the plugin may be stalled, or the workspace may be too large. Please try again.",
       )), DOWNLOAD_TIMEOUT_MS),
     );
 

@@ -12,7 +12,7 @@
 
 import type { Api } from '../lib/backend/api';
 import type { JsonValue } from '../lib/backend/generated/serde_json/JsonValue';
-import type { StorageType } from '../lib/backend/storageType';
+import { resolveStorageType, type StorageType } from '../lib/backend/storageType';
 import type { BundleRegistryEntry } from '$lib/marketplace/types';
 import {
   fetchStarterWorkspaceRegistry,
@@ -286,7 +286,7 @@ export async function applyOnboardingBundle(
 // ---------------------------------------------------------------------------
 
 export interface AutoCreateWorkspaceDeps {
-  createLocalWorkspace: (name: string) => { id: string; name: string; storageType?: StorageType };
+  createLocalWorkspace: (name: string, storageType?: StorageType) => { id: string; name: string; storageType?: StorageType };
   setCurrentWorkspaceId: (id: string) => void;
   getBackend: (id: string, name: string, storageType?: StorageType) => Promise<any>;
   createApi: (backend: any) => Api;
@@ -313,7 +313,10 @@ export async function autoCreateDefaultWorkspace(
   deps: AutoCreateWorkspaceDeps,
   bundle?: BundleRegistryEntry | null,
 ): Promise<{ id: string; name: string }> {
-  const ws = deps.createLocalWorkspace("My Workspace");
+  const ws = deps.createLocalWorkspace(
+    "My Workspace",
+    await resolveStorageType(),
+  );
   deps.setCurrentWorkspaceId(ws.id);
 
   try {

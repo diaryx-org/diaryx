@@ -21,6 +21,7 @@ import type { WorkerApi } from "./wasmWorkerNew";
 import {
   getStorageType,
   getWorkspaceFileSystemHandle,
+  resolveStorageType,
   storeWorkspaceFileSystemHandle,
   getStoredFileSystemHandle,
   storeFileSystemHandle,
@@ -156,7 +157,9 @@ export class WorkerBackendNew implements Backend {
     const { port1, port2 } = new MessageChannel();
     this.attachEventPort(port1);
 
-    const storageType = storageTypeOverride ?? getStorageType();
+    const storageType = await resolveStorageType(
+      storageTypeOverride ?? getStorageType(),
+    );
     console.log(
       `[WorkerBackendNew] Falling back to main-thread WASM backend with storage: ${storageType}`,
     );
@@ -304,7 +307,9 @@ export class WorkerBackendNew implements Backend {
     this.attachEventPort(port1);
 
     // Initialize the backend with storage type (use override if provided)
-    const storageType = storageTypeOverride ?? getStorageType();
+    const storageType = await resolveStorageType(
+      storageTypeOverride ?? getStorageType(),
+    );
     console.log(`[WorkerBackendNew] Initializing with storage: ${storageType}`);
 
     try {
@@ -416,7 +421,7 @@ export class WorkerBackendNew implements Backend {
           e,
         );
         await this.initMainThreadFallback(
-          storageTypeOverride,
+          storageType,
           workspaceId,
           workspaceName,
         );

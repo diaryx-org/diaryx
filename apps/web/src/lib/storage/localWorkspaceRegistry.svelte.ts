@@ -9,7 +9,11 @@
  * will automatically update when the registry changes.
  */
 
-import { getStorageType, type StorageType } from '$lib/backend/storageType';
+import {
+  getStorageType,
+  isOpfsUsable,
+  type StorageType,
+} from '$lib/backend/storageType';
 import type { WorkspaceEntry } from '$lib/backend/generated';
 import { generateUUID } from '$lib/utils';
 
@@ -625,7 +629,7 @@ const SYSTEM_DIRS = new Set(['diaryx', '.diaryx', 'guest']);
  * Returns the list of newly discovered workspaces.
  */
 export async function discoverOpfsWorkspaces(): Promise<LocalWorkspace[]> {
-  if (typeof navigator === 'undefined' || !navigator.storage?.getDirectory) return [];
+  if (!(await isOpfsUsable())) return [];
 
   try {
     const root = await navigator.storage.getDirectory();

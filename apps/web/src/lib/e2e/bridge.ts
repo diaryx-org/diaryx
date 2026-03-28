@@ -5,7 +5,6 @@
  * Extracted from App.svelte to keep the main component focused on UI wiring.
  */
 
-import { tick } from "svelte";
 import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
 import { createApi, type Api } from "../backend/api";
 import type { Backend } from "../backend/interface";
@@ -13,12 +12,8 @@ import type { JsonValue } from "../backend/generated/serde_json/JsonValue";
 import { getBackend } from "../backend";
 import { installLocalPlugin } from "$lib/plugins/pluginInstallService";
 import { getWorkspaceDirectoryPath } from "../../controllers/onboardingController";
+import { deleteEntryWithSync } from "../../controllers";
 import {
-  openEntry as openEntryController,
-  deleteEntryWithSync,
-} from "../../controllers";
-import {
-  entryStore,
   collaborationStore,
   permissionStore,
   workspaceStore,

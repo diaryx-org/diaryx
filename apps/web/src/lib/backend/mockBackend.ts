@@ -99,6 +99,120 @@ function buildTree(files: Map<string, MockFile>, rootPath: string): TreeNode {
   return buildNode(rootPath);
 }
 
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+/g, "/").replace(/\/$/, "");
+}
+
+function getNodeName(path: string): string {
+  const normalized = normalizePath(path);
+  if (!normalized) return ".";
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || normalized;
+}
+
+function isHiddenSegment(segment: string): boolean {
+  return segment.startsWith(".");
+}
+
+function isIndexFile(path: string, files: Map<string, MockFile>): boolean {
+  const file = files.get(path);
+  return Array.isArray(file?.frontmatter?.contents);
+}
+
+function makeTreeNode(
+  path: string,
+  files: Map<string, MockFile>,
+  children: TreeNode[] = [],
+): TreeNode {
+  const file = files.get(path);
+  return {
+    name: getNodeName(path),
+    description: file?.frontmatter?.description ?? null,
+    path,
+    is_index: isIndexFile(path, files),
+    children,
+    properties: {},
+  };
+}
+
+function buildFilesystemTree(
+  files: Map<string, MockFile>,
+  rawRootPath: string,
+  showHidden: boolean,
+): TreeNode {
+  const rootPath = normalizePath(rawRootPath || "workspace");
+  const directFile = files.has(rootPath);
+  if (directFile) {
+    return makeTreeNode(rootPath, files);
+  }
+
+  const rootNode = makeTreeNode(rootPath, files);
+  const directoryNodes = new Map<string, TreeNode>([[rootPath, rootNode]]);
+  const sortedPaths = Array.from(files.keys()).sort((a, b) => a.localeCompare(b));
+
+  for (const originalFilePath of sortedPaths) {
+    const filePath = normalizePath(originalFilePath);
+    if (!(filePath === rootPath || filePath.startsWith(`${rootPath}/`))) {
+      continue;
+    }
+
+    const relativePath = filePath === rootPath ? "" : filePath.slice(rootPath.length + 1);
+    if (!relativePath) {
+      continue;
+    }
+
+    const segments = relativePath.split("/").filter(Boolean);
+    if (!showHidden && segments.some(isHiddenSegment)) {
+      continue;
+    }
+
+    let currentPath = rootPath;
+    let currentNode = directoryNodes.get(rootPath)!;
+
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index];
+      const childPath = normalizePath(`${currentPath}/${segment}`);
+      const isLeaf = index === segments.length - 1;
+      let childNode = currentNode.children.find((child) => child.path === childPath);
+
+      if (!childNode) {
+        childNode = isLeaf
+          ? makeTreeNode(childPath, files)
+          : makeTreeNode(childPath, files, []);
+        currentNode.children.push(childNode);
+      }
+
+      if (!isLeaf) {
+        if (!directoryNodes.has(childPath)) {
+          directoryNodes.set(childPath, childNode);
+        }
+        currentNode = directoryNodes.get(childPath)!;
+        currentPath = childPath;
+      }
+    }
+  }
+
+  const sortChildren = (node: TreeNode): void => {
+    node.children.sort((a, b) => a.path.localeCompare(b.path));
+    for (const child of node.children) {
+      sortChildren(child);
+    }
+  };
+
+  sortChildren(rootNode);
+  return rootNode;
+}
+
+function cloneTreeWithDepth(node: TreeNode, maxDepth: number | null, currentDepth = 0): TreeNode {
+  const shouldPrune = maxDepth !== null && currentDepth >= maxDepth;
+  return {
+    ...node,
+    children: shouldPrune
+      ? []
+      : node.children.map((child) => cloneTreeWithDepth(child, maxDepth, currentDepth + 1)),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Default fallback data
 // ---------------------------------------------------------------------------
@@ -219,6 +333,17 @@ export class MockBackend implements Backend {
 
       case "GetWorkspaceTree":
         return { type: "Tree", data: this.tree };
+
+      case "GetFilesystemTree": {
+        const requestedPath = normalizePath(params?.path ?? "workspace");
+        const showHidden = Boolean(params?.show_hidden);
+        const depth =
+          typeof params?.depth === "number" && Number.isFinite(params.depth)
+            ? params.depth
+            : null;
+        const tree = buildFilesystemTree(this.files, requestedPath, showHidden);
+        return { type: "Tree", data: cloneTreeWithDepth(tree, depth) };
+      }
 
       case "GetEntry":
         return { type: "Entry", data: this.getEntry(params?.path ?? this.firstEntry()) };
@@ -369,7 +494,7 @@ export class MockBackend implements Backend {
         return { type: "Strings", data: [] };
 
       default:
-        return { type: "Ok" };
+        throw new Error(`MockBackend does not implement command: ${type}`);
     }
   }
 

@@ -107,6 +107,11 @@ command so sandboxed macOS builds persist a security-scoped bookmark for
 instead of saving a raw path that cannot be reopened on the next workspace
 switch.
 
+When restoring a remote workspace from onboarding, the welcome flow now skips
+bundle selection and instead inspects the restored root frontmatter to install
+any registry plugins declared by that workspace's `plugins` config (plus
+disabled plugin IDs that still need to be available locally).
+
 ## Mobile Swipe Behavior
 
 `App.svelte` supports progressive touch swipe gestures. All gestures are interactive — the target UI follows the finger during the swipe and snaps open or closed on release (threshold: 35%).

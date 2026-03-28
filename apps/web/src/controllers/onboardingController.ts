@@ -47,6 +47,35 @@ function normalizeFrontmatter(frontmatter: any): Record<string, any> {
   return frontmatter;
 }
 
+function getWorkspacePluginIds(frontmatter: unknown): string[] {
+  const normalized = normalizeFrontmatter(frontmatter);
+  const pluginIds = new Set<string>();
+
+  const pluginsRaw = normalized.plugins;
+  const plugins =
+    pluginsRaw instanceof Map
+      ? Object.fromEntries(pluginsRaw.entries())
+      : pluginsRaw;
+  if (plugins && typeof plugins === "object") {
+    for (const pluginId of Object.keys(plugins)) {
+      if (pluginId.trim()) {
+        pluginIds.add(pluginId);
+      }
+    }
+  }
+
+  const disabledPlugins = normalized.disabled_plugins;
+  if (Array.isArray(disabledPlugins)) {
+    for (const pluginId of disabledPlugins) {
+      if (typeof pluginId === "string" && pluginId.trim()) {
+        pluginIds.add(pluginId);
+      }
+    }
+  }
+
+  return Array.from(pluginIds);
+}
+
 export function getWorkspaceDirectoryPath(backendInstance: { getWorkspacePath(): string }): string {
   return backendInstance
     .getWorkspacePath()
@@ -500,7 +529,9 @@ export async function handleCreateWithProvider(
   restoreNamespace: { id: string; metadata?: { provider?: string; name?: string; [key: string]: unknown } | null } | null | undefined,
 ): Promise<OnCreateWithProviderResult> {
   if (restoreNamespace) {
-    // Restore from remote: download plugin bytes, create workspace from remote, then apply bundle
+    // Restore from remote: download provider plugin bytes, restore the
+    // workspace, then infer/install any additional registry plugins from the
+    // restored workspace's own root frontmatter.
     const providerId = providerPluginId ?? restoreNamespace.metadata?.provider ?? "diaryx.sync";
 
     // Check if the user provided a local override for the provider plugin
@@ -563,6 +594,7 @@ export async function handleCreateWithProvider(
     const { setActiveWorkspaceId } = await import("$lib/auth");
     setActiveWorkspaceId(result.localId);
     const dlBackend = await (await import("$lib/backend")).getBackend();
+    const dlApi = deps.autoCreateDeps.createApi(dlBackend);
     deps.autoCreateDeps.setBackend(dlBackend);
     deps.autoCreateDeps.clearRustApi();
     deps.autoCreateDeps.setCleanupEventSubscription(
@@ -580,14 +612,41 @@ export async function handleCreateWithProvider(
       }
     }
 
-    // Apply bundle plugins on top — exclude any plugins the user overrode locally
-    if (bundle && bundle.plugins.length > 0) {
-      try {
-        const effectiveBundle = excludeOverriddenPlugins(bundle, pluginOverrides);
-        await applyOnboardingBundle(effectiveBundle, deps.persistPermissionDefaults);
-      } catch (e) {
-        console.warn("[App] Bundle apply on restored workspace failed (non-fatal):", e);
+    try {
+      const rootIndexPath = await dlApi.resolveWorkspaceRootIndexPath(
+        dlBackend.getWorkspacePath(),
+      );
+      if (rootIndexPath) {
+        const frontmatter = await dlApi.getFrontmatter(rootIndexPath);
+        const pluginIds = getWorkspacePluginIds(frontmatter).filter(
+          (pluginId) => pluginId !== providerId,
+        );
+        if (pluginIds.length > 0) {
+          const { fetchPluginRegistry } = await import("$lib/plugins/pluginRegistry");
+          const { installRegistryPlugin } = await import("$lib/plugins/pluginInstallService");
+          const registry = await fetchPluginRegistry();
+          const registryPlugins = new Map(
+            registry.plugins.map((plugin) => [plugin.id, plugin]),
+          );
+          const overriddenPluginIds = new Set(
+            pluginOverrides?.map((override) => override.targetPluginId) ?? [],
+          );
+
+          for (const pluginId of pluginIds) {
+            if (overriddenPluginIds.has(pluginId)) continue;
+            const plugin = registryPlugins.get(pluginId);
+            if (!plugin) {
+              console.warn(
+                `[onboarding] Restored workspace requested plugin "${pluginId}" but it was not found in the registry`,
+              );
+              continue;
+            }
+            await installRegistryPlugin(plugin);
+          }
+        }
       }
+    } catch (e) {
+      console.warn("[App] Plugin inference on restored workspace failed (non-fatal):", e);
     }
   } else {
     // New workspace from bundle — install overrides before bundle apply so they aren't overwritten
@@ -617,7 +676,11 @@ export async function handleCreateWithProvider(
   await deps.dismissLaunchOverlay();
 
   return {
-    spotlightSteps: bundle?.spotlight?.length ? bundle.spotlight : null,
+    spotlightSteps: restoreNamespace
+      ? null
+      : bundle?.spotlight?.length
+        ? bundle.spotlight
+        : null,
   };
 }
 

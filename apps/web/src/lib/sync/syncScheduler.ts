@@ -2,9 +2,9 @@
  * Host-side debounced sync scheduler.
  *
  * After file mutation events, waits for a quiet period (no new mutations)
- * then triggers a SyncPush command on each linked workspace provider plugin.
- * This keeps sync timing in the host — plugins just track dirty state and
- * execute sync when told.
+ * then triggers a full Sync command on each linked workspace provider plugin.
+ * The same sync path is reused for workspace startup, tab visibility resume,
+ * and explicit manual sync requests from the footer.
  */
 
 import {
@@ -30,8 +30,9 @@ const FILE_MUTATION_EVENTS = new Set([
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let syncing = false;
 let teardown: (() => void) | null = null;
+let visibilityListenerInstalled = false;
 
-async function triggerSyncPush(): Promise<void> {
+async function triggerSync(): Promise<void> {
   const wsId = getCurrentWorkspaceId();
   if (!wsId) return;
 
@@ -43,14 +44,14 @@ async function triggerSyncPush(): Promise<void> {
     await Promise.allSettled(
       links.map(async (link) => {
         try {
-          const result = await dispatchCommand(link.pluginId, "SyncPush", {
+          const result = await dispatchCommand(link.pluginId, "Sync", {
             provider_id: link.pluginId,
           });
           if (!result.success) {
-            console.warn("[syncScheduler] SyncPush failed:", link.pluginId, result.error);
+            console.warn("[syncScheduler] Sync failed:", link.pluginId, result.error);
           }
         } catch (e) {
-          console.warn("[syncScheduler] SyncPush error:", link.pluginId, e);
+          console.warn("[syncScheduler] Sync error:", link.pluginId, e);
         }
       }),
     );
@@ -59,21 +60,28 @@ async function triggerSyncPush(): Promise<void> {
   }
 }
 
-function scheduleSyncPush(): void {
+function scheduleSync(): void {
   if (debounceTimer !== null) {
     clearTimeout(debounceTimer);
   }
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
     if (!syncing) {
-      triggerSyncPush();
+      void triggerSync();
     }
   }, SYNC_DEBOUNCE_MS);
 }
 
+function handleVisibilityChange(): void {
+  if (document.visibilityState !== "visible" || syncing) {
+    return;
+  }
+  void triggerSync();
+}
+
 const observer: PluginEventObserver = (event) => {
   if (FILE_MUTATION_EVENTS.has(event.event_type)) {
-    scheduleSyncPush();
+    scheduleSync();
   }
 };
 
@@ -81,6 +89,11 @@ const observer: PluginEventObserver = (event) => {
 export function startSyncScheduler(): void {
   if (teardown) return; // already running
   teardown = onPluginEventDispatched(observer);
+  if (!visibilityListenerInstalled) {
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    visibilityListenerInstalled = true;
+  }
+  void triggerSync();
 }
 
 /** Stop the scheduler and cancel any pending sync. */
@@ -91,4 +104,20 @@ export function stopSyncScheduler(): void {
   }
   teardown?.();
   teardown = null;
+  if (visibilityListenerInstalled) {
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    visibilityListenerInstalled = false;
+  }
+}
+
+/** Trigger an immediate manual sync for all linked providers in the current workspace. */
+export async function runManualSyncNow(): Promise<void> {
+  if (debounceTimer !== null) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+  if (syncing) {
+    return;
+  }
+  await triggerSync();
 }

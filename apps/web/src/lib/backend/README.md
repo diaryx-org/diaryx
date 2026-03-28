@@ -224,6 +224,11 @@ flow for browser and Tauri installs.
   the guest instead of logging and returning success. Provider-owned restore
   flows therefore fail fast with a surfaced error when workspace writes are not
   possible, rather than stalling indefinitely behind the launch overlay.
+- Browser plugin storage host calls also use the already-initialized synchronous
+  backend handle during lifecycle execution. That avoids re-entering backend
+  initialization from `host_storage_get`/`host_storage_set` while a plugin's
+  `init` export is still in flight, which is especially important for plugins
+  like `diaryx.daily` that read or persist config during startup.
 
 ## Reveal In File Manager
 

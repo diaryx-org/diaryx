@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import type { Api } from "$lib/backend/api";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import { runManualSyncNow } from "$lib/sync/syncScheduler";
 
   interface Props {
     api: Api | null;
@@ -20,6 +21,7 @@
   const statusItems = $derived(pluginStore.statusBarItems);
 
   let dataByItemId = $state<Record<string, SyncStatusLike>>({});
+  let syncingItemIds = $state<Record<string, boolean>>({});
 
   async function refreshStatusItems() {
     if (!api) return;
@@ -95,15 +97,53 @@
     }
     return "text-muted-foreground";
   }
+
+  function isManualSyncItem(pluginId: string, itemId: string): boolean {
+    return pluginId === "diaryx.sync" && itemId === "sync-status";
+  }
+
+  function itemAriaLabel(pluginId: string, itemId: string, fallbackLabel: string): string {
+    if (isManualSyncItem(pluginId, itemId)) {
+      return "Sync now";
+    }
+    return fallbackLabel;
+  }
+
+  async function handleItemClick(pluginId: string, itemId: string): Promise<void> {
+    if (!isManualSyncItem(pluginId, itemId) || syncingItemIds[itemId]) {
+      return;
+    }
+
+    syncingItemIds = { ...syncingItemIds, [itemId]: true };
+    try {
+      await runManualSyncNow();
+      await refreshStatusItems();
+    } finally {
+      syncingItemIds = { ...syncingItemIds, [itemId]: false };
+    }
+  }
 </script>
 
 <div class="flex items-center gap-2">
   {#each statusItems as item (item.pluginId + ':' + item.contribution.id)}
-    <span
-      class={`text-xs whitespace-nowrap ${stateClass(item.contribution.id)}`}
-      title={itemTitle(item.contribution.id, item.contribution.label)}
-    >
-      {itemText(item.contribution.id, item.contribution.label)}
-    </span>
+    {#if isManualSyncItem(String(item.pluginId), item.contribution.id)}
+      <button
+        type="button"
+        class={`text-xs whitespace-nowrap rounded px-1 py-0.5 transition-colors hover:bg-accent disabled:cursor-wait disabled:opacity-60 ${stateClass(item.contribution.id)}`}
+        title={`${itemTitle(item.contribution.id, item.contribution.label)} - Click to sync now`}
+        aria-label={itemAriaLabel(String(item.pluginId), item.contribution.id, item.contribution.label)}
+        disabled={syncingItemIds[item.contribution.id] === true}
+        onclick={() => void handleItemClick(String(item.pluginId), item.contribution.id)}
+      >
+        {itemText(item.contribution.id, item.contribution.label)}
+      </button>
+    {:else}
+      <span
+        class={`text-xs whitespace-nowrap ${stateClass(item.contribution.id)}`}
+        title={itemTitle(item.contribution.id, item.contribution.label)}
+      >
+        {itemText(item.contribution.id, item.contribution.label)}
+      </span>
+    {/if}
   {/each}
 </div>

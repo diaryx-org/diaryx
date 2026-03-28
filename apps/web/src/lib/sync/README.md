@@ -41,6 +41,12 @@ host still fails fast on per-request plugin/network errors, but it avoids
 aborting active restores just because a larger workspace exceeds a fixed
 two-minute wall clock budget.
 
+Bootstrap loads that use `loadPluginWithCustomInit(...)` also seed the guest's
+requested permission defaults into the in-memory runtime config for that
+session. That lets provider-owned restore flows write the initial downloaded
+files before workspace frontmatter exists, without stalling on a hidden
+permission prompt behind the launch overlay.
+
 For live sync, the host forwards only generic file events. That includes
 emitting `file_saved` after non-title frontmatter edits so the guest can
 refresh workspace metadata and propagate create, rename, move, metadata, and

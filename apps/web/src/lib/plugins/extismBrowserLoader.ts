@@ -32,8 +32,6 @@ import {
 } from "@/models/stores/permissionStore.svelte";
 import {
   getPluginStoragePath,
-  readWorkspaceBinary,
-  writeWorkspaceBinary,
 } from "$lib/workspace/workspaceAssetStorage";
 import { collectFilesystemTreePaths } from "./filesystemTreePaths";
 import { normalizeExtismHostPath } from "./extismHostPaths";
@@ -212,6 +210,16 @@ function bytesToBase64(bytes: Uint8Array): string {
 function throwHostFsError(action: string, error: unknown): never {
   const detail = error instanceof Error ? error.message : String(error);
   throw new Error(`${action} failed: ${detail}`);
+}
+
+function isMissingWorkspacePathError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("NotFound") ||
+    message.includes("not found") ||
+    message.includes("could not be found") ||
+    message.includes("object can not be found")
+  );
 }
 
 function extractWorkspaceUpdateBase64(result: unknown): string | null {
@@ -997,9 +1005,16 @@ function buildHostFunctions(
           }
           const pluginId = opts.getPluginId();
           const storagePath = getPluginStoragePath(pluginId, input.key);
-          const bytes = await readWorkspaceBinary(storagePath);
-          if (bytes) {
-            return cp.store(JSON.stringify({ data: bytesToBase64(bytes) }));
+          const backend = getBackendSync();
+          try {
+            const bytes = await backend.readBinary(storagePath);
+            if (bytes) {
+              return cp.store(JSON.stringify({ data: bytesToBase64(bytes) }));
+            }
+          } catch (error) {
+            if (!isMissingWorkspacePathError(error)) {
+              throw error;
+            }
           }
 
           // Migration path for pre-workspace browser plugin storage.
@@ -1009,7 +1024,7 @@ function buildHostFunctions(
           try {
             const parsed = JSON.parse(raw) as { data?: string };
             if (typeof parsed.data === "string" && parsed.data.length > 0) {
-              await writeWorkspaceBinary(storagePath, base64ToBytes(parsed.data));
+              await backend.writeBinary(storagePath, base64ToBytes(parsed.data));
             }
           } catch {
             // Ignore malformed legacy state and return the raw value for compatibility.
@@ -1036,7 +1051,8 @@ function buildHostFunctions(
             );
           }
           const pluginId = opts.getPluginId();
-          await writeWorkspaceBinary(
+          const backend = getBackendSync();
+          await backend.writeBinary(
             getPluginStoragePath(pluginId, input.key),
             base64ToBytes(input.data),
           );

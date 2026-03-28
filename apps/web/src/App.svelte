@@ -729,8 +729,8 @@
 
     getPluginStore().preloadInsertCommandIcons();
 
-    // Start debounced sync scheduler — pushes dirty files to linked providers
-    // after a quiet period following file mutations.
+    // Start debounced sync scheduler — runs full provider sync on startup,
+    // after a quiet period following file mutations, and when the tab resumes.
     startSyncScheduler();
   }
 

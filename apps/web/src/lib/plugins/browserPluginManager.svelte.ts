@@ -192,6 +192,27 @@ function hasRequestedPermissionDefaults(
   return Object.values(defaults).some((rule) => rule != null);
 }
 
+function mergePluginConfigDefaults(
+  pluginId: string,
+  defaults: PluginPermissions | undefined,
+): Record<string, PluginConfig> | undefined {
+  const current = pluginsConfigProvider?.();
+  if (!hasRequestedPermissionDefaults(defaults)) {
+    return current;
+  }
+
+  return {
+    ...(current ?? {}),
+    [pluginId]: {
+      ...(current?.[pluginId] ?? {}),
+      permissions: {
+        ...(current?.[pluginId]?.permissions ?? {}),
+        ...defaults,
+      },
+    },
+  };
+}
+
 async function persistRequestedPermissionDefaults(
   pluginId: string,
   requestedPermissions?: RequestedPermissionsManifest,
@@ -299,16 +320,22 @@ export async function loadPluginWithCustomInit(
     pluginId: "unknown-plugin",
     pluginName: "Unknown Plugin",
   };
+  let runtimeRequestedPermissionDefaults: PluginPermissions | undefined;
   const plugin = await loadBrowserPlugin(wasmBytes, {
     getPluginId: () => runtimeIdentity.pluginId,
     getPluginName: () => runtimeIdentity.pluginName,
-    getPluginsConfig: () => pluginsConfigProvider?.(),
+    getPluginsConfig: () =>
+      mergePluginConfigDefaults(
+        runtimeIdentity.pluginId,
+        runtimeRequestedPermissionDefaults,
+      ),
   }, {
     initializeLifecycle: false,
   });
   const id = plugin.manifest.id as unknown as string;
   runtimeIdentity.pluginId = id;
   runtimeIdentity.pluginName = String(plugin.manifest.name ?? id);
+  runtimeRequestedPermissionDefaults = plugin.requestedPermissions?.defaults;
 
   // Close and remove any existing instance with the same ID
   const existing = loadedPlugins.get(id);

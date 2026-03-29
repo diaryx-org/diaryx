@@ -28,6 +28,7 @@
 
 	"env": {
 		"production": {
+			"name": "diaryx-api",
 			// No public route — reached only via service binding from the web worker.
 			// To expose publicly later (e.g. for API access), add:
 			//   "routes": [{ "pattern": "api.diaryx.org/*", "zone_name": "diaryx.org" }]

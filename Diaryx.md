@@ -12,7 +12,6 @@ contents:
 - '[README](/crates/README.md)'
 - '[ROADMAP](/ROADMAP.md)'
 - '[Scripts](/scripts/scripts.md)'
-- '[Archive](/Archive.md)'
 audience:
 - public
 - developers
@@ -29,18 +28,17 @@ workspace_config:
     developers: bg-teal-500
     public: bg-teal-500
 ---
-# Diaryx
-
-<div style="display: flex; align-items: center; gap: 2rem; margin-bottom: 2rem;">
-
-  <h1 style="margin: 0; font-size: clamp(3.5rem, 12vw, 7rem); font-weight: 700; line-height: 1; letter-spacing: -0.03em;">Diaryx</h1>
-
-  <img src="_attachments/diaryx-icon.svg" alt="Diaryx icon" style="width: clamp(6rem, 18vw, 10rem); height: auto; flex-shrink: 0;" />
-
+<div>
+  <p align="center">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/icon-dark.png">
+      <source media="(prefers-color-scheme: light)" srcset="apps/web/public/icon.png">
+      <img alt="Diaryx icon" src="apps/web/public/icon.png" width="128">
+    </picture>
+  </p>
+  <h1 align="center">Diaryx</h1>
+  <p align="center"><strong>Your journal. Worth sharing.</strong></p>
 </div>
-
-
-### Your journal. Worth sharing.
 
 ---
 

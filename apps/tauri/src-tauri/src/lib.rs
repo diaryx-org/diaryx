@@ -180,6 +180,10 @@ pub fn run() {
             commands::oauth_webview,
             // iCloud Drive workspace storage
             commands::set_icloud_enabled,
+            commands::get_icloud_workspace_info,
+            commands::list_icloud_workspaces,
+            commands::link_icloud_workspace,
+            commands::restore_icloud_workspace,
             // Secure credential storage (OS keychain / encrypted file on Android)
             credentials::store_credential,
             credentials::get_credential,

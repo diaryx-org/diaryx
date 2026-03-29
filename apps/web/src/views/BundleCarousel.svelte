@@ -157,7 +157,7 @@
 >
   <!-- Back button -->
   {#if onBack}
-    <div class="absolute top-6 left-6 z-10 fade-in" style="animation-delay: 0.1s">
+    <div class="absolute top-[calc(env(safe-area-inset-top,0px)+var(--titlebar-area-height,0px)+1.5rem)] left-[calc(env(safe-area-inset-left,0px)+1.5rem)] z-10 fade-in" style="animation-delay: 0.1s">
       <button
         type="button"
         class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"

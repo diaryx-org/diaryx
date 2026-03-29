@@ -416,7 +416,7 @@ export async function initAuth(): Promise<void> {
  *
  * Note: This only saves the URL - it does NOT start sync.
  * Sync is started by setWorkspaceServer() which is called
- * from AddWorkspaceDialog after authentication completes.
+ * from onboarding after authentication completes.
  */
 export function setServerUrl(url: string | null): void {
   state.serverUrl = url;
@@ -426,7 +426,7 @@ export function setServerUrl(url: string | null): void {
     authService = createAuthService(url);
     // Note: We intentionally do NOT call setCollaborationServer() here.
     // Sync should only start after authentication completes and user
-    // chooses to sync via AddWorkspaceDialog.
+    // chooses to sync via onboarding.
   } else {
     localStorage.removeItem(STORAGE_KEYS.SERVER_URL);
     authService = null;
@@ -631,7 +631,7 @@ export async function refreshUserStorageUsage(): Promise<void> {
 }
 
 /**
- * Explicitly enable sync. Called by AddWorkspaceDialog after workspace initialization.
+ * Explicitly enable sync. Called by workspace setup flows after initialization.
  * This is the only way sync gets enabled — signing in alone does not enable it.
  */
 export function enableSync(): void {

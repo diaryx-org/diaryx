@@ -16,12 +16,14 @@ import type {
 } from "@/models/stores/permissionStore.svelte";
 import { inspectPluginWasm, loadAllPlugins, loadPluginWithCustomInit } from "$lib/plugins/browserPluginManager.svelte";
 import { executeProviderPluginCommand } from "$lib/sync/providerPluginCommands";
+import { isBuiltinProvider } from "$lib/sync/builtinProviders";
 import {
   addLocalWorkspace,
   setCurrentWorkspaceId,
   setPluginMetadata,
   createLocalWorkspace,
   getLocalWorkspace,
+  getLocalWorkspaces,
   getWorkspaceStorageType,
   removeLocalWorkspace,
 } from "$lib/storage/localWorkspaceRegistry.svelte";
@@ -304,6 +306,83 @@ export async function downloadWorkspace(
   /** Pre-fetched plugin wasm bytes — used when no existing workspace has the plugin installed. */
   pluginWasm?: Uint8Array | null,
 ): Promise<{ localId: string; filesImported: number }> {
+  if (isBuiltinProvider(pluginId)) {
+    onProgress?.({ percent: 15, message: "Restoring workspace..." });
+
+    const currentApi = await resolveApi(_api);
+    await executeProviderPluginCommand<DownloadWorkspaceResponse>({
+      api: currentApi,
+      pluginId,
+      command: "DownloadWorkspace",
+      params: {
+        remote_id: params.remoteId,
+        link: !!params.link,
+      },
+    });
+
+    resetBackend();
+    const restoredBackend = await getBackend();
+    const restoredApi = createApi(restoredBackend);
+    const restoredWorkspaceRoot = restoredBackend
+      .getWorkspacePath()
+      .replace(/\/index\.md$/, "")
+      .replace(/\/README\.md$/, "");
+
+    const existingWorkspace = restoredWorkspaceRoot
+      ? getLocalWorkspaces().find((workspace) => workspace.path === restoredWorkspaceRoot)
+      : null;
+    const localWs = existingWorkspace ?? createLocalWorkspace(
+      params.name,
+      undefined,
+      restoredWorkspaceRoot || undefined,
+    );
+    addLocalWorkspace({
+      id: localWs.id,
+      name: params.name,
+      ...(restoredWorkspaceRoot ? { path: restoredWorkspaceRoot } : {}),
+    });
+    setCurrentWorkspaceId(localWs.id);
+
+    if (params.link) {
+      setPluginMetadata(localWs.id, pluginId, {
+        remoteWorkspaceId: params.remoteId,
+        serverId: params.remoteId,
+        syncEnabled: true,
+      });
+    }
+
+    try {
+      const rootIndexPath = await restoredApi.resolveWorkspaceRootIndexPath(
+        restoredBackend.getWorkspacePath(),
+      );
+      if (rootIndexPath) {
+        const frontmatter = await restoredApi.getFrontmatter(rootIndexPath);
+        const title = typeof frontmatter.title === "string" && frontmatter.title.trim().length > 0
+          ? frontmatter.title.trim()
+          : null;
+        if (title && title !== params.name) {
+          addLocalWorkspace({
+            id: localWs.id,
+            name: title,
+            ...(restoredWorkspaceRoot ? { path: restoredWorkspaceRoot } : {}),
+          });
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `[workspaceProviderService] Failed to inspect restored built-in workspace ${pluginId}:`,
+        error,
+      );
+    }
+
+    onProgress?.({ percent: 100, message: "Done." });
+
+    return {
+      localId: localWs.id,
+      filesImported: 0,
+    };
+  }
+
   const capturedProviderPlugin = pluginWasm ?? await captureProviderPluginForTransfer(pluginId);
   const workspacePluginDefaults = capturedProviderPlugin
     ? (await inspectPluginWasm(toPluginBuffer(capturedProviderPlugin)))

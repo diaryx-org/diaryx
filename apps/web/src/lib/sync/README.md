@@ -28,6 +28,16 @@ host-registered built-ins. Built-ins use the same provider ID and workspace
 link metadata model as plugins, but their commands are routed to host adapters
 instead of `executePluginCommand(...)`.
 
+Built-in providers can also own restore flows that do not involve a plugin
+artifact at all. The current Apple/Tauri iCloud path uses a native host probe +
+restore command so onboarding can attach to an existing iCloud workspace
+without first migrating the current local workspace into that container.
+Authenticated iCloud onboarding also creates workspace namespace metadata with
+`provider: "builtin.icloud"` so other clients can discover that the workspace
+exists even when they cannot open the Apple-local storage backing.
+The onboarding restore UI therefore keeps those namespaces visible and marks
+them unavailable on unsupported clients instead of filtering them out.
+
 Provider command dispatch adds `provider_id` for both plugin-backed and
 built-in providers. Provider guests resolve `server_url`, `auth_token`, and
 current workspace link state from the generic host runtime context. The host

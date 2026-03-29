@@ -25,6 +25,13 @@
     getRegistryWorkspaceProviders,
     type RegistryWorkspaceProvider,
   } from "$lib/plugins/pluginRegistry";
+  import {
+    getBuiltinWorkspaceProviders,
+    getProviderDisplayLabel,
+    getProviderUnavailableReason,
+    isProviderAvailableHere,
+  } from "$lib/sync/builtinProviders";
+  import { listRemoteWorkspaces } from "$lib/sync/workspaceProviderService";
 
   interface Props {
     /** Called to create a local workspace (no account) */
@@ -68,9 +75,19 @@
   // Bundle + provider choice state
   let selectedBundle = $state<BundleRegistryEntry | null>(null);
   let pendingOverrides = $state<PluginOverride[] | undefined>(undefined);
-  let bundleProviders = $state<RegistryWorkspaceProvider[]>([]);
+  type WelcomeProvider = {
+    pluginId: string;
+    label: string;
+    description: string | null;
+    source: "plugin" | "builtin";
+    requiresAuth: boolean;
+  };
+
+  let bundleProviders = $state<WelcomeProvider[]>([]);
   let signInForProvider = $state<string | null>(null);
   let checkingProvider = $state(false);
+  let workspacePickerProviderId = $state<string | null>(null);
+  let workspacePickerBackView = $state<WelcomeView>('main');
 
   // Deferred zoom animation state
   let launchInfo = $state<BundleSelectInfo | null>(null);
@@ -97,6 +114,41 @@
   // Workspace picker state
   let workspaceNamespaces = $state<NamespaceEntry[]>([]);
   let loadingWorkspaces = $state(false);
+  const builtinProviders = $derived.by(() =>
+    getBuiltinWorkspaceProviders().map((provider): WelcomeProvider => ({
+      pluginId: String(provider.pluginId),
+      label: provider.contribution.label,
+      description: provider.contribution.description ?? null,
+      source: provider.source,
+      requiresAuth: false,
+    })),
+  );
+
+  function toWelcomeProvider(provider: RegistryWorkspaceProvider): WelcomeProvider {
+    return {
+      pluginId: provider.pluginId,
+      label: provider.label,
+      description: provider.description ?? null,
+      source: "plugin",
+      requiresAuth: true,
+    };
+  }
+
+  function toSyntheticNamespace(
+    providerId: string,
+    remote: { id: string; name: string },
+  ): NamespaceEntry {
+    return {
+      id: remote.id,
+      owner_user_id: "builtin",
+      created_at: Date.now(),
+      metadata: {
+        kind: "workspace",
+        provider: providerId,
+        name: remote.name,
+      },
+    };
+  }
 
   async function playZoomThen(callback: () => void | Promise<void>) {
     if (launchInfo) {
@@ -150,9 +202,12 @@
 
     try {
       const registry = await fetchPluginRegistry();
-      bundleProviders = getRegistryWorkspaceProviders(registry.plugins, pluginIds);
+      bundleProviders = [
+        ...getRegistryWorkspaceProviders(registry.plugins, pluginIds).map(toWelcomeProvider),
+        ...builtinProviders,
+      ];
     } catch {
-      bundleProviders = [];
+      bundleProviders = [...builtinProviders];
     }
 
     if (bundleProviders.length === 0) {
@@ -162,43 +217,59 @@
     }
   }
 
-  async function handleProviderSelected(provider: RegistryWorkspaceProvider) {
-    if (!isAuthenticated()) {
+  async function handleProviderSelected(provider: WelcomeProvider) {
+    if (provider.requiresAuth && !isAuthenticated()) {
       signInForProvider = provider.pluginId;
       navigateTo('sign-in');
       return;
     }
 
-    await checkProviderNamespaces(provider.pluginId);
+    await checkProviderNamespaces(provider);
   }
 
-  async function checkProviderNamespaces(providerPluginId: string) {
+  async function checkProviderNamespaces(provider: WelcomeProvider) {
     checkingProvider = true;
     try {
-      const allNamespaces = await listUserWorkspaceNamespaces();
-      const providerNs = allNamespaces.filter(
-        (ns) => ns.metadata?.provider === providerPluginId,
-      );
-
-      if (providerNs.length > 0) {
-        workspaceNamespaces = providerNs;
-        navigateTo('workspace-picker');
+      if (provider.source === "builtin") {
+        const remote = await listRemoteWorkspaces(provider.pluginId);
+        if (remote.length > 0) {
+          workspaceNamespaces = remote.map((entry) =>
+            toSyntheticNamespace(provider.pluginId, entry),
+          );
+          workspacePickerProviderId = provider.pluginId;
+          workspacePickerBackView = currentView === 'main' ? 'main' : 'provider-choice';
+          navigateTo('workspace-picker');
+          return;
+        }
       } else {
-        settingUp = true;
-        try {
-          await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId, pendingOverrides));
-        } catch (e) {
-          settingUp = false;
-          toast.error("Failed to set up workspace", {
-            description: e instanceof Error ? e.message : String(e),
-          });
+        const allNamespaces = await listUserWorkspaceNamespaces();
+        const providerNs = allNamespaces.filter(
+          (ns) => ns.metadata?.provider === provider.pluginId,
+        );
+
+        if (providerNs.length > 0) {
+          workspaceNamespaces = providerNs;
+          workspacePickerProviderId = provider.pluginId;
+          workspacePickerBackView = currentView === 'main' ? 'main' : 'provider-choice';
+          navigateTo('workspace-picker');
+          return;
         }
       }
-    } catch {
-      // Namespace listing failed — fall through to create new workspace
+
       settingUp = true;
       try {
-        await playZoomThen(() => onCreateWithProvider(selectedBundle, providerPluginId, pendingOverrides));
+        await playZoomThen(() => onCreateWithProvider(selectedBundle, provider.pluginId, pendingOverrides));
+      } catch (e) {
+        settingUp = false;
+        toast.error("Failed to set up workspace", {
+          description: e instanceof Error ? e.message : String(e),
+        });
+      }
+    } catch {
+      // Provider listing failed — fall through to create new workspace
+      settingUp = true;
+      try {
+        await playZoomThen(() => onCreateWithProvider(selectedBundle, provider.pluginId, pendingOverrides));
       } catch (e) {
         settingUp = false;
         toast.error("Failed to set up workspace", {
@@ -212,15 +283,19 @@
 
   export async function handleSignInComplete() {
     if (signInForProvider) {
-      // User signed in specifically to use a provider
       const providerPluginId = signInForProvider;
       signInForProvider = null;
-      await checkProviderNamespaces(providerPluginId);
+      const provider = bundleProviders.find((entry) => entry.pluginId === providerPluginId);
+      if (provider) {
+        await checkProviderNamespaces(provider);
+      }
       return;
     }
 
     // Original flow: signed in from main screen
     loadingWorkspaces = true;
+    workspacePickerProviderId = null;
+    workspacePickerBackView = 'main';
     navigateTo('workspace-picker');
     try {
       workspaceNamespaces = await listUserWorkspaceNamespaces();
@@ -235,12 +310,19 @@
   }
 
   async function handlePickNamespace(ns: NamespaceEntry) {
+    if (!workspaceAvailableHere(ns)) {
+      toast.error("This workspace is not available on this device.", {
+        description: workspaceUnavailableReason(ns) ?? undefined,
+      });
+      return;
+    }
+
     settingUp = true;
     try {
       await playZoomThen(() =>
         onCreateWithProvider(
           null,
-          ns.metadata?.provider ?? "diaryx.sync",
+          workspaceProviderId(ns),
           undefined,
           ns,
         ),
@@ -251,6 +333,25 @@
         description: e instanceof Error ? e.message : String(e),
       });
     }
+  }
+
+  async function handleWorkspacePickerCreateAction() {
+    if (workspacePickerProviderId) {
+      settingUp = true;
+      try {
+        await playZoomThen(() =>
+          onCreateWithProvider(selectedBundle, workspacePickerProviderId, pendingOverrides),
+        );
+      } catch (e) {
+        settingUp = false;
+        toast.error("Failed to set up workspace", {
+          description: e instanceof Error ? e.message : String(e),
+        });
+      }
+      return;
+    }
+
+    await handleCreateFirstWorkspace();
   }
 
   async function handleCreateFirstWorkspace() {
@@ -274,6 +375,8 @@
   async function autoNavigateIfSignedIn() {
     if (!returnWorkspaceName || !isAuthenticated()) return;
     loadingWorkspaces = true;
+    workspacePickerProviderId = null;
+    workspacePickerBackView = 'main';
     navigateTo('workspace-picker');
     try {
       workspaceNamespaces = await listUserWorkspaceNamespaces();
@@ -315,6 +418,23 @@
 
   function workspaceName(ns: NamespaceEntry): string {
     return ns.metadata?.name ?? ns.id;
+  }
+
+  function workspaceProviderId(ns: NamespaceEntry): string {
+    return ns.metadata?.provider ?? "diaryx.sync";
+  }
+
+  function workspaceProviderLabel(ns: NamespaceEntry): string {
+    const providerId = workspaceProviderId(ns);
+    return getProviderDisplayLabel(providerId) ?? providerId;
+  }
+
+  function workspaceAvailableHere(ns: NamespaceEntry): boolean {
+    return isProviderAvailableHere(workspaceProviderId(ns));
+  }
+
+  function workspaceUnavailableReason(ns: NamespaceEntry): string | null {
+    return getProviderUnavailableReason(workspaceProviderId(ns));
   }
 </script>
 
@@ -496,7 +616,7 @@
                       </div>
                     {/if}
                   </div>
-                  {#if !isAuthenticated()}
+                  {#if provider.requiresAuth && !isAuthenticated()}
                     <Lock class="size-4 text-muted-foreground shrink-0" />
                   {/if}
                 </div>
@@ -519,7 +639,7 @@
             <button
               type="button"
               class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors fade-in"
-              onclick={() => navigateTo(returnWorkspaceName ? 'main' : 'sign-in')}
+              onclick={() => navigateTo(workspacePickerBackView)}
             >
               <ArrowLeft class="size-4" />
               Back
@@ -545,8 +665,10 @@
               {#each workspaceNamespaces as ns (ns.id)}
                 <button
                   type="button"
-                  class="w-full text-left p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-secondary/50 transition-colors"
-                  disabled={settingUp}
+                  class="w-full text-left p-4 rounded-lg border border-border transition-colors disabled:opacity-70 disabled:cursor-not-allowed {workspaceAvailableHere(ns)
+                    ? 'hover:border-primary/50 hover:bg-secondary/50'
+                    : 'border-dashed bg-secondary/30'}"
+                  disabled={settingUp || !workspaceAvailableHere(ns)}
                   onclick={() => handlePickNamespace(ns)}
                 >
                   <div class="flex items-center gap-3">
@@ -557,7 +679,12 @@
                       </div>
                       {#if ns.metadata?.provider}
                         <div class="text-xs text-muted-foreground">
-                          via {ns.metadata.provider}
+                          via {workspaceProviderLabel(ns)}
+                        </div>
+                      {/if}
+                      {#if !workspaceAvailableHere(ns) && workspaceUnavailableReason(ns)}
+                        <div class="text-xs text-muted-foreground mt-1">
+                          {workspaceUnavailableReason(ns)}
                         </div>
                       {/if}
                     </div>
@@ -571,9 +698,15 @@
                 type="button"
                 class="text-xs text-muted-foreground hover:text-foreground transition-colors"
                 disabled={settingUp}
-                onclick={handleCreateFirstWorkspace}
+                onclick={handleWorkspacePickerCreateAction}
               >
-                {settingUp ? 'Creating…' : 'Or create a new workspace'}
+                {#if settingUp}
+                  Creating…
+                {:else if workspacePickerProviderId}
+                  Or create a new workspace here
+                {:else}
+                  Or create a new workspace
+                {/if}
               </button>
             </div>
 

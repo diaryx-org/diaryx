@@ -16,6 +16,7 @@ export interface NamespaceInfo {
   id: string;
   owner_user_id: string;
   created_at: number;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface AudienceInfo {
@@ -87,11 +88,30 @@ async function apiFetch<T>(
 // Public API
 // ============================================================================
 
-export async function createNamespace(id?: string): Promise<NamespaceInfo> {
+export async function createNamespace(
+  id?: string,
+  metadata?: Record<string, unknown> | null,
+): Promise<NamespaceInfo> {
   return apiFetch<NamespaceInfo>('/namespaces', {
     method: 'POST',
-    body: JSON.stringify(id ? { id } : {}),
+    body: JSON.stringify({
+      ...(id ? { id } : {}),
+      ...(metadata !== undefined ? { metadata } : {}),
+    }),
   });
+}
+
+export async function updateNamespaceMetadata(
+  nsId: string,
+  metadata: Record<string, unknown> | null,
+): Promise<NamespaceInfo> {
+  return apiFetch<NamespaceInfo>(
+    `/namespaces/${encodeURIComponent(nsId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata }),
+    },
+  );
 }
 
 export async function deleteNamespace(nsId: string): Promise<void> {

@@ -162,7 +162,379 @@ function createBundle(): BundleRegistryEntry {
   };
 }
 
+function createStubRuntime(overrides: Partial<BundleApplyRuntime> = {}): BundleApplyRuntime {
+  return {
+    hasTheme: () => false,
+    installTheme: () => {},
+    applyTheme: () => {},
+    hasTypographyPreset: () => false,
+    installTypography: () => {},
+    applyTypographyPreset: () => {},
+    applyTypographyOverrides: () => {},
+    isPluginInstalled: () => false,
+    installRegistryPlugin: async () => {},
+    setPluginEnabled: () => {},
+    ...overrides,
+  };
+}
+
 describe("bundleApply", () => {
+  describe("planBundleApply", () => {
+    it("skips theme install when already installed", () => {
+      const runtime = createStubRuntime({ hasTheme: () => true });
+      const bundle = createBundle();
+      const plan = planBundleApply(bundle, {
+        themes: [createThemeEntry("theme.writer")],
+        typographies: [],
+        plugins: [],
+        runtime,
+      });
+
+      expect(plan.actions.find((a) => a.type === "theme-install")).toBeUndefined();
+      expect(plan.actions.find((a) => a.type === "theme-apply")).toBeDefined();
+    });
+
+    it("skips typography install when already installed", () => {
+      const runtime = createStubRuntime({ hasTypographyPreset: () => true });
+      const bundle = createBundle();
+      const plan = planBundleApply(bundle, {
+        themes: [createThemeEntry("theme.writer")],
+        typographies: [createTypographyEntry("typography.editorial-serif")],
+        plugins: [],
+        runtime,
+      });
+
+      expect(plan.actions.find((a) => a.type === "typography-install")).toBeUndefined();
+      expect(plan.actions.find((a) => a.type === "typography-preset-apply")).toBeDefined();
+    });
+
+    it("skips typography actions when bundle has no typography_id", () => {
+      const runtime = createStubRuntime();
+      const bundle = createBundle();
+      bundle.typography_id = null as any;
+      bundle.typography = undefined as any;
+      const plan = planBundleApply(bundle, {
+        themes: [createThemeEntry("theme.writer")],
+        typographies: [],
+        plugins: [],
+        runtime,
+      });
+
+      expect(plan.actions.filter((a) => a.type.startsWith("typography"))).toEqual([]);
+    });
+
+    it("flags missing typography preset", () => {
+      const runtime = createStubRuntime();
+      const bundle = createBundle();
+      const plan = planBundleApply(bundle, {
+        themes: [createThemeEntry("theme.writer")],
+        typographies: [], // no matching typography
+        plugins: [],
+        runtime,
+      });
+
+      expect(plan.missingTypographyPreset).toBe(true);
+    });
+
+    it("skips plugin install when already installed", () => {
+      const runtime = createStubRuntime({ isPluginInstalled: () => true });
+      const bundle = createBundle();
+      bundle.plugins = [{ plugin_id: "diaryx.sync", required: true, enable: true }];
+      const plan = planBundleApply(bundle, {
+        themes: [createThemeEntry("theme.writer")],
+        typographies: [],
+        plugins: [createPluginEntry("diaryx.sync")],
+        runtime,
+      });
+
+      expect(plan.actions.find((a) => a.type === "plugin-install")).toBeUndefined();
+      expect(plan.actions.find((a) => a.type === "plugin-enable")).toBeDefined();
+    });
+
+    it("skips plugin-enable when enable is false", () => {
+      const runtime = createStubRuntime();
+      const bundle = createBundle();
+      bundle.plugins = [{ plugin_id: "diaryx.sync", required: true, enable: false }];
+      const plan = planBundleApply(bundle, {
+        themes: [createThemeEntry("theme.writer")],
+        typographies: [],
+        plugins: [createPluginEntry("diaryx.sync")],
+        runtime,
+      });
+
+      expect(plan.actions.find((a) => a.type === "plugin-enable")).toBeUndefined();
+    });
+
+    it("includes typography-override-apply when bundle has typography overrides", () => {
+      const runtime = createStubRuntime();
+      const bundle = createBundle();
+      const plan = planBundleApply(bundle, {
+        themes: [createThemeEntry("theme.writer")],
+        typographies: [createTypographyEntry("typography.editorial-serif")],
+        plugins: [],
+        runtime,
+      });
+
+      expect(plan.actions.find((a) => a.type === "typography-override-apply")).toBeDefined();
+    });
+  });
+
+  describe("executeBundleApply", () => {
+    it("reports failure for theme-install with missing theme metadata", async () => {
+      const runtime = createStubRuntime();
+      const plan = {
+        bundle: createBundle(),
+        actions: [{
+          type: "theme-install" as const,
+          key: "test",
+          required: true,
+          label: "Install theme",
+          theme: undefined,
+        }],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results[0].status).toBe("failed");
+      expect(result.results[0].message).toBe("Theme metadata is unavailable");
+    });
+
+    it("reports failure for theme-apply with missing themeId", async () => {
+      const runtime = createStubRuntime();
+      const plan = {
+        bundle: createBundle(),
+        actions: [{
+          type: "theme-apply" as const,
+          key: "test",
+          required: true,
+          label: "Apply theme",
+          themeId: undefined,
+        }],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results[0].status).toBe("failed");
+      expect(result.results[0].message).toBe("Theme ID is unavailable");
+    });
+
+    it("reports failure for typography-install with missing entry", async () => {
+      const runtime = createStubRuntime();
+      const plan = {
+        bundle: createBundle(),
+        actions: [{
+          type: "typography-install" as const,
+          key: "test",
+          required: false,
+          label: "Install typography",
+          typographyEntry: undefined,
+        }],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results[0].status).toBe("failed");
+      expect(result.results[0].message).toBe("Typography metadata is unavailable");
+    });
+
+    it("reports failure for typography-preset-apply with missing id", async () => {
+      const runtime = createStubRuntime();
+      const plan = {
+        bundle: createBundle(),
+        actions: [{
+          type: "typography-preset-apply" as const,
+          key: "test",
+          required: false,
+          label: "Apply typography",
+          typographyId: undefined,
+        }],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results[0].status).toBe("failed");
+      expect(result.results[0].message).toBe("Typography preset ID is unavailable");
+    });
+
+    it("reports failure for typography-override-apply with missing overrides", async () => {
+      const runtime = createStubRuntime();
+      const plan = {
+        bundle: createBundle(),
+        actions: [{
+          type: "typography-override-apply" as const,
+          key: "test",
+          required: false,
+          label: "Apply overrides",
+          typography: undefined,
+        }],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results[0].status).toBe("failed");
+      expect(result.results[0].message).toBe("Typography overrides are unavailable");
+    });
+
+    it("reports failure for plugin-install with missing plugin", async () => {
+      const runtime = createStubRuntime();
+      const plan = {
+        bundle: createBundle(),
+        actions: [{
+          type: "plugin-install" as const,
+          key: "test",
+          required: true,
+          label: "Install plugin",
+          plugin: undefined,
+        }],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results[0].status).toBe("failed");
+      expect(result.results[0].message).toBe("Plugin metadata is unavailable");
+    });
+
+    it("reports failure for plugin-enable with missing pluginId", async () => {
+      const runtime = createStubRuntime();
+      const plan = {
+        bundle: createBundle(),
+        actions: [{
+          type: "plugin-enable" as const,
+          key: "test",
+          required: true,
+          label: "Enable plugin",
+          pluginId: undefined,
+        }],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results[0].status).toBe("failed");
+      expect(result.results[0].message).toBe("Plugin ID is unavailable");
+    });
+
+    it("reports failure for plugin-enable when plugin is not installed", async () => {
+      const runtime = createStubRuntime({ isPluginInstalled: () => false });
+      const plan = {
+        bundle: createBundle(),
+        actions: [{
+          type: "plugin-enable" as const,
+          key: "test",
+          required: true,
+          label: "Enable plugin",
+          pluginId: "some.plugin",
+          pluginEnable: true,
+        }],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results[0].status).toBe("failed");
+      expect(result.results[0].message).toBe("Plugin is not installed");
+    });
+
+    it("appends missing typography failure to results", async () => {
+      const runtime = createStubRuntime();
+      const bundle = createBundle();
+      const plan = {
+        bundle,
+        actions: [],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: true,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results.some((r) =>
+        r.message.includes("Typography preset 'typography.editorial-serif'"),
+      )).toBe(true);
+    });
+
+    it("appends missing required and optional plugin failures", async () => {
+      const runtime = createStubRuntime();
+      const plan = {
+        bundle: createBundle(),
+        actions: [],
+        missingRequiredPlugins: ["required.plugin"],
+        missingOptionalPlugins: ["optional.plugin"],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results.find((r) => r.message.includes("Required plugin 'required.plugin'"))).toBeDefined();
+      expect(result.results.find((r) => r.message.includes("Optional plugin 'optional.plugin'"))).toBeDefined();
+    });
+
+    it("computes correct summary counts", async () => {
+      const runtime = createStubRuntime({
+        hasTheme: () => true,
+        isPluginInstalled: () => true,
+      });
+      const bundle = createBundle();
+      bundle.plugins = [{ plugin_id: "diaryx.sync", required: true, enable: true }];
+      bundle.typography = undefined as any;
+      const plan = planBundleApply(bundle, {
+        themes: [createThemeEntry("theme.writer")],
+        typographies: [createTypographyEntry("typography.editorial-serif")],
+        plugins: [createPluginEntry("diaryx.sync")],
+        runtime,
+      });
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.summary.total).toBe(result.summary.success + result.summary.failed);
+    });
+
+    it("stringifies non-Error throws", async () => {
+      const runtime = createStubRuntime({
+        applyTheme: () => { throw "raw string error"; },
+      });
+      const plan = {
+        bundle: createBundle(),
+        actions: [{
+          type: "theme-apply" as const,
+          key: "test",
+          required: true,
+          label: "Apply theme",
+          themeId: "theme.writer",
+        }],
+        missingRequiredPlugins: [],
+        missingOptionalPlugins: [],
+        missingTheme: false,
+        missingTypographyPreset: false,
+      };
+
+      const result = await executeBundleApply(plan, runtime);
+      expect(result.results[0].status).toBe("failed");
+      expect(result.results[0].message).toBe("raw string error");
+    });
+  });
+
   it("plans and executes in guided best-effort mode", async () => {
     const installedThemes = new Set<string>();
     const installedTypographies = new Set<string>();

@@ -143,6 +143,7 @@ The validation system checks workspace link integrity and can automatically fix 
 | Export         | `get_available_audiences`, `plan_export`, `export_to_memory`, `export_to_html`            |
 | Backup         | `backup_workspace`, `restore_workspace`, `backup_to_s3`, `backup_to_google_drive`         |
 | Import         | `import_from_zip`, `pick_and_import_zip`                                                  |
+| Apple/iCloud   | `set_icloud_enabled`, `get_icloud_workspace_info`, `list_icloud_workspaces`, `link_icloud_workspace`, `restore_icloud_workspace` |
 
 ## Plugin Host Transport
 
@@ -227,7 +228,12 @@ See [PUBLISHING.md](PUBLISHING.md) for the full guide to publishing to the App S
 - iOS (via Tauri mobile)
 - Android (via Tauri mobile)
 
-Mobile platforms use platform-appropriate paths within app sandboxes.
+Mobile platforms use platform-appropriate paths within app sandboxes. On iOS,
+the sandbox container UUID changes between builds and reinstalls, so
+`initialize_app` re-resolves any absolute workspace path stored in config by
+extracting the folder name and joining it to the current `document_dir`. This
+mirrors the same logic already present in `reinitialize_workspace` and prevents
+`EPERM` errors when a dev build overwrites an older install.
 
 On sandboxed macOS App Store builds, the default workspace now lives inside the
 app container until the user explicitly picks an external folder. External

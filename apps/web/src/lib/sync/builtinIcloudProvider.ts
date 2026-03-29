@@ -1,10 +1,29 @@
 import type { Api } from "$lib/backend/api";
 import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
 import { getBackend } from "$lib/backend";
-import { BUILTIN_ICLOUD_PROVIDER_ID, isAppleTauriRuntime } from "./builtinProviders";
+import {
+  BUILTIN_ICLOUD_PROVIDER_ID,
+  isAppleTauriRuntime,
+  makeLocalIcloudRemoteId,
+} from "./builtinProviders";
 import type { ProviderCapabilities } from "./providerTypes";
 
 type ProviderCommandParams = Record<string, JsonValue>;
+
+interface IcloudWorkspaceInfo {
+  isAvailable: boolean;
+  hasWorkspace: boolean;
+  workspacePath?: string | null;
+  workspaceName?: string | null;
+  active: boolean;
+}
+
+interface IcloudWorkspaceRecord {
+  workspaceId: string;
+  workspaceName: string;
+  workspacePath: string;
+  active: boolean;
+}
 
 function unsupported(message: string): never {
   throw new Error(message);
@@ -13,6 +32,28 @@ function unsupported(message: string): never {
 async function invokeIcloud<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return await invoke<T>(command, args);
+}
+
+async function getWorkspaceInfo(): Promise<IcloudWorkspaceInfo> {
+  if (!isAppleTauriRuntime()) {
+    return {
+      isAvailable: false,
+      hasWorkspace: false,
+      workspacePath: null,
+      workspaceName: null,
+      active: false,
+    };
+  }
+
+  return await invokeIcloud<IcloudWorkspaceInfo>("get_icloud_workspace_info");
+}
+
+async function listNativeWorkspaces(): Promise<IcloudWorkspaceRecord[]> {
+  if (!isAppleTauriRuntime()) {
+    return [];
+  }
+
+  return await invokeIcloud<IcloudWorkspaceRecord[]>("list_icloud_workspaces");
 }
 
 async function getCapabilities(): Promise<ProviderCapabilities> {
@@ -29,8 +70,8 @@ async function getCapabilities(): Promise<ProviderCapabilities> {
   return {
     available: true,
     canLink: true,
-    canDownload: false,
-    canListRemote: false,
+    canDownload: true,
+    canListRemote: true,
   };
 }
 
@@ -52,9 +93,7 @@ export async function executeBuiltinIcloudProviderCommand<T = JsonValue>(args: {
       }
 
       try {
-        const result = await invokeIcloud<{ isAvailable: boolean }>(
-          "plugin:icloud|check_icloud_available",
-        );
+        const result = await getWorkspaceInfo();
         return {
           ready: result.isAvailable,
           message: result.isAvailable
@@ -70,7 +109,15 @@ export async function executeBuiltinIcloudProviderCommand<T = JsonValue>(args: {
     }
 
     case "ListRemoteWorkspaces":
-      return { workspaces: [] } as T;
+      {
+        const workspaces = await listNativeWorkspaces();
+        return {
+          workspaces: workspaces.map((workspace) => ({
+            id: workspace.workspaceId,
+            name: workspace.workspaceName,
+          })),
+        } as T;
+      }
 
     case "LinkWorkspace": {
       const capabilities = await getCapabilities();
@@ -83,7 +130,13 @@ export async function executeBuiltinIcloudProviderCommand<T = JsonValue>(args: {
       const backend = await getBackend();
       const appPaths = backend.getAppPaths();
       if (appPaths?.icloud_active === true) {
-        const remoteId = String(appPaths.icloud_workspace ?? "Diaryx");
+        const activePath = typeof appPaths.icloud_workspace === "string"
+          ? appPaths.icloud_workspace
+          : "";
+        const workspaceKey = activePath.split("/").filter(Boolean).at(-1) ?? "";
+        const remoteId = workspaceKey
+          ? makeLocalIcloudRemoteId(workspaceKey)
+          : BUILTIN_ICLOUD_PROVIDER_ID;
         return {
           remote_id: remoteId,
           created_remote: false,
@@ -91,13 +144,24 @@ export async function executeBuiltinIcloudProviderCommand<T = JsonValue>(args: {
         } as T;
       }
 
+      const requestedRemoteId =
+        typeof args.params?.remote_id === "string" ? args.params.remote_id : null;
+      const workspaceName =
+        typeof args.params?.name === "string" ? args.params.name : null;
       const result = await invokeIcloud<Record<string, string | boolean | null>>(
-        "set_icloud_enabled",
-        { enabled: true },
+        "link_icloud_workspace",
+        {
+          workspaceId: requestedRemoteId,
+          workspaceName,
+        },
       );
+      const resultPath = typeof result.icloud_workspace === "string" ? result.icloud_workspace : "";
+      const resultKey = resultPath.split("/").filter(Boolean).at(-1) ?? "";
+      const remoteId = requestedRemoteId
+        ?? (resultKey ? makeLocalIcloudRemoteId(resultKey) : BUILTIN_ICLOUD_PROVIDER_ID);
 
       return {
-        remote_id: String(result.icloud_workspace ?? result.default_workspace ?? BUILTIN_ICLOUD_PROVIDER_ID),
+        remote_id: remoteId,
         created_remote: false,
         snapshot_uploaded: false,
       } as T;
@@ -107,8 +171,16 @@ export async function executeBuiltinIcloudProviderCommand<T = JsonValue>(args: {
       await invokeIcloud("set_icloud_enabled", { enabled: false });
       return undefined as T;
 
-    case "DownloadWorkspace":
-      unsupported("iCloud Drive workspaces cannot be downloaded on this platform.");
+    case "DownloadWorkspace": {
+      const requestedRemoteId =
+        typeof args.params?.remote_id === "string" ? args.params.remote_id : null;
+      await invokeIcloud("restore_icloud_workspace", {
+        workspaceId: requestedRemoteId,
+      });
+      return {
+        files_imported: 0,
+      } as T;
+    }
 
     default:
       unsupported(`Unsupported built-in iCloud provider command: ${command}`);

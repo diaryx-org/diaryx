@@ -18,6 +18,7 @@
     getLocalWorkspaces,
     getWorkspaceStorageType,
     getCurrentWorkspaceId,
+    getWorkspaceProviderLinks,
     renameLocalWorkspace,
     removeLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
@@ -26,6 +27,7 @@
   import {
     getAuthState,
     getWorkspaces as getServerWorkspaces,
+    listUserWorkspaceNamespaces,
     renameServerWorkspace,
   } from "$lib/auth";
   import { toast } from "svelte-sonner";
@@ -38,6 +40,12 @@
   } from "$lib/sync/workspaceProviderService";
   import { deleteLocalWorkspaceData } from "$lib/settings/clearData";
   import { BackendError } from "$lib/backend/interface";
+  import {
+    getProviderDisplayLabel,
+    getProviderUnavailableReason,
+    isProviderAvailableHere,
+  } from "$lib/sync/builtinProviders";
+  import type { NamespaceEntry } from "$lib/auth/authService";
 
   interface Props {
     onSwitchStart?: () => void;
@@ -59,6 +67,7 @@
 
   // Remote extras: unlinked remote workspaces per provider
   let remoteExtras = $state<Record<string, RemoteWorkspace[]>>({});
+  let unavailableRemoteNamespaces = $state<NamespaceEntry[]>([]);
 
   // RemoteWorkspacePicker state
   let pickerProvider = $state<{ pluginId: string; label: string; workspaces: RemoteWorkspace[] } | null>(null);
@@ -112,10 +121,17 @@
   // Fetch remote extras when popover opens
   async function onPopoverOpen() {
     const extras: Record<string, RemoteWorkspace[]> = {};
+    const linkedRemoteKeys = new Set(
+      allLocalWorkspaces.flatMap((workspace) =>
+        getWorkspaceProviderLinks(workspace.id).map(
+          (link) => `${link.pluginId}:${link.remoteWorkspaceId}`,
+        ),
+      ),
+    );
     const localServerIds = new Set(
-      allLocalWorkspaces
-        .map(w => getServerWorkspaceId(w.id))
-        .filter((id): id is string => !!id),
+      Array.from(linkedRemoteKeys)
+        .map((entry) => entry.slice(entry.indexOf(":") + 1))
+        .filter((id): id is string => id.length > 0),
     );
 
     for (const provider of workspaceProviders) {
@@ -130,6 +146,22 @@
         extras[provider.contribution.id] = unlinked;
       }
     }
+
+    if (authState.isAuthenticated) {
+      try {
+        const namespaces = await listUserWorkspaceNamespaces();
+        unavailableRemoteNamespaces = namespaces.filter((ns) => {
+          const providerId = namespaceProviderId(ns);
+          return !isProviderAvailableHere(providerId)
+            && !linkedRemoteKeys.has(`${providerId}:${ns.id}`);
+        });
+      } catch {
+        unavailableRemoteNamespaces = [];
+      }
+    } else {
+      unavailableRemoteNamespaces = [];
+    }
+
     remoteExtras = extras;
   }
 
@@ -141,6 +173,7 @@
       menuOpenId = null;
       renamingId = null;
       confirmDeleteId = null;
+      unavailableRemoteNamespaces = [];
     }
   });
 
@@ -208,6 +241,23 @@
     pickerProvider = null;
     await tick();
     onAddWorkspace?.();
+  }
+
+  function namespaceProviderId(ns: NamespaceEntry): string {
+    return ns.metadata?.provider ?? "diaryx.sync";
+  }
+
+  function namespaceProviderLabel(ns: NamespaceEntry): string {
+    const providerId = namespaceProviderId(ns);
+    return getProviderDisplayLabel(providerId) ?? providerId;
+  }
+
+  function namespaceUnavailableReason(ns: NamespaceEntry): string | null {
+    return getProviderUnavailableReason(namespaceProviderId(ns));
+  }
+
+  function namespaceName(ns: NamespaceEntry): string {
+    return ns.metadata?.name ?? ns.id;
   }
 
   // --- Rename state ---
@@ -471,6 +521,29 @@
               </button>
             {/if}
           {/each}
+          {#if unavailableRemoteNamespaces.length > 0}
+            <div class="px-2 pt-2 pb-1 space-y-1">
+              <p class="px-2 py-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                Unavailable Here
+              </p>
+              {#each unavailableRemoteNamespaces as ns (ns.id)}
+                <div class="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground rounded-md border border-dashed bg-secondary/30">
+                  <Cloud class="size-3 shrink-0" />
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate">{namespaceName(ns)}</span>
+                    <span class="block text-[10px]">
+                      via {namespaceProviderLabel(ns)}
+                    </span>
+                    {#if namespaceUnavailableReason(ns)}
+                      <span class="block text-[10px] mt-0.5">
+                        {namespaceUnavailableReason(ns)}
+                      </span>
+                    {/if}
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/if}
           <div class="p-2">
             <button
               type="button"

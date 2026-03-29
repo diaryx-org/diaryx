@@ -98,6 +98,71 @@ afterEach(() => {
 });
 
 describe("themeRegistry", () => {
+  it("returns trusted URLs", () => {
+    const urls = getTrustedThemeRegistryUrls();
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls[0]).toContain("/themes/registry.md");
+  });
+
+  it("fails on non-ok HTTP response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 404 }),
+    );
+    const trusted = getTrustedThemeRegistryUrls()[0];
+    await expect(fetchThemeRegistry(trusted)).rejects.toThrow("Theme registry fetch failed: 404");
+  });
+
+  it("fails on missing frontmatter", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => "no frontmatter here",
+      }),
+    );
+    const trusted = getTrustedThemeRegistryUrls()[0];
+    await expect(fetchThemeRegistry(trusted)).rejects.toThrow("missing YAML frontmatter");
+  });
+
+  it("fails when themes is not an array", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => "---\nschema_version: 1\ngenerated_at: \"now\"\nthemes: \"nope\"\n---\n",
+      }),
+    );
+    const trusted = getTrustedThemeRegistryUrls()[0];
+    await expect(fetchThemeRegistry(trusted)).rejects.toThrow("'themes' must be an array");
+  });
+
+  it("clears cache so next fetch re-fetches", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => VALID_THEME_REGISTRY_MD,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const trusted = getTrustedThemeRegistryUrls()[0];
+    await fetchThemeRegistry(trusted);
+    clearThemeRegistryCache();
+    await fetchThemeRegistry(trusted);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("validates theme entry fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => "---\nschema_version: 1\ngenerated_at: \"now\"\nthemes:\n  - not_an_object: true\n---\n",
+      }),
+    );
+    const trusted = getTrustedThemeRegistryUrls()[0];
+    await expect(fetchThemeRegistry(trusted)).rejects.toThrow("Theme registry validation error");
+  });
+
   it("rejects untrusted URLs", async () => {
     await expect(
       fetchThemeRegistry("https://example.com/themes/registry.md"),

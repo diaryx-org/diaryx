@@ -52,6 +52,90 @@ function makeRegistryPlugin(
 }
 
 describe("hydrateOnboardingPluginPermissionDefaults", () => {
+  it("skips dependencies with no matching registry plugin", async () => {
+    const persistDefaults = vi.fn().mockResolvedValue(undefined);
+
+    await hydrateOnboardingPluginPermissionDefaults(
+      [makeBundleDependency("nonexistent.plugin")],
+      [], // no registry plugins
+      persistDefaults,
+    );
+
+    expect(persistDefaults).not.toHaveBeenCalled();
+  });
+
+  it("continues to next plugin when artifact fetch fails", async () => {
+    const defaults = makeDefaults();
+    const persistDefaults = vi.fn().mockResolvedValue(undefined);
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("network error"));
+
+    await hydrateOnboardingPluginPermissionDefaults(
+      [makeBundleDependency("diaryx.failing"), makeBundleDependency("diaryx.ok")],
+      [
+        makeRegistryPlugin("diaryx.failing", null),
+        makeRegistryPlugin("diaryx.ok", { defaults }),
+      ],
+      persistDefaults,
+      { fetchImpl: fetchImpl as typeof fetch },
+    );
+
+    // First plugin should warn and be skipped, second should succeed
+    expect(consoleWarn).toHaveBeenCalled();
+    expect(persistDefaults).toHaveBeenCalledTimes(1);
+    expect(persistDefaults).toHaveBeenCalledWith("diaryx.ok", defaults);
+    consoleWarn.mockRestore();
+  });
+
+  it("continues when artifact HTTP response is not ok", async () => {
+    const persistDefaults = vi.fn().mockResolvedValue(undefined);
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+    });
+
+    await hydrateOnboardingPluginPermissionDefaults(
+      [makeBundleDependency("diaryx.broken")],
+      [makeRegistryPlugin("diaryx.broken", null)],
+      persistDefaults,
+      { fetchImpl: fetchImpl as typeof fetch },
+    );
+
+    expect(consoleWarn).toHaveBeenCalled();
+    expect(persistDefaults).not.toHaveBeenCalled();
+    consoleWarn.mockRestore();
+  });
+
+  it("skips when registry defaults has only null/undefined values", async () => {
+    const persistDefaults = vi.fn().mockResolvedValue(undefined);
+    const inspectPluginBytes = vi.fn().mockResolvedValue({
+      requestedPermissions: undefined,
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(8)),
+    } satisfies Pick<Response, "ok" | "status" | "arrayBuffer">);
+
+    // Plugin with empty defaults object (all null values)
+    await hydrateOnboardingPluginPermissionDefaults(
+      [makeBundleDependency("diaryx.empty")],
+      [makeRegistryPlugin("diaryx.empty", { defaults: {} as any })],
+      persistDefaults,
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        verifyArtifact: vi.fn().mockResolvedValue(undefined),
+        inspectPluginBytes,
+      },
+    );
+
+    // Empty defaults -> falls through to manifest -> empty -> no fallback -> skip
+    expect(persistDefaults).not.toHaveBeenCalled();
+  });
+
   it("uses registry requested_permissions defaults when present", async () => {
     const defaults = makeDefaults();
     const persistDefaults = vi.fn().mockResolvedValue(undefined);

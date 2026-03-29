@@ -34,6 +34,18 @@ import { fetchPluginRegistry } from '$lib/plugins/pluginRegistry';
 import { isTauri, resetBackend } from '../lib/backend';
 import { isIOS } from '$lib/hooks/useMobile.svelte';
 import { removeLocalWorkspace } from '$lib/storage/localWorkspaceRegistry.svelte';
+import { isBuiltinProvider } from '$lib/sync/builtinProviders';
+import {
+  BUILTIN_ICLOUD_PROVIDER_ID,
+  getIcloudWorkspaceKeyFromRemoteId,
+  makeIcloudNamespaceId,
+} from '$lib/sync/builtinProviders';
+import {
+  createNamespace,
+  updateNamespaceMetadata,
+} from '$lib/namespace/namespaceService';
+import { isAuthenticated } from '$lib/auth/authStore.svelte';
+import { generateUUID } from '$lib/utils';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -106,6 +118,28 @@ export function isWorkspaceAlreadyExistsError(error: unknown): boolean {
     message.includes("Workspace already exists") ||
     message.includes("WorkspaceAlreadyExists")
   );
+}
+
+async function ensureIcloudNamespace(args: {
+  remoteId: string;
+  name: string;
+}): Promise<string> {
+  const workspaceKey = getIcloudWorkspaceKeyFromRemoteId(args.remoteId) ?? generateUUID();
+  const namespaceId = makeIcloudNamespaceId(workspaceKey);
+  const metadata = {
+    kind: "workspace",
+    provider: BUILTIN_ICLOUD_PROVIDER_ID,
+    name: args.name,
+    platform_scope: "apple-tauri",
+    availability_hint: "local-container",
+    workspace_key: workspaceKey,
+  };
+  try {
+    await createNamespace(namespaceId, metadata);
+  } catch {
+    await updateNamespaceMetadata(namespaceId, metadata);
+  }
+  return namespaceId;
 }
 
 export function shouldBypassWelcomeScreenForE2E(): boolean {
@@ -540,7 +574,9 @@ export async function handleCreateWithProvider(
     );
 
     let pluginWasm: Uint8Array | null = null;
-    if (providerOverride) {
+    if (isBuiltinProvider(providerId)) {
+      pluginWasm = null;
+    } else if (providerOverride) {
       // Use the user-provided override instead of fetching from the marketplace
       pluginWasm = new Uint8Array(providerOverride.bytes);
       console.info(`[onboarding] Using local override for provider plugin "${providerId}"`);
@@ -566,10 +602,30 @@ export async function handleCreateWithProvider(
     // Download workspace from remote, providing pre-fetched plugin bytes
     const { downloadWorkspace } = await import("$lib/sync/workspaceProviderService");
     const name = restoreNamespace.metadata?.name ?? "Restored Workspace";
+    let effectiveRestoreNamespace = restoreNamespace;
+    if (
+      providerId === BUILTIN_ICLOUD_PROVIDER_ID
+      && isAuthenticated()
+      && !restoreNamespace.id.startsWith("workspace:icloud:")
+    ) {
+      const namespaceId = await ensureIcloudNamespace({
+        remoteId: restoreNamespace.id,
+        name,
+      });
+      effectiveRestoreNamespace = {
+        ...restoreNamespace,
+        id: namespaceId,
+        metadata: {
+          ...(restoreNamespace.metadata ?? {}),
+          provider: BUILTIN_ICLOUD_PROVIDER_ID,
+          name,
+        },
+      };
+    }
     let result: { localId: string; filesImported: number };
     try {
       result = await downloadWorkspace(providerId, {
-        remoteId: restoreNamespace.id,
+        remoteId: effectiveRestoreNamespace.id,
         name,
         link: true,
       }, undefined, undefined, pluginWasm);
@@ -662,7 +718,20 @@ export async function handleCreateWithProvider(
     }
     if (providerPluginId) {
       const { linkWorkspace } = await import("$lib/sync/workspaceProviderService");
-      await linkWorkspace(providerPluginId, { localId: id, name });
+      let remoteId: string | undefined;
+      if (providerPluginId === BUILTIN_ICLOUD_PROVIDER_ID && isAuthenticated()) {
+        const workspaceKey = generateUUID();
+        remoteId = makeIcloudNamespaceId(workspaceKey);
+        await createNamespace(remoteId, {
+          kind: "workspace",
+          provider: BUILTIN_ICLOUD_PROVIDER_ID,
+          name,
+          platform_scope: "apple-tauri",
+          availability_hint: "local-container",
+          workspace_key: workspaceKey,
+        });
+      }
+      await linkWorkspace(providerPluginId, { localId: id, name, remoteId });
     }
   }
 

@@ -34,7 +34,6 @@ attachments:
   - "[MarketplaceDialog.svelte](/apps/web/src/lib/MarketplaceDialog.svelte)"
   - "[RightSidebar.svelte](/apps/web/src/lib/RightSidebar.svelte)"
   - "[SettingsDialog.svelte](/apps/web/src/lib/SettingsDialog.svelte)"
-  - "[AddWorkspaceDialog.svelte](/apps/web/src/lib/AddWorkspaceDialog.svelte)"
   - "[components/PluginSidebarPanel.svelte](/apps/web/src/lib/components/PluginSidebarPanel.svelte)"
   - "[components/PluginStatusItems.svelte](/apps/web/src/lib/components/PluginStatusItems.svelte)"
 exclude:
@@ -75,29 +74,22 @@ Commands (`ValidateWorkspaceName`, `ValidatePublishingSlug`,
 `backend/api.ts`. Frontend components call these instead of duplicating
 validation logic locally.
 
-## Add Workspace Dialog
+## Onboarding Workspace Setup
 
-`AddWorkspaceDialog.svelte` is the unified workspace creation dialog. It presents
-two orthogonal dimensions:
+Workspace creation and restore now flow through the welcome/onboarding
+experience (`views/WelcomeScreen.svelte` + `controllers/onboardingController.ts`)
+instead of a standalone add-workspace dialog.
 
-- **Sync mode** (Local / Remote segmented toggle)
-- **Content source** (From existing workspace / Import from ZIP / Start fresh)
+The onboarding flow supports:
 
-The dialog uses staged progress updates during initialization
-(`upload snapshot` -> `prepare local workspace state` -> `connect` -> `metadata sync`) so
-users see visible forward motion even when backend operations don't emit
-granular file progress for small workspaces.
+- local-first workspace creation from curated starter bundles
+- provider-backed workspace creation after bundle selection
+- remote workspace restore through provider-owned metadata
+- Apple/Tauri built-in provider options such as iCloud Drive
 
-`WorkspaceSelector.svelte` opens `AddWorkspaceDialog.svelte` from the
-`New workspace` button so workspace initialization always goes through the same
-setup flow instead of inline naming/creation.
-
-Both local and synced workspace creation prompt for a workspace name and
-automatically create a root index file during initialization.
-
-The dialog's local->sync upload path copies local workspace files to the server
-(snapshot upload) and keeps local files on device; it does not delete or move
-local data.
+Provider-backed restore still uses staged initialization so users see visible
+forward motion during link/bootstrap flows even when the underlying provider
+does not emit granular file-level progress.
 
 Browser sync now loads the Extism sync plugin from
 `/plugins/diaryx_sync.wasm` with a runtime compatibility check. If the file is
@@ -114,23 +106,8 @@ Browser host-side sync wiring lives in `plugins/extismBrowserLoader.ts` and
 web app remains a plugin host, provider commands prefer plugin-owned
 runtime/config state, and sync logic stays in the external sync plugin.
 
-`App.svelte` only auto-opens the dialog after a fresh sign-in / magic-link
-verification that still needs workspace bootstrap. It no longer reopens the
-setup flow on every page reload for authenticated users who have not enabled
-sync on the current client.
-
-On Tauri, the dialog resets the location field when opened and derives a
-fresh default path from the app document directory + workspace name when no
-explicit location is provided, so "start fresh" flows don't reuse a previous
-workspace folder accidentally.
-
-For local->sync uploads, the snapshot root is resolved from the selected local
-workspace's stored filesystem path when available (instead of ambient backend
-path), preventing uploads from reading a different currently-open workspace.
-
-`App.svelte` routes the editor empty-workspace `Initialize workspace` action
-to the same setup flow (`AddWorkspaceDialog.svelte`) instead of exposing separate
-`Create Root Index` and `Import from ZIP` buttons in the editor area.
+`App.svelte` now returns first-run and missing-workspace recovery flows to the
+welcome screen instead of reopening a separate add-workspace modal.
 
 ## Command Palette Dialog Sequencing
 

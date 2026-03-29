@@ -48,6 +48,59 @@ afterEach(() => {
 });
 
 describe("typographyRegistry", () => {
+  it("returns trusted URLs", () => {
+    const urls = getTrustedTypographyRegistryUrls();
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls[0]).toContain("/typographies/registry.md");
+  });
+
+  it("fails on non-ok HTTP response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 500 }),
+    );
+    const trusted = getTrustedTypographyRegistryUrls()[0];
+    await expect(fetchTypographyRegistry(trusted)).rejects.toThrow("Typography registry fetch failed: 500");
+  });
+
+  it("fails on missing frontmatter", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => "no frontmatter here",
+      }),
+    );
+    const trusted = getTrustedTypographyRegistryUrls()[0];
+    await expect(fetchTypographyRegistry(trusted)).rejects.toThrow("missing YAML frontmatter");
+  });
+
+  it("fails when typographies is not an array", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => "---\nschema_version: 1\ngenerated_at: \"now\"\ntypographies: \"nope\"\n---\n",
+      }),
+    );
+    const trusted = getTrustedTypographyRegistryUrls()[0];
+    await expect(fetchTypographyRegistry(trusted)).rejects.toThrow("'typographies' must be an array");
+  });
+
+  it("clears cache so next fetch re-fetches", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => VALID_TYPOGRAPHY_REGISTRY_MD,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const trusted = getTrustedTypographyRegistryUrls()[0];
+    await fetchTypographyRegistry(trusted);
+    clearTypographyRegistryCache();
+    await fetchTypographyRegistry(trusted);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects untrusted URLs", async () => {
     await expect(
       fetchTypographyRegistry("https://example.com/typographies/registry.md"),

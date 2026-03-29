@@ -124,7 +124,7 @@
           wasm-bindgen-cli = pkgs.buildWasmBindgenCli rec {
             src = pkgs.fetchCrate {
               pname = "wasm-bindgen-cli";
-              version = "0.2.114";
+              version = "1.4.0";
               hash = "sha256-xrCym+rFY6EUQFWyWl6OPA+LtftpUAE5pIaElAIVqW0=";
             };
             cargoDeps = pkgs.rustPlatform.fetchCargoVendor {

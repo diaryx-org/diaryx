@@ -2,8 +2,8 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-21T13:42:14Z
-part_of: '[README](/README.md)'
+updated: 2026-03-29T20:19:45Z
+part_of: '[Diaryx](/Diaryx.md)'
 ---
 # Instructions for AI agents
 
@@ -12,7 +12,7 @@ Always read the relevant docs before making changes, and update the relevant doc
 ## Workspace Overview
 
 ```workspace-index
-Diaryx Monorepo - README/repo for the Diaryx project - README.md
+Diaryx - README/repo for the Diaryx project - README.md
 ├── AGENTS - Instructions for AI Agents - AGENTS.md
 ├── CONTRIBUTING - A guide for making contributions in the Diaryx repo - CONTRIBUTING.md
 ├── LICENSE - PolyForm Shield License 1.0.0 - LICENSE.md

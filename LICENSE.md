@@ -1,7 +1,7 @@
 ---
 title: LICENSE
 description: PolyForm Shield License 1.0.0
-part_of: '[README](/README.md)'
+part_of: '[Diaryx](/Diaryx.md)'
 ---
 # PolyForm Shield License 1.0.0
 

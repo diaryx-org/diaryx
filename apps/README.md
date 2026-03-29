@@ -7,7 +7,7 @@ audience:
 contents:
 - '[README](/apps/web/README.md)'
 - '[README](/apps/tauri/README.md)'
-part_of: '[README](/README.md)'
+part_of: '[Diaryx](/Diaryx.md)'
 ---
 # Diaryx Frontend Apps
 

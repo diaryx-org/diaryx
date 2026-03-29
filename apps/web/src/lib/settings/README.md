@@ -58,7 +58,7 @@ actual provider or render actions per ready provider.
 - Declarative field contributions render via `PluginSettingsTab`
 - `PluginSettingsTab` can invoke arbitrary host-managed actions, apply config patches, write plugin-scoped workspace metadata patches from command results, gate nested field groups with conditions like `authenticated` or `config:import_format=markdown`, and pass selected file bytes through both browser and native plugin command paths
 
-Google Drive storage uses declarative settings plus a host-managed OAuth action. `diaryx.sync` and `diaryx.share` both use declarative settings surfaces, while snapshots/history and templating remain iframe-backed.
+Google Drive storage and the GitHub sync provider both use declarative settings plus a host-managed OAuth action. GitHub also supports pasting a personal access token as a fallback when OAuth is unavailable on the current platform. `diaryx.sync` and `diaryx.share` both use declarative settings surfaces, while snapshots/history and templating remain iframe-backed.
 
 ## Mobile Drawer Layout
 

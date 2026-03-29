@@ -35,6 +35,7 @@ import {
 } from "$lib/workspace/workspaceAssetStorage";
 import { collectFilesystemTreePaths } from "./filesystemTreePaths";
 import { normalizeExtismHostPath } from "./extismHostPaths";
+import { proxyFetch } from "$lib/backend/proxyFetch";
 
 // ============================================================================
 // Helpers
@@ -1186,12 +1187,13 @@ function buildHostFunctions(
             } catch {}
             const credentials = isSameOrigin || isServerUrl ? "include" as const : "omit" as const;
 
-            resp = await fetch(input.url, {
+            resp = await proxyFetch(input.url, {
               method: input.method,
               headers: input.headers,
               body: fetchBody,
               credentials,
               signal: abortController?.signal,
+              timeout_ms: timeoutMs ?? undefined,
             });
           } finally {
             if (timeoutId !== null) {

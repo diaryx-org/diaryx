@@ -41,6 +41,14 @@ describe("pluginRuntimeConfig", () => {
     expect(merged.client_id).toBe("configured-client");
   });
 
+  it("preserves an explicit GitHub client_id", () => {
+    const merged = mergeRuntimePluginConfig("diaryx.github", {
+      client_id: "configured-client",
+    });
+
+    expect(merged.client_id).toBe("configured-client");
+  });
+
   it("builds PKCE OAuth params for Google Drive begin-oauth", async () => {
     const params = await getRuntimePluginCommandParams(
       "diaryx.storage.gdrive",
@@ -65,5 +73,21 @@ describe("pluginRuntimeConfig", () => {
         client_id: "configured-client",
       }),
     ).resolves.toEqual({});
+  });
+
+  it("builds PKCE OAuth params for GitHub begin-oauth", async () => {
+    const params = await getRuntimePluginCommandParams(
+      "diaryx.github",
+      "BeginOAuth",
+      {
+        client_id: "configured-client",
+      },
+    );
+
+    expect(params.client_id).toBe("configured-client");
+    expect(params.redirect_uri).toBe("https://app.example/oauth/callback");
+    expect(params.redirect_uri_prefix).toBe("https://app.example/oauth/callback");
+    expect(typeof params.code_verifier).toBe("string");
+    expect(typeof params.code_challenge).toBe("string");
   });
 });

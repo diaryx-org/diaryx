@@ -646,15 +646,87 @@ fn make_plugin_storage(workspace_root: Option<PathBuf>) -> Arc<dyn diaryx_extism
 }
 
 #[cfg(feature = "extism-plugins")]
-fn make_plugin_secret_store(
-    workspace_root: Option<PathBuf>,
-) -> Arc<dyn diaryx_extism::PluginSecretStore> {
-    match workspace_root {
-        Some(root) => Arc::new(diaryx_extism::FilePluginSecretStore::new(
-            root.join(".diaryx").join("plugin-secrets"),
-        )),
-        None => Arc::new(diaryx_extism::NoopSecretStore),
+struct TauriPluginSecretStore {
+    #[cfg(target_os = "android")]
+    data_dir: Option<PathBuf>,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl diaryx_extism::PluginSecretStore for TauriPluginSecretStore {
+    fn get(&self, key: &str) -> Option<String> {
+        #[cfg(not(target_os = "android"))]
+        {
+            match crate::credentials::get_credential(key.to_string()) {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!("Failed to load plugin secret from credential store: {error}");
+                    None
+                }
+            }
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            let Some(data_dir) = self.data_dir.as_ref() else {
+                return None;
+            };
+            match crate::credentials::get_plugin_secret(data_dir, key) {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!("Failed to load plugin secret from credential store: {error}");
+                    None
+                }
+            }
+        }
     }
+
+    fn set(&self, key: &str, value: &str) {
+        #[cfg(not(target_os = "android"))]
+        if let Err(error) = crate::credentials::store_credential(key.to_string(), value.to_string())
+        {
+            log::warn!("Failed to store plugin secret in credential store: {error}");
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            let Some(data_dir) = self.data_dir.as_ref() else {
+                return;
+            };
+            if let Err(error) = crate::credentials::store_plugin_secret(data_dir, key, value) {
+                log::warn!("Failed to store plugin secret in credential store: {error}");
+            }
+        }
+    }
+
+    fn delete(&self, key: &str) {
+        #[cfg(not(target_os = "android"))]
+        if let Err(error) = crate::credentials::remove_credential(key.to_string()) {
+            log::warn!("Failed to delete plugin secret from credential store: {error}");
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            let Some(data_dir) = self.data_dir.as_ref() else {
+                return;
+            };
+            if let Err(error) = crate::credentials::remove_plugin_secret(data_dir, key) {
+                log::warn!("Failed to delete plugin secret from credential store: {error}");
+            }
+        }
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+fn make_plugin_secret_store<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Arc<dyn diaryx_extism::PluginSecretStore> {
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+
+    Arc::new(TauriPluginSecretStore {
+        #[cfg(target_os = "android")]
+        data_dir: app.path().app_data_dir().ok(),
+    })
 }
 
 /// Load and register any third-party Extism WASM plugins from the workspace-local
@@ -693,7 +765,7 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
     let host_ctx = Arc::new(diaryx_extism::HostContext {
         fs,
         storage: make_plugin_storage(workspace_root_opt.clone()),
-        secret_store: make_plugin_secret_store(workspace_root_opt.clone()),
+        secret_store: make_plugin_secret_store(app),
         event_emitter,
         plugin_id: String::new(),
         permission_checker: Some(make_permission_checker(workspace_root_opt)),

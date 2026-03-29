@@ -27,6 +27,30 @@ workspace_config:
   audience_colors:
     developers: bg-teal-500
     public: bg-teal-500
+plugins:
+  diaryx.github:
+    permissions:
+      create_files:
+        exclude: []
+        include:
+        - all
+      edit_files:
+        exclude: []
+        include:
+        - all
+      http_requests:
+        exclude: []
+        include:
+        - api.github.com
+        - github.com
+      plugin_storage:
+        exclude: []
+        include:
+        - all
+      read_files:
+        exclude: []
+        include:
+        - all
 ---
 <div>
   <p align="center">

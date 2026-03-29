@@ -22,6 +22,28 @@ use std::path::PathBuf;
 #[allow(dead_code)]
 pub struct CredentialStoreDir(pub PathBuf);
 
+#[cfg(target_os = "android")]
+pub(crate) fn store_plugin_secret(
+    data_dir: &std::path::Path,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    platform::store(data_dir, key, value)
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn get_plugin_secret(
+    data_dir: &std::path::Path,
+    key: &str,
+) -> Result<Option<String>, String> {
+    platform::get(data_dir, key)
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn remove_plugin_secret(data_dir: &std::path::Path, key: &str) -> Result<(), String> {
+    platform::remove(data_dir, key)
+}
+
 // =========================================================================
 // Desktop / iOS — OS keychain via keyring-rs
 // =========================================================================

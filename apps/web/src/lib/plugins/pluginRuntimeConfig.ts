@@ -2,12 +2,16 @@ import { isTauri } from "$lib/backend/interface";
 import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
 
 const GDRIVE_PLUGIN_ID = "diaryx.storage.gdrive";
+const GITHUB_PLUGIN_ID = "diaryx.github";
 const env = (import.meta as ImportMeta & {
   env?: Record<string, string | undefined>;
 }).env ?? {};
 const GDRIVE_SHARED_CLIENT_ID = env.VITE_GOOGLE_DRIVE_CLIENT_ID;
 const GDRIVE_WEB_CLIENT_ID = env.VITE_GOOGLE_DRIVE_WEB_CLIENT_ID;
 const GDRIVE_DESKTOP_CLIENT_ID = env.VITE_GOOGLE_DRIVE_DESKTOP_CLIENT_ID;
+const GITHUB_SHARED_CLIENT_ID = env.VITE_GITHUB_CLIENT_ID;
+const GITHUB_WEB_CLIENT_ID = env.VITE_GITHUB_WEB_CLIENT_ID;
+const GITHUB_DESKTOP_CLIENT_ID = env.VITE_GITHUB_DESKTOP_CLIENT_ID;
 
 function trimEnv(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -23,17 +27,39 @@ function resolveGoogleDriveClientId(
   return preferred ?? trimEnv(GDRIVE_SHARED_CLIENT_ID) ?? fallback ?? null;
 }
 
+function resolveGithubClientId(
+  fallback?: string | null,
+): string | null {
+  const preferred = isTauri()
+    ? trimEnv(GITHUB_DESKTOP_CLIENT_ID)
+    : trimEnv(GITHUB_WEB_CLIENT_ID);
+  return preferred ?? trimEnv(GITHUB_SHARED_CLIENT_ID) ?? fallback ?? null;
+}
+
+function resolveOauthClientId(
+  pluginId: string,
+  fallback?: string | null,
+): string | null {
+  if (pluginId === GDRIVE_PLUGIN_ID) {
+    return resolveGoogleDriveClientId(fallback);
+  }
+  if (pluginId === GITHUB_PLUGIN_ID) {
+    return resolveGithubClientId(fallback);
+  }
+  return fallback ?? null;
+}
+
 export function mergeRuntimePluginConfig(
   pluginId: string,
   config: Record<string, JsonValue>,
 ): Record<string, JsonValue> {
-  if (pluginId !== GDRIVE_PLUGIN_ID) {
+  if (pluginId !== GDRIVE_PLUGIN_ID && pluginId !== GITHUB_PLUGIN_ID) {
     return config;
   }
 
   const fallback =
     typeof config.client_id === "string" ? config.client_id : null;
-  const clientId = resolveGoogleDriveClientId(fallback);
+  const clientId = resolveOauthClientId(pluginId, fallback);
   if (!clientId) {
     return config;
   }
@@ -75,13 +101,16 @@ export async function getRuntimePluginCommandParams(
   command: string,
   config: Record<string, JsonValue>,
 ): Promise<Record<string, JsonValue>> {
-  if (pluginId !== GDRIVE_PLUGIN_ID || command !== "BeginOAuth") {
+  if (
+    (pluginId !== GDRIVE_PLUGIN_ID && pluginId !== GITHUB_PLUGIN_ID)
+    || command !== "BeginOAuth"
+  ) {
     return {};
   }
 
   const fallback =
     typeof config.client_id === "string" ? config.client_id : null;
-  const clientId = resolveGoogleDriveClientId(fallback);
+  const clientId = resolveOauthClientId(pluginId, fallback);
   if (!clientId) {
     return {};
   }

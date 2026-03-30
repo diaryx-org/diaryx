@@ -116,7 +116,7 @@ test.describe('Workspace Navigation', () => {
   })
 })
 
-test.describe('Workspace Settings', () => {
+test.describe('Workspace Selector', () => {
   test('preserves scroll when opening and confirming workspace delete actions', async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem('diaryx-storage-type', 'indexeddb')
@@ -133,34 +133,48 @@ test.describe('Workspace Settings', () => {
       }
     })
 
-    await page.getByLabel('Open settings').click()
+    const currentWorkspaceName = await page.evaluate(async () => {
+      const { getCurrentWorkspaceId, getLocalWorkspace } = await import('/src/lib/storage/localWorkspaceRegistry.svelte.ts')
+      const currentId = getCurrentWorkspaceId()
+      return currentId ? (getLocalWorkspace(currentId)?.name ?? null) : null
+    })
+    expect(currentWorkspaceName).toBeTruthy()
 
-    const dialog = page.locator('[data-slot="dialog-content"]').first()
-    await dialog.getByRole('button', { name: 'Account' }).click()
-    await expect(dialog.getByText('Workspaces')).toBeVisible()
+    await page.locator('[data-slot="popover-trigger"]').filter({ hasText: currentWorkspaceName ?? '' }).click()
 
-    const scrollContainer = dialog.locator('[data-settings-scroll-container]')
+    const popover = page.locator('[data-slot="popover-content"]').filter({ hasText: 'Workspaces' }).first()
+    await expect(popover.getByText('Workspaces')).toBeVisible()
+
+    const targetWorkspaceName = 'Scroll Test Workspace 30'
+    const scrollContainer = popover.locator('[data-workspace-selector-list]')
     const initialScrollTop = await scrollContainer.evaluate((el) => {
       el.scrollTop = el.scrollHeight
       return el.scrollTop
     })
     expect(initialScrollTop).toBeGreaterThan(0)
 
-    const deleteButtons = dialog.locator('button[title="Delete"]:not([disabled])')
-    const deleteButtonCount = await deleteButtons.count()
-    expect(deleteButtonCount).toBeGreaterThan(5)
+    const workspaceRows = scrollContainer.locator('div.group')
+    const workspaceRowCount = await workspaceRows.count()
+    expect(workspaceRowCount).toBeGreaterThan(5)
 
-    await deleteButtons.last().click()
-    await expect(dialog.getByRole('button', { name: 'Delete locally' })).toBeVisible()
+    const targetRow = workspaceRows.filter({ hasText: targetWorkspaceName }).first()
+    await targetRow.scrollIntoViewIfNeeded()
+    const beforeDeleteActionScrollTop = await scrollContainer.evaluate((el) => el.scrollTop)
+    await targetRow.hover()
+    await targetRow.getByRole('button', { name: `Workspace actions for ${targetWorkspaceName}` }).click()
+    await popover.getByRole('button', { name: `Delete workspace ${targetWorkspaceName}` }).click()
+
+    const confirmRow = scrollContainer.locator('div').filter({ hasText: `Delete "${targetWorkspaceName}"?` }).first()
+    await expect(confirmRow).toBeVisible()
 
     const afterConfirmOpenScrollTop = await scrollContainer.evaluate((el) => el.scrollTop)
-    expect(afterConfirmOpenScrollTop).toBeGreaterThan(Math.max(20, initialScrollTop - 80))
+    expect(afterConfirmOpenScrollTop).toBeGreaterThan(Math.max(20, beforeDeleteActionScrollTop - 80))
 
-    await dialog.getByRole('button', { name: 'Delete locally' }).click()
+    await confirmRow.getByRole('button', { name: 'Delete', exact: true }).click()
 
     await expect
-      .poll(async () => await dialog.locator('button[title="Delete"]:not([disabled])').count())
-      .toBe(deleteButtonCount - 1)
+      .poll(async () => await scrollContainer.getByText(targetWorkspaceName, { exact: true }).count())
+      .toBe(0)
 
     const afterDeleteScrollTop = await scrollContainer.evaluate((el) => el.scrollTop)
     expect(afterDeleteScrollTop).toBeGreaterThan(Math.max(20, afterConfirmOpenScrollTop - 120))

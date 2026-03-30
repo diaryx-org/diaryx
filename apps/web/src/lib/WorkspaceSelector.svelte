@@ -101,6 +101,15 @@
 
   let showSelector = $derived(workspaces.length > 0);
 
+  let workspaceListEl: HTMLDivElement | null = $state(null);
+  let savedWorkspaceListScrollTop = $state(0);
+  let renamingId = $state<string | null>(null);
+  let renameValue = $state("");
+  let renameLoading = $state(false);
+  let confirmDeleteId = $state<string | null>(null);
+  let deleteLoading = $state(false);
+  let menuOpenId = $state<string | null>(null);
+
   // Current workspace ID (reactive via auth state + local registry state)
   let authState = $derived(getAuthState());
   let currentWsId = $derived(authState.activeWorkspaceId ?? getCurrentWorkspaceId());
@@ -175,6 +184,28 @@
       confirmDeleteId = null;
       unavailableRemoteNamespaces = [];
     }
+  });
+
+  $effect.pre(() => {
+    open;
+    renamingId;
+    confirmDeleteId;
+    workspaces.length;
+    if (open && workspaceListEl) {
+      savedWorkspaceListScrollTop = workspaceListEl.scrollTop;
+    }
+  });
+
+  $effect(() => {
+    open;
+    renamingId;
+    confirmDeleteId;
+    workspaces.length;
+    void tick().then(() => {
+      if (open && workspaceListEl && savedWorkspaceListScrollTop > 0) {
+        workspaceListEl.scrollTop = savedWorkspaceListScrollTop;
+      }
+    });
   });
 
   async function handleSelect(ws: LocalWorkspaceEntry) {
@@ -260,11 +291,6 @@
     return ns.metadata?.name ?? ns.id;
   }
 
-  // --- Rename state ---
-  let renamingId = $state<string | null>(null);
-  let renameValue = $state("");
-  let renameLoading = $state(false);
-
   function startRename(ws: LocalWorkspaceEntry) {
     menuOpenId = null;
     renamingId = ws.id;
@@ -300,10 +326,6 @@
     else if (e.key === "Escape") cancelRename();
   }
 
-  // --- Delete state ---
-  let confirmDeleteId = $state<string | null>(null);
-  let deleteLoading = $state(false);
-
   function startDelete(ws: LocalWorkspaceEntry) {
     menuOpenId = null;
     confirmDeleteId = ws.id;
@@ -327,9 +349,6 @@
       deleteLoading = false;
     }
   }
-
-  // --- Three-dot menu state ---
-  let menuOpenId = $state<string | null>(null);
 </script>
 
 {#if showSelector}
@@ -389,7 +408,7 @@
             Workspaces
           </p>
         </div>
-        <div class="max-h-64 overflow-y-auto">
+        <div class="max-h-64 overflow-y-auto" data-workspace-selector-list bind:this={workspaceListEl}>
           {#each workspaces as ws (ws.id)}
             {#if renamingId === ws.id}
               <!-- Inline rename row -->
@@ -474,6 +493,7 @@
                   <button
                     type="button"
                     class="size-11 md:size-6 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 hover:bg-accent-foreground/10 transition-all {menuOpenId === ws.id ? 'opacity-100' : ''}"
+                    aria-label={"Workspace actions for " + ws.name}
                     onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === ws.id ? null : ws.id; }}
                   >
                     <Ellipsis class="size-4 md:size-3.5 text-muted-foreground" />
@@ -492,6 +512,7 @@
                         type="button"
                         class="flex items-center gap-2 w-full px-2 py-1.5 text-sm rounded-sm hover:bg-accent transition-colors text-destructive disabled:opacity-50"
                         disabled={currentWsId === ws.id}
+                        aria-label={"Delete workspace " + ws.name}
                         title={currentWsId === ws.id ? "Switch to another workspace first" : "Delete workspace"}
                         onclick={(e) => { e.stopPropagation(); startDelete(ws); }}
                       >

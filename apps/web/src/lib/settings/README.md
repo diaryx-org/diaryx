@@ -26,12 +26,13 @@ Settings panel components for `SettingsDialog.svelte`.
 | `ICloudSettings.svelte` | iCloud Drive toggle and sync status (iOS Apple builds only). Conditionally rendered in the Data tab. |
 | `syncSettingsLogic.ts` | Shared sync/storage usage helpers used by settings UIs. |
 
-`WorkspaceManagement.svelte` now also shows account-linked workspaces whose
-provider is unavailable on the current client, so Apple-only iCloud workspaces
-remain visible on unsupported devices with an explanatory unavailable state.
-It no longer assumes the first installed provider is the canonical cloud
-provider; linked, downloadable, and linkable rows now use each workspace's
-actual provider or render actions per ready provider.
+`WorkspaceManagement.svelte` now shows a read-only account/workspace overview,
+including account-linked workspaces whose provider is unavailable on the current
+client, so Apple-only iCloud workspaces remain visible on unsupported devices
+with an explanatory unavailable state. It no longer assumes the first installed
+provider is the canonical cloud provider; linked, downloadable, and linkable
+rows now use each workspace's actual provider or render actions per ready
+provider.
 
 ## Plugin Settings Tabs
 
@@ -56,9 +57,10 @@ so long tabs (for example Workspace) do not push the bottom tab bar off-screen.
 - `diaryx.import` now owns the Day One / markdown format import settings tab declaratively, using generic host actions for file, directory, and workspace-entry picking.
 - The shared ZIP import helpers still stream Markdown Directory ZIP imports with `@zip.js/zip.js` so large archives are processed entry-by-entry instead of loading the full ZIP into one `ArrayBuffer` first.
 
-The shared settings content scroller is also reused by `WorkspaceManagement.svelte`
-to preserve scroll position when inline workspace actions swap a row into
-confirmation controls (for example, delete confirmations in the Account tab).
+The shared settings content scroller is reused across tabs so long sections in
+the Account, Data, and plugin tabs keep a stable scroll container while content
+changes within the active tab. Workspace deletion confirmations now live in
+`WorkspaceSelector.svelte`, not in the Account tab's read-only workspace list.
 
 `DebugInfo.svelte` now reflects the backend-provided log path (`log_file`) and
 can read the native log file directly through the Tauri backend. That lets the

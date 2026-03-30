@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-30T17:39:22Z
+updated: 2026-03-30T22:29:40Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -41,17 +41,15 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Storage - Storage abstraction layer - apps/web/src/lib/storage/README.md
 │   │   │   │   ├── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
 │   │   │   │   └── diaryx_wasm - WASM bindings for diaryx_core - apps/web/src/lib/wasm/README.md
-│   │   │   │       └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
 │   │   │   ├── Models - Stores and services for application state - apps/web/src/models/README.md
 │   │   │   │   ├── Services - Business logic services - apps/web/src/models/services/README.md
 │   │   │   │   └── Stores - Svelte stores for reactive state - apps/web/src/models/stores/README.md
-│   │   │   ├── Views - View components - apps/web/src/views/README.md
-│   │   │   │   ├── Editor Views - Editor-related view components - apps/web/src/views/editor/README.md
-│   │   │   │   ├── Layout Views - Layout components - apps/web/src/views/layout/README.md
-│   │   │   │   ├── Marketplace Views - Marketplace panels and plugin/theme browsing views - apps/web/src/views/marketplace/README.md
-│   │   │   │   ├── Shared Views - Shared view components - apps/web/src/views/shared/README.md
-│   │   │   │   └── Sidebar Views - Sidebar components - apps/web/src/views/sidebar/README.md
-│   │   │   └── LICENSE - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md
+│   │   │   └── Views - View components - apps/web/src/views/README.md
+│   │   │       ├── Editor Views - Editor-related view components - apps/web/src/views/editor/README.md
+│   │   │       ├── Layout Views - Layout components - apps/web/src/views/layout/README.md
+│   │   │       ├── Marketplace Views - Marketplace panels and plugin/theme browsing views - apps/web/src/views/marketplace/README.md
+│   │   │       ├── Shared Views - Shared view components - apps/web/src/views/shared/README.md
+│   │   │       └── Sidebar Views - Sidebar components - apps/web/src/views/sidebar/README.md
 │   │   ├── web worker - Cloudflare Worker entrypoint for app.diaryx.org - apps/web/worker/README.md
 │   │   └── TipTap Custom Extensions - Guide to creating custom TipTap extensions with markdown support - apps/web/docs/tiptap-custom-extensions.md
 │   └── tauri - Web app + native backend - apps/tauri/README.md

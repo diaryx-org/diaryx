@@ -1727,6 +1727,18 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
                 part_of: parent_path.clone(),
                 contents,
                 attachments,
+                attachment: parsed
+                    .frontmatter
+                    .get("attachment")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                attachment_of: parsed.frontmatter.get("attachment_of").and_then(|v| {
+                    v.as_sequence().map(|seq| {
+                        seq.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                }),
                 deleted: false,
                 audience: file_audience,
                 description,

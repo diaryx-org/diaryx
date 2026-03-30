@@ -353,6 +353,17 @@ pub fn parse_snapshot_markdown(
         part_of,
         contents,
         attachments,
+        attachment: fm
+            .get("attachment")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        attachment_of: fm.get("attachment_of").and_then(|v| {
+            v.as_sequence().map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+        }),
         deleted: fm.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false),
         audience,
         description,

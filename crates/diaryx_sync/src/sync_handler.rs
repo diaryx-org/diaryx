@@ -686,6 +686,11 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
             } else {
                 crdt.attachments.clone()
             },
+            attachment: crdt.attachment.clone().or_else(|| disk.attachment.clone()),
+            attachment_of: match &crdt.attachment_of {
+                None => disk.attachment_of.clone(),
+                Some(_) => crdt.attachment_of.clone(),
+            },
             deleted: crdt.deleted,
             // Only fall back to disk if crdt.audience is None (not set).
             // Some([]) means explicitly cleared and should not be overwritten.
@@ -814,6 +819,17 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                     })
                 })
                 .unwrap_or_default(),
+            attachment: fm
+                .get("attachment")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            attachment_of: fm.get("attachment_of").and_then(|v| {
+                v.as_sequence().map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+            }),
             deleted: fm.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false),
             audience: fm.get("audience").and_then(|v| {
                 v.as_sequence().map(|seq| {

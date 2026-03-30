@@ -58,11 +58,3 @@ codegen-units = 1
 [profile.release.package.diaryx_wasm]
 # Optimize WASM for size rather than speed.
 opt-level = "z"
-
-# Patch getrandom 0.2 to let `custom` feature take priority over `js` on wasm32.
-# Upstream getrandom checks `js` first, so when both features are enabled
-# (yrs→fastrand→getrandom/js), the JS/wasm-bindgen backend is always selected.
-# This patch swaps the priority so diaryx_wasm (which only has `js`, not
-# `custom`) still uses the browser crypto backend correctly.
-[patch.crates-io]
-getrandom = { path = "patches/getrandom-0.2" }

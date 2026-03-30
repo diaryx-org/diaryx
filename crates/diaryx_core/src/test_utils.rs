@@ -56,7 +56,7 @@ impl FileSystem for MockFileSystem {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "File not found"))
             .and_then(|content| {
                 if content == "<DIR>" {
-                    Err(io::Error::new(io::ErrorKind::Other, "Is a directory"))
+                    Err(io::Error::other("Is a directory"))
                 } else {
                     Ok(content)
                 }

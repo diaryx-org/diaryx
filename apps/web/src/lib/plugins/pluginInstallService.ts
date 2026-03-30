@@ -210,6 +210,10 @@ async function inspectPluginForInstall(
 }
 
 export async function uninstallPlugin(pluginId: string): Promise<void> {
+  // Discover the namespace ID *before* tearing down the plugin, since the
+  // publish plugin stores it in its own config (only queryable while alive).
+  const namespaceId = await discoverPluginNamespaceId(pluginId);
+
   if (isTauri()) {
     const backend: Backend = await getBackend();
     if (backend.uninstallPlugin) {
@@ -223,7 +227,7 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
       preservePluginEditorExtensions(removedManifest);
       await refreshTauriPluginStore(backend);
       await removePluginWorkspaceConfig(pluginId);
-      await cleanupPluginLocalMetadata(pluginId);
+      await cleanupPluginLocalMetadata(pluginId, namespaceId);
       return;
     }
   }
@@ -231,7 +235,7 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
   await browserUninstallPlugin(pluginId);
   clearInstalledPluginSource(pluginId);
   await removePluginWorkspaceConfig(pluginId);
-  await cleanupPluginLocalMetadata(pluginId);
+  await cleanupPluginLocalMetadata(pluginId, namespaceId);
 }
 
 function normalizeSha256(value: string): string {
@@ -280,16 +284,59 @@ async function removePluginWorkspaceConfig(pluginId: string): Promise<void> {
 function readPluginNamespaceId(
   metadata: Record<string, unknown> | undefined,
 ): string | null {
-  const raw = metadata?.namespace_id ?? metadata?.namespaceId;
+  // Plugins store namespace references under different keys:
+  //   - publish plugin: namespace_id / namespaceId
+  //   - sync plugin (via workspaceProviderService): remoteWorkspaceId / serverId
+  const raw =
+    metadata?.namespace_id ??
+    metadata?.namespaceId ??
+    metadata?.remoteWorkspaceId ??
+    metadata?.serverId;
   return typeof raw === "string" && raw.trim() ? raw : null;
 }
 
-async function cleanupPluginLocalMetadata(pluginId: string): Promise<void> {
+/**
+ * Try to discover the namespace ID owned by a plugin.  Checks host-side
+ * workspace metadata first (sync plugin stores `remoteWorkspaceId`), then
+ * falls back to querying the plugin itself (publish plugin stores
+ * `namespace_id` in its own config via `GetPublishConfig`).
+ *
+ * Call this **before** the plugin WASM is torn down so the command query
+ * still works.
+ */
+async function discoverPluginNamespaceId(pluginId: string): Promise<string | null> {
+  const workspaceId = getCurrentWorkspaceId();
+  if (!workspaceId) return null;
+
+  // 1. Check host-side workspace metadata.
+  const metadata = getPluginMetadata(workspaceId, pluginId);
+  const fromMetadata = readPluginNamespaceId(metadata);
+  if (fromMetadata) return fromMetadata;
+
+  // 2. Ask the plugin directly (best-effort; it may not support this command).
+  try {
+    const backend = await getBackend();
+    const api = createApi(backend);
+    const config = await api.executePluginCommand(pluginId, "GetPublishConfig", {});
+    const raw = (config as Record<string, unknown> | null)?.namespace_id;
+    if (typeof raw === "string" && raw.trim()) return raw;
+  } catch {
+    // Plugin doesn't support GetPublishConfig or is already gone — that's fine.
+  }
+
+  return null;
+}
+
+async function cleanupPluginLocalMetadata(
+  pluginId: string,
+  preDiscoveredNamespaceId?: string | null,
+): Promise<void> {
   const workspaceId = getCurrentWorkspaceId();
   if (!workspaceId) return;
 
-  const metadata = getPluginMetadata(workspaceId, pluginId);
-  const namespaceId = readPluginNamespaceId(metadata);
+  const namespaceId = preDiscoveredNamespaceId ?? readPluginNamespaceId(
+    getPluginMetadata(workspaceId, pluginId),
+  );
   if (namespaceId) {
     try {
       await deleteNamespace(namespaceId);

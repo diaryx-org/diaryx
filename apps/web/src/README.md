@@ -8,12 +8,9 @@ contents:
   - "[README](/apps/web/src/models/README.md)"
   - "[README](/apps/web/src/views/README.md)"
   - "[LICENSE](/apps/web/src/LICENSE.md)"
-attachments:
-  - "[App.svelte](/apps/web/src/App.svelte)"
-  - "[main.ts](/apps/web/src/main.ts)"
-  - "[app.css](/apps/web/src/app.css)"
 exclude:
   - "*.lock"
+  - "**/*.ts"
   - "test/**"
 ---
 

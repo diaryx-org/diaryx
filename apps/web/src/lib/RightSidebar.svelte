@@ -70,6 +70,7 @@
   import {
     getAttachmentAvailability,
     getAttachmentMediaKind,
+    getMimeType,
     getAttachmentThumbnailUrl,
     isPreviewableAttachmentKind,
   } from "@/models/services/attachmentService";
@@ -392,14 +393,20 @@
     return path.split("/").pop() ?? path;
   }
 
+  function getAttachmentAssetPath(attachment: string): string {
+    const parsed = parseLinkDisplay(attachment);
+    const rawPath = parsed?.path ?? attachment;
+    return rawPath.endsWith(".md") ? rawPath.slice(0, -3) : rawPath;
+  }
+
   // Extract display name from an attachment value (may be a markdown link or plain path)
   function getAttachmentDisplayName(attachment: string): string {
     const parsed = parseLinkDisplay(attachment);
-    if (parsed) return parsed.title || getFilename(parsed.path);
-    return getFilename(attachment);
+    if (parsed) return parsed.title || getFilename(getAttachmentAssetPath(attachment));
+    return getFilename(getAttachmentAssetPath(attachment));
   }
 
-  // Extract the actual file path from an attachment value (may be a markdown link or plain path)
+  // Extract the raw attachment note path from an attachment value.
   function getAttachmentPath(attachment: string): string {
     const parsed = parseLinkDisplay(attachment);
     if (parsed) return parsed.path;
@@ -526,7 +533,7 @@
         if (cancelled) return;
         const attachPath = getAttachmentPath(attachment);
         if (attachmentThumbnails.has(attachPath)) continue;
-        const kind = getAttachmentMediaKind(attachPath);
+        const kind = getAttachmentMediaKind(getAttachmentAssetPath(attachment));
         if (kind !== "image") continue;
         // Only load thumbnail if the file is available locally
         const status = attachmentStatuses.get(attachPath);
@@ -585,6 +592,39 @@
     } catch {
       // Fallback: try the raw value
       await onOpenEntry?.(link);
+    }
+  }
+
+  async function openAttachmentNote(attachment: string) {
+    const attachPath = getAttachmentPath(attachment);
+    await navigateToLink(attachPath);
+  }
+
+  async function accessAttachmentValue(attachmentValue: string) {
+    if (!api || !entry) return;
+
+    const assetPath = getAttachmentAssetPath(attachmentValue);
+    const previewKind = getAttachmentMediaKind(assetPath);
+    if (isPreviewableAttachmentKind(previewKind)) {
+      onPreviewAttachment?.(attachmentValue);
+      return;
+    }
+
+    try {
+      const bytes = await api.getAttachmentData(entry.path, attachmentValue);
+      const blob = new Blob([new Uint8Array(bytes)], {
+        type: getMimeType(assetPath),
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = getFilename(assetPath);
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("[RightSidebar] Failed to access attachment value:", error);
     }
   }
 
@@ -1043,8 +1083,9 @@
                         {#each getAttachments() as attachment}
                           {@const displayName = getAttachmentDisplayName(attachment)}
                           {@const attachPath = getAttachmentPath(attachment)}
-                          {@const Icon = getFileIcon(attachPath)}
-                          {@const previewKind = getAttachmentMediaKind(attachPath)}
+                          {@const assetPath = getAttachmentAssetPath(attachment)}
+                          {@const Icon = getFileIcon(assetPath)}
+                          {@const previewKind = getAttachmentMediaKind(assetPath)}
                           {@const canPreview = isPreviewableAttachmentKind(previewKind)}
                           {@const status = attachmentStatuses.get(attachPath) ?? 'unknown'}
                           {@const meta = entry ? getAttachmentMetadata(entry.path, attachPath) : null}
@@ -1076,7 +1117,7 @@
                               <div class="flex flex-col min-w-0">
                                 <span
                                   class="text-xs text-foreground truncate {canPreview ? 'hover:underline' : ''}"
-                                  title={canPreview ? `Preview ${displayName}` : attachPath}
+                              title={canPreview ? `Preview ${displayName}` : assetPath}
                                 >
                                   {displayName}
                                 </span>
@@ -1086,6 +1127,18 @@
                               </div>
                             </button>
                             <div class="flex items-center gap-0.5 shrink-0">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                class="size-11 md:size-5 shrink-0 opacity-0 group-hover/att:opacity-100 transition-opacity"
+                                onclick={(e: MouseEvent) => {
+                                  e.stopPropagation();
+                                  void openAttachmentNote(attachment);
+                                }}
+                                aria-label="Open attachment note"
+                              >
+                                <FileText class="size-4 md:size-3" />
+                              </Button>
                               {#if status === 'local'}
                                 <CheckCircle2 class="size-3 text-green-500" />
                               {:else if status === 'downloading'}
@@ -1147,8 +1200,8 @@
                       </Button>
                     </FilePickerPopover>
                   </div>
-                {:else if isArray(value) && key === 'contents'}
-                  <!-- Contents array with file picker -->
+                {:else if isArray(value) && ['contents', 'links', 'link_of', 'attachment_of'].includes(key)}
+                  <!-- Link array with file picker -->
                   <div class="space-y-1">
                     <div class="flex flex-wrap gap-1">
                       {#each value as item, i}
@@ -1336,6 +1389,25 @@
                       </Button>
                     </FilePickerPopover>
                   </div>
+                {:else if key === 'attachment' && typeof value === 'string' && value.trim().length > 0}
+                  {@const attachmentPath = String(value)}
+                  {@const attachmentAssetPath = getAttachmentAssetPath(attachmentPath)}
+                  {@const attachmentParsed = parseLinkDisplay(attachmentPath)}
+                  {@const attachmentPreviewKind = getAttachmentMediaKind(attachmentAssetPath)}
+                  {@const attachmentCanPreview = isPreviewableAttachmentKind(attachmentPreviewKind)}
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground hover:underline cursor-pointer"
+                    onclick={() => void accessAttachmentValue(attachmentPath)}
+                    title={attachmentAssetPath}
+                  >
+                    {#if attachmentCanPreview}
+                      <ArrowUpRight class="size-3" />
+                    {:else}
+                      <Download class="size-3" />
+                    {/if}
+                    {attachmentParsed?.title || getFilename(attachmentAssetPath)}
+                  </button>
                 {:else if typeof value === 'object' && value !== null && !Array.isArray(value)}
                   <!-- Nested object display -->
                   <NestedObjectDisplay data={value as Record<string, unknown>} onNavigateLink={navigateToLink} />

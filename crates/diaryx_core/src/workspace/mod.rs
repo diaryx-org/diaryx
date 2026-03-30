@@ -3542,6 +3542,58 @@ fn resolve_workspace_path(workspace_root: &Path, resolved_path: &Path) -> PathBu
     }
 }
 
+// ---------------------------------------------------------------------------
+// Sync helpers — usable without an async runtime.
+// ---------------------------------------------------------------------------
+
+/// Find the root index file in a directory using a synchronous filesystem.
+///
+/// A root index is a markdown file whose frontmatter has a `contents` key but
+/// no `part_of` key.  This is the sync equivalent of
+/// [`Workspace::find_root_index_in_dir`].
+pub fn find_root_index_in_dir_sync(
+    fs: &dyn crate::fs::FileSystem,
+    dir: &Path,
+) -> Result<Option<PathBuf>> {
+    let md_files = fs.list_md_files(dir).map_err(|e| DiaryxError::FileRead {
+        path: dir.to_path_buf(),
+        source: e,
+    })?;
+
+    for file in md_files {
+        if is_root_index_sync(fs, &file) {
+            return Ok(Some(file));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Check whether `path` is a root index using a synchronous filesystem.
+fn is_root_index_sync(fs: &dyn crate::fs::FileSystem, path: &Path) -> bool {
+    let content = match fs.read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // Quick check: must have frontmatter delimiters.
+    if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
+        return false;
+    }
+
+    let rest = &content[4..];
+    let end_idx = match rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
+        Some(i) => i,
+        None => return false,
+    };
+
+    let frontmatter_str = &rest[..end_idx];
+    match serde_yaml::from_str::<IndexFrontmatter>(frontmatter_str) {
+        Ok(fm) => fm.is_root(),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3565,6 +3617,8 @@ mod tests {
             part_of: None,
             audience: None,
             attachments: None,
+            attachment: None,
+            attachment_of: None,
             exclude: None,
             plugins: None,
             extra: std::collections::HashMap::new(),
@@ -3582,6 +3636,8 @@ mod tests {
             part_of: Some("../parent.md".to_string()),
             audience: None,
             attachments: None,
+            attachment: None,
+            attachment_of: None,
             exclude: None,
             plugins: None,
             extra: std::collections::HashMap::new(),
@@ -3741,6 +3797,39 @@ mod tests {
 
         assert!(block_on_test(ws.is_root_index(Path::new("root.md"))));
         assert!(!block_on_test(ws.is_root_index(Path::new("child.md"))));
+    }
+
+    #[test]
+    fn test_find_root_index_in_dir_sync() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("root.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("child.md"),
+            "---\ntitle: Child\ncontents: []\npart_of: root.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("plain.md"), "No frontmatter here")
+            .unwrap();
+
+        let result = find_root_index_in_dir_sync(&fs, Path::new(".")).unwrap();
+        assert_eq!(result, Some(PathBuf::from("root.md")));
+    }
+
+    #[test]
+    fn test_find_root_index_in_dir_sync_returns_none_when_no_root() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("child.md"),
+            "---\ntitle: Child\ncontents: []\npart_of: root.md\n---\n",
+        )
+        .unwrap();
+
+        let result = find_root_index_in_dir_sync(&fs, Path::new(".")).unwrap();
+        assert_eq!(result, None);
     }
 
     #[test]

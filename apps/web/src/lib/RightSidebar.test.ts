@@ -293,6 +293,28 @@ describe("RightSidebar", () => {
     expect(onDeleteAttachment).toHaveBeenCalledWith("photos/image.png");
   });
 
+  it("opens the attachment note when the note action is clicked", async () => {
+    const onOpenEntry = vi.fn(async () => {});
+    const api = {
+      canonicalizeLink: vi.fn(async () => "workspace/_attachments/image.png.md"),
+    };
+    const entry = createMockEntry({
+      path: "workspace/test-entry.md",
+      frontmatter: {
+        title: "Test Entry",
+        attachments: ["_attachments/image.png.md"],
+      },
+    });
+
+    renderSidebar({ entry, api, onOpenEntry });
+
+    const openNoteBtn = screen.getByRole("button", { name: "Open attachment note" });
+    await fireEvent.click(openNoteBtn);
+
+    expect(api.canonicalizeLink).toHaveBeenCalledWith("_attachments/image.png.md", "workspace/test-entry.md");
+    expect(onOpenEntry).toHaveBeenCalledWith("workspace/_attachments/image.png.md");
+  });
+
   it("calls onPropertyChange when a property is edited", async () => {
     const onPropertyChange = vi.fn();
     const entry = createMockEntry({

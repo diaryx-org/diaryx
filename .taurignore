@@ -1,0 +1,4 @@
+apps/**/*.md
+crates/**/*.md
+workers/**/*.md
+scripts/**/*.md

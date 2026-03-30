@@ -358,6 +358,64 @@ describe("Editor.svelte", () => {
     expect(onblur).toHaveBeenCalled();
   });
 
+  it("intercepts local editor link clicks before native navigation", async () => {
+    const onLinkClick = vi.fn();
+    render(EditorComponent, {
+      props: { readonly: true, onLinkClick },
+    });
+
+    await waitForEditorCreation();
+
+    const anchor = document.createElement("a");
+    anchor.setAttribute("href", "notes/file.md");
+    const event = {
+      target: anchor,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent;
+
+    const handled = editorState.createConfig.editorProps.handleDOMEvents.click(
+      mockEditorInstance.view,
+      event,
+    );
+
+    expect(handled).toBe(true);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(event.stopPropagation).toHaveBeenCalled();
+    expect(onLinkClick).toHaveBeenCalledWith("notes/file.md");
+  });
+
+  it("opens external editor links in a new tab when no link handler is provided", async () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    render(EditorComponent, {
+      props: { readonly: true },
+    });
+
+    await waitForEditorCreation();
+
+    const anchor = document.createElement("a");
+    anchor.setAttribute("href", "https://example.com");
+    const event = {
+      target: anchor,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent;
+
+    const handled = editorState.createConfig.editorProps.handleDOMEvents.click(
+      mockEditorInstance.view,
+      event,
+    );
+
+    expect(handled).toBe(true);
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://example.com",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    openSpy.mockRestore();
+  });
+
   it("has role=application on the editor container", () => {
     const { container } = render(EditorComponent, {
       props: { readonly: true },

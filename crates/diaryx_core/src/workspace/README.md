@@ -2,11 +2,9 @@
 title: Workspace module
 description: Workspace tree organization
 part_of: '[README](/crates/diaryx_core/src/README.md)'
-attachments:
-  - '[mod.rs](/crates/diaryx_core/src/workspace/mod.rs)'
-  - '[types.rs](/crates/diaryx_core/src/workspace/types.rs)'
 exclude:
   - '*.lock'
+  - '**/*.rs'
 ---
 
 # Workspace Module

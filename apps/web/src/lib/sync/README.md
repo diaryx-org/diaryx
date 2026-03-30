@@ -2,15 +2,9 @@
 title: Sync
 description: Host-side sync plugin integration services
 part_of: "[README](/apps/web/src/lib/README.md)"
-attachments:
-  - "[extismBrowserLoader.ts](/apps/web/src/lib/plugins/extismBrowserLoader.ts)"
-  - "[builtinProviders.ts](/apps/web/src/lib/sync/builtinProviders.ts)"
-  - "[providerRouter.ts](/apps/web/src/lib/sync/providerRouter.ts)"
-  - "[providerPluginCommands.ts](/apps/web/src/lib/sync/providerPluginCommands.ts)"
-  - "[workspaceProviderService.ts](/apps/web/src/lib/sync/workspaceProviderService.ts)"
-  - "[attachmentSyncService.ts](/apps/web/src/lib/sync/attachmentSyncService.ts)"
 exclude:
   - "*.lock"
+  - "**/*.ts"
   - "*.test.ts"
 ---
 

@@ -6,6 +6,9 @@ audience:
 - public
 - agents
 - developers
+link_of:
+- '[Diaryx](/Diaryx.md)'
+link: '[PHILOSOPHY](/PHILOSOPHY.md)'
 ---
 # PHILOSOPHY
 

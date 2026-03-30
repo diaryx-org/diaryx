@@ -2,17 +2,9 @@
 title: Lib Stores
 description: Svelte stores for UI preferences
 part_of: '[README](/apps/web/src/lib/README.md)'
-attachments:
-  - '[linkFormatStore.svelte.ts](/apps/web/src/lib/stores/linkFormatStore.svelte.ts)'
-  - '[workspaceConfigStore.svelte.ts](/apps/web/src/lib/stores/workspaceConfigStore.svelte.ts)'
-  - '[theme.svelte.ts](/apps/web/src/lib/stores/theme.svelte.ts)'
-  - '[templateContextStore.svelte.ts](/apps/web/src/lib/stores/templateContextStore.svelte.ts)'
-  - '[appearance.svelte.ts](/apps/web/src/lib/stores/appearance.svelte.ts)'
-  - '[appearance.types.ts](/apps/web/src/lib/stores/appearance.types.ts)'
-  - '[appearance.utils.ts](/apps/web/src/lib/stores/appearance.utils.ts)'
-  - '[appearance.presets.ts](/apps/web/src/lib/stores/appearance.presets.ts)'
 exclude:
   - '*.lock'
+  - '**/*.ts'
 ---
 
 # Lib Stores

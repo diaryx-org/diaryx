@@ -7,6 +7,7 @@
   import { maybeStartWindowDrag } from "$lib/windowDrag";
   import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
   import { switchWorkspace } from "$lib/workspace/switchWorkspace";
+  import { getWorkspaceDirectoryPath } from "$lib/workspace/rootPath";
   import { installLocalPlugin } from "$lib/plugins/pluginInstallService";
   import { addFilesToZip } from "./lib/settings/zipUtils";
   import { useMobileGestures } from "$lib/hooks/useMobileGestures.svelte";
@@ -1945,9 +1946,7 @@
       const localWs = wsId ? getLocalWorkspace(wsId) : null;
       const wsName = localWs?.name ?? "My Journal";
       // Use the actual workspace directory, not "." (which is CWD on Tauri)
-      const workspaceDir = backend.getWorkspacePath()
-        .replace(/\/index\.md$/, '')
-        .replace(/\/README\.md$/, '');
+      const workspaceDir = getWorkspaceDirectoryPath(backend.getWorkspacePath());
       await api.createWorkspace(workspaceDir, wsName);
       await refreshTree();
       // Open the newly created root index
@@ -2547,14 +2546,15 @@
     // Parse markdown link if present: [name](/path) -> extract path
     const linkMatch = /^\[([^\]]*)\]\(([^)]+)\)$/.exec(attachmentValue);
     const attachmentPath = linkMatch ? linkMatch[2] : attachmentValue;
-    const displayName = linkMatch ? (linkMatch[1] || attachmentPath.split("/").pop() || attachmentPath) : attachmentPath.split("/").pop() || attachmentValue;
+    const assetPath = attachmentPath.endsWith(".md") ? attachmentPath.slice(0, -3) : attachmentPath;
+    const displayName = linkMatch ? (linkMatch[1] || assetPath.split("/").pop() || assetPath) : assetPath.split("/").pop() || attachmentValue;
 
     try {
       const data = await api.getAttachmentData(currentEntry.path, attachmentPath);
-      const mimeType = getMimeType(attachmentPath);
+      const mimeType = getMimeType(assetPath);
       let blob = new Blob([new Uint8Array(data)], { type: mimeType });
-      let mediaKind = getAttachmentMediaKind(attachmentPath, mimeType);
-      if (isHeicFile(attachmentPath)) {
+      let mediaKind = getAttachmentMediaKind(assetPath, mimeType);
+      if (isHeicFile(assetPath)) {
         blob = await convertHeicToJpeg(blob);
         mediaKind = "image";
       }

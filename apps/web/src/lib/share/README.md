@@ -2,8 +2,6 @@
 title: Share
 description: Legacy share/publish panel module
 part_of: "[README](/apps/web/src/lib/README.md)"
-attachments:
-  - "[PublishingPanel.svelte](/apps/web/src/lib/share/PublishingPanel.svelte)"
 exclude:
   - "*.lock"
 ---

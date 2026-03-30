@@ -11,6 +11,7 @@
  */
 
 import type { TreeNode, Api, EntryData } from '../lib/backend';
+import { resolveWorkspaceValidationRootPath } from '../lib/workspace/rootPath';
 import { workspaceStore } from '../models/stores';
 import { reverseBlobUrlsToAttachmentPaths } from '../models/services';
 import { toast } from 'svelte-sonner';
@@ -24,7 +25,11 @@ export async function handleValidateWorkspace(
   backend: any
 ): Promise<void> {
   try {
-    const rootPath = tree?.path ?? backend.getWorkspacePath();
+    const rootPath = await resolveWorkspaceValidationRootPath(
+      api,
+      tree,
+      backend.getWorkspacePath(),
+    );
     const result = await api.validateWorkspace(rootPath);
     workspaceStore.setValidationResult(result);
 

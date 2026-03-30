@@ -2,11 +2,9 @@
 title: Hooks
 description: Svelte hooks
 part_of: '[README](/apps/web/src/lib/README.md)'
-attachments:
-  - '[useContextMenu.svelte.ts](/apps/web/src/lib/hooks/useContextMenu.svelte.ts)'
-  - '[useMobile.svelte.ts](/apps/web/src/lib/hooks/useMobile.svelte.ts)'
 exclude:
   - '*.lock'
+  - '**/*.ts'
 ---
 
 # Hooks

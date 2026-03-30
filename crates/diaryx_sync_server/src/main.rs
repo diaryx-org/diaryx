@@ -187,6 +187,7 @@ async fn main() {
     // Namespace / object / audience states
     let namespace_state = NamespaceState {
         namespace_store: namespace_store.clone(),
+        domain_mapping_cache: Some(domain_mapping_cache.clone()),
     };
     let object_state = ObjectState {
         namespace_store: namespace_store.clone(),

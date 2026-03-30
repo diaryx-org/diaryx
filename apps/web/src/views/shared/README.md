@@ -2,8 +2,6 @@
 title: Shared Views
 description: Shared view components
 part_of: '[README](/apps/web/src/views/README.md)'
-attachments:
-  - '[LoadingSpinner.svelte](/apps/web/src/views/shared/LoadingSpinner.svelte)'
 exclude:
   - '*.lock'
 ---

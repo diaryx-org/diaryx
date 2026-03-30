@@ -1,14 +1,226 @@
 //! Frontmatter operation command handlers.
 
+use std::path::Path;
+
 use serde_yaml::Value;
 
 use crate::command::Response;
 use crate::diaryx::{Diaryx, json_to_yaml, yaml_to_json};
+use crate::error::DiaryxError;
 use crate::error::Result;
 use crate::fs::AsyncFileSystem;
 use indexmap::IndexMap;
 
 impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
+    fn extract_markdown_link_destinations(content: &str) -> Vec<String> {
+        let bytes = content.as_bytes();
+        let mut links = Vec::new();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if bytes[i] != b'[' {
+                i += 1;
+                continue;
+            }
+            if i > 0 && bytes[i - 1] == b'!' {
+                i += 1;
+                continue;
+            }
+
+            let mut label_end = i + 1;
+            while label_end < bytes.len() {
+                match bytes[label_end] {
+                    b'\\' => label_end += 2,
+                    b']' => break,
+                    _ => label_end += 1,
+                }
+            }
+
+            if label_end >= bytes.len()
+                || bytes[label_end] != b']'
+                || label_end + 1 >= bytes.len()
+                || bytes[label_end + 1] != b'('
+            {
+                i += 1;
+                continue;
+            }
+
+            let href_start = label_end + 2;
+            let mut cursor = href_start;
+            let mut depth = 1usize;
+            while cursor < bytes.len() {
+                match bytes[cursor] {
+                    b'\\' => cursor += 2,
+                    b'(' => {
+                        depth += 1;
+                        cursor += 1;
+                    }
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let href = content[href_start..cursor].trim();
+                            let href = href
+                                .strip_prefix('<')
+                                .and_then(|s| s.strip_suffix('>'))
+                                .unwrap_or(href);
+                            if !href.is_empty() {
+                                links.push(href.to_string());
+                            }
+                            cursor += 1;
+                            break;
+                        }
+                        cursor += 1;
+                    }
+                    _ => cursor += 1,
+                }
+            }
+
+            i = cursor.max(i + 1);
+        }
+
+        links
+    }
+
+    fn is_local_body_link(href: &str) -> bool {
+        let lowered = href.trim().to_ascii_lowercase();
+        !(lowered.contains("://")
+            || lowered.starts_with("mailto:")
+            || lowered.starts_with("tel:")
+            || lowered.starts_with('#')
+            || lowered.starts_with("javascript:"))
+    }
+
+    async fn content_uses_target(
+        &self,
+        source_path: &str,
+        target_canonical: &str,
+        content: Option<&str>,
+    ) -> bool {
+        let source_canonical = self.get_canonical_path(source_path);
+        let body = match content {
+            Some(content) => content.to_string(),
+            None => self
+                .entry()
+                .get_content(source_path)
+                .await
+                .unwrap_or_default(),
+        };
+
+        Self::extract_markdown_link_destinations(&body)
+            .into_iter()
+            .filter(|href| Self::is_local_body_link(href))
+            .any(|href| {
+                self.resolve_frontmatter_link_target(&href, &source_canonical) == target_canonical
+            })
+    }
+
+    async fn upsert_frontmatter_link_array_item(
+        &self,
+        file_path: &str,
+        key: &str,
+        target_canonical: &str,
+    ) -> Result<bool> {
+        let file_canonical = self.get_canonical_path(file_path);
+        let existing = self
+            .entry()
+            .get_frontmatter_property(file_path, key)
+            .await?;
+        let mut items = match existing {
+            Some(Value::Sequence(items)) => items,
+            Some(_) => Vec::new(),
+            None => Vec::new(),
+        };
+
+        let already_present = items.iter().any(|item| {
+            item.as_str().is_some_and(|s| {
+                self.resolve_frontmatter_link_target(s, &file_canonical) == target_canonical
+            })
+        });
+        if already_present {
+            return Ok(false);
+        }
+
+        let formatted = self.format_link_for_file(target_canonical, &file_canonical);
+        items.push(Value::String(formatted));
+        self.entry()
+            .set_frontmatter_property(file_path, key, Value::Sequence(items))
+            .await?;
+        Ok(true)
+    }
+
+    async fn remove_frontmatter_link_array_item(
+        &self,
+        file_path: &str,
+        key: &str,
+        target_canonical: &str,
+    ) -> Result<bool> {
+        let file_canonical = self.get_canonical_path(file_path);
+        let existing = self
+            .entry()
+            .get_frontmatter_property(file_path, key)
+            .await?;
+        let Some(Value::Sequence(items)) = existing else {
+            return Ok(false);
+        };
+        let original_len = items.len();
+
+        let filtered: Vec<Value> = items
+            .into_iter()
+            .filter(|item| {
+                !item.as_str().is_some_and(|s| {
+                    self.resolve_frontmatter_link_target(s, &file_canonical) == target_canonical
+                })
+            })
+            .collect();
+
+        let changed = filtered.len() != original_len;
+        if !changed {
+            return Ok(false);
+        }
+
+        if filtered.is_empty() {
+            self.entry()
+                .remove_frontmatter_property(file_path, key)
+                .await?;
+        } else {
+            self.entry()
+                .set_frontmatter_property(file_path, key, Value::Sequence(filtered))
+                .await?;
+        }
+        Ok(true)
+    }
+
+    async fn ensure_self_link_property(&self, file_path: &str) -> Result<bool> {
+        let canonical_path = self.get_canonical_path(file_path);
+        match self
+            .entry()
+            .get_frontmatter_property(file_path, "link")
+            .await?
+        {
+            Some(Value::String(existing))
+                if self.resolve_frontmatter_link_target(&existing, &canonical_path)
+                    == canonical_path =>
+            {
+                Ok(false)
+            }
+            Some(_) => Ok(false),
+            None => {
+                let formatted = self.format_link_for_file(&canonical_path, &canonical_path);
+                self.entry()
+                    .set_frontmatter_property(file_path, "link", Value::String(formatted))
+                    .await?;
+                Ok(true)
+            }
+        }
+    }
+
+    async fn track_link_metadata_change(&self, path: &str) {
+        let canonical_path = self.get_canonical_path(path);
+        self.plugin_registry()
+            .track_file_for_sync(&canonical_path)
+            .await;
+    }
+
     pub(crate) async fn cmd_get_frontmatter(&self, path: String) -> Result<Response> {
         let fm = self.entry().get_frontmatter(&path).await?;
         let json_fm: IndexMap<String, serde_json::Value> =
@@ -45,6 +257,27 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 }
+            } else if key == "attachment" {
+                if let serde_json::Value::String(ref s) = value {
+                    let canonical_target = self.resolve_attachment_link_target_with_hint(
+                        s,
+                        &canonical_path,
+                        Some(crate::link_parser::LinkFormat::PlainCanonical),
+                    );
+                    let formatted =
+                        self.format_attachment_link_for_file(&canonical_target, &canonical_path);
+                    let yaml_value = Value::String(formatted);
+                    self.entry()
+                        .set_frontmatter_property(&path, &key, yaml_value)
+                        .await?;
+
+                    self.plugin_registry()
+                        .track_file_for_sync(&canonical_path)
+                        .await;
+
+                    self.emit_workspace_sync().await;
+                    return Ok(Response::Ok);
+                }
             } else if key == "part_of" {
                 // Parse the value, convert to canonical, format as markdown link
                 if let serde_json::Value::String(ref s) = value {
@@ -68,15 +301,22 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 }
-            } else if key == "contents" || key == "links" || key == "link_of" {
+            } else if key == "contents"
+                || key == "links"
+                || key == "link_of"
+                || key == "attachment_of"
+            {
                 // Handle contents array - format each item as markdown link
                 if let serde_json::Value::Array(ref arr) = value {
                     let mut formatted_links: Vec<Value> = Vec::new();
 
                     for item in arr {
                         if let serde_json::Value::String(s) = item {
-                            let canonical_target =
-                                self.resolve_frontmatter_link_target(s, &canonical_path);
+                            let canonical_target = self.resolve_attachment_link_target_with_hint(
+                                s,
+                                &canonical_path,
+                                Some(self.link_format()),
+                            );
                             let formatted =
                                 self.format_link_for_file(&canonical_target, &canonical_path);
                             formatted_links.push(Value::String(formatted));
@@ -99,21 +339,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     return Ok(Response::Ok);
                 }
             } else if key == "attachments" {
-                // Handle attachments array - format each item as a normalized link.
+                // Attachments now point to attachment notes, not binary assets.
                 if let serde_json::Value::Array(ref arr) = value {
                     let mut formatted_links: Vec<Value> = Vec::new();
 
                     for item in arr {
                         if let serde_json::Value::String(s) = item {
-                            let canonical_target = self.resolve_attachment_link_target_with_hint(
-                                s,
-                                &canonical_path,
-                                Some(self.link_format()),
-                            );
-                            let formatted = self.format_attachment_link_for_file(
-                                &canonical_target,
-                                &canonical_path,
-                            );
+                            let canonical_target =
+                                self.resolve_frontmatter_link_target(s, &canonical_path);
+                            let formatted =
+                                self.format_link_for_file(&canonical_target, &canonical_path);
                             formatted_links.push(Value::String(formatted));
                         }
                     }
@@ -131,14 +366,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 } else if let serde_json::Value::String(ref s) = value {
-                    // Accept scalar attachment values for backwards compatibility.
                     let canonical_target = self.resolve_attachment_link_target_with_hint(
                         s,
                         &canonical_path,
                         Some(self.link_format()),
                     );
-                    let formatted =
-                        self.format_attachment_link_for_file(&canonical_target, &canonical_path);
+                    let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
                     let yaml_value = Value::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
@@ -264,7 +497,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         // CrdtFs handles CRDT updates automatically via write_file hook.
         // We only need to track for echo detection and emit sync.
         {
-            if key == "part_of" || key == "contents" || key == "attachments" {
+            if key == "link"
+                || key == "attachment"
+                || key == "links"
+                || key == "link_of"
+                || key == "attachment_of"
+                || key == "part_of"
+                || key == "contents"
+                || key == "attachments"
+            {
                 let canonical_path = self.get_canonical_path(&path);
 
                 // Track for echo detection
@@ -275,6 +516,94 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Emit workspace sync message
                 self.emit_workspace_sync().await;
             }
+        }
+
+        Ok(Response::Ok)
+    }
+
+    pub(crate) async fn cmd_add_link(
+        &self,
+        source_path: String,
+        target_path: String,
+        _content: Option<String>,
+    ) -> Result<Response> {
+        let source_fs_path = self.resolve_fs_path(&source_path);
+        let target_fs_path = self.resolve_fs_path(&target_path);
+        if !self.fs().exists(&source_fs_path).await {
+            return Err(DiaryxError::Validation(format!(
+                "Source entry not found: {}",
+                Path::new(&source_path).display()
+            )));
+        }
+        if !self.fs().exists(&target_fs_path).await {
+            return Err(DiaryxError::Validation(format!(
+                "Target entry not found: {}",
+                Path::new(&target_path).display()
+            )));
+        }
+
+        let source_canonical = self.get_canonical_path(&source_path);
+        let target_canonical = self.get_canonical_path(&target_path);
+
+        let mut changed = false;
+        changed |= self
+            .upsert_frontmatter_link_array_item(&source_path, "links", &target_canonical)
+            .await?;
+        changed |= self
+            .upsert_frontmatter_link_array_item(&target_path, "link_of", &source_canonical)
+            .await?;
+        changed |= self.ensure_self_link_property(&target_path).await?;
+
+        if changed {
+            self.track_link_metadata_change(&source_path).await;
+            self.track_link_metadata_change(&target_path).await;
+            self.emit_workspace_sync().await;
+        }
+
+        Ok(Response::Ok)
+    }
+
+    pub(crate) async fn cmd_remove_link(
+        &self,
+        source_path: String,
+        target_path: String,
+        content: Option<String>,
+    ) -> Result<Response> {
+        let source_fs_path = self.resolve_fs_path(&source_path);
+        if !self.fs().exists(&source_fs_path).await {
+            return Err(DiaryxError::Validation(format!(
+                "Source entry not found: {}",
+                Path::new(&source_path).display()
+            )));
+        }
+
+        let target_canonical = self.get_canonical_path(&target_path);
+        if self
+            .content_uses_target(&source_path, &target_canonical, content.as_deref())
+            .await
+        {
+            return Ok(Response::Ok);
+        }
+
+        let source_canonical = self.get_canonical_path(&source_path);
+        let mut changed = false;
+        changed |= self
+            .remove_frontmatter_link_array_item(&source_path, "links", &target_canonical)
+            .await?;
+
+        let target_fs_path = self.resolve_fs_path(&target_path);
+        if self.fs().exists(&target_fs_path).await {
+            changed |= self
+                .remove_frontmatter_link_array_item(&target_path, "link_of", &source_canonical)
+                .await?;
+        }
+
+        if changed {
+            self.track_link_metadata_change(&source_path).await;
+            if self.fs().exists(&target_fs_path).await {
+                self.track_link_metadata_change(&target_path).await;
+            }
+            self.emit_workspace_sync().await;
         }
 
         Ok(Response::Ok)

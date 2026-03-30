@@ -9,9 +9,9 @@ contents:
 - '[README](/crates/diaryx/src/README.md)'
 attachments:
 - '[Cargo.toml](/crates/diaryx/Cargo.toml)'
-- '[build.rs](/crates/diaryx/build.rs)'
 exclude:
 - '*.lock'
+- '**/*.rs'
 ---
 # Diaryx CLI
 
@@ -239,7 +239,10 @@ exclude:
   - "*.lock"        # Glob pattern
 ```
 
-Patterns are inherited up the `part_of` hierarchy.
+Patterns are inherited up the `part_of` hierarchy. Validation matches them
+against both basenames and workspace-relative paths, so directory globs like
+`**/target` or `build/**` also prune those directories from the validation
+scan instead of only hiding the resulting orphan warnings.
 
 You can also validate specific files or directories:
 

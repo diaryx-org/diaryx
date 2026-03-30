@@ -2,15 +2,6 @@
 title: Marketplace Views
 description: Marketplace panels and plugin/theme browsing views
 part_of: '[README](/apps/web/src/views/README.md)'
-attachments:
-  - '[MarketplaceSidebar.svelte](/apps/web/src/views/marketplace/MarketplaceSidebar.svelte)'
-  - '[MarketplaceThemes.svelte](/apps/web/src/views/marketplace/MarketplaceThemes.svelte)'
-  - '[MarketplaceTypography.svelte](/apps/web/src/views/marketplace/MarketplaceTypography.svelte)'
-  - '[MarketplacePlugins.svelte](/apps/web/src/views/marketplace/MarketplacePlugins.svelte)'
-  - '[MarketplaceBundles.svelte](/apps/web/src/views/marketplace/MarketplaceBundles.svelte)'
-  - '[MarketplaceTemplates.svelte](/apps/web/src/views/marketplace/MarketplaceTemplates.svelte)'
-  - '[MarketplaceStarters.svelte](/apps/web/src/views/marketplace/MarketplaceStarters.svelte)'
-  - '[PluginMarketplace.svelte](/apps/web/src/views/marketplace/PluginMarketplace.svelte)'
 exclude:
   - '*.lock'
 ---

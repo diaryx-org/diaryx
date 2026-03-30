@@ -2,22 +2,9 @@
 title: Namespace
 description: Namespace management services and host-side UI components
 part_of: "[README](/apps/web/src/lib/README.md)"
-attachments:
-  - "[namespaceService.ts](/apps/web/src/lib/namespace/namespaceService.ts)"
-  - "[namespaceContext.svelte.ts](/apps/web/src/lib/namespace/namespaceContext.svelte.ts)"
-  - "[NamespaceAudienceManager.svelte](/apps/web/src/lib/namespace/NamespaceAudienceManager.svelte)"
-  - "[NamespacePublishButton.svelte](/apps/web/src/lib/namespace/NamespacePublishButton.svelte)"
-  - "[NamespaceSubdomainManager.svelte](/apps/web/src/lib/namespace/NamespaceSubdomainManager.svelte)"
-  - "[NamespaceCustomDomainManager.svelte](/apps/web/src/lib/namespace/NamespaceCustomDomainManager.svelte)"
-  - "[NamespaceSiteUrl.svelte](/apps/web/src/lib/namespace/NamespaceSiteUrl.svelte)"
-  - "[NamespaceGuardWidget.svelte](/apps/web/src/lib/namespace/NamespaceGuardWidget.svelte)"
-  - "[NamespaceSiteUrlWidget.svelte](/apps/web/src/lib/namespace/NamespaceSiteUrlWidget.svelte)"
-  - "[NamespaceSubdomainWidget.svelte](/apps/web/src/lib/namespace/NamespaceSubdomainWidget.svelte)"
-  - "[NamespaceAudienceWidget.svelte](/apps/web/src/lib/namespace/NamespaceAudienceWidget.svelte)"
-  - "[NamespacePublishWidget.svelte](/apps/web/src/lib/namespace/NamespacePublishWidget.svelte)"
-  - "[index.ts](/apps/web/src/lib/namespace/index.ts)"
 exclude:
   - "*.lock"
+  - "**/*.ts"
 ---
 
 # Namespace

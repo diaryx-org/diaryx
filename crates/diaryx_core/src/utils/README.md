@@ -2,13 +2,9 @@
 title: Utils module
 description: Utility functions for date and path handling
 part_of: '[README](/crates/diaryx_core/src/README.md)'
-attachments:
-  - '[mod.rs](/crates/diaryx_core/src/utils/mod.rs)'
-  - '[date.rs](/crates/diaryx_core/src/utils/date.rs)'
-  - '[naming.rs](/crates/diaryx_core/src/utils/naming.rs)'
-  - '[path.rs](/crates/diaryx_core/src/utils/path.rs)'
 exclude:
   - '*.lock'
+  - '**/*.rs'
 ---
 
 # Utils Module

@@ -11,7 +11,7 @@ use axum::{
 use diaryx_server::api::namespaces::{
     CreateNamespaceRequest, NamespaceResponse, UpdateNamespaceRequest,
 };
-use diaryx_server::ports::{NamespaceStore, ServerCoreError};
+use diaryx_server::ports::{DomainMappingCache, NamespaceStore, ServerCoreError};
 use diaryx_server::use_cases::namespaces::NamespaceService;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -20,6 +20,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct NamespaceState {
     pub namespace_store: Arc<dyn NamespaceStore>,
+    pub domain_mapping_cache: Option<Arc<dyn DomainMappingCache>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -160,8 +161,9 @@ async fn delete_namespace(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let service = NamespaceService::new(state.namespace_store.as_ref());
+    let cache = state.domain_mapping_cache.as_deref();
 
-    match service.delete(&id, &auth.user.id).await {
+    match service.delete_with_cache(&id, &auth.user.id, cache).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => core_error_response(e),
     }
@@ -206,6 +208,7 @@ mod tests {
     fn state(repo: Arc<NamespaceRepo>) -> NamespaceState {
         NamespaceState {
             namespace_store: Arc::new(NativeNamespaceStore::new(repo)),
+            domain_mapping_cache: None,
         }
     }
 

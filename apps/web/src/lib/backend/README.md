@@ -2,18 +2,9 @@
 title: Backend
 description: Backend abstraction layer for WASM and Tauri
 part_of: "[README](/apps/web/src/lib/README.md)"
-attachments:
-  - "[index.ts](/apps/web/src/lib/backend/index.ts)"
-  - "[api.ts](/apps/web/src/lib/backend/api.ts)"
-  - "[eventEmitter.ts](/apps/web/src/lib/backend/eventEmitter.ts)"
-  - "[interface.ts](/apps/web/src/lib/backend/interface.ts)"
-  - "[storageType.ts](/apps/web/src/lib/backend/storageType.ts)"
-  - "[tauri.ts](/apps/web/src/lib/backend/tauri.ts)"
-  - "[workspaceAccess.ts](/apps/web/src/lib/backend/workspaceAccess.ts)"
-  - "[wasmWorkerNew.ts](/apps/web/src/lib/backend/wasmWorkerNew.ts)"
-  - "[workerBackendNew.ts](/apps/web/src/lib/backend/workerBackendNew.ts)"
 exclude:
   - "*.lock"
+  - "**/*.ts"
   - "generated/**"
   - "serde_json/**"
   - "*.test.ts"
@@ -58,6 +49,14 @@ code paths just because `window.__TAURI__` is absent.
 
 This avoids base64 encoding/decoding and keeps large media uploads off the
 JSON command path in both web and Tauri runtimes.
+
+Attachment refs are note-backed rather than binary-backed. Entry
+`frontmatter.attachments[]` values point at attachment notes
+(for example `_attachments/photo.png.md`), and backend read/delete/move/resolve
+commands dereference those notes through the note's singular `attachment`
+property to reach the binary. `GetAncestorAttachments` now returns both the
+attachment-note path and the binary path so UI surfaces can offer note
+navigation separately from binary preview/download behavior.
 
 ## Live Sync Event Emission
 
@@ -173,6 +172,13 @@ The backend command API now exposes Rust `link_parser` operations through
 can use `api.ts` helpers (`runLinkParser`, `parseLink`, `canonicalizeLink`,
 `formatLink`, `convertLink`) to avoid duplicating link parsing logic in
 TypeScript.
+
+`api.ts` also exposes `addLink(...)` / `removeLink(...)` wrappers for the Rust
+`AddLink` / `RemoveLink` commands. Those commands keep explicit `links`,
+`link_of`, and target `link` frontmatter synchronized for local note links,
+while accepting an optional current markdown snapshot so removal can skip
+tearing down a relationship that still exists elsewhere in the unsaved editor
+state.
 
 ## Native HTTP Proxy
 

@@ -166,6 +166,41 @@ pub enum Command {
         parent_path: String,
     },
 
+    /// Register a non-structural link relationship between two entries.
+    ///
+    /// Ensures the source entry's `links` contains the target, the target's
+    /// `link_of` contains the source, and the target's singular `link`
+    /// property is initialized if absent.
+    AddLink {
+        /// Source entry containing the link in its body.
+        source_path: String,
+        /// Target entry referenced by the source.
+        target_path: String,
+        /// Optional current body markdown snapshot from the editor.
+        ///
+        /// When provided, this is used for duplicate detection against the
+        /// current unsaved editor state instead of the last saved file body.
+        #[serde(default)]
+        content: Option<String>,
+    },
+
+    /// Remove a non-structural link relationship between two entries.
+    ///
+    /// If the current source body still contains another link to the same
+    /// target, this command leaves `links` / `link_of` intact.
+    RemoveLink {
+        /// Source entry containing the link in its body.
+        source_path: String,
+        /// Target entry referenced by the source.
+        target_path: String,
+        /// Optional current body markdown snapshot from the editor.
+        ///
+        /// When provided, this is used to decide whether the relationship is
+        /// still present in the current unsaved editor state.
+        #[serde(default)]
+        content: Option<String>,
+    },
+
     // === Workspace Operations ===
     /// Find the root index file in a directory.
     /// Returns the path to the root index (a file with `contents` but no `part_of`).
@@ -800,6 +835,20 @@ impl Command {
                 *parent_path = normalizer(parent_path);
             }
 
+            Command::AddLink {
+                source_path,
+                target_path,
+                ..
+            }
+            | Command::RemoveLink {
+                source_path,
+                target_path,
+                ..
+            } => {
+                *source_path = normalizer(source_path);
+                *target_path = normalizer(target_path);
+            }
+
             // --- Workspace directory paths — NOT normalized ---
             Command::FindRootIndex { .. } => {}
 
@@ -1160,8 +1209,8 @@ pub struct AncestorAttachmentEntry {
     pub entry_path: String,
     /// Title of the entry (from frontmatter).
     pub entry_title: Option<String>,
-    /// List of attachment paths for this entry.
-    pub attachments: Vec<String>,
+    /// List of attachment note refs and resolved binary targets for this entry.
+    pub attachments: Vec<ResolvedAttachmentRef>,
 }
 
 /// Result of GetAncestorAttachments command.
@@ -1172,6 +1221,21 @@ pub struct AncestorAttachmentsResult {
     /// Attachments from current entry and all ancestors.
     /// Ordered from current entry first, then ancestors (closest to root).
     pub entries: Vec<AncestorAttachmentEntry>,
+}
+
+/// A declared attachment note and the binary asset it resolves to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub struct ResolvedAttachmentRef {
+    /// Link/path stored in the `attachments` frontmatter array.
+    pub note_path: String,
+    /// Resolved binary asset path from the attachment note's `attachment` field.
+    pub attachment_path: String,
+    /// Optional title from the attachment note.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_title: Option<String>,
 }
 
 /// Result of resolving effective audience for an entry.

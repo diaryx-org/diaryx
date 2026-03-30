@@ -623,6 +623,40 @@ export function createApi(backend: Backend) {
       await mirrorWorkspaceMutation();
     },
 
+    /** Register an explicit local-note link relationship between two entries. */
+    async addLink(sourcePath: string, targetPath: string, content?: string): Promise<void> {
+      await backend.execute({
+        type: 'AddLink',
+        params: {
+          source_path: sourcePath,
+          target_path: targetPath,
+          content: content ?? null,
+        },
+      } as any);
+      await dispatchFileSavedEvent(sourcePath, { bodyChanged: false });
+      if (targetPath !== sourcePath) {
+        await dispatchFileSavedEvent(targetPath, { bodyChanged: false });
+      }
+      await mirrorWorkspaceMutation();
+    },
+
+    /** Remove an explicit local-note link relationship when no body links remain. */
+    async removeLink(sourcePath: string, targetPath: string, content?: string): Promise<void> {
+      await backend.execute({
+        type: 'RemoveLink',
+        params: {
+          source_path: sourcePath,
+          target_path: targetPath,
+          content: content ?? null,
+        },
+      } as any);
+      await dispatchFileSavedEvent(sourcePath, { bodyChanged: false });
+      if (targetPath !== sourcePath) {
+        await dispatchFileSavedEvent(targetPath, { bodyChanged: false });
+      }
+      await mirrorWorkspaceMutation();
+    },
+
     /** Reorder frontmatter keys to match a specified order. */
     async reorderFrontmatterKeys(path: string, keys: string[]): Promise<void> {
       await backend.execute({

@@ -49,6 +49,22 @@ describe('workspaceController.refreshTree', () => {
     expect(setTree).toHaveBeenCalledWith(workspaceTree);
   });
 
+  it('derives the workspace directory when backend returns a nonstandard root index filename', async () => {
+    const workspaceTree = { path: '/workspace/Diaryx.md', name: 'Diaryx', children: [] };
+    const api = {
+      findRootIndex: vi.fn().mockResolvedValue('/workspace/Diaryx.md'),
+      getWorkspaceTree: vi.fn().mockResolvedValue(workspaceTree),
+      getFilesystemTree: vi.fn(),
+    };
+    const backend = { getWorkspacePath: vi.fn().mockReturnValue('/workspace/Diaryx.md') };
+
+    await refreshTree(api as any, backend as any, false, false);
+
+    expect(api.findRootIndex).toHaveBeenCalledWith('/workspace');
+    expect(api.getWorkspaceTree).toHaveBeenCalledWith('/workspace/Diaryx.md', 2, undefined);
+    expect(setTree).toHaveBeenCalledWith(workspaceTree);
+  });
+
   it('keeps existing tree when fallback filesystem tree is transiently empty', async () => {
     currentTree = { path: 'README.md', name: 'My Journal', children: [] };
 

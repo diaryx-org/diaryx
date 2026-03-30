@@ -1650,28 +1650,28 @@ This is the projects index.
         let current_file = "Projects/index.md";
 
         // Convert part_of to PlainRelative
-        if let Some(part_of_value) = fm.get("part_of") {
-            if let Some(part_of_str) = part_of_value.as_str() {
-                let converted =
-                    convert_link(part_of_str, LinkFormat::PlainRelative, current_file, None);
-                assert_eq!(converted, "../README.md");
-                fm.insert("part_of".to_string(), Value::String(converted));
-            }
+        if let Some(part_of_value) = fm.get("part_of")
+            && let Some(part_of_str) = part_of_value.as_str()
+        {
+            let converted =
+                convert_link(part_of_str, LinkFormat::PlainRelative, current_file, None);
+            assert_eq!(converted, "../README.md");
+            fm.insert("part_of".to_string(), Value::String(converted));
         }
 
         // Convert contents to PlainRelative
-        if let Some(contents_value) = fm.get("contents") {
-            if let Some(contents_seq) = contents_value.as_sequence() {
-                let mut new_contents = Vec::new();
-                for item in contents_seq {
-                    if let Some(item_str) = item.as_str() {
-                        let converted =
-                            convert_link(item_str, LinkFormat::PlainRelative, current_file, None);
-                        new_contents.push(Value::String(converted));
-                    }
+        if let Some(contents_value) = fm.get("contents")
+            && let Some(contents_seq) = contents_value.as_sequence()
+        {
+            let mut new_contents = Vec::new();
+            for item in contents_seq {
+                if let Some(item_str) = item.as_str() {
+                    let converted =
+                        convert_link(item_str, LinkFormat::PlainRelative, current_file, None);
+                    new_contents.push(Value::String(converted));
                 }
-                fm.insert("contents".to_string(), Value::Sequence(new_contents));
             }
+            fm.insert("contents".to_string(), Value::Sequence(new_contents));
         }
 
         // Serialize back
@@ -1686,27 +1686,26 @@ This is the projects index.
         let parsed2 = frontmatter::parse_or_empty(&new_content).unwrap();
         let mut fm2 = parsed2.frontmatter.clone();
 
-        if let Some(part_of_value) = fm2.get("part_of") {
-            if let Some(part_of_str) = part_of_value.as_str() {
-                let converted =
-                    convert_link(part_of_str, LinkFormat::MarkdownRoot, current_file, None);
-                assert_eq!(converted, "[README](/README.md)");
-                fm2.insert("part_of".to_string(), Value::String(converted));
-            }
+        if let Some(part_of_value) = fm2.get("part_of")
+            && let Some(part_of_str) = part_of_value.as_str()
+        {
+            let converted = convert_link(part_of_str, LinkFormat::MarkdownRoot, current_file, None);
+            assert_eq!(converted, "[README](/README.md)");
+            fm2.insert("part_of".to_string(), Value::String(converted));
         }
 
-        if let Some(contents_value) = fm2.get("contents") {
-            if let Some(contents_seq) = contents_value.as_sequence() {
-                let mut new_contents = Vec::new();
-                for item in contents_seq {
-                    if let Some(item_str) = item.as_str() {
-                        let converted =
-                            convert_link(item_str, LinkFormat::MarkdownRoot, current_file, None);
-                        new_contents.push(Value::String(converted));
-                    }
+        if let Some(contents_value) = fm2.get("contents")
+            && let Some(contents_seq) = contents_value.as_sequence()
+        {
+            let mut new_contents = Vec::new();
+            for item in contents_seq {
+                if let Some(item_str) = item.as_str() {
+                    let converted =
+                        convert_link(item_str, LinkFormat::MarkdownRoot, current_file, None);
+                    new_contents.push(Value::String(converted));
                 }
-                fm2.insert("contents".to_string(), Value::Sequence(new_contents));
             }
+            fm2.insert("contents".to_string(), Value::Sequence(new_contents));
         }
 
         let final_content = frontmatter::serialize(&fm2, &parsed2.body).unwrap();

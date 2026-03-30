@@ -103,6 +103,14 @@ pub struct FileMetadata {
     #[serde(default)]
     pub attachments: Vec<BinaryRef>,
 
+    /// Singular link to the binary asset for attachment-note entries.
+    #[serde(default)]
+    pub attachment: Option<String>,
+
+    /// Reverse links from entries whose `attachments` reference this note.
+    #[serde(default)]
+    pub attachment_of: Option<Vec<String>>,
+
     /// Soft deletion tombstone - if true, file is considered deleted
     #[serde(default)]
     pub deleted: bool,
@@ -159,6 +167,8 @@ impl FileMetadata {
             "audience",
             "description",
             "attachments",
+            "attachment",
+            "attachment_of",
             "deleted",
             "modified_at",
             "updated",
@@ -289,6 +299,18 @@ impl FileMetadata {
                 })
                 .collect();
         }
+        if let Some(attachment) = fm.get("attachment") {
+            metadata.attachment = attachment.as_str().map(String::from);
+        }
+        if let Some(attachment_of) = fm.get("attachment_of")
+            && let Some(seq) = attachment_of.as_sequence()
+        {
+            metadata.attachment_of = Some(
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+            );
+        }
 
         // Store remaining fields in extra
         for (key, value) in fm {
@@ -350,6 +372,8 @@ impl FileMetadata {
             && self.part_of == other.part_of
             && self.contents == other.contents
             && self.attachments == other.attachments
+            && self.attachment == other.attachment
+            && self.attachment_of == other.attachment_of
             && self.deleted == other.deleted
             && self.audience == other.audience
             && self.description == other.description

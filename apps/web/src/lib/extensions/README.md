@@ -2,14 +2,9 @@
 title: Extensions
 description: TipTap editor extensions
 part_of: '[README](/apps/web/src/lib/README.md)'
-attachments:
-  - '[AttachmentExtension.ts](/apps/web/src/lib/extensions/AttachmentExtension.ts)'
-  - '[AttachmentPickerNode.ts](/apps/web/src/lib/extensions/AttachmentPickerNode.ts)'
-  - '[TableControls.ts](/apps/web/src/lib/extensions/TableControls.ts)'
-  - '[TemplateVariable.ts](/apps/web/src/lib/extensions/TemplateVariable.ts)'
-  - '[ConditionalBlock.ts](/apps/web/src/lib/extensions/ConditionalBlock.ts)'
 exclude:
   - '*.lock'
+  - '**/*.ts'
 ---
 
 # Extensions

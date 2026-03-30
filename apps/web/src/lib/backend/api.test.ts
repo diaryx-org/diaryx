@@ -200,6 +200,44 @@ describe('api', () => {
     })
   })
 
+  describe('link metadata commands', () => {
+    it('should add link metadata for source and target entries', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({ type: 'Ok' })
+
+      await api.addLink('source.md', 'target.md', 'See [Target](/target.md)')
+
+      expect(mockBackend.execute).toHaveBeenCalledWith({
+        type: 'AddLink',
+        params: {
+          source_path: 'source.md',
+          target_path: 'target.md',
+          content: 'See [Target](/target.md)',
+        },
+      })
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenNthCalledWith(1, 'source.md', { bodyChanged: false })
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenNthCalledWith(2, 'target.md', { bodyChanged: false })
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
+    })
+
+    it('should remove link metadata for source and target entries', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({ type: 'Ok' })
+
+      await api.removeLink('source.md', 'target.md', 'No remaining links')
+
+      expect(mockBackend.execute).toHaveBeenCalledWith({
+        type: 'RemoveLink',
+        params: {
+          source_path: 'source.md',
+          target_path: 'target.md',
+          content: 'No remaining links',
+        },
+      })
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenNthCalledWith(1, 'source.md', { bodyChanged: false })
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenNthCalledWith(2, 'target.md', { bodyChanged: false })
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
+    })
+  })
+
   describe('createEntry', () => {
     it('should create entry with default options', async () => {
       vi.mocked(mockBackend.execute).mockResolvedValue({
@@ -1495,7 +1533,21 @@ describe('api', () => {
     })
 
     it('should get ancestor attachments', async () => {
-      const mockResult = { entries: [{ entry_path: 'index.md', entry_title: null, attachments: ['logo.png'] }] }
+      const mockResult = {
+        entries: [
+          {
+            entry_path: 'index.md',
+            entry_title: null,
+            attachments: [
+              {
+                note_path: '_attachments/logo.png.md',
+                attachment_path: '_attachments/logo.png',
+                note_title: 'logo.png',
+              },
+            ],
+          },
+        ],
+      }
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'AncestorAttachments',
         data: mockResult,

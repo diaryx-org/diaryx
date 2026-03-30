@@ -94,6 +94,12 @@ bun run tauri dev
 bun run tauri build
 ```
 
+Tauri dev now ignores markdown edits under repo code directories
+(`apps/**`, `crates/**`, `workers/**`, `scripts/**`) via the workspace
+`.taurignore`, and the shared Vite dev server also ignores `**/*.md`.
+That keeps in-app editing of workspace documentation from triggering a frontend
+reload while `cargo tauri dev` is running against this repo as a workspace.
+
 For iOS dev builds, `bun run tauri:ios` now runs `bun run clean:ios-swift-cache`
 first. This clears stale `swift-rs` module artifacts for Tauri and Tauri plugin
 build scripts under `target/` that can break builds after moving the repository

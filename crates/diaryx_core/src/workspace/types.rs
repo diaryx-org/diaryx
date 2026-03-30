@@ -162,10 +162,22 @@ pub struct IndexFrontmatter {
 
     /// List of paths to attachment files (images, documents, etc.) relative to this file.
     /// Attachments declared here are available to this entry and all children.
-    /// Supports multiple formats: plain paths, markdown links, workspace-root paths (with `/` prefix).
-    /// All non-markdown files SHOULD be listed here to avoid orphan warnings.
+    /// These values point to attachment notes (markdown files), whose singular
+    /// `attachment` property points to the actual binary asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<String>>,
+
+    /// Singular link to the binary asset represented by this attachment note.
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    pub attachment: Option<String>,
+
+    /// Reverse links from entries whose `attachments` reference this note.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_vec_string_lenient"
+    )]
+    pub attachment_of: Option<Vec<String>>,
 
     /// Glob patterns for files to exclude from orphan validation.
     /// Files matching these patterns won't trigger OrphanBinaryFile warnings.
@@ -217,6 +229,11 @@ impl IndexFrontmatter {
     /// Get attachments as a slice, or empty slice if absent
     pub fn attachments_list(&self) -> &[String] {
         self.attachments.as_deref().unwrap_or(&[])
+    }
+
+    /// Get reverse attachment links as a slice, or empty slice if absent.
+    pub fn attachment_of_list(&self) -> &[String] {
+        self.attachment_of.as_deref().unwrap_or(&[])
     }
 
     /// Returns true if this file has attachments

@@ -2,10 +2,9 @@
 title: Device
 description: Device identification
 part_of: '[README](/apps/web/src/lib/README.md)'
-attachments:
-  - '[deviceId.ts](/apps/web/src/lib/device/deviceId.ts)'
 exclude:
   - '*.lock'
+  - '**/*.ts'
 ---
 
 # Device

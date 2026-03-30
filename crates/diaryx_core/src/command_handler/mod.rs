@@ -25,9 +25,10 @@ use crate::diaryx::Diaryx;
 use crate::error::Result;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
-use crate::path_utils::normalize_path;
 use crate::path_utils::strip_workspace_root_prefix;
 
+#[cfg(test)]
+use crate::path_utils::normalize_path;
 #[cfg(test)]
 use std::path::Component;
 
@@ -78,6 +79,7 @@ fn normalize_contents_path(base_dir: &Path, relative: &str, workspace_base: &Pat
 ///
 /// Handles markdown links, root-relative links, plain relative paths, and
 /// plain canonical paths that start with the current entry directory.
+#[cfg(test)]
 fn resolve_attachment_storage_path(entry_path: &str, attachment_path: &str) -> PathBuf {
     let entry = Path::new(entry_path);
     let parsed = link_parser::parse_link(attachment_path);
@@ -462,6 +464,19 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 self.cmd_attach_entry_to_parent(entry_path, parent_path)
                     .await
             }
+            Command::AddLink {
+                source_path,
+                target_path,
+                content,
+            } => self.cmd_add_link(source_path, target_path, content).await,
+            Command::RemoveLink {
+                source_path,
+                target_path,
+                content,
+            } => {
+                self.cmd_remove_link(source_path, target_path, content)
+                    .await
+            }
             Command::SyncMoveMetadata { old_path, new_path } => {
                 self.cmd_sync_move_metadata(old_path, new_path).await
             }
@@ -600,7 +615,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             Command::ResolveAttachmentPath {
                 entry_path,
                 attachment_path,
-            } => self.cmd_resolve_attachment_path(entry_path, attachment_path),
+            } => {
+                self.cmd_resolve_attachment_path(entry_path, attachment_path)
+                    .await
+            }
             Command::MoveAttachment {
                 source_entry_path,
                 target_entry_path,
@@ -1406,7 +1424,7 @@ mod tests {
             assert_eq!(
                 attachments,
                 vec![
-                    "_attachments/a.png".to_string(),
+                    "notes/_attachments/a.png".to_string(),
                     "_attachments/report.pdf".to_string()
                 ]
             );
@@ -1594,5 +1612,298 @@ mod tests {
             resolved.to_string_lossy().replace('\\', "/"),
             "notes/_attachments/a.png"
         );
+    }
+
+    #[test]
+    fn test_get_attachment_data_allows_direct_binary_body_refs() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let diaryx = Diaryx::new(fs);
+
+            diaryx
+                .fs()
+                .create_dir_all(Path::new("apps/web/public"))
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(Path::new("Diaryx.md"), "# Diaryx\n")
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_binary(Path::new("apps/web/public/icon.png"), b"png-bytes")
+                .await
+                .unwrap();
+
+            let response = diaryx
+                .execute(Command::GetAttachmentData {
+                    entry_path: "Diaryx.md".to_string(),
+                    attachment_path: "apps/web/public/icon.png".to_string(),
+                })
+                .await
+                .unwrap();
+
+            match response {
+                Response::Bytes(bytes) => assert_eq!(bytes, b"png-bytes"),
+                other => panic!("Expected Response::Bytes, got {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn test_get_attachment_data_resolves_attachment_note_plain_canonical_property() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let mut diaryx = Diaryx::new(fs);
+            diaryx.set_link_format(link_parser::LinkFormat::MarkdownRoot);
+
+            diaryx
+                .fs()
+                .create_dir_all(Path::new("_attachments"))
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .create_dir_all(Path::new("apps/web/public"))
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(
+                    Path::new("Diaryx.md"),
+                    "---\nattachments:\n  - \"[Diaryx light logo](/_attachments/icon.png.md)\"\n---\n# Diaryx\n",
+                )
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(
+                    Path::new("_attachments/icon.png.md"),
+                    "---\ntitle: Diaryx light logo\nattachment: apps/web/public/icon.png\n---\n",
+                )
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_binary(Path::new("apps/web/public/icon.png"), b"png-bytes")
+                .await
+                .unwrap();
+
+            let response = diaryx
+                .execute(Command::GetAttachmentData {
+                    entry_path: "Diaryx.md".to_string(),
+                    attachment_path: "[Diaryx light logo](/_attachments/icon.png.md)".to_string(),
+                })
+                .await
+                .unwrap();
+
+            match response {
+                Response::Bytes(bytes) => assert_eq!(bytes, b"png-bytes"),
+                other => panic!("Expected Response::Bytes, got {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn test_set_frontmatter_attachment_normalizes_to_workspace_link_format() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let mut diaryx = Diaryx::new(fs);
+            diaryx.set_link_format(link_parser::LinkFormat::MarkdownRoot);
+
+            diaryx
+                .fs()
+                .write_file(
+                    Path::new("_attachments/icon.png.md"),
+                    "---\ntitle: Diaryx light logo\n---\n",
+                )
+                .await
+                .unwrap();
+
+            diaryx
+                .execute(Command::SetFrontmatterProperty {
+                    path: "_attachments/icon.png.md".to_string(),
+                    key: "attachment".to_string(),
+                    value: serde_json::Value::String("apps/web/public/icon.png".to_string()),
+                    root_index_path: None,
+                })
+                .await
+                .unwrap();
+
+            let note = diaryx
+                .fs()
+                .read_to_string(Path::new("_attachments/icon.png.md"))
+                .await
+                .unwrap();
+            assert!(note.contains("attachment:"));
+            assert!(note.contains("[icon.png](/apps/web/public/icon.png)"));
+        });
+    }
+
+    #[test]
+    fn test_add_link_updates_links_link_of_and_target_link() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let mut diaryx = Diaryx::new(fs);
+            diaryx.set_link_format(link_parser::LinkFormat::MarkdownRoot);
+
+            diaryx
+                .fs()
+                .write_file(
+                    Path::new("source.md"),
+                    "---\ntitle: Source\n---\n\nSee [Target](/target.md).\n",
+                )
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(
+                    Path::new("target.md"),
+                    "---\ntitle: Target\n---\n\n# Target\n",
+                )
+                .await
+                .unwrap();
+
+            diaryx
+                .execute(Command::AddLink {
+                    source_path: "source.md".to_string(),
+                    target_path: "target.md".to_string(),
+                    content: Some("See [Target](/target.md).\n".to_string()),
+                })
+                .await
+                .unwrap();
+            diaryx
+                .execute(Command::AddLink {
+                    source_path: "source.md".to_string(),
+                    target_path: "target.md".to_string(),
+                    content: Some(
+                        "See [Target](/target.md) and [Target Again](/target.md).\n".to_string(),
+                    ),
+                })
+                .await
+                .unwrap();
+
+            let source = diaryx
+                .fs()
+                .read_to_string(Path::new("source.md"))
+                .await
+                .unwrap();
+            let source_parsed = crate::frontmatter::parse_or_empty(&source).unwrap();
+            let source_links: Vec<String> = source_parsed
+                .frontmatter
+                .get("links")
+                .and_then(|v| v.as_sequence())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert_eq!(source_links, vec!["[Target](/target.md)".to_string()]);
+
+            let target = diaryx
+                .fs()
+                .read_to_string(Path::new("target.md"))
+                .await
+                .unwrap();
+            let target_parsed = crate::frontmatter::parse_or_empty(&target).unwrap();
+            let target_backlinks: Vec<String> = target_parsed
+                .frontmatter
+                .get("link_of")
+                .and_then(|v| v.as_sequence())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert_eq!(target_backlinks, vec!["[Source](/source.md)".to_string()]);
+            assert_eq!(
+                target_parsed
+                    .frontmatter
+                    .get("link")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default(),
+                "[Target](/target.md)"
+            );
+        });
+    }
+
+    #[test]
+    fn test_remove_link_preserves_relation_while_body_still_links_target() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let mut diaryx = Diaryx::new(fs);
+            diaryx.set_link_format(link_parser::LinkFormat::MarkdownRoot);
+
+            diaryx
+                .fs()
+                .write_file(
+                    Path::new("source.md"),
+                    "---\ntitle: Source\nlinks:\n  - \"[Target](/target.md)\"\n---\n\nOne [Target](/target.md) two [Target](/target.md)\n",
+                )
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(
+                    Path::new("target.md"),
+                    "---\ntitle: Target\nlink: \"[Target](/target.md)\"\nlink_of:\n  - \"[Source](/source.md)\"\n---\n\n# Target\n",
+                )
+                .await
+                .unwrap();
+
+            diaryx
+                .execute(Command::RemoveLink {
+                    source_path: "source.md".to_string(),
+                    target_path: "target.md".to_string(),
+                    content: Some("One [Target](/target.md)\n".to_string()),
+                })
+                .await
+                .unwrap();
+
+            let source_after_first_remove = diaryx
+                .fs()
+                .read_to_string(Path::new("source.md"))
+                .await
+                .unwrap();
+            assert!(source_after_first_remove.contains("links:"));
+
+            diaryx
+                .execute(Command::RemoveLink {
+                    source_path: "source.md".to_string(),
+                    target_path: "target.md".to_string(),
+                    content: Some("No remaining links\n".to_string()),
+                })
+                .await
+                .unwrap();
+
+            let source_after_second_remove = diaryx
+                .fs()
+                .read_to_string(Path::new("source.md"))
+                .await
+                .unwrap();
+            let source_parsed =
+                crate::frontmatter::parse_or_empty(&source_after_second_remove).unwrap();
+            assert!(!source_parsed.frontmatter.contains_key("links"));
+
+            let target_after_second_remove = diaryx
+                .fs()
+                .read_to_string(Path::new("target.md"))
+                .await
+                .unwrap();
+            let target_parsed =
+                crate::frontmatter::parse_or_empty(&target_after_second_remove).unwrap();
+            assert!(!target_parsed.frontmatter.contains_key("link_of"));
+            assert_eq!(
+                target_parsed
+                    .frontmatter
+                    .get("link")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default(),
+                "[Target](/target.md)"
+            );
+        });
     }
 }

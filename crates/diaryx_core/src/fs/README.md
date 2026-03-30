@@ -2,18 +2,9 @@
 title: Filesystem module
 description: Filesystem abstraction layer
 part_of: '[README](/crates/diaryx_core/src/README.md)'
-attachments:
-  - '[mod.rs](/crates/diaryx_core/src/fs/mod.rs)'
-  - '[async_fs.rs](/crates/diaryx_core/src/fs/async_fs.rs)'
-  - '[callback_registry.rs](/crates/diaryx_core/src/fs/callback_registry.rs)'
-  - '[crdt_fs.rs](/crates/diaryx_core/src/fs/crdt_fs.rs)'
-  - '[decorator_stack.rs](/crates/diaryx_core/src/fs/decorator_stack.rs)'
-  - '[event_fs.rs](/crates/diaryx_core/src/fs/event_fs.rs)'
-  - '[events.rs](/crates/diaryx_core/src/fs/events.rs)'
-  - '[memory.rs](/crates/diaryx_core/src/fs/memory.rs)'
-  - '[native.rs](/crates/diaryx_core/src/fs/native.rs)'
 exclude:
   - '*.lock'
+  - '**/*.rs'
 ---
 
 # Filesystem Module

@@ -649,6 +649,39 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         patterns
     }
 
+    fn workspace_relative_path(&self, workspace_root: &Path, path: &Path) -> String {
+        let relative = path.strip_prefix(workspace_root).unwrap_or(path);
+        normalize_sync_path(&relative.to_string_lossy().replace('\\', "/"))
+    }
+
+    fn path_matches_exclude(
+        &self,
+        pattern: &str,
+        workspace_root: &Path,
+        path: &Path,
+        file_name: &str,
+    ) -> bool {
+        let relative_path = self.workspace_relative_path(workspace_root, path);
+        matches_glob_pattern(pattern, file_name) || matches_glob_pattern(pattern, &relative_path)
+    }
+
+    async fn exclude_patterns_for_dir(&self, dir: &Path, workspace_root: &Path) -> Vec<String> {
+        let mut current = Some(dir);
+        while let Some(candidate) = current {
+            if !candidate.starts_with(workspace_root) {
+                break;
+            }
+
+            if let Ok(Some(index)) = self.ws.find_any_index_in_dir(candidate).await {
+                return self.collect_exclude_patterns(&index).await;
+            }
+
+            current = candidate.parent();
+        }
+
+        Vec::new()
+    }
+
     /// Validate all links starting from a workspace root index.
     ///
     /// Checks:
@@ -692,8 +725,17 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         // Find unlinked entries: files/dirs in workspace not visited during traversal
         // Scan with depth limit to match tree view behavior and improve performance
         let workspace_root = root_path.parent().unwrap_or(Path::new("."));
+        let root_exclude_patterns = self
+            .exclude_patterns_for_dir(workspace_root, workspace_root)
+            .await;
         let all_entries = self
-            .list_files_with_depth(workspace_root, 0, max_depth)
+            .list_files_with_depth(
+                workspace_root,
+                workspace_root,
+                0,
+                max_depth,
+                &root_exclude_patterns,
+            )
             .await;
 
         if !all_entries.is_empty() {
@@ -702,7 +744,10 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             let visited_normalized: HashSet<PathBuf> =
                 visited.iter().map(|p| normalize_path(p)).collect();
 
-            // Build a map of directory -> index file path from visited files
+            // Build a map of directory -> index file path from visited files.
+            // Only actual index files should participate here; using arbitrary
+            // markdown files can cause orphan binary warnings to inherit exclude
+            // patterns from a sibling leaf note instead of the directory index.
             // This allows us to find the nearest parent index for orphan files
             let mut dir_to_index: std::collections::HashMap<PathBuf, PathBuf> =
                 std::collections::HashMap::new();
@@ -710,11 +755,17 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 if visited_path.extension().is_some_and(|ext| ext == "md")
                     && let Some(parent) = visited_path.parent()
                 {
-                    // Only add if this is likely an index file (has contents or is named index/README)
-                    // For simplicity, we add all visited markdown files and let the first one win
-                    dir_to_index
-                        .entry(parent.to_path_buf())
-                        .or_insert_with(|| visited_path.clone());
+                    let is_index = self
+                        .ws
+                        .parse_index(visited_path)
+                        .await
+                        .map(|index| index.frontmatter.is_index())
+                        .unwrap_or(false);
+                    if is_index {
+                        dir_to_index
+                            .entry(parent.to_path_buf())
+                            .or_insert_with(|| visited_path.clone());
+                    }
                 }
             }
 
@@ -800,8 +851,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
                     let filename = entry.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     let is_excluded = local_exclude_patterns.iter().any(|pattern| {
-                        matches_glob_pattern(pattern, filename)
-                            || matches_glob_pattern(pattern, entry.to_str().unwrap_or(""))
+                        self.path_matches_exclude(pattern, workspace_root, &entry, filename)
                     });
 
                     if extension == Some("md") {
@@ -844,8 +894,10 @@ impl<FS: AsyncFileSystem> Validator<FS> {
     async fn list_files_with_depth(
         &self,
         dir: &Path,
+        workspace_root: &Path,
         current_depth: usize,
         max_depth: Option<usize>,
+        exclude_patterns: &[String],
     ) -> Vec<PathBuf> {
         // Check if we've exceeded max depth
         if let Some(max) = max_depth
@@ -871,13 +923,27 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     continue;
                 }
 
+                let file_name = entry.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if exclude_patterns.iter().any(|pattern| {
+                    self.path_matches_exclude(pattern, workspace_root, &entry, file_name)
+                }) {
+                    continue;
+                }
+
                 all_entries.push(entry.clone());
 
                 // Recurse into subdirectories
                 if self.ws.fs_ref().is_dir(&entry).await {
-                    let sub_entries =
-                        Box::pin(self.list_files_with_depth(&entry, current_depth + 1, max_depth))
-                            .await;
+                    let child_exclude_patterns =
+                        self.exclude_patterns_for_dir(&entry, workspace_root).await;
+                    let sub_entries = Box::pin(self.list_files_with_depth(
+                        &entry,
+                        workspace_root,
+                        current_depth + 1,
+                        max_depth,
+                        &child_exclude_patterns,
+                    ))
+                    .await;
                     all_entries.extend(sub_entries);
                 }
             }
@@ -1522,11 +1588,12 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                                         // Check if file matches any exclude pattern (inherited from ancestors)
                                         let is_excluded =
                                             inherited_exclude_patterns.iter().any(|pattern| {
-                                                matches_glob_pattern(pattern, fname)
-                                                    || matches_glob_pattern(
-                                                        pattern,
-                                                        entry_path.to_str().unwrap_or(""),
-                                                    )
+                                                self.path_matches_exclude(
+                                                    pattern,
+                                                    &workspace_root,
+                                                    &entry_path,
+                                                    fname,
+                                                )
                                             });
 
                                         if !is_excluded {
@@ -1546,11 +1613,12 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                                     // Check if file matches any exclude pattern (inherited from ancestors)
                                     let is_excluded =
                                         inherited_exclude_patterns.iter().any(|pattern| {
-                                            matches_glob_pattern(pattern, fname)
-                                                || matches_glob_pattern(
-                                                    pattern,
-                                                    entry_path.to_str().unwrap_or(""),
-                                                )
+                                            self.path_matches_exclude(
+                                                pattern,
+                                                &workspace_root,
+                                                &entry_path,
+                                                fname,
+                                            )
                                         });
 
                                     if !is_excluded {
@@ -3356,6 +3424,151 @@ contents:
             orphan_warnings.contains(&"config.json".to_string()),
             "config.json should trigger a warning, got warnings: {:?}",
             orphan_warnings
+        );
+    }
+
+    #[test]
+    fn test_root_index_excludes_apply_even_with_sibling_leaf_markdown_files() {
+        let fs = make_test_fs();
+
+        fs.write_file(
+            Path::new("Diaryx.md"),
+            "---\ntitle: Root\ncontents:\n  - AGENTS.md\nexclude:\n  - \"*.toml\"\n  - \"*.lock\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("AGENTS.md"),
+            "---\ntitle: Agents\npart_of: Diaryx.md\n---\n",
+        )
+        .unwrap();
+
+        fs.write_file(Path::new("Cargo.toml"), "[package]").unwrap();
+        fs.write_file(Path::new("flake.lock"), "lock").unwrap();
+        fs.write_file(Path::new("config.json"), "{}").unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("Diaryx.md"), None)).unwrap();
+
+        let orphan_binaries: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| {
+                if let ValidationWarning::OrphanBinaryFile { file, .. } = w {
+                    Some(file.file_name()?.to_str()?.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            !orphan_binaries.contains(&"Cargo.toml".to_string()),
+            "Cargo.toml should inherit root excludes, got warnings: {:?}",
+            orphan_binaries
+        );
+        assert!(
+            !orphan_binaries.contains(&"flake.lock".to_string()),
+            "flake.lock should inherit root excludes, got warnings: {:?}",
+            orphan_binaries
+        );
+        assert!(
+            orphan_binaries.contains(&"config.json".to_string()),
+            "config.json should still warn, got warnings: {:?}",
+            orphan_binaries
+        );
+    }
+
+    #[test]
+    fn test_validate_workspace_prunes_excluded_directories_during_scan() {
+        let fs = make_test_fs();
+
+        fs.create_dir_all(Path::new("build/nested")).unwrap();
+
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nexclude:\n  - \"build/**\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("build/output.json"), "{}").unwrap();
+        fs.write_file(Path::new("build/nested/extra.bin"), "bin")
+            .unwrap();
+        fs.write_file(Path::new("visible.json"), "{}").unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let orphan_binaries: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| {
+                if let ValidationWarning::OrphanBinaryFile { file, .. } = w {
+                    Some(file.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            !orphan_binaries
+                .iter()
+                .any(|path| path.starts_with("build/")),
+            "build/** should prune the directory scan, got warnings: {:?}",
+            orphan_binaries
+        );
+        assert!(
+            orphan_binaries.contains(&"visible.json".to_string()),
+            "visible.json should still warn, got warnings: {:?}",
+            orphan_binaries
+        );
+    }
+
+    #[test]
+    fn test_validate_workspace_matches_excludes_against_workspace_relative_paths() {
+        let fs = make_test_fs();
+
+        fs.create_dir_all(Path::new("crates/diaryx")).unwrap();
+
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nexclude:\n  - \"**/target\"\n  - \"**/target/**\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("crates/diaryx/target/app.bin"), "bin")
+            .unwrap();
+        fs.write_file(Path::new("crates/diaryx/kept.bin"), "bin")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let orphan_binaries: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| {
+                if let ValidationWarning::OrphanBinaryFile { file, .. } = w {
+                    Some(file.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            !orphan_binaries.contains(&"crates/diaryx/target/app.bin".to_string()),
+            "workspace-relative excludes should suppress nested target paths, got warnings: {:?}",
+            orphan_binaries
+        );
+        assert!(
+            orphan_binaries.contains(&"crates/diaryx/kept.bin".to_string()),
+            "non-excluded sibling should still warn, got warnings: {:?}",
+            orphan_binaries
         );
     }
 

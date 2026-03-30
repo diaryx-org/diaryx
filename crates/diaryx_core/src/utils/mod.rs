@@ -120,7 +120,7 @@ mod glob_tests {
     #[test]
     fn test_simple_extension_patterns() {
         assert!(matches_glob_pattern("*.lock", "Cargo.lock"));
-        assert!(matches_glob_pattern("*.lock", "package-lock.json") == false);
+        assert!(!matches_glob_pattern("*.lock", "package-lock.json"));
         assert!(matches_glob_pattern("*.toml", "Cargo.toml"));
         assert!(matches_glob_pattern("*.toml", "release.toml"));
         assert!(matches_glob_pattern("*.md", "README.md"));

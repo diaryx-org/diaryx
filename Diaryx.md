@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.4.0
-updated: 2026-03-29T22:05:56-06:00
+updated: 2026-03-30T15:34:53-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -22,14 +22,17 @@ audience:
 exclude:
 - '*.lock'
 - '**/target'
+- '**/*.rs'
+- '**/*.ts'
 - .git
 - patches
 - '**/dist'
+- '**/*.toml'
+- deploy
+- flake.nix
 attachments:
-- '[flake.nix](/flake.nix)'
-- '[release.toml](/release.toml)'
-- '[Cargo.toml](/Cargo.toml)'
-- rust-analyzer.toml
+- '[Diaryx light logo](/_attachments/icon.png.md)'
+- '[Diaryx dark logo](/_attachments/icon-dark.png.md)'
 workspace_config:
   link_format: markdown_root
   audience_colors:
@@ -38,6 +41,7 @@ workspace_config:
     public: bg-emerald-500
   theme_preset: default
   theme_accent_hue: null
+  disabled_plugins: []
 plugins:
   diaryx.publish:
     permissions:
@@ -53,6 +57,13 @@ plugins:
         include:
         - all
         exclude: []
+    public_audiences:
+    - public
+    audience_states:
+      public:
+        state: public
+        email_on_publish: false
+    namespace_id: e108abba-9268-4fa6-a786-f3b94cfe357e
   diaryx.sync:
     permissions:
       read_files:
@@ -79,6 +90,10 @@ plugins:
         include:
         - all
         exclude: []
+    workspace_id: 12b87774-ebd6-4535-b5f7-06e39f0bbcb9
+links:
+- '[ROADMAP](/ROADMAP.md)'
+- '[PHILOSOPHY](/PHILOSOPHY.md)'
 ---
 <div>
   <p align="center">

@@ -2,15 +2,9 @@
 title: Services
 description: Business logic services
 part_of: '[README](/apps/web/src/models/README.md)'
-attachments:
-  - '[index.ts](/apps/web/src/models/services/index.ts)'
-  - '[attachmentService.ts](/apps/web/src/models/services/attachmentService.ts)'
-  - '[historyService.ts](/apps/web/src/models/services/historyService.ts)'
-  - '[toastService.ts](/apps/web/src/models/services/toastService.ts)'
-  - '[updaterService.ts](/apps/web/src/models/services/updaterService.ts)'
-  - '[imageConverterService.ts](/apps/web/src/models/services/imageConverterService.ts)'
 exclude:
   - '*.lock'
+  - '**/*.ts'
   - '*.test.ts'
 ---
 

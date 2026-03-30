@@ -2,18 +2,9 @@
 title: Marketplace
 description: Marketplace registries and bundle apply execution
 part_of: "[README](/apps/web/src/lib/README.md)"
-attachments:
-  - "[types.ts](/apps/web/src/lib/marketplace/types.ts)"
-  - "[themeRegistry.ts](/apps/web/src/lib/marketplace/themeRegistry.ts)"
-  - "[typographyRegistry.ts](/apps/web/src/lib/marketplace/typographyRegistry.ts)"
-  - "[bundleRegistry.ts](/apps/web/src/lib/marketplace/bundleRegistry.ts)"
-  - "[bundleApply.ts](/apps/web/src/lib/marketplace/bundleApply.ts)"
-  - "[templateRegistry.ts](/apps/web/src/lib/marketplace/templateRegistry.ts)"
-  - "[templateInstall.ts](/apps/web/src/lib/marketplace/templateInstall.ts)"
-  - "[starterWorkspaceRegistry.ts](/apps/web/src/lib/marketplace/starterWorkspaceRegistry.ts)"
-  - "[starterWorkspaceApply.ts](/apps/web/src/lib/marketplace/starterWorkspaceApply.ts)"
 exclude:
   - "*.lock"
+  - "**/*.ts"
 ---
 
 # Marketplace

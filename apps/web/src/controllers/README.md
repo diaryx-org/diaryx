@@ -27,7 +27,7 @@ Controller logic for UI actions, mediating between views and models.
 | `entryController.ts` | Entry creation, editing, deletion, and frontmatter-safe property updates (normalizes `Map` frontmatter before merges/removals). Title changes delegate rename logic to the Rust backend (`SetFrontmatterProperty` handler reads workspace config for `auto_rename_to_title` and `filename_style`). Entry-open flow supports request-scoped guards so stale `openEntry` results do not overwrite newer navigation intents. |
 | `linkController.ts` | Link handling and navigation |
 | `onboardingController.ts` | Onboarding orchestration (E2E bypass, starter workspace seeding, iOS first-run bootstrap, default workspace auto-creation, bundle application, welcome screen callback orchestration). Remote workspace restore now skips bundle selection and instead installs registry plugins inferred from the restored workspace root frontmatter; Apple/Tauri onboarding can also attach to the built-in iCloud provider without fetching a provider plugin artifact, and authenticated iCloud workspaces register namespace metadata for cross-device discovery. Pure .ts with dependency injection for testability. |
-| `workspaceController.ts` | Workspace operations (tree refresh, lazy child loading, validation). |
+| `workspaceController.ts` | Workspace operations (tree refresh, lazy child loading, validation). Tree refresh now normalizes backend workspace paths that already point at a root markdown file (for example `Diaryx.md`, `README.md`, or `index.md`) before asking the backend to rediscover the root index, which avoids spurious `WorkspaceNotFound` errors on Tauri workspaces that use nonstandard root filenames. |
 
 ## Sync-time tree refresh behavior
 

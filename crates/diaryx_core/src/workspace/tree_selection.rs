@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_compare_path_depth_descending() {
-        let mut paths = vec![
+        let mut paths = [
             PathBuf::from("a.md"),
             PathBuf::from("x/y/z.md"),
             PathBuf::from("b/c.md"),

@@ -146,8 +146,9 @@ export default defineConfig({
       },
     },
     watch: {
-      // Tell vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // Ignore Tauri native sources and workspace markdown docs so editing
+      // repo entries in-app doesn't trigger frontend reloads during Tauri dev.
+      ignored: ["**/src-tauri/**", "**/*.md"],
     },
   },
   build: {

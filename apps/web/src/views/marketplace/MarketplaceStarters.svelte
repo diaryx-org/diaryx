@@ -25,6 +25,7 @@
     fetchStarterWorkspaceZip,
   } from "$lib/marketplace/starterWorkspaceApply";
   import { getBackend } from "$lib/backend";
+  import { getWorkspaceDirectoryPath } from "$lib/workspace/rootPath";
   import { useMarketplacePanel, isRecord } from "./useMarketplacePanel.svelte";
 
   interface DisplayStarter extends StarterWorkspaceRegistryEntry {
@@ -78,9 +79,7 @@
 
       applyProgress = "Importing starter content...";
       const backend = await getBackend();
-      const workspaceDir = backend.getWorkspacePath()
-        .replace(/\/index\.md$/, "")
-        .replace(/\/README\.md$/, "");
+      const workspaceDir = getWorkspaceDirectoryPath(backend.getWorkspacePath());
 
       const result = await backend.importFromZip(
         zipFile,

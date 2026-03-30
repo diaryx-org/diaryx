@@ -2,10 +2,6 @@
 title: Editor Views
 description: Editor-related view components
 part_of: '[README](/apps/web/src/views/README.md)'
-attachments:
-  - '[EditorContent.svelte](/apps/web/src/views/editor/EditorContent.svelte)'
-  - '[EditorEmptyState.svelte](/apps/web/src/views/editor/EditorEmptyState.svelte)'
-  - '[EditorFooter.svelte](/apps/web/src/views/editor/EditorFooter.svelte)'
 exclude:
   - '*.lock'
 ---

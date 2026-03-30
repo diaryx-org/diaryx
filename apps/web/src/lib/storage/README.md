@@ -2,11 +2,9 @@
 title: Storage
 description: Storage abstraction layer
 part_of: '[README](/apps/web/src/lib/README.md)'
-attachments:
-  - '[index.ts](/apps/web/src/lib/storage/index.ts)'
-  - '[localWorkspaceRegistry.svelte.ts](/apps/web/src/lib/storage/localWorkspaceRegistry.svelte.ts)'
 exclude:
   - '*.lock'
+  - '**/*.ts'
 ---
 
 # Storage

@@ -1,36 +1,17 @@
 ---
 title: diaryx_core src
 description: Source code for the core Diaryx library
-part_of: "[README](/crates/diaryx_core/README.md)"
+part_of: '[README](/crates/diaryx_core/README.md)'
 contents:
-  - "[README](/crates/diaryx_core/src/crdt/README.md)"
-  - "[README](/crates/diaryx_core/src/cloud/README.md)"
-  - "[README](/crates/diaryx_core/src/entry/README.md)"
-  - "[README](/crates/diaryx_core/src/fs/README.md)"
-  - "[README](/crates/diaryx_core/src/plugin/README.md)"
-  - "[README](/crates/diaryx_core/src/utils/README.md)"
-  - "[README](/crates/diaryx_core/src/workspace/README.md)"
-  - "[README](/crates/diaryx_core/src/import/README.md)"
-attachments:
-  - "[lib.rs](/crates/diaryx_core/src/lib.rs)"
-  - "[backup.rs](/crates/diaryx_core/src/backup.rs)"
-  - "[command.rs](/crates/diaryx_core/src/command.rs)"
-  - "[command_handler.rs](/crates/diaryx_core/src/command_handler.rs)"
-  - "[config.rs](/crates/diaryx_core/src/config.rs)"
-  - "[diaryx.rs](/crates/diaryx_core/src/diaryx.rs)"
-  - "[error.rs](/crates/diaryx_core/src/error.rs)"
-  - "[export.rs](/crates/diaryx_core/src/export.rs)"
-  - "[frontmatter.rs](/crates/diaryx_core/src/frontmatter.rs)"
-  - "[link_parser.rs](/crates/diaryx_core/src/link_parser.rs)"
-  - "[metadata_writer.rs](/crates/diaryx_core/src/metadata_writer.rs)"
-  - "[search.rs](/crates/diaryx_core/src/search.rs)"
-  - "[body_template.rs](/crates/diaryx_core/src/body_template.rs)"
-  - "[template.rs](/crates/diaryx_core/src/template.rs)"
-  - "[test_utils.rs](/crates/diaryx_core/src/test_utils.rs)"
-  - "[validate.rs](/crates/diaryx_core/src/validate.rs)"
-  - "[workspace_registry.rs](/crates/diaryx_core/src/workspace_registry.rs)"
+- '[README](/crates/diaryx_core/src/entry/README.md)'
+- '[README](/crates/diaryx_core/src/fs/README.md)'
+- '[README](/crates/diaryx_core/src/plugin/README.md)'
+- '[README](/crates/diaryx_core/src/utils/README.md)'
+- '[README](/crates/diaryx_core/src/workspace/README.md)'
+- '[README](/crates/diaryx_core/src/import/README.md)'
 exclude:
-  - "*.lock"
+- '*.lock'
+- '**/*.rs'
 ---
 
 # diaryx_core Source
@@ -98,11 +79,26 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   for markdown links, root-relative refs, plain relative refs, and plain
   canonical refs that include the current entry directory. This keeps
   get/delete/move attachment commands consistent for nested entries.
+- Entry `attachments[]` frontmatter now stores links to attachment notes rather
+  than direct binary paths. Each binary is represented by a sibling note such
+  as `_attachments/photo.png.md`, whose frontmatter carries `attachment` (the
+  binary self-link) and `attachment_of` backlinks.
 - Attachment uploads now split into two steps: callers write raw bytes through
   the filesystem API, then `Command::RegisterAttachment` formats and records the
-  attachment link in entry frontmatter. This keeps large media off the
+  attachment-note link in entry frontmatter, creating or updating the
+  attachment note as needed. This keeps large media off the
   JSON/base64 command path while preserving one canonical link-formatting
   implementation in Rust.
+- `GetAttachmentData`, `ResolveAttachmentPath`, `DeleteAttachment`, and
+  `MoveAttachment` all resolve through the attachment note. Delete only removes
+  the binary/note pair when the final `attachment_of` backlink is gone, and
+  move updates backlinking entries to the new attachment-note path. Read/preview
+  flows still accept direct binary body refs (for example raw HTML `<img src>`
+  and `<picture><source srcset>` paths) so existing body media does not need to
+  become note-backed before it can render.
+- The singular attachment-note `attachment` property is also normalized through
+  the attachment-aware link pipeline, so plain canonical binary paths are read
+  correctly and rewritten back into the workspace link format on save.
 - Frontmatter attachment values set through `SetFrontmatterProperty` and
   `ConvertLinks` are normalized through the same link parser pipeline used for
   `part_of`/`contents`, then formatted according to workspace `link_format`.
@@ -112,6 +108,12 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   conversion pipeline, and validation/fixer logic treats them as an explicit
   outbound/backlink graph layered on top of the main `contents` / `part_of`
   hierarchy.
+- Orphan-file/orphan-binary exclude patterns are inherited from the nearest
+  actual index file and its `part_of` ancestors, even when sibling leaf
+  markdown files are present in the same directory as the index.
+- Validation matches exclude patterns against both basenames and
+  workspace-relative paths, and now prunes excluded files/directories during
+  the orphan scan instead of walking them first and suppressing warnings later.
 
 ## Command Path Resolution Notes
 
@@ -135,6 +137,11 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   index's `plugins.<id>` entry and matching `disabled_plugins` entry, so
   frontends do not need to hand-edit workspace frontmatter when removing a
   plugin.
+- `Command::AddLink` / `Command::RemoveLink` manage the explicit non-structural
+  link graph in frontmatter. `AddLink` ensures `source.links`, `target.link_of`,
+  and a missing target `link` self-reference are populated without duplicates.
+  `RemoveLink` accepts an optional current body snapshot and only removes the
+  relation when no matching local markdown link remains in the source body.
 
 ## TypeScript Binding Notes
 

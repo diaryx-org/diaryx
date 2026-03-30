@@ -26,8 +26,10 @@ export interface AttachmentGroup {
   entryPath: string;
   entryTitle: string | null;
   attachments: Array<{
+    notePath: string;
     path: string;
     kind: AttachmentMediaKind;
+    title?: string | null;
     thumbnail?: string;
   }>;
 }
@@ -103,16 +105,20 @@ export function useAttachmentPicker(options: UseAttachmentPickerOptions) {
         const entry = ancestorResult.entries[i];
         const isCurrentEntry = i === 0;
 
-        const normalizedPaths = await Promise.all(
-          entry.attachments.map((rawPath: string) =>
-            formatSourceRelativePath(entry.entry_path, rawPath),
-          ),
+        const normalized = await Promise.all(
+          entry.attachments.map(async (attachment) => ({
+            notePath: await formatSourceRelativePath(entry.entry_path, attachment.note_path),
+            path: await formatSourceRelativePath(entry.entry_path, attachment.attachment_path),
+            title: attachment.note_title ?? null,
+          })),
         );
         const attachments = Array.from(
-          new Set(normalizedPaths),
-        ).map((path) => ({
-          path,
-          kind: getAttachmentMediaKind(path),
+          new Map(normalized.map((item) => [item.notePath, item])).values(),
+        ).map((item) => ({
+          notePath: item.notePath,
+          path: item.path,
+          title: item.title,
+          kind: getAttachmentMediaKind(item.path),
           thumbnail: undefined as string | undefined,
         }));
 

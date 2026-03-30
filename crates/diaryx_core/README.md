@@ -9,9 +9,9 @@ contents:
 - '[README](/crates/diaryx_core/src/README.md)'
 attachments:
 - '[Cargo.toml](/crates/diaryx_core/Cargo.toml)'
-- '[build.rs](/crates/diaryx_core/build.rs)'
 exclude:
 - '*.lock'
+- '**/*.rs'
 ---
 # Diaryx Core Library
 
@@ -187,6 +187,9 @@ let validator = Validator::new(fs);
 // The second parameter controls orphan detection depth:
 // - Some(2) matches tree view depth (recommended for UI)
 // - None for unlimited depth (full workspace scan)
+// Exclude patterns from the nearest index + its part_of ancestors are
+// honored during that scan, including workspace-relative directory globs
+// such as "**/target" and "**/dist/**".
 let root_path = Path::new("./workspace/README.md");
 let result = futures_lite::future::block_on(
     validator.validate_workspace(&root_path, Some(2))

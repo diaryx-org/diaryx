@@ -182,6 +182,33 @@
       return;
     }
 
+    function handleEditorLinkClick(event: MouseEvent): boolean {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return false;
+
+      const link = target.closest("a[href]");
+      if (!(link instanceof HTMLAnchorElement)) return false;
+
+      const href = link.getAttribute("href")?.trim() ?? "";
+      if (!href) return false;
+
+      // Prevent the webview from treating note links as navigation.
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (onLinkClick) {
+        onLinkClick(href);
+        return true;
+      }
+
+      if (href.startsWith("http://") || href.startsWith("https://")) {
+        window.open(href, "_blank", "noopener,noreferrer");
+        return true;
+      }
+
+      return true;
+    }
+
     // Build extensions array
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const extensions: any[] = [
@@ -216,23 +243,7 @@
             new ProseMirrorPlugin({
               props: {
                 handleClick: (_view, _pos, event) => {
-                  const target = event.target as HTMLElement;
-                  const link = target.closest("a");
-                  if (link && link.href) {
-                    event.preventDefault();
-                    const href = link.getAttribute("href") || "";
-                    if (onLinkClick) {
-                      onLinkClick(href);
-                    } else if (
-                      href.startsWith("http://") ||
-                      href.startsWith("https://")
-                    ) {
-                      // External link - open in new tab
-                      window.open(href, "_blank", "noopener,noreferrer");
-                    }
-                    return true;
-                  }
-                  return false;
+                  return handleEditorLinkClick(event);
                 },
               },
             }),
@@ -967,6 +978,9 @@
         editorProps: {
           attributes: {
             class: "editor-content",
+          },
+          handleDOMEvents: {
+            click: (_view, event) => handleEditorLinkClick(event),
           },
           handleKeyDown: (view, event) => {
             // Right Arrow on empty paragraph opens floating menu

@@ -75,6 +75,11 @@ Commands (`ValidateWorkspaceName`, `ValidatePublishingSlug`,
 `backend/api.ts`. Frontend components call these instead of duplicating
 validation logic locally.
 
+Workspace-root normalization for Tauri now also lives in
+`workspace/rootPath.ts`. Callers that need the workspace directory or the
+actual root index file should use those helpers or `api.resolveWorkspaceRootIndexPath(...)`
+instead of hardcoding `README.md` / `index.md` filename assumptions.
+
 ## Onboarding Workspace Setup
 
 Workspace creation and restore now flow through the welcome/onboarding
@@ -140,6 +145,11 @@ while avoiding full-document markdown serialization on every keystroke. Large
 documents are serialized on demand for save/export/sync checks instead, which
 keeps typing latency down in long notes.
 
+Editor link clicks are intercepted at the DOM-event layer before the webview
+can navigate. This keeps local note links inside the app on Tauri/dev builds
+instead of falling through to a `localhost` browser open, while external
+`http(s)` links still route out through the normal browser path.
+
 Editor menu visibility rules that depend on focus handoff and explicit link
 popover state now live in `editorMenuVisibility.ts` so BubbleMenu regressions
 can be tested directly without relying on full TipTap child-component wiring.
@@ -171,6 +181,10 @@ can be tested directly without relying on full TipTap child-component wiring.
   `GetAttachmentData` and creating a fresh preview blob on every open, which
   makes repeat previews effectively instant and keeps the first open on the
   binary read path.
+- `RightSidebar.svelte` now also treats the singular attachment-note
+  `attachment` property as an attachment target instead of a generic note link:
+  previewable media opens in the preview dialog and non-previewable files
+  download through the backend bytes path.
 - The attachment preview dialog now opens images with a cached thumbnail
   immediately when one already exists, then swaps to the full media when ready.
   Videos and audio use the same preview surface. On Tauri, the full-preview

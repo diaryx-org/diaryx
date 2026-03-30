@@ -159,8 +159,8 @@ mod tests {
         let result =
             remove_plugin_from_mapping(Value::Mapping(mapping), "diaryx.sync").expect("removed");
 
-        assert!(!result.contains_key(&Value::String("diaryx.sync".into())));
-        assert!(result.contains_key(&Value::String("diaryx.daily".into())));
+        assert!(!result.contains_key(Value::String("diaryx.sync".into())));
+        assert!(result.contains_key(Value::String("diaryx.daily".into())));
     }
 
     #[test]

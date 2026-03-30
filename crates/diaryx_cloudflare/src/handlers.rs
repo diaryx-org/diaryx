@@ -212,9 +212,13 @@ pub async fn delete_namespace(req: Request, ctx: RouteContext<()>) -> Result<Res
     let user_id = authenticate(&req, &ctx).await?;
     let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let domain_cache = KvDomainMappingCache::new(domains_kv(&ctx)?);
     let service = NamespaceService::new(&ns_store);
 
-    match service.delete(id, &user_id).await {
+    match service
+        .delete_with_cache(id, &user_id, Some(&domain_cache))
+        .await
+    {
         Ok(()) => Response::empty().map(|r| r.with_status(204)),
         Err(e) => error_response(e),
     }

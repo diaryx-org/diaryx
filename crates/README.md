@@ -13,6 +13,7 @@ contents:
 - '[README](/crates/diaryx_extism/README.md)'
 exclude:
 - LICENSE.md
+- '**/*.rs'
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - developers

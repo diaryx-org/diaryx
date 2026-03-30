@@ -2,13 +2,9 @@
 title: Import module
 description: Import external formats into Diaryx entries
 part_of: '[README](/crates/diaryx_core/src/README.md)'
-attachments:
-  - '[mod.rs](/crates/diaryx_core/src/import/mod.rs)'
-  - '[email.rs](/crates/diaryx_core/src/import/email.rs)'
-  - '[dayone.rs](/crates/diaryx_core/src/import/dayone.rs)'
-  - '[markdown.rs](/crates/diaryx_core/src/import/markdown.rs)'
 exclude:
   - '*.lock'
+  - '**/*.rs'
 ---
 
 # Import Module

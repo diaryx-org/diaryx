@@ -1,17 +1,12 @@
 ---
 title: Scripts
 part_of: '[Diaryx](/Diaryx.md)'
-attachments:
-- build-wasm.sh
-- publish-ios.sh
-- publish-macos.sh
-- sync-marketplace.sh
-- sync-versions.sh
-- test-sync.sh
-- update-agents-index.sh
+exclude:
+- '*.sh'
 audience:
 - developers
 - agents
+contents: []
 ---
 
 # Scripts

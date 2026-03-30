@@ -26,6 +26,12 @@
     linkPopoverOpen?: boolean;
   }
 
+  interface SelectedLink {
+    href: string;
+    canonicalPath?: string;
+    isLocal: boolean;
+  }
+
   let {
     editor,
     element = $bindable(),
@@ -79,6 +85,33 @@
     updateActiveStates();
   }
 
+  function isLocalHref(href: string): boolean {
+    const trimmed = href.trim().toLowerCase();
+    return !(
+      /^[a-z][a-z0-9+.-]*:/.test(trimmed)
+      || trimmed.startsWith("#")
+      || trimmed.startsWith("//")
+    );
+  }
+
+  function getCurrentMarkdown(): string {
+    const markdownStorage = editor?.storage?.markdown as
+      | { getMarkdown?: () => string }
+      | undefined;
+    return markdownStorage?.getMarkdown?.() ?? "";
+  }
+
+  async function syncAddedLocalLink(canonicalPath?: string) {
+    if (!api || !entryPath || !canonicalPath) return;
+    await api.addLink(entryPath, canonicalPath, getCurrentMarkdown());
+  }
+
+  async function syncRemovedLocalLink(href?: string) {
+    if (!api || !entryPath || !href || !isLocalHref(href)) return;
+    const canonicalPath = await api.canonicalizeLink(href, entryPath);
+    await api.removeLink(entryPath, canonicalPath, getCurrentMarkdown());
+  }
+
   // Dropdown mutual exclusion: only one open at a time
   let blockStyleOpen = $state(false);
   let moreStylesOpen = $state(false);
@@ -92,20 +125,33 @@
     }
   }
 
-  function handleLink() {
+  async function handleLink() {
     if (isLinkActive) {
+      const href = editor?.getAttributes?.("link")?.href as string | undefined;
       editor?.chain().focus().unsetLink().run();
       updateActiveStates();
+      try {
+        await syncRemovedLocalLink(href);
+      } catch (error) {
+        console.warn("[BubbleMenuComponent] Failed to remove local link metadata:", error);
+      }
     } else {
       closeAllDropdowns();
       linkPopoverOpen = true;
     }
   }
 
-  function handleLinkSelect(href: string) {
-    editor?.chain().focus().setLink({ href }).run();
+  async function handleLinkSelect(link: SelectedLink) {
+    editor?.chain().focus().setLink({ href: link.href }).run();
     linkPopoverOpen = false;
     updateActiveStates();
+    if (link.isLocal) {
+      try {
+        await syncAddedLocalLink(link.canonicalPath);
+      } catch (error) {
+        console.warn("[BubbleMenuComponent] Failed to add local link metadata:", error);
+      }
+    }
   }
 
   function handleLinkClose() {
@@ -245,7 +291,7 @@
         onmousedown={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          handleLink();
+          void handleLink();
         }}
         title={isLinkActive ? "Remove Link" : "Add Link"}
         aria-pressed={isLinkActive}

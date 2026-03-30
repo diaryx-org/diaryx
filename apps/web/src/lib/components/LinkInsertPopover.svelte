@@ -9,9 +9,15 @@
   import { FileText, Globe, ArrowRight } from "@lucide/svelte";
   import { collectUniqueEntries, filterEntries } from "./filePickerEntries";
 
+  export interface SelectedLink {
+    href: string;
+    canonicalPath?: string;
+    isLocal: boolean;
+  }
+
   interface Props {
     open: boolean;
-    onSelect: (href: string) => void;
+    onSelect: (link: SelectedLink) => void;
     onClose: () => void;
     currentEntryPath?: string;
     api?: Api | null;
@@ -45,7 +51,7 @@
     if (!url) return;
     // Auto-add https:// if no protocol specified
     const href = url.match(/^https?:\/\//) ? url : `https://${url}`;
-    onSelect(href);
+    onSelect({ href, isLocal: false });
     reset();
   }
 
@@ -69,13 +75,13 @@
         if (href.startsWith("<") && href.endsWith(">")) {
           href = href.slice(1, -1);
         }
-        onSelect(href);
+        onSelect({ href, canonicalPath: file.path, isLocal: true });
       } catch {
         // Fallback: use the raw path
-        onSelect(file.path);
+        onSelect({ href: file.path, canonicalPath: file.path, isLocal: true });
       }
     } else {
-      onSelect(file.path);
+      onSelect({ href: file.path, canonicalPath: file.path, isLocal: true });
     }
     reset();
   }

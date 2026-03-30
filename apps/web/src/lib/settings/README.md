@@ -2,25 +2,9 @@
 title: Settings
 description: Settings panel components
 part_of: "[README](/apps/web/src/lib/README.md)"
-attachments:
-  - "[index.ts](/apps/web/src/lib/settings/index.ts)"
-  - "[AccountSettings.svelte](/apps/web/src/lib/settings/AccountSettings.svelte)"
-  - "[BackupSettings.svelte](/apps/web/src/lib/settings/BackupSettings.svelte)"
-  - "[BillingSettings.svelte](/apps/web/src/lib/settings/BillingSettings.svelte)"
-  - "[ClearDataSettings.svelte](/apps/web/src/lib/settings/ClearDataSettings.svelte)"
-  - "[DebugInfo.svelte](/apps/web/src/lib/settings/DebugInfo.svelte)"
-  - "[DisplaySettings.svelte](/apps/web/src/lib/settings/DisplaySettings.svelte)"
-  - "[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)"
-  - "[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)"
-  - "[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)"
-  - "[WorkspaceManagement.svelte](/apps/web/src/lib/settings/WorkspaceManagement.svelte)"
-  - "[WorkspaceSettings.svelte](/apps/web/src/lib/settings/WorkspaceSettings.svelte)"
-  - "[PluginsSettings.svelte](/apps/web/src/lib/settings/PluginsSettings.svelte)"
-  - "[PluginSettingsTab.svelte](/apps/web/src/lib/settings/PluginSettingsTab.svelte)"
-  - "[ICloudSettings.svelte](/apps/web/src/lib/settings/ICloudSettings.svelte)"
-  - "[syncSettingsLogic.ts](/apps/web/src/lib/settings/syncSettingsLogic.ts)"
 exclude:
   - "*.lock"
+  - "**/*.ts"
 ---
 
 # Settings

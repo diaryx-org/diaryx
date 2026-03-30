@@ -45,6 +45,7 @@ import {
   updateNamespaceMetadata,
 } from '$lib/namespace/namespaceService';
 import { isAuthenticated } from '$lib/auth/authStore.svelte';
+import { getWorkspaceDirectoryPath as getWorkspaceDirectoryPathFromRoot } from '$lib/workspace/rootPath';
 import { generateUUID } from '$lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -89,10 +90,7 @@ function getWorkspacePluginIds(frontmatter: unknown): string[] {
 }
 
 export function getWorkspaceDirectoryPath(backendInstance: { getWorkspacePath(): string }): string {
-  return backendInstance
-    .getWorkspacePath()
-    .replace(/\/index\.md$/, '')
-    .replace(/\/README\.md$/, '');
+  return getWorkspaceDirectoryPathFromRoot(backendInstance.getWorkspacePath());
 }
 
 /**

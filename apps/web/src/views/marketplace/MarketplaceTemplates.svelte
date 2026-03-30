@@ -26,6 +26,7 @@
     type TemplateInstallRuntime,
   } from "$lib/marketplace/templateInstall";
   import { getBackend, createApi } from "$lib/backend";
+  import { getWorkspaceDirectoryPath } from "$lib/workspace/rootPath";
   import { useMarketplacePanel, isRecord } from "./useMarketplacePanel.svelte";
 
   interface DisplayTemplate extends TemplateRegistryEntry {
@@ -72,9 +73,7 @@
     try {
       const backend = await getBackend();
       const api = createApi(backend);
-      const workspaceDir = backend.getWorkspacePath()
-        .replace(/\/index\.md$/, "")
-        .replace(/\/README\.md$/, "");
+      const workspaceDir = getWorkspaceDirectoryPath(backend.getWorkspacePath());
 
       const runtime: TemplateInstallRuntime = {
         saveTemplate: (name, content, wsPath) => api.saveTemplate(name, content, wsPath),

@@ -10,6 +10,10 @@
 
 import type { TreeNode, Api, ValidationResultWithMeta } from '../lib/backend';
 import type { Backend } from '../lib/backend/interface';
+import {
+  getWorkspaceDirectoryPath,
+  resolveWorkspaceValidationRootPath,
+} from '../lib/workspace/rootPath';
 import { workspaceStore } from '../models/stores';
 import { toast } from 'svelte-sonner';
 
@@ -65,10 +69,7 @@ export async function refreshTree(
 ): Promise<void> {
   try {
     // Get the workspace directory from the backend
-    const workspaceDir = backend
-      .getWorkspacePath()
-      .replace(/\/index\.md$/, '')
-      .replace(/\/README\.md$/, '');
+    const workspaceDir = getWorkspaceDirectoryPath(backend.getWorkspacePath());
 
     if (showUnlinkedFiles) {
       // "Show All Files" mode - use filesystem tree with depth limit
@@ -144,11 +145,11 @@ export async function runValidation(
   tree: TreeNode | null
 ): Promise<void> {
   try {
-    // Pass the actual workspace root path for validation
-    // tree?.path is the root index file path (e.g., "/Users/.../workspace/index.md")
-    // This is required for Tauri which uses absolute filesystem paths
-    // Fall back to backend.getWorkspacePath() if tree is not yet loaded
-    const rootPath = tree?.path ?? backend.getWorkspacePath();
+    const rootPath = await resolveWorkspaceValidationRootPath(
+      api,
+      tree,
+      backend.getWorkspacePath(),
+    );
     const result = await api.validateWorkspace(rootPath);
     workspaceStore.setValidationResult(result);
     console.log('[WorkspaceController] Validation result:', result);

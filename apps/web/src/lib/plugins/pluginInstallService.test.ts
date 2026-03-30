@@ -350,7 +350,7 @@ describe("pluginInstallService", () => {
   });
 
   it("removes workspace plugin data through the backend helper on browser uninstall", async () => {
-    const { api, service, workspaceRegistry } = await loadBrowserPluginInstallService({
+    const { api, namespaceService, service, workspaceRegistry } = await loadBrowserPluginInstallService({
       pluginMetadata: {
         "diaryx.spoiler": {
           remoteWorkspaceId: "remote-1",
@@ -364,6 +364,7 @@ describe("pluginInstallService", () => {
       "index.md",
       "diaryx.spoiler",
     );
+    expect(namespaceService.deleteNamespace).toHaveBeenCalledWith("remote-1");
     expect(workspaceRegistry.setPluginMetadata).toHaveBeenCalledWith(
       "local-1",
       "diaryx.spoiler",

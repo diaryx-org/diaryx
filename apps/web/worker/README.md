@@ -2,10 +2,9 @@
 title: web worker
 description: Cloudflare Worker entrypoint for app.diaryx.org
 part_of: '[README](/apps/web/README.md)'
-attachments:
-  - '[index.ts](/apps/web/worker/index.ts)'
 exclude:
   - '*.lock'
+  - '**/*.ts'
 ---
 
 # Web Worker

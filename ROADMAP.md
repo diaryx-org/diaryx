@@ -3,12 +3,15 @@ title: ROADMAP
 description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
-updated: 2026-03-29T19:10:08-06:00
+updated: 2026-03-30T15:33:59-06:00
 audience:
 - public
 - agents
 - developers
 part_of: '[Diaryx](/Diaryx.md)'
+link_of:
+- '[Diaryx](/Diaryx.md)'
+link: '[ROADMAP](/ROADMAP.md)'
 ---
 # ROADMAP
 
@@ -26,7 +29,7 @@ part_of: '[Diaryx](/Diaryx.md)'
 - [x] Bundles can include "spotlight" onboarding
 - [x] Log in from onboarding screen
 - [x] Browse bundles from onboarding screen
-- [ ] Set up terms and conditions on diaryx.org; update links in purchase section
+- [x] Set up terms and conditions on diaryx.org; update links in purchase section
 - [ ] Release to app store!
 - [x] Stretch goal: make sync plugin work seamlessly
 

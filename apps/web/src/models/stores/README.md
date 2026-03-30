@@ -2,16 +2,9 @@
 title: Stores
 description: Svelte stores for reactive state
 part_of: '[README](/apps/web/src/models/README.md)'
-attachments:
-  - '[index.ts](/apps/web/src/models/stores/index.ts)'
-  - '[collaborationStore.svelte.ts](/apps/web/src/models/stores/collaborationStore.svelte.ts)'
-  - '[entryStore.svelte.ts](/apps/web/src/models/stores/entryStore.svelte.ts)'
-  - '[pluginStore.svelte.ts](/apps/web/src/models/stores/pluginStore.svelte.ts)'
-  - '[permissionStore.svelte.ts](/apps/web/src/models/stores/permissionStore.svelte.ts)'
-  - '[uiStore.svelte.ts](/apps/web/src/models/stores/uiStore.svelte.ts)'
-  - '[workspaceStore.svelte.ts](/apps/web/src/models/stores/workspaceStore.svelte.ts)'
 exclude:
   - '*.lock'
+  - '**/*.ts'
   - '*.test.ts'
 ---
 

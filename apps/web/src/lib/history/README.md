@@ -2,14 +2,9 @@
 title: History
 description: Version history components
 part_of: '[README](/apps/web/src/lib/README.md)'
-attachments:
-  - '[index.ts](/apps/web/src/lib/history/index.ts)'
-  - '[HistoryEntry.svelte](/apps/web/src/lib/history/HistoryEntry.svelte)'
-  - '[HistoryPanel.svelte](/apps/web/src/lib/history/HistoryPanel.svelte)'
-  - '[VersionDiff.svelte](/apps/web/src/lib/history/VersionDiff.svelte)'
-  - '[GitHistoryPanel.svelte](/apps/web/src/lib/history/GitHistoryPanel.svelte)'
 exclude:
   - '*.lock'
+  - '**/*.ts'
 ---
 
 # History

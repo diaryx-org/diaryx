@@ -743,7 +743,16 @@ export async function handleCreateWithProvider(
           workspace_key: workspaceKey,
         });
       }
-      await linkWorkspace(providerPluginId, { localId: id, name, remoteId }, onProgress);
+      const linkParams = {
+        localId: id,
+        name,
+        ...(remoteId ? { remoteId } : {}),
+      };
+      if (onProgress) {
+        await linkWorkspace(providerPluginId, linkParams, onProgress);
+      } else {
+        await linkWorkspace(providerPluginId, linkParams);
+      }
     }
   }
 

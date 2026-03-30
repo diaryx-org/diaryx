@@ -4,8 +4,7 @@ description: WASM bindings for diaryx_core
 part_of: '[README](/crates/README.md)'
 audience:
 - developers
-contents:
-- '[README](/crates/diaryx_wasm/src/README.md)'
+contents: []
 attachments:
 - '[Cargo.toml](/crates/diaryx_wasm/Cargo.toml)'
 - '[build.rs](/crates/diaryx_wasm/build.rs)'

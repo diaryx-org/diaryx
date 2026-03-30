@@ -240,6 +240,10 @@ vi.mock("$lib/backend", () => ({
 
 // ── Import the component AFTER all mocks ────────────────────────────
 import EditorComponent from "./Editor.svelte";
+import {
+  bubbleMenuHasRelevantFocus,
+  shouldKeepBubbleMenuVisible,
+} from "./editorMenuVisibility";
 
 // Helper: wait for the mock Editor constructor to have been called.
 // Since MockEditor is a plain function (not vi.fn), we check editorState.
@@ -360,5 +364,34 @@ describe("Editor.svelte", () => {
     });
     const el = container.querySelector("[role='application']");
     expect(el).toBeTruthy();
+  });
+
+  it("keeps the bubble menu visible while focus moves into the link popover", () => {
+    const bubbleMenuElement = document.createElement("div");
+    const popoverInput = document.createElement("input");
+    bubbleMenuElement.appendChild(popoverInput);
+    document.body.appendChild(bubbleMenuElement);
+    popoverInput.focus();
+
+    expect(
+      bubbleMenuHasRelevantFocus(
+        bubbleMenuElement,
+        document.activeElement,
+        false,
+      ),
+    ).toBe(true);
+
+    bubbleMenuElement.remove();
+  });
+
+  it("keeps the bubble menu visible while the link popover is open", () => {
+    expect(
+      shouldKeepBubbleMenuVisible({
+        bubbleMenuElement: undefined,
+        activeElement: null,
+        editorHasFocus: false,
+        linkPopoverOpen: true,
+      }),
+    ).toBe(true);
   });
 });

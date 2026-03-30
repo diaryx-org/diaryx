@@ -4,9 +4,9 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
-  import type { TreeNode } from "$lib/backend";
   import { FileText } from "@lucide/svelte";
   import type { Snippet } from "svelte";
+  import { collectUniqueEntries, filterEntries } from "./filePickerEntries";
 
   interface Props {
     excludePaths?: string[];
@@ -27,29 +27,9 @@
 
   const mobileState = getMobileState();
 
-  function getAllEntries(node: TreeNode | null): { path: string; name: string }[] {
-    if (!node) return [];
-    const entries: { path: string; name: string }[] = [];
-    function traverse(n: TreeNode) {
-      entries.push({ path: n.path, name: n.name });
-      for (const child of n.children) {
-        traverse(child);
-      }
-    }
-    traverse(node);
-    return entries;
-  }
-
-  const allEntries = $derived(getAllEntries(workspaceStore.tree));
+  const allEntries = $derived(collectUniqueEntries(workspaceStore.tree));
   const filteredEntries = $derived(
-    allEntries
-      .filter((e) => !excludePaths.includes(e.path))
-      .filter(
-        (e) =>
-          !searchValue.trim() ||
-          e.name.toLowerCase().includes(searchValue.toLowerCase()) ||
-          e.path.toLowerCase().includes(searchValue.toLowerCase()),
-      ),
+    filterEntries(allEntries, searchValue, excludePaths),
   );
 
   function handleSelect(file: { path: string; name: string }) {

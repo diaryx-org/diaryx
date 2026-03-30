@@ -35,6 +35,12 @@ use crate::link_parser;
 pub struct FrontmatterMetadata {
     /// Display title from frontmatter
     pub title: Option<String>,
+    /// Canonical self-link for this file.
+    pub link: Option<String>,
+    /// Explicit outbound links declared by this file.
+    pub links: Option<Vec<String>>,
+    /// Explicit backlinks declared by other files.
+    pub link_of: Option<Vec<String>>,
     /// Markdown link to parent index file (e.g., `[Parent](/folder/index.md)`)
     pub part_of: Option<String>,
     /// Markdown links to child files (e.g., `[Child](/folder/child.md)`)
@@ -102,6 +108,55 @@ impl FrontmatterMetadata {
             .and_then(|o| o.get("title"))
             .and_then(|v| v.as_str())
             .map(String::from);
+
+        let link = obj
+            .and_then(|o| o.get("link"))
+            .and_then(|v| v.as_str())
+            .map(|raw_value| {
+                let parsed = link_parser::parse_link(raw_value);
+                let canonical_path = &parsed.path;
+                let link_title = parsed
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| title_resolver(canonical_path));
+                link_parser::format_link(canonical_path, &link_title)
+            });
+
+        let links = obj
+            .and_then(|o| o.get("links"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|raw_value| {
+                        let parsed = link_parser::parse_link(raw_value);
+                        let canonical_path = &parsed.path;
+                        let link_title = parsed
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| title_resolver(canonical_path));
+                        link_parser::format_link(canonical_path, &link_title)
+                    })
+                    .collect()
+            });
+
+        let link_of = obj
+            .and_then(|o| o.get("link_of"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|raw_value| {
+                        let parsed = link_parser::parse_link(raw_value);
+                        let canonical_path = &parsed.path;
+                        let link_title = parsed
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| title_resolver(canonical_path));
+                        link_parser::format_link(canonical_path, &link_title)
+                    })
+                    .collect()
+            });
 
         let part_of = obj
             .and_then(|o| o.get("part_of"))
@@ -202,6 +257,9 @@ impl FrontmatterMetadata {
 
         Self {
             title,
+            link,
+            links,
+            link_of,
             part_of,
             contents,
             attachments,
@@ -218,6 +276,28 @@ impl FrontmatterMetadata {
 
         if let Some(title) = &self.title {
             lines.push(format!("title: {}", yaml_string(title)));
+        }
+
+        if let Some(link) = &self.link {
+            lines.push(format!("link: {}", yaml_string(link)));
+        }
+
+        if let Some(links) = &self.links
+            && !links.is_empty()
+        {
+            lines.push("links:".to_string());
+            for item in links {
+                lines.push(format!("  - {}", yaml_string(item)));
+            }
+        }
+
+        if let Some(link_of) = &self.link_of
+            && !link_of.is_empty()
+        {
+            lines.push("link_of:".to_string());
+            for item in link_of {
+                lines.push(format!("  - {}", yaml_string(item)));
+            }
         }
 
         if let Some(part_of) = &self.part_of {
@@ -741,6 +821,9 @@ mod tests {
     fn test_frontmatter_metadata_to_yaml() {
         let fm = FrontmatterMetadata {
             title: Some("Test Title".to_string()),
+            link: None,
+            links: None,
+            link_of: None,
             part_of: Some("[Parent Index](/folder/parent.md)".to_string()),
             contents: Some(vec!["[Child](/folder/child.md)".to_string()]),
             audience: None,
@@ -763,6 +846,9 @@ mod tests {
     fn test_frontmatter_metadata_to_yaml_uses_local_offset_for_updated() {
         let fm = FrontmatterMetadata {
             title: Some("Test Title".to_string()),
+            link: None,
+            links: None,
+            link_of: None,
             part_of: None,
             contents: None,
             audience: None,
@@ -792,6 +878,9 @@ mod tests {
         // to preserve index file identity
         let fm = FrontmatterMetadata {
             title: Some("Root Index".to_string()),
+            link: None,
+            links: None,
+            link_of: None,
             part_of: None,
             contents: Some(vec![]), // Empty but explicitly set
             audience: None,
@@ -814,6 +903,9 @@ mod tests {
         // None contents should NOT be written at all
         let fm = FrontmatterMetadata {
             title: Some("Regular File".to_string()),
+            link: None,
+            links: None,
+            link_of: None,
             part_of: Some("parent.md".to_string()),
             contents: None, // Not an index file
             audience: None,
@@ -937,6 +1029,9 @@ mod tests {
     fn test_roundtrip_markdown_link_to_yaml() {
         let fm = FrontmatterMetadata {
             title: Some("Test Entry".to_string()),
+            link: None,
+            links: None,
+            link_of: None,
             part_of: Some("[Parent Index](/Folder/index.md)".to_string()),
             contents: Some(vec!["[Child Entry](/Folder/child.md)".to_string()]),
             audience: None,

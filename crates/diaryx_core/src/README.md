@@ -106,6 +106,12 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
 - Frontmatter attachment values set through `SetFrontmatterProperty` and
   `ConvertLinks` are normalized through the same link parser pipeline used for
   `part_of`/`contents`, then formatted according to workspace `link_format`.
+- The singular `link` frontmatter property is normalized through the same path
+  too, and validation treats it as the file's canonical self-link.
+- `links` and `link_of` frontmatter arrays now use the same normalization and
+  conversion pipeline, and validation/fixer logic treats them as an explicit
+  outbound/backlink graph layered on top of the main `contents` / `part_of`
+  hierarchy.
 
 ## Command Path Resolution Notes
 

@@ -2,7 +2,7 @@
   import DOMPurify from "dompurify";
   import { Code, Check } from "@lucide/svelte";
   import type { Api } from "$lib/backend/api";
-  import { resolveImageSrc } from "@/models/services/attachmentService";
+  import { resolveHtmlPreviewMedia } from "./htmlPreviewMedia";
 
   const ALLOWED_IFRAME_ORIGINS = [
     'https://www.youtube.com',
@@ -57,7 +57,7 @@
     sourceText = content;
   });
 
-  // Resolve <img src> local paths to blob URLs for preview
+  // Resolve local HTML media paths to blob URLs/native preview URLs
   $effect(() => {
     resolvePreviewHtml(content);
   });
@@ -68,31 +68,7 @@
       return;
     }
 
-    const imgSrcRegex = /<img\s[^>]*?\bsrc\s*=\s*(["'])((?:(?!\1).)+)\1/gi;
-    let result = html;
-    const replacements: { original: string; replacement: string }[] = [];
-
-    let match: RegExpExecArray | null;
-    while ((match = imgSrcRegex.exec(html)) !== null) {
-      const [fullMatch, quote, rawSrc] = match;
-
-      const blobUrl = await resolveImageSrc(rawSrc.trim(), entryPath, api);
-      if (blobUrl && blobUrl !== rawSrc.trim()) {
-        replacements.push({
-          original: fullMatch,
-          replacement: fullMatch.replace(
-            `${quote}${rawSrc}${quote}`,
-            `${quote}${blobUrl}${quote}`,
-          ),
-        });
-      }
-    }
-
-    for (const { original, replacement } of replacements) {
-      result = result.replace(original, replacement);
-    }
-
-    previewHtml = result;
+    previewHtml = await resolveHtmlPreviewMedia(html, entryPath, api);
   }
 
   const sanitized = $derived(

@@ -111,6 +111,11 @@ pub struct IndexFrontmatter {
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub title: Option<String>,
 
+    /// Canonical self-link for this file.
+    /// When present, this should resolve back to the file itself.
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    pub link: Option<String>,
+
     /// Description of this area
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub description: Option<String>,
@@ -121,6 +126,22 @@ pub struct IndexFrontmatter {
     /// None means the key was absent; Some(vec) means it was present (even if empty)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contents: Option<Vec<String>>,
+
+    /// Explicit outbound links declared by this file.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_vec_string_lenient"
+    )]
+    pub links: Option<Vec<String>>,
+
+    /// Explicit backlinks from files whose `links` reference this file.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_vec_string_lenient"
+    )]
+    pub link_of: Option<Vec<String>>,
 
     /// Path to parent index file (relative to this file)
     /// If absent, this is a root index (workspace root)
@@ -176,6 +197,16 @@ impl IndexFrontmatter {
     /// Get contents as a slice, or empty slice if absent
     pub fn contents_list(&self) -> &[String] {
         self.contents.as_deref().unwrap_or(&[])
+    }
+
+    /// Get links as a slice, or empty slice if absent
+    pub fn links_list(&self) -> &[String] {
+        self.links.as_deref().unwrap_or(&[])
+    }
+
+    /// Get backlinks as a slice, or empty slice if absent
+    pub fn link_of_list(&self) -> &[String] {
+        self.link_of.as_deref().unwrap_or(&[])
     }
 
     /// Get display name

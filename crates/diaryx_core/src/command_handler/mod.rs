@@ -850,6 +850,24 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 .to_string()
         }
 
+        // Convert link if present
+        if let Some(link_value) = fm.get("link")
+            && let Some(link_str) = link_value.as_str()
+        {
+            let converted = link_parser::convert_link_with_hint(
+                link_str,
+                target_format,
+                relative_path,
+                None,
+                source_format_hint,
+            );
+            if converted != link_str {
+                fm.insert("link".to_string(), Value::String(converted));
+                links_converted += 1;
+                modified = true;
+            }
+        }
+
         // Convert part_of if present (can be string or array)
         if let Some(part_of_value) = fm.get("part_of") {
             if let Some(part_of_str) = part_of_value.as_str() {
@@ -925,6 +943,70 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
             if contents_changed {
                 fm.insert("contents".to_string(), Value::Sequence(new_contents));
+                modified = true;
+            }
+        }
+
+        // Convert links if present
+        if let Some(links_value) = fm.get("links")
+            && let Some(links_seq) = links_value.as_sequence()
+        {
+            let mut new_links = Vec::new();
+            let mut links_changed = false;
+
+            for item in links_seq {
+                if let Some(item_str) = item.as_str() {
+                    let converted = link_parser::convert_link_with_hint(
+                        item_str,
+                        target_format,
+                        relative_path,
+                        None,
+                        source_format_hint,
+                    );
+                    if converted != item_str {
+                        links_changed = true;
+                        links_converted += 1;
+                    }
+                    new_links.push(Value::String(converted));
+                } else {
+                    new_links.push(item.clone());
+                }
+            }
+
+            if links_changed {
+                fm.insert("links".to_string(), Value::Sequence(new_links));
+                modified = true;
+            }
+        }
+
+        // Convert link_of if present
+        if let Some(link_of_value) = fm.get("link_of")
+            && let Some(link_of_seq) = link_of_value.as_sequence()
+        {
+            let mut new_link_of = Vec::new();
+            let mut link_of_changed = false;
+
+            for item in link_of_seq {
+                if let Some(item_str) = item.as_str() {
+                    let converted = link_parser::convert_link_with_hint(
+                        item_str,
+                        target_format,
+                        relative_path,
+                        None,
+                        source_format_hint,
+                    );
+                    if converted != item_str {
+                        link_of_changed = true;
+                        links_converted += 1;
+                    }
+                    new_link_of.push(Value::String(converted));
+                } else {
+                    new_link_of.push(item.clone());
+                }
+            }
+
+            if link_of_changed {
+                fm.insert("link_of".to_string(), Value::Sequence(new_link_of));
                 modified = true;
             }
         }
@@ -1324,6 +1406,105 @@ mod tests {
                 vec![
                     "_attachments/a.png".to_string(),
                     "_attachments/report.pdf".to_string()
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn test_set_frontmatter_property_normalizes_link_to_link_format() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let mut diaryx = Diaryx::new(fs);
+            diaryx.set_link_format(link_parser::LinkFormat::MarkdownRoot);
+
+            diaryx
+                .fs()
+                .create_dir_all(Path::new("notes"))
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(Path::new("notes/day.md"), "---\ntitle: Day\n---\n\n# Day\n")
+                .await
+                .unwrap();
+
+            diaryx
+                .execute(Command::SetFrontmatterProperty {
+                    path: "notes/day.md".to_string(),
+                    key: "link".to_string(),
+                    value: serde_json::json!("../notes/day.md"),
+                    root_index_path: None,
+                })
+                .await
+                .unwrap();
+
+            let updated = diaryx
+                .fs()
+                .read_to_string(Path::new("notes/day.md"))
+                .await
+                .unwrap();
+            let parsed = crate::frontmatter::parse_or_empty(&updated).unwrap();
+            let link = parsed
+                .frontmatter
+                .get("link")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+
+            assert_eq!(link, "[Day](/notes/day.md)");
+        });
+    }
+
+    #[test]
+    fn test_set_frontmatter_property_normalizes_links_array_to_link_format() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let mut diaryx = Diaryx::new(fs);
+            diaryx.set_link_format(link_parser::LinkFormat::MarkdownRoot);
+
+            diaryx
+                .fs()
+                .create_dir_all(Path::new("notes"))
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(Path::new("notes/day.md"), "---\ntitle: Day\n---\n\n# Day\n")
+                .await
+                .unwrap();
+
+            diaryx
+                .execute(Command::SetFrontmatterProperty {
+                    path: "notes/day.md".to_string(),
+                    key: "links".to_string(),
+                    value: serde_json::json!(["../other.md", "[Self](/notes/day.md)"]),
+                    root_index_path: None,
+                })
+                .await
+                .unwrap();
+
+            let updated = diaryx
+                .fs()
+                .read_to_string(Path::new("notes/day.md"))
+                .await
+                .unwrap();
+            let parsed = crate::frontmatter::parse_or_empty(&updated).unwrap();
+            let links: Vec<String> = parsed
+                .frontmatter
+                .get("links")
+                .and_then(|v| v.as_sequence())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            assert_eq!(
+                links,
+                vec![
+                    "[Other](/other.md)".to_string(),
+                    "[Day](/notes/day.md)".to_string()
                 ]
             );
         });

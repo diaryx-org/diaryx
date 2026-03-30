@@ -9,6 +9,9 @@ attachments:
 - sync-versions.sh
 - test-sync.sh
 - update-agents-index.sh
+audience:
+- developers
+- agents
 ---
 
 # Scripts

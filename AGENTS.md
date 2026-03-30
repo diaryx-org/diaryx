@@ -2,8 +2,10 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-29T20:19:45Z
+updated: 2026-03-30T06:21:27Z
 part_of: '[Diaryx](/Diaryx.md)'
+audience:
+- agents
 ---
 # Instructions for AI agents
 
@@ -16,6 +18,7 @@ Diaryx - README/repo for the Diaryx project - README.md
 ├── AGENTS - Instructions for AI Agents - AGENTS.md
 ├── CONTRIBUTING - A guide for making contributions in the Diaryx repo - CONTRIBUTING.md
 ├── LICENSE - PolyForm Shield License 1.0.0 - LICENSE.md
+├── PHILOSOPHY - PHILOSOPHY.md
 ├── apps - GUI frontends for Diaryx - apps/README.md
 │   ├── web - Svelte + Tiptap frontend for Diaryx - apps/web/README.md
 │   │   ├── web src - Source code for the Diaryx web application - apps/web/src/README.md
@@ -69,11 +72,9 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │       └── Import module - Import external formats into Diaryx entries - crates/diaryx_core/src/import/README.md
 │   ├── crates/diaryx_daily/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
-│   │   └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
 │   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
 │   │   └── diaryx_sync_server src - Source code for the sync server - crates/diaryx_sync_server/src/README.md
 │   │       ├── Auth module - Authentication middleware and magic link handling - crates/diaryx_sync_server/src/auth/README.md
-│   │       ├── diaryx_server src - Platform-agnostic core modules for Diaryx server adapters - crates/diaryx_server/src/README.md
 │   │       ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
 │   │       ├── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md

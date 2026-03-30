@@ -1004,6 +1004,8 @@
         return error.target ?? null;
       case 'BrokenAttachment':
         return error.attachment ?? null;
+      default:
+        return null;
     }
   }
 
@@ -1318,6 +1320,8 @@
         return error.file;
       case 'BrokenContentsRef':
         return error.index;
+      default:
+        return null;
     }
   }
 

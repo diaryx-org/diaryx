@@ -158,7 +158,7 @@ export class NamespaceContext {
     try {
       const serverUrl = this.serverUrl;
       if (!serverUrl) return;
-      const resp = await fetch(`${serverUrl}/capabilities`);
+      const resp = await proxyFetch(`${serverUrl}/capabilities`);
       if (resp.ok) {
         const caps = await resp.json();
         this.siteBaseUrl = caps.site_base_url ?? null;

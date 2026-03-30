@@ -3,18 +3,20 @@ title: crates
 description: Cargo crates for Diaryx
 author: adammharris
 contents:
-- '[Diaryx CLI README](/crates/diaryx/README.md)'
-- '[Diaryx Server README](/crates/diaryx_server/README.md)'
-- '[Diaryx Core README](/crates/diaryx_core/README.md)'
-- '[Diaryx Daily README](/crates/diaryx_daily/README.md)'
-- '[Diaryx Core Publish README](/crates/diaryx_core/src/publish/README.md)'
-- '[Diaryx WASM README](/crates/diaryx_wasm/README.md)'
-- '[Diaryx Sync Server README](/crates/diaryx_sync_server/README.md)'
-- '[Diaryx Sync Protocol README](/crates/diaryx_sync/README.md)'
-- '[Diaryx Extism Host README](/crates/diaryx_extism/README.md)'
+- '[README](/crates/diaryx/README.md)'
+- '[README](/crates/diaryx_server/README.md)'
+- '[README](/crates/diaryx_core/README.md)'
+- '[README](/crates/diaryx_daily/README.md)'
+- '[README](/crates/diaryx_wasm/README.md)'
+- '[README](/crates/diaryx_sync_server/README.md)'
+- '[README](/crates/diaryx_sync/README.md)'
+- '[README](/crates/diaryx_extism/README.md)'
 exclude:
 - LICENSE.md
 part_of: '[Diaryx](/Diaryx.md)'
+audience:
+- developers
+- agents
 ---
 
 # Diaryx Crates

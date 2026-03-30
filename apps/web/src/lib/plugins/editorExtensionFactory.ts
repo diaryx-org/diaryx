@@ -797,10 +797,318 @@ function injectCss(id: string, css: string) {
   injectedCss.add(id);
   const style = document.createElement("style");
   style.setAttribute("data-plugin-css", id);
-  // Scope plugin CSS under a per-extension class so it cannot affect elements
-  // outside the plugin's own extension containers.
-  style.textContent = `.plugin-ext-${CSS.escape(id)} { ${css} }`;
+  style.textContent = scopePluginCss(id, css);
   document.head.appendChild(style);
+}
+
+export function scopePluginCss(id: string, css: string): string {
+  const scopeClass = `.plugin-ext-${CSS.escape(id)}`;
+  return transformCssBlockList(css, scopeClass);
+}
+
+function transformCssBlockList(source: string, scopeClass: string): string {
+  let output = "";
+  let index = 0;
+
+  while (index < source.length) {
+    const char = source[index];
+
+    if (char === "/" && source[index + 1] === "*") {
+      const commentEnd = source.indexOf("*/", index + 2);
+      const end = commentEnd === -1 ? source.length : commentEnd + 2;
+      output += source.slice(index, end);
+      index = end;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      output += char;
+      index += 1;
+      continue;
+    }
+
+    const boundary = findNextTopLevelBoundary(source, index);
+    if (!boundary) {
+      break;
+    }
+
+    const prelude = source.slice(index, boundary.index).trim();
+    if (prelude.length === 0) {
+      index = boundary.index + 1;
+      continue;
+    }
+
+    if (boundary.type === ";") {
+      index = boundary.index + 1;
+      continue;
+    }
+
+    const blockEnd = findMatchingBraceIndex(source, boundary.index);
+    if (blockEnd === -1) {
+      break;
+    }
+
+    const blockContent = source.slice(boundary.index + 1, blockEnd);
+    const scopedRule = transformCssRule(prelude, blockContent, scopeClass);
+    if (scopedRule.length > 0) {
+      output += scopedRule;
+    }
+    index = blockEnd + 1;
+  }
+
+  return output.trim();
+}
+
+function transformCssRule(
+  prelude: string,
+  blockContent: string,
+  scopeClass: string,
+): string {
+  if (prelude.startsWith("@")) {
+    if (/^@(media|supports|layer)\b/i.test(prelude)) {
+      const nested = transformCssBlockList(blockContent, scopeClass);
+      return nested.length > 0 ? `${prelude} {${nested}}` : "";
+    }
+    return "";
+  }
+
+  const selectors = splitTopLevelSelectors(prelude)
+    .flatMap((selector) => scopeSelector(selector, scopeClass))
+    .filter((selector, index, all) => selector.length > 0 && all.indexOf(selector) === index);
+
+  if (selectors.length === 0) {
+    return "";
+  }
+
+  return `${selectors.join(", ")} {${blockContent}}`;
+}
+
+function splitTopLevelSelectors(selectorList: string): string[] {
+  const selectors: string[] = [];
+  let start = 0;
+  let depthParen = 0;
+  let depthBracket = 0;
+  let quote: string | null = null;
+
+  for (let i = 0; i < selectorList.length; i += 1) {
+    const char = selectorList[i];
+
+    if (quote) {
+      if (char === "\\" && i + 1 < selectorList.length) {
+        i += 1;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") depthParen += 1;
+    else if (char === ")") depthParen = Math.max(0, depthParen - 1);
+    else if (char === "[") depthBracket += 1;
+    else if (char === "]") depthBracket = Math.max(0, depthBracket - 1);
+    else if (char === "," && depthParen === 0 && depthBracket === 0) {
+      selectors.push(selectorList.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+
+  const tail = selectorList.slice(start).trim();
+  if (tail.length > 0) {
+    selectors.push(tail);
+  }
+  return selectors;
+}
+
+function scopeSelector(selector: string, scopeClass: string): string[] {
+  const trimmed = selector.trim();
+  if (trimmed.length === 0) {
+    return [];
+  }
+
+  const targetScoped = injectScopeIntoFinalCompound(trimmed, scopeClass);
+  const ancestorScoped = `${scopeClass} ${trimmed}`;
+  return targetScoped === ancestorScoped
+    ? [targetScoped]
+    : [targetScoped, ancestorScoped];
+}
+
+function injectScopeIntoFinalCompound(selector: string, scopeClass: string): string {
+  const splitIndex = findFinalCompoundStart(selector);
+  const prefix = selector.slice(0, splitIndex);
+  const compound = selector.slice(splitIndex);
+  const insertionIndex = findTopLevelPseudoStart(compound);
+  return `${prefix}${compound.slice(0, insertionIndex)}${scopeClass}${compound.slice(insertionIndex)}`;
+}
+
+function findFinalCompoundStart(selector: string): number {
+  let depthParen = 0;
+  let depthBracket = 0;
+  let quote: string | null = null;
+
+  for (let i = selector.length - 1; i >= 0; i -= 1) {
+    const char = selector[i];
+
+    if (quote) {
+      if (char === quote && selector[i - 1] !== "\\") {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === ")") depthParen += 1;
+    else if (char === "(") depthParen = Math.max(0, depthParen - 1);
+    else if (char === "]") depthBracket += 1;
+    else if (char === "[") depthBracket = Math.max(0, depthBracket - 1);
+    else if (depthParen === 0 && depthBracket === 0) {
+      if (char === ">" || char === "+" || char === "~") {
+        return i + 1;
+      }
+      if (/\s/.test(char)) {
+        let sawSpace = false;
+        for (let j = i; j >= 0 && /\s/.test(selector[j]); j -= 1) {
+          sawSpace = true;
+          i = j;
+        }
+        if (sawSpace) {
+          return i + 1;
+        }
+      }
+    }
+  }
+
+  return 0;
+}
+
+function findTopLevelPseudoStart(compound: string): number {
+  let depthParen = 0;
+  let depthBracket = 0;
+  let quote: string | null = null;
+
+  for (let i = 0; i < compound.length; i += 1) {
+    const char = compound[i];
+
+    if (quote) {
+      if (char === "\\" && i + 1 < compound.length) {
+        i += 1;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") depthParen += 1;
+    else if (char === ")") depthParen = Math.max(0, depthParen - 1);
+    else if (char === "[") depthBracket += 1;
+    else if (char === "]") depthBracket = Math.max(0, depthBracket - 1);
+    else if (char === ":" && depthParen === 0 && depthBracket === 0) {
+      return i;
+    }
+  }
+
+  return compound.length;
+}
+
+function findNextTopLevelBoundary(
+  source: string,
+  start: number,
+): { index: number; type: "{" | ";" } | null {
+  let depthParen = 0;
+  let depthBracket = 0;
+  let quote: string | null = null;
+
+  for (let i = start; i < source.length; i += 1) {
+    const char = source[i];
+
+    if (char === "/" && source[i + 1] === "*") {
+      const commentEnd = source.indexOf("*/", i + 2);
+      i = commentEnd === -1 ? source.length : commentEnd + 1;
+      continue;
+    }
+
+    if (quote) {
+      if (char === "\\" && i + 1 < source.length) {
+        i += 1;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") depthParen += 1;
+    else if (char === ")") depthParen = Math.max(0, depthParen - 1);
+    else if (char === "[") depthBracket += 1;
+    else if (char === "]") depthBracket = Math.max(0, depthBracket - 1);
+    else if (depthParen === 0 && depthBracket === 0 && (char === "{" || char === ";")) {
+      return { index: i, type: char };
+    }
+  }
+
+  return null;
+}
+
+function findMatchingBraceIndex(source: string, openBraceIndex: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+
+  for (let i = openBraceIndex; i < source.length; i += 1) {
+    const char = source[i];
+
+    if (char === "/" && source[i + 1] === "*") {
+      const commentEnd = source.indexOf("*/", i + 2);
+      if (commentEnd === -1) {
+        return source.length - 1;
+      }
+      i = commentEnd + 1;
+      continue;
+    }
+
+    if (quote) {
+      if (char === "\\" && i + 1 < source.length) {
+        i += 1;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+
+  return -1;
 }
 
 function injectMissingPluginCss() {

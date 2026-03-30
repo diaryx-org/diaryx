@@ -22,6 +22,11 @@ Web marketplace domain helpers for non-WASM assets.
 Curated registries follow the same pattern as `plugin-registry`: markdown source
 entries assembled into a generated `registry.md` and published to CDN-backed R2.
 
+`cdnBase.ts` now resolves the curated asset base differently by host:
+web stays on same-origin `/cdn`, Tauri dev resolves against the local Vite
+origin, and packaged Tauri builds fall back to `https://app.diaryx.org/cdn`
+so native proxy fetches never receive an invalid relative URL.
+
 ## Files
 
 | File | Purpose |

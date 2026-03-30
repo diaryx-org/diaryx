@@ -5,9 +5,9 @@
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { getLinkFormatStore } from "$lib/stores/linkFormatStore.svelte";
-  import type { TreeNode } from "$lib/backend";
   import type { Api } from "$lib/backend/api";
   import { FileText, Globe, ArrowRight } from "@lucide/svelte";
+  import { collectUniqueEntries, filterEntries } from "./filePickerEntries";
 
   interface Props {
     open: boolean;
@@ -35,29 +35,9 @@
   const mobileState = getMobileState();
   const linkFormatStore = getLinkFormatStore();
 
-  function getAllEntries(node: TreeNode | null): { path: string; name: string }[] {
-    if (!node) return [];
-    const entries: { path: string; name: string }[] = [];
-    function traverse(n: TreeNode) {
-      entries.push({ path: n.path, name: n.name });
-      for (const child of n.children) {
-        traverse(child);
-      }
-    }
-    traverse(node);
-    return entries;
-  }
-
-  const allEntries = $derived(getAllEntries(workspaceStore.tree));
+  const allEntries = $derived(collectUniqueEntries(workspaceStore.tree));
   const filteredEntries = $derived(
-    allEntries
-      .filter((e) => e.path !== currentEntryPath)
-      .filter(
-        (e) =>
-          !searchValue.trim() ||
-          e.name.toLowerCase().includes(searchValue.toLowerCase()) ||
-          e.path.toLowerCase().includes(searchValue.toLowerCase()),
-      ),
+    filterEntries(allEntries, searchValue, [currentEntryPath]),
   );
 
   function handleRemoteSubmit() {
@@ -238,7 +218,7 @@
     class:show-below={showBelow}
     role="dialog"
     tabindex="-1"
-    onmousedown={(e) => e.preventDefault()}
+    onmousedown={(e) => e.stopPropagation()}
   >
     {@render linkContent()}
   </div>

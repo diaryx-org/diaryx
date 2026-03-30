@@ -18,6 +18,14 @@
       "id": "92891768520a46e883f4eb111c02b4d8",
     }
   ],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "diaryx-users",
+			"database_id": "2d952957-b0a4-4172-a617-2cbbb4edcd75",
+			"remote": true
+		}
+	],
   "observability": {
     "logs": {
       "enabled": true,

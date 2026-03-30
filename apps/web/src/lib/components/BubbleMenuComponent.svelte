@@ -23,9 +23,16 @@
     entryPath?: string;
     /** API instance for link formatting */
     api?: Api | null;
+    linkPopoverOpen?: boolean;
   }
 
-  let { editor, element = $bindable(), entryPath = "", api = null }: Props = $props();
+  let {
+    editor,
+    element = $bindable(),
+    entryPath = "",
+    api = null,
+    linkPopoverOpen = $bindable(false),
+  }: Props = $props();
 
   // Track active states reactively
   let isBoldActive = $state(false);
@@ -74,7 +81,6 @@
 
   // Dropdown mutual exclusion: only one open at a time
   let blockStyleOpen = $state(false);
-  let linkPopoverOpen = $state(false);
   let moreStylesOpen = $state(false);
 
   function closeAllDropdowns() {

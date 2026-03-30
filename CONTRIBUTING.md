@@ -2,6 +2,8 @@
 title: CONTRIBUTING
 description: A guide for making contributions in the Diaryx repo
 part_of: '[Diaryx](/Diaryx.md)'
+audience:
+- developers
 ---
 # Contributing to Diaryx
 

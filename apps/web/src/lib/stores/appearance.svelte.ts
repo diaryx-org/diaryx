@@ -431,27 +431,13 @@ function parseTypographySettingsFileInput(
 }
 
 async function persistThemeWorkspaceFiles(
-  appearance: UserAppearance,
   library: Record<string, ThemeLibraryEntry>,
 ): Promise<void> {
   try {
-    await Promise.all([
-      writeWorkspaceText(
-        getThemeSettingsPath(),
-        JSON.stringify(
-          {
-            presetId: appearance.presetId,
-            accentHue: appearance.accentHue,
-          },
-          null,
-          2,
-        ),
-      ),
-      writeWorkspaceText(
-        getThemeLibraryPath(),
-        JSON.stringify(Object.values(library), null, 2),
-      ),
-    ]);
+    await writeWorkspaceText(
+      getThemeLibraryPath(),
+      JSON.stringify(Object.values(library), null, 2),
+    );
   } catch (error) {
     console.warn("[appearanceStore] Failed to persist workspace themes:", error);
   }
@@ -590,6 +576,9 @@ export function createAppearanceStore() {
       mergeTypographyMap(initialTypographyLibrary),
     ),
   );
+  let persistWorkspaceTheme:
+    | ((theme: { presetId: string; accentHue: number | null }) => Promise<void>)
+    | null = null;
 
   function getThemeMap(): Record<string, ThemeDefinition> {
     return mergeThemeMap(themeLibrary);
@@ -678,6 +667,9 @@ export function createAppearanceStore() {
   }
 
   function update(partial: Partial<UserAppearance>): void {
+    const shouldPersistWorkspaceTheme =
+      Object.hasOwn(partial, "presetId") || Object.hasOwn(partial, "accentHue");
+
     appearance = normalizeAppearance(
       {
         ...appearance,
@@ -690,8 +682,14 @@ export function createAppearanceStore() {
     );
 
     saveAppearance(appearance);
-    void persistThemeWorkspaceFiles(appearance, themeLibrary);
+    void persistThemeWorkspaceFiles(themeLibrary);
     void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
+    if (shouldPersistWorkspaceTheme) {
+      void persistWorkspaceTheme?.({
+        presetId: appearance.presetId,
+        accentHue: appearance.accentHue,
+      });
+    }
     apply();
   }
 
@@ -726,7 +724,7 @@ export function createAppearanceStore() {
       },
     };
     saveThemeLibrary(themeLibrary);
-    void persistThemeWorkspaceFiles(appearance, themeLibrary);
+    void persistThemeWorkspaceFiles(themeLibrary);
 
     appearance = normalizeAppearance(appearance, getThemeMap(), getTypographyMap());
     saveAppearance(appearance);
@@ -744,7 +742,7 @@ export function createAppearanceStore() {
     delete nextLibrary[themeId];
     themeLibrary = nextLibrary;
     saveThemeLibrary(themeLibrary);
-    void persistThemeWorkspaceFiles(appearance, themeLibrary);
+    void persistThemeWorkspaceFiles(themeLibrary);
 
     if (appearance.presetId === themeId) {
       update({ presetId: "default" });
@@ -799,7 +797,7 @@ export function createAppearanceStore() {
 
     appearance = normalizeAppearance(appearance, getThemeMap(), getTypographyMap());
     saveAppearance(appearance);
-    void persistThemeWorkspaceFiles(appearance, themeLibrary);
+    void persistThemeWorkspaceFiles(themeLibrary);
     apply();
 
     return true;
@@ -875,27 +873,24 @@ export function createAppearanceStore() {
 
   async function reloadFromWorkspace(): Promise<void> {
     try {
-      const [
-        rawThemeSettings,
-        rawThemeLibrary,
-        rawTypographySettings,
-        rawTypographyLibrary,
-      ] = await Promise.all([
-        readWorkspaceText(getThemeSettingsPath()),
-        readWorkspaceText(getThemeLibraryPath()),
-        readWorkspaceText(getTypographySettingsPath()),
-        readWorkspaceText(getTypographyLibraryPath()),
-      ]);
+      const [rawThemeSettings, rawThemeLibrary, rawTypographySettings, rawTypographyLibrary] =
+        await Promise.all([
+          readWorkspaceText(getThemeSettingsPath()),
+          readWorkspaceText(getThemeLibraryPath()),
+          readWorkspaceText(getTypographySettingsPath()),
+          readWorkspaceText(getTypographyLibraryPath()),
+        ]);
 
+      const hasLegacyThemeSettings =
+        typeof rawThemeSettings === "string" && rawThemeSettings.length > 0;
       const hasWorkspaceState = [
-        rawThemeSettings,
         rawThemeLibrary,
         rawTypographySettings,
         rawTypographyLibrary,
       ].some((value) => typeof value === "string" && value.length > 0);
 
-      if (!hasWorkspaceState) {
-        void persistThemeWorkspaceFiles(appearance, themeLibrary);
+      if (!hasWorkspaceState && !hasLegacyThemeSettings) {
+        void persistThemeWorkspaceFiles(themeLibrary);
         void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
         return;
       }
@@ -907,12 +902,13 @@ export function createAppearanceStore() {
         ? parseTypographyLibraryInput(JSON.parse(rawTypographyLibrary))
         : {};
 
+      const legacyThemeSettings = parseThemeSettingsInput(
+        rawThemeSettings ? JSON.parse(rawThemeSettings) : null,
+      );
       appearance = normalizeAppearance(
         {
-          ...cloneDefaultAppearance(),
-          ...parseThemeSettingsInput(
-            rawThemeSettings ? JSON.parse(rawThemeSettings) : null,
-          ),
+          ...appearance,
+          ...legacyThemeSettings,
           ...parseTypographySettingsFileInput(
             rawTypographySettings ? JSON.parse(rawTypographySettings) : null,
           ),
@@ -924,6 +920,16 @@ export function createAppearanceStore() {
       saveThemeLibrary(themeLibrary);
       saveTypographyLibrary(typographyLibrary);
       saveAppearance(appearance);
+      if (
+        rawThemeSettings &&
+        (legacyThemeSettings.presetId !== undefined ||
+          Object.hasOwn(legacyThemeSettings, "accentHue"))
+      ) {
+        void persistWorkspaceTheme?.({
+          presetId: appearance.presetId,
+          accentHue: appearance.accentHue,
+        });
+      }
       apply();
     } catch (error) {
       console.warn("[appearanceStore] Failed to reload workspace appearance:", error);
@@ -1023,13 +1029,44 @@ export function createAppearanceStore() {
 
     reloadFromWorkspace,
 
+    hydrateWorkspaceTheme(
+      workspaceTheme: { presetId?: string; accentHue?: number | null },
+      persistFn: (theme: { presetId: string; accentHue: number | null }) => Promise<void>,
+    ): void {
+      persistWorkspaceTheme = persistFn;
+      if (
+        workspaceTheme.presetId !== undefined ||
+        Object.hasOwn(workspaceTheme, "accentHue")
+      ) {
+        appearance = normalizeAppearance(
+          {
+            ...appearance,
+            ...(workspaceTheme.presetId !== undefined
+              ? { presetId: workspaceTheme.presetId }
+              : {}),
+            ...(Object.hasOwn(workspaceTheme, "accentHue")
+              ? { accentHue: workspaceTheme.accentHue ?? null }
+              : {}),
+          },
+          getThemeMap(),
+          getTypographyMap(),
+        );
+        saveAppearance(appearance);
+        apply();
+      }
+    },
+
     reapply: apply,
 
     reset() {
       appearance = cloneDefaultAppearance();
       saveAppearance(appearance);
-      void persistThemeWorkspaceFiles(appearance, themeLibrary);
+      void persistThemeWorkspaceFiles(themeLibrary);
       void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
+      void persistWorkspaceTheme?.({
+        presetId: appearance.presetId,
+        accentHue: appearance.accentHue,
+      });
       clearCssVars();
       clearVarsCache();
       document.documentElement.classList.remove("high-contrast-editor");
@@ -1157,6 +1194,7 @@ export function getAppearanceStore() {
       setContentWidth: () => {},
       clearTypographyOverrides: () => {},
       reloadFromWorkspace: async () => {},
+      hydrateWorkspaceTheme: () => {},
       reapply: () => {},
       reset: () => {},
       exportTheme: () => ({ $schema: "", theme: BUILTIN_PRESETS.default }),

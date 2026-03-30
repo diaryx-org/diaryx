@@ -11,7 +11,7 @@ exclude:
 
 # Workspace Module
 
-This module organizes collections of markdown files into hierarchical workspaces using `part_of` and `contents` relationships.
+This module organizes collections of markdown files into hierarchical workspaces using `part_of` and `contents` relationships, with optional canonical self-links via `link` and explicit non-structural link graphs via `links` / `link_of`.
 
 ## Files
 
@@ -24,7 +24,19 @@ Workspace-level configuration lives in the root index file's YAML frontmatter `e
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `link_format` | `LinkFormat` | `MarkdownRoot` | How `part_of`/`contents`/`attachments` links are formatted |
+| `link_format` | `LinkFormat` | `MarkdownRoot` | How `link`/`links`/`link_of`/`part_of`/`contents`/`attachments` links are formatted |
+
+## Canonical Self-Links
+
+Entries may declare a singular `link` frontmatter property that represents the
+canonical way to refer to the file. Diaryx normalizes `link` values through the
+same link parser used for `part_of` and `contents`, and validation warns when a
+declared `link` does not resolve back to the file itself.
+
+Files may also declare `links` and `link_of` arrays for explicit outbound and
+inbound link relationships. Validation reports broken outbound targets as
+errors, warns when a target is missing the expected backlink, and warns when a
+stored backlink is stale.
 | `default_template` | `Option<String>` | `None` | Link to default template entry |
 | `sync_title_to_heading` | `bool` | `false` | Update first H1 when title changes |
 | `auto_update_timestamp` | `bool` | `true` | Auto-set `updated` on save |
@@ -32,6 +44,9 @@ Workspace-level configuration lives in the root index file's YAML frontmatter `e
 | `filename_style` | `FilenameStyle` | `Preserve` | How titles map to filenames |
 | `default_audience` | `Option<String>` | `None` | Audience tag assigned to entries with no explicit/inherited audience. Unset = private. |
 | `daily_entry_folder` | `Option<String>` | `None` | Folder used by the Daily plugin for date-based entries. |
+| `theme_mode` | `Option<String>` | `None` | Workspace theme mode preference (`light`, `dark`, `system`). |
+| `theme_preset` | `Option<String>` | `None` | Active workspace theme preset ID. |
+| `theme_accent_hue` | `Option<f64>` | `None` | Accent hue override for the active workspace theme. |
 
 ## FilenameStyle
 

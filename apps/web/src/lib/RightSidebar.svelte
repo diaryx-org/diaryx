@@ -805,25 +805,45 @@
     moveConfigDialogOpen = true;
   }
 
+  function padDatePart(value: number): string {
+    return value.toString().padStart(2, "0");
+  }
+
+  function formatLocalDateTimeInput(date: Date): string {
+    const year = date.getFullYear();
+    const month = padDatePart(date.getMonth() + 1);
+    const day = padDatePart(date.getDate());
+    const hour = padDatePart(date.getHours());
+    const minute = padDatePart(date.getMinutes());
+    return `${year}-${month}-${day}T${hour}:${minute}`;
+  }
+
+  function formatLocalRfc3339(date: Date): string {
+    const localDateTime = `${formatLocalDateTimeInput(date)}:${padDatePart(date.getSeconds())}`;
+    const offsetMinutes = -date.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? "+" : "-";
+    const absoluteOffset = Math.abs(offsetMinutes);
+    const offsetHours = padDatePart(Math.floor(absoluteOffset / 60));
+    const offsetRemainder = padDatePart(absoluteOffset % 60);
+    return `${localDateTime}${sign}${offsetHours}:${offsetRemainder}`;
+  }
+
   // Format date for datetime-local input
   function formatDateForInput(value: string): string {
-    try {
-      const date = new Date(value);
-      // Format as YYYY-MM-DDTHH:mm
-      return date.toISOString().slice(0, 16);
-    } catch {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
       return value;
     }
+    return formatLocalDateTimeInput(date);
   }
 
   // Parse datetime-local input back to ISO string
   function parseDateFromInput(value: string): string {
-    try {
-      const date = new Date(value);
-      return date.toISOString();
-    } catch {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
       return value;
     }
+    return formatLocalRfc3339(date);
   }
 
   function handleCollapseClick(event: MouseEvent): void {

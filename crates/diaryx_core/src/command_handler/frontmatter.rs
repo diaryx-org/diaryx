@@ -23,13 +23,29 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         value: serde_json::Value,
         root_index_path: Option<String>,
     ) -> Result<Response> {
-        // Handle part_of/contents/attachments specially - normalize and
+        // Handle link/part_of/contents/attachments specially - normalize and
         // format links according to workspace settings.
         // CrdtFs.write_file extracts metadata from frontmatter automatically
         {
             let canonical_path = self.get_canonical_path(&path);
 
-            if key == "part_of" {
+            if key == "link" {
+                if let serde_json::Value::String(ref s) = value {
+                    let canonical_target = self.resolve_frontmatter_link_target(s, &canonical_path);
+                    let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
+                    let yaml_value = Value::String(formatted);
+                    self.entry()
+                        .set_frontmatter_property(&path, &key, yaml_value)
+                        .await?;
+
+                    self.plugin_registry()
+                        .track_file_for_sync(&canonical_path)
+                        .await;
+
+                    self.emit_workspace_sync().await;
+                    return Ok(Response::Ok);
+                }
+            } else if key == "part_of" {
                 // Parse the value, convert to canonical, format as markdown link
                 if let serde_json::Value::String(ref s) = value {
                     let canonical_target = self.resolve_frontmatter_link_target(s, &canonical_path);
@@ -52,7 +68,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 }
-            } else if key == "contents" {
+            } else if key == "contents" || key == "links" || key == "link_of" {
                 // Handle contents array - format each item as markdown link
                 if let serde_json::Value::Array(ref arr) = value {
                     let mut formatted_links: Vec<Value> = Vec::new();

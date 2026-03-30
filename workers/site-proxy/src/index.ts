@@ -5,6 +5,7 @@ type Env = {
   ATTACHMENTS_BUCKET: R2Bucket;
   TOKEN_SIGNING_KEY: string;
   KV: KVNamespace;
+  DB: D1Database;
 };
 
 type SiteMeta = {
@@ -26,10 +27,22 @@ type DomainMapping = { namespace_id: string; audience_name: string };
 // KV subdomain mapping: subdomain → namespace + optional default audience.
 type SubdomainMapping = { namespace_id: string; default_audience?: string };
 
+type NamespaceObjectMeta = {
+  key: string;
+  r2_key: string | null;
+  mime_type: string;
+  audience: string | null;
+};
+
+type NamespaceAudienceMeta = {
+  access: string;
+};
+
 const META_TTL_MS = 60_000;
 const metaCache = new Map<string, { expiresAt: number; value: SiteMeta | null }>();
 
 const SITE_DOMAIN = 'diaryx.org';
+const ROOT_SITE_SUBDOMAIN = 'main';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -40,6 +53,12 @@ export default {
     const host = url.hostname;
     if (isPassthroughSubdomain(host)) {
       return fetch(request);
+    }
+    if (host === SITE_DOMAIN) {
+      const rootMapping = await resolveNamedSubdomain(ROOT_SITE_SUBDOMAIN, env);
+      if (rootMapping) {
+        return serveSubdomainSite(request, env, rootMapping, url);
+      }
     }
     const subdomainMapping = await resolveSubdomain(host, env);
     if (subdomainMapping) {
@@ -88,6 +107,9 @@ export default {
     // Namespace object route: /ns/{ns_id}/{*path}
     if (slug === 'ns') {
       return serveNamespaceRoute(request, env, url, segments);
+    }
+    if (slug === 'sites') {
+      return serveNamespaceSiteRoute(request, env, url, segments);
     }
     const sitePathSegments = segments.slice(1);
     const siteMeta = await getSiteMeta(slug, env);
@@ -407,6 +429,21 @@ async function resolveSubdomain(host: string, env: Env): Promise<SubdomainMappin
   return null;
 }
 
+async function resolveNamedSubdomain(
+  name: string,
+  env: Env,
+): Promise<SubdomainMapping | null> {
+  const raw = await env.KV.get(`subdomain:${name.toLowerCase()}`);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<SubdomainMapping>;
+    if (typeof parsed.namespace_id === 'string') {
+      return parsed as SubdomainMapping;
+    }
+  } catch {}
+  return null;
+}
+
 /** Resolve a custom domain to a namespace mapping via KV. */
 async function resolveNamespaceDomain(hostname: string, env: Env): Promise<DomainMapping | null> {
   const raw = await env.KV.get(`domain:${hostname.toLowerCase()}`);
@@ -502,6 +539,128 @@ async function checkNamespaceAccess(
   return new Response(object.body, { headers });
 }
 
+async function getNamespaceObjectMeta(
+  env: Env,
+  nsId: string,
+  key: string,
+): Promise<NamespaceObjectMeta | null> {
+  const result = await env.DB.prepare(
+    `SELECT key, r2_key, mime_type, audience
+       FROM namespace_objects
+      WHERE namespace_id = ?1 AND key = ?2`,
+  )
+    .bind(nsId, key)
+    .first<NamespaceObjectMeta>();
+
+  return result ?? null;
+}
+
+async function getNamespaceAudienceMeta(
+  env: Env,
+  nsId: string,
+  audience: string,
+): Promise<NamespaceAudienceMeta | null> {
+  const result = await env.DB.prepare(
+    `SELECT access
+       FROM namespace_audiences
+      WHERE namespace_id = ?1 AND audience_name = ?2`,
+  )
+    .bind(nsId, audience)
+    .first<NamespaceAudienceMeta>();
+
+  return result ?? null;
+}
+
+function buildNamespaceCookie(nsId: string, token: string, path = '/'): string {
+  return `diaryx_access_${nsId}=${encodeURIComponent(token)}; Path=${path}; HttpOnly; Secure; SameSite=Lax`;
+}
+
+async function serveNamespaceObjectByKey(
+  request: Request,
+  url: URL,
+  env: Env,
+  nsId: string,
+  key: string,
+  options?: {
+    allowedAudience?: string;
+    htmlPrefix?: string;
+    cookiePath?: string;
+  },
+): Promise<Response> {
+  const meta = await getNamespaceObjectMeta(env, nsId, key);
+  if (!meta) {
+    return notFound();
+  }
+
+  const objectAudience = meta.audience;
+  if (!objectAudience) {
+    return notFound();
+  }
+  if (options?.allowedAudience && objectAudience !== options.allowedAudience) {
+    return notFound();
+  }
+
+  const audienceMeta = await getNamespaceAudienceMeta(env, nsId, objectAudience);
+  if (!audienceMeta) {
+    return notFound();
+  }
+
+  if (audienceMeta.access === 'public') {
+    // Allowed.
+  } else if (audienceMeta.access === 'token') {
+    const tokenStr =
+      url.searchParams.get('audience_token') ??
+      getCookie(request.headers.get('Cookie') ?? '', `diaryx_access_${nsId}`);
+
+    if (!tokenStr) {
+      return forbidden('Authentication required to access this resource.');
+    }
+
+    const claims = await validateSignedToken(env.TOKEN_SIGNING_KEY, tokenStr);
+    if (!claims || claims.s !== nsId || claims.a !== objectAudience) {
+      return forbidden('This access token is invalid or has expired.');
+    }
+    if (claims.e !== null && claims.e < Math.floor(Date.now() / 1000)) {
+      return forbidden('This access token has expired.');
+    }
+
+    if (url.searchParams.has('audience_token')) {
+      const redirectUrl = new URL(url.toString());
+      redirectUrl.searchParams.delete('audience_token');
+      const headers = new Headers();
+      headers.set('Location', redirectUrl.toString());
+      headers.append(
+        'Set-Cookie',
+        buildNamespaceCookie(nsId, tokenStr, options?.cookiePath ?? '/'),
+      );
+      return new Response(null, { status: 302, headers });
+    }
+  } else {
+    return forbidden('You do not have permission to access this resource.');
+  }
+
+  const blobKey = meta.r2_key ?? `ns/${nsId}/${key}`;
+  const object = await env.ATTACHMENTS_BUCKET.get(blobKey);
+  if (!object) {
+    return notFound();
+  }
+
+  const contentType = meta.mime_type || object.httpMetadata?.contentType || contentTypeForPath(key);
+  const headers = new Headers();
+  headers.set('Content-Type', contentType);
+  headers.set('Cache-Control', 'public, max-age=60');
+
+  if (contentType.toLowerCase().includes('text/html')) {
+    const html = await object.text();
+    const rewritten = options?.htmlPrefix
+      ? rewriteRootRelativeUrlsWithPrefix(html, options.htmlPrefix)
+      : html;
+    return new Response(rewritten, { headers });
+  }
+
+  return new Response(object.body, { headers });
+}
+
 /** Handle /ns/{ns_id}/{*path} routes. */
 async function serveNamespaceRoute(
   request: Request,
@@ -519,6 +678,53 @@ async function serveNamespaceRoute(
   const r2Key = `ns/${nsId}/${objectPath}`;
 
   return checkNamespaceAccess(request, url, env, nsId, r2Key);
+}
+
+async function serveNamespaceSiteRoute(
+  request: Request,
+  env: Env,
+  url: URL,
+  segments: string[],
+): Promise<Response> {
+  if (segments.length < 3) {
+    return notFound();
+  }
+
+  const nsId = decodeURIComponent(segments[1]);
+  const sitePathSegments = segments.slice(2).map((s) => decodeURIComponent(s));
+  const audience = sitePathSegments[0];
+  if (!audience) {
+    return notFound();
+  }
+
+  let objectPath = sitePathSegments.slice(1).join('/');
+  if (!objectPath) {
+    objectPath = 'index.html';
+  }
+
+  const key = `${audience}/${objectPath}`;
+  const htmlPrefix = `/sites/${encodeURIComponent(nsId)}/${encodeURIComponent(audience)}`;
+  const cookiePath = `/sites/${encodeURIComponent(nsId)}`;
+
+  let response = await serveNamespaceObjectByKey(request, url, env, nsId, key, {
+    allowedAudience: audience,
+    htmlPrefix,
+    cookiePath,
+  });
+  if (response.status !== 404) {
+    return response;
+  }
+
+  if (!objectPath.endsWith('/index.html')) {
+    const fallback = `${audience}/${objectPath.replace(/\/$/, '')}/index.html`;
+    response = await serveNamespaceObjectByKey(request, url, env, nsId, fallback, {
+      allowedAudience: audience,
+      htmlPrefix,
+      cookiePath,
+    });
+  }
+
+  return response.status === 404 ? notFound() : response;
 }
 
 /** Handle subdomain requests — serves the whole namespace, access control per-object.
@@ -557,30 +763,35 @@ async function serveSubdomainSite(
   // If an explicit audience is given, prepend it to the path.
   if (queryAudience) {
     const audiencedPath = `${queryAudience}/${objectPath}`;
-    const r2Key = `ns/${nsId}/${audiencedPath}`;
-    let response = await checkNamespaceAccess(request, url, env, nsId, r2Key);
+    let response = await serveNamespaceObjectByKey(request, url, env, nsId, audiencedPath, {
+      allowedAudience: queryAudience,
+    });
     if (response.status === 404 && !audiencedPath.endsWith('/index.html')) {
       const fallback = `${audiencedPath.replace(/\/$/, '')}/index.html`;
-      response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`);
+      response = await serveNamespaceObjectByKey(request, url, env, nsId, fallback, {
+        allowedAudience: queryAudience,
+      });
     }
     return response;
   }
 
   // Try the path as-is first (may already include audience prefix like /family/page.html).
-  const directKey = `ns/${nsId}/${objectPath}`;
-  let response = await checkNamespaceAccess(request, url, env, nsId, directKey);
+  let response = await serveNamespaceObjectByKey(request, url, env, nsId, objectPath);
   if (response.status !== 404) return response;
 
   // Try with default_audience prefix.
   if (mapping.default_audience) {
     const audiencedPath = `${mapping.default_audience}/${objectPath}`;
-    const r2Key = `ns/${nsId}/${audiencedPath}`;
-    response = await checkNamespaceAccess(request, url, env, nsId, r2Key);
+    response = await serveNamespaceObjectByKey(request, url, env, nsId, audiencedPath, {
+      allowedAudience: mapping.default_audience,
+    });
     if (response.status !== 404) return response;
     // index.html fallback with audience prefix
     if (!audiencedPath.endsWith('/index.html')) {
       const fallback = `${audiencedPath.replace(/\/$/, '')}/index.html`;
-      response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`);
+      response = await serveNamespaceObjectByKey(request, url, env, nsId, fallback, {
+        allowedAudience: mapping.default_audience,
+      });
       if (response.status !== 404) return response;
     }
   }
@@ -588,7 +799,7 @@ async function serveSubdomainSite(
   // index.html fallback without audience prefix (for direct paths).
   if (!objectPath.endsWith('/index.html')) {
     const fallback = `${objectPath.replace(/\/$/, '')}/index.html`;
-    response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`);
+    response = await serveNamespaceObjectByKey(request, url, env, nsId, fallback);
     if (response.status !== 404) return response;
   }
 
@@ -612,27 +823,33 @@ async function serveNamespaceCustomDomain(
   const audience = mapping.audience_name;
 
   // Try the path as-is first (may already include audience prefix).
-  const directKey = `ns/${nsId}/${objectPath}`;
-  let response = await checkNamespaceAccess(request, url, env, nsId, directKey, audience);
+  let response = await serveNamespaceObjectByKey(request, url, env, nsId, objectPath, {
+    allowedAudience: audience,
+  });
   if (response.status !== 404) return response;
 
   // Try with audience prefix (e.g. /index.html → /family/index.html).
   const audiencedPath = `${audience}/${objectPath}`;
-  const audiencedKey = `ns/${nsId}/${audiencedPath}`;
-  response = await checkNamespaceAccess(request, url, env, nsId, audiencedKey, audience);
+  response = await serveNamespaceObjectByKey(request, url, env, nsId, audiencedPath, {
+    allowedAudience: audience,
+  });
   if (response.status !== 404) return response;
 
   // Try index.html fallback with audience prefix.
   if (!audiencedPath.endsWith('/index.html')) {
     const fallback = `${audiencedPath.replace(/\/$/, '')}/index.html`;
-    response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`, audience);
+    response = await serveNamespaceObjectByKey(request, url, env, nsId, fallback, {
+      allowedAudience: audience,
+    });
     if (response.status !== 404) return response;
   }
 
   // Try index.html fallback without audience prefix.
   if (!objectPath.endsWith('/index.html')) {
     const fallback = `${objectPath.replace(/\/$/, '')}/index.html`;
-    response = await checkNamespaceAccess(request, url, env, nsId, `ns/${nsId}/${fallback}`, audience);
+    response = await serveNamespaceObjectByKey(request, url, env, nsId, fallback, {
+      allowedAudience: audience,
+    });
     if (response.status !== 404) return response;
   }
 
@@ -711,37 +928,115 @@ function contentTypeForPath(path: string): string {
 }
 
 function rewriteRootRelativeUrls(html: string, slug: string): string {
-  const slugPrefix = `/${slug}`;
-  const attrPattern = /\b(href|src|action)=(["'])\/(?!\/)([^"']*)\2/gi;
+  return rewriteRootRelativeUrlsWithPrefix(html, `/${slug}`);
+}
 
-  return html.replace(attrPattern, (_match, attr: string, quote: string, rawPath: string) => {
-    const normalized = rawPath.replace(/^\/+/, '');
-    if (normalized === slug || normalized.startsWith(`${slug}/`)) {
-      return `${attr}=${quote}/${normalized}${quote}`;
-    }
-    if (normalized.length === 0) {
-      return `${attr}=${quote}${slugPrefix}/${quote}`;
-    }
-    return `${attr}=${quote}${slugPrefix}/${normalized}${quote}`;
+function rewriteRootRelativeUrlsWithPrefix(html: string, prefix: string): string {
+  const normalizedPrefix = prefix.startsWith('/') ? prefix : `/${prefix}`;
+  const attrPattern = /\b(href|src|action)=(["'])\/(?!\/)([^"']*)\2/gi;
+  const rewrittenAttrs = html.replace(
+    attrPattern,
+    (_match, attr: string, quote: string, rawPath: string) => {
+      const normalized = rawPath.replace(/^\/+/, '');
+      const prefixWithoutSlash = normalizedPrefix.replace(/^\/+/, '');
+      if (
+        normalized === prefixWithoutSlash ||
+        normalized.startsWith(`${prefixWithoutSlash}/`)
+      ) {
+        return `${attr}=${quote}/${normalized}${quote}`;
+      }
+      if (normalized.length === 0) {
+        return `${attr}=${quote}${normalizedPrefix}/${quote}`;
+      }
+      return `${attr}=${quote}${normalizedPrefix}/${normalized}${quote}`;
+    },
+  );
+
+  return rewriteSrcsetUrlsWithPrefix(rewrittenAttrs, normalizedPrefix);
+}
+
+function rewriteSrcsetUrlsWithPrefix(html: string, prefix: string): string {
+  const normalizedPrefix = prefix.startsWith('/') ? prefix : `/${prefix}`;
+  const prefixWithoutSlash = normalizedPrefix.replace(/^\/+/, '');
+  const attrPattern = /\bsrcset=(["'])([^"']*)\1/gi;
+
+  return html.replace(attrPattern, (_match, quote: string, rawValue: string) => {
+    const rewritten = rawValue
+      .split(',')
+      .map((candidate) => {
+        const trimmed = candidate.trim();
+        if (!trimmed.startsWith('/')) {
+          return trimmed;
+        }
+        const firstSpace = trimmed.search(/\s/);
+        const rawUrl = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
+        const descriptor = firstSpace === -1 ? '' : trimmed.slice(firstSpace);
+        const normalized = rawUrl.replace(/^\/+/, '');
+        if (
+          normalized === prefixWithoutSlash ||
+          normalized.startsWith(`${prefixWithoutSlash}/`)
+        ) {
+          return `/${normalized}${descriptor}`;
+        }
+        if (normalized.length === 0) {
+          return `${normalizedPrefix}/${descriptor.trimStart()}`.trimEnd();
+        }
+        return `${normalizedPrefix}/${normalized}${descriptor}`;
+      })
+      .join(', ');
+
+    return `srcset=${quote}${rewritten}${quote}`;
   });
 }
 
-/** Strip the /{slug}/ prefix from root-relative URLs in HTML for custom domain serving. */
+function stripSlugPrefixFromSrcset(html: string, slug: string): string {
+  const attrPattern = /\bsrcset=(["'])([^"']*)\1/gi;
+  return html.replace(attrPattern, (_match, quote: string, rawValue: string) => {
+    const rewritten = rawValue
+      .split(',')
+      .map((candidate) => {
+        const trimmed = candidate.trim();
+        if (!trimmed.startsWith('/')) {
+          return trimmed;
+        }
+        const firstSpace = trimmed.search(/\s/);
+        const rawUrl = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
+        const descriptor = firstSpace === -1 ? '' : trimmed.slice(firstSpace);
+        const normalized = rawUrl.replace(/^\/+/, '');
+        if (normalized === slug) {
+          return `/${descriptor.trimStart()}`.trimEnd();
+        }
+        if (normalized.startsWith(`${slug}/`)) {
+          return `/${normalized.slice(slug.length + 1)}${descriptor}`;
+        }
+        return trimmed;
+      })
+      .join(', ');
+
+    return `srcset=${quote}${rewritten}${quote}`;
+  });
+}
+
 function stripSlugPrefix(html: string, slug: string): string {
   const attrPattern = /\b(href|src|action)=(["'])\/(?!\/)([^"']*)\2/gi;
 
-  return html.replace(attrPattern, (_match, attr: string, quote: string, rawPath: string) => {
-    // If the path starts with the slug prefix, strip it.
-    if (rawPath === slug) {
-      return `${attr}=${quote}/${quote}`;
-    }
-    if (rawPath.startsWith(`${slug}/`)) {
-      const stripped = rawPath.slice(slug.length); // keeps the leading /
-      return `${attr}=${quote}${stripped}${quote}`;
-    }
-    // Already doesn't have slug prefix — leave as-is.
-    return _match;
-  });
+  const rewrittenAttrs = html.replace(
+    attrPattern,
+    (_match, attr: string, quote: string, rawPath: string) => {
+      // If the path starts with the slug prefix, strip it.
+      if (rawPath === slug) {
+        return `${attr}=${quote}/${quote}`;
+      }
+      if (rawPath.startsWith(`${slug}/`)) {
+        const stripped = rawPath.slice(slug.length); // keeps the leading /
+        return `${attr}=${quote}${stripped}${quote}`;
+      }
+      // Already doesn't have slug prefix — leave as-is.
+      return _match;
+    },
+  );
+
+  return stripSlugPrefixFromSrcset(rewrittenAttrs, slug);
 }
 
 function notFound(): Response {

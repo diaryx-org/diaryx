@@ -196,6 +196,29 @@ function renderSidebar(propOverrides: Record<string, unknown> = {}) {
   return { ...result, onToggleCollapse };
 }
 
+function padDatePart(value: number): string {
+  return value.toString().padStart(2, "0");
+}
+
+function formatLocalDateTimeInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = padDatePart(date.getMonth() + 1);
+  const day = padDatePart(date.getDate());
+  const hour = padDatePart(date.getHours());
+  const minute = padDatePart(date.getMinutes());
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
+function formatLocalRfc3339(date: Date): string {
+  const localDateTime = `${formatLocalDateTimeInput(date)}:${padDatePart(date.getSeconds())}`;
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const offsetHours = padDatePart(Math.floor(absoluteOffset / 60));
+  const offsetRemainder = padDatePart(absoluteOffset % 60);
+  return `${localDateTime}${sign}${offsetHours}:${offsetRemainder}`;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -288,6 +311,29 @@ describe("RightSidebar", () => {
     await fireEvent.blur(titleInput);
 
     expect(onPropertyChange).toHaveBeenCalledWith("title", "New Title");
+  });
+
+  it("preserves local wall time for datetime frontmatter fields", async () => {
+    const onPropertyChange = vi.fn();
+    const initialDate = new Date(2026, 2, 29, 19, 0, 0);
+    const updatedDate = new Date(2026, 2, 29, 20, 15, 0);
+    const entry = createMockEntry({
+      frontmatter: {
+        title: "Test Entry",
+        updated: formatLocalRfc3339(initialDate),
+      },
+    });
+    const { container } = renderSidebar({ entry, onPropertyChange });
+
+    const updatedInput = container.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    expect(updatedInput).not.toBeNull();
+    expect(updatedInput.value).toBe(formatLocalDateTimeInput(initialDate));
+
+    await fireEvent.change(updatedInput, {
+      target: { value: formatLocalDateTimeInput(updatedDate) },
+    });
+
+    expect(onPropertyChange).toHaveBeenCalledWith("updated", formatLocalRfc3339(updatedDate));
   });
 
   it("displays attachment error message", () => {

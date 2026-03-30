@@ -22,6 +22,7 @@ contents:
 attachments:
   - "[utils.ts](/apps/web/src/lib/utils.ts)"
   - "[windowDrag.ts](/apps/web/src/lib/windowDrag.ts)"
+  - "[editorMenuVisibility.ts](/apps/web/src/lib/editorMenuVisibility.ts)"
   - "[credentials.ts](/apps/web/src/lib/credentials.ts)"
   - "[mobileSwipe.ts](/apps/web/src/lib/mobileSwipe.ts)"
   - "[leftSidebarSelection.ts](/apps/web/src/lib/leftSidebarSelection.ts)"
@@ -139,6 +140,10 @@ while avoiding full-document markdown serialization on every keystroke. Large
 documents are serialized on demand for save/export/sync checks instead, which
 keeps typing latency down in long notes.
 
+Editor menu visibility rules that depend on focus handoff and explicit link
+popover state now live in `editorMenuVisibility.ts` so BubbleMenu regressions
+can be tested directly without relying on full TipTap child-component wiring.
+
 ## Sidebar Layout
 
 - Left sidebar: built-in `Files` tab plus plugin-contributed tabs.
@@ -153,6 +158,10 @@ keeps typing latency down in long notes.
 - Status-bar plugin items are host-rendered with `components/PluginStatusItems.svelte`, which only displays plugin-reported status and leaves plugin-specific actions to the plugin itself.
 - `RightSidebar.svelte` resets collapse-button tooltip state when collapsing to
   prevent stale tooltip visibility when reopening the panel.
+- `RightSidebar.svelte` keeps `datetime-local` frontmatter editors on local wall
+  time and writes RFC3339 values with the current local offset instead of
+  round-tripping through UTC, so `updated` and similar fields display the same
+  local time they store.
 - `RightSidebar.svelte` now probes attachment local availability through
   attachment path resolution + file existence checks instead of reading full
   attachment bytes, keeping the properties panel responsive in media-heavy

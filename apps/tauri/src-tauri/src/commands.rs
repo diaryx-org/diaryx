@@ -773,7 +773,7 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
         ws_bridge: ws_bridge.clone(),
         plugin_command_bridge: Arc::new(TauriPluginCommandBridge { app: app.clone() }),
         runtime_context_provider: Arc::new(TauriRuntimeContextProvider { app: app.clone() }),
-        namespace_provider: Arc::new(diaryx_extism::NoopNamespaceProvider),
+        namespace_provider: Arc::new(TauriNamespaceProvider { app: app.clone() }),
     });
     let mut adapters = Vec::new();
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
@@ -905,6 +905,218 @@ impl<R: Runtime> diaryx_extism::RuntimeContextProvider for TauriRuntimeContextPr
             .try_state::<RuntimeContextState>()
             .and_then(|state| state.context.lock().ok().map(|value| value.clone()))
             .unwrap_or_else(|| serde_json::json!({}))
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+struct TauriNamespaceProvider<R: Runtime> {
+    app: AppHandle<R>,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl<R: Runtime> TauriNamespaceProvider<R> {
+    fn runtime_context(&self) -> JsonValue {
+        self.app
+            .try_state::<RuntimeContextState>()
+            .and_then(|state| state.context.lock().ok().map(|value| value.clone()))
+            .unwrap_or_else(|| serde_json::json!({}))
+    }
+
+    fn server_url(&self) -> Result<String, String> {
+        self.runtime_context()
+            .get("server_url")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.trim_end_matches('/').to_string())
+            .ok_or_else(|| "Namespace operations require runtime_context.server_url".to_string())
+    }
+
+    fn auth_token(&self) -> Option<String> {
+        self.runtime_context()
+            .get("auth_token")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }
+
+    fn encode_component(value: &str) -> String {
+        url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+    }
+
+    fn encode_key(key: &str) -> String {
+        key.split('/')
+            .map(Self::encode_component)
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    fn request_json<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        url: String,
+        body: Option<Vec<u8>>,
+        content_type: Option<&str>,
+        audience: Option<&str>,
+    ) -> Result<Option<T>, String> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(120)))
+            .build()
+            .into();
+
+        let mut request_builder = ureq::http::Request::builder()
+            .method(method)
+            .uri(url.as_str());
+        if let Some(token) = self.auth_token() {
+            request_builder = request_builder.header("Authorization", format!("Bearer {token}"));
+        }
+        if let Some(content_type) = content_type {
+            request_builder = request_builder.header("Content-Type", content_type);
+        }
+        if let Some(audience) = audience {
+            request_builder = request_builder.header("X-Audience", audience);
+        }
+
+        let response = if let Some(body) = body {
+            let request = request_builder
+                .body(body)
+                .map_err(|e| format!("Failed to build namespace request: {e}"))?;
+            agent
+                .run(request)
+                .map_err(|e| format!("Namespace request failed: {e}"))?
+        } else {
+            let request = request_builder
+                .body(())
+                .map_err(|e| format!("Failed to build namespace request: {e}"))?;
+            agent
+                .run(request)
+                .map_err(|e| format!("Namespace request failed: {e}"))?
+        };
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.into_body().read_to_string().unwrap_or_default();
+            return Err(if text.is_empty() {
+                format!("Namespace request failed with status {status}")
+            } else {
+                text
+            });
+        }
+        if status == ureq::http::StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        let bytes = response
+            .into_body()
+            .read_to_vec()
+            .map_err(|e| format!("Failed to read namespace response: {e}"))?;
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        serde_json::from_slice::<T>(&bytes)
+            .map(Some)
+            .map_err(|e| format!("Failed to parse namespace response JSON: {e}"))
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+impl<R: Runtime> diaryx_extism::NamespaceProvider for TauriNamespaceProvider<R> {
+    fn put_object(
+        &self,
+        ns_id: &str,
+        key: &str,
+        bytes: &[u8],
+        mime_type: &str,
+        audience: &str,
+    ) -> Result<(), String> {
+        let base = self.server_url()?;
+        let url = format!(
+            "{}/namespaces/{}/objects/{}",
+            base,
+            Self::encode_component(ns_id),
+            Self::encode_key(key)
+        );
+        self.request_json::<serde_json::Value>(
+            "PUT",
+            url,
+            Some(bytes.to_vec()),
+            Some(mime_type),
+            Some(audience),
+        )?;
+        Ok(())
+    }
+
+    fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String> {
+        let base = self.server_url()?;
+        let url = format!(
+            "{}/namespaces/{}/objects/{}",
+            base,
+            Self::encode_component(ns_id),
+            Self::encode_key(key)
+        );
+        self.request_json::<serde_json::Value>("DELETE", url, None, None, None)?;
+        Ok(())
+    }
+
+    fn list_objects(&self, ns_id: &str) -> Result<Vec<diaryx_extism::NamespaceObjectMeta>, String> {
+        let base = self.server_url()?;
+        let url = format!(
+            "{}/namespaces/{}/objects",
+            base,
+            Self::encode_component(ns_id)
+        );
+        Ok(self
+            .request_json::<Vec<diaryx_extism::NamespaceObjectMeta>>("GET", url, None, None, None)?
+            .unwrap_or_default())
+    }
+
+    fn sync_audience(&self, ns_id: &str, audience: &str, access: &str) -> Result<(), String> {
+        let base = self.server_url()?;
+        let url = format!(
+            "{}/namespaces/{}/audiences/{}",
+            base,
+            Self::encode_component(ns_id),
+            Self::encode_component(audience)
+        );
+        let body = serde_json::to_vec(&serde_json::json!({ "access": access }))
+            .map_err(|e| format!("Failed to serialize audience request: {e}"))?;
+        self.request_json::<serde_json::Value>(
+            "PUT",
+            url,
+            Some(body),
+            Some("application/json"),
+            None,
+        )?;
+        Ok(())
+    }
+
+    fn send_audience_email(
+        &self,
+        ns_id: &str,
+        audience: &str,
+        subject: &str,
+        reply_to: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let base = self.server_url()?;
+        let url = format!(
+            "{}/namespaces/{}/audiences/{}/send-email",
+            base,
+            Self::encode_component(ns_id),
+            Self::encode_component(audience)
+        );
+        let body = serde_json::to_vec(&serde_json::json!({
+            "subject": subject,
+            "reply_to": reply_to,
+        }))
+        .map_err(|e| format!("Failed to serialize send-email request: {e}"))?;
+        Ok(self
+            .request_json::<serde_json::Value>(
+                "POST",
+                url,
+                Some(body),
+                Some("application/json"),
+                None,
+            )?
+            .unwrap_or_else(|| serde_json::json!({ "ok": true })))
     }
 }
 

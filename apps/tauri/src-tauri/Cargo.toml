@@ -43,6 +43,7 @@ tauri-plugin-icloud = { path = "../../../crates/tauri-plugin-icloud", optional =
 # Native iOS keyboard toolbar for TipTap editor
 tauri-plugin-editor-toolbar = { path = "../../../crates/tauri-plugin-editor-toolbar" }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
+ureq = "3"
 url = "2"
 dotenvy = "0.15"
 

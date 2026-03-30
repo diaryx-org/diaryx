@@ -122,6 +122,16 @@ pub struct WorkspaceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme_mode: Option<String>,
 
+    /// Active workspace theme preset ID.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_preset: Option<String>,
+
+    /// Accent hue override applied to the active theme preset.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_accent_hue: Option<f64>,
+
     /// Map of audience name → Tailwind color class (e.g., "family" → "bg-indigo-500").
     #[cfg_attr(feature = "typescript", ts(optional))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -784,6 +794,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         "show_unlinked_files",
         "show_hidden_files",
         "theme_mode",
+        "theme_preset",
+        "theme_accent_hue",
         "audience_colors",
         "disabled_plugins",
     ];
@@ -903,6 +915,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        let theme_preset = get("theme_preset")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let theme_accent_hue = get("theme_accent_hue").and_then(|v| v.as_f64());
+
         let audience_colors = get("audience_colors")
             .and_then(|v| v.as_mapping())
             .map(|m| {
@@ -931,6 +949,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             show_unlinked_files,
             show_hidden_files,
             theme_mode,
+            theme_preset,
+            theme_accent_hue,
             audience_colors,
             disabled_plugins,
         })
@@ -942,13 +962,13 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
             _ => {
-                // Try parsing as JSON for complex types (maps, arrays).
+                // Try parsing as JSON for scalars and complex types.
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(value) {
                     match &json {
-                        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                        serde_json::Value::String(_) => Value::String(value.to_string()),
+                        _ => {
                             serde_yaml::to_value(&json).unwrap_or(Value::String(value.to_string()))
                         }
-                        _ => Value::String(value.to_string()),
                     }
                 } else {
                     Value::String(value.to_string())
@@ -3411,8 +3431,11 @@ mod tests {
     fn test_index_frontmatter_is_root() {
         let root_fm = IndexFrontmatter {
             title: Some("Root".to_string()),
+            link: None,
             description: None,
             contents: Some(vec![]),
+            links: None,
+            link_of: None,
             part_of: None,
             audience: None,
             attachments: None,
@@ -3425,8 +3448,11 @@ mod tests {
 
         let non_root_fm = IndexFrontmatter {
             title: Some("Non-root".to_string()),
+            link: None,
             description: None,
             contents: Some(vec![]),
+            links: None,
+            link_of: None,
             part_of: Some("../parent.md".to_string()),
             audience: None,
             attachments: None,
@@ -3510,6 +3536,24 @@ mod tests {
 
         let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
         assert_eq!(config.daily_entry_folder.as_deref(), Some("Journal/Daily"));
+    }
+
+    #[test]
+    fn test_get_workspace_config_reads_theme_selection_fields() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nworkspace_config:\n  theme_mode: dark\n  theme_preset: nord\n  theme_accent_hue: 210\n---\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(config.theme_mode.as_deref(), Some("dark"));
+        assert_eq!(config.theme_preset.as_deref(), Some("nord"));
+        assert_eq!(config.theme_accent_hue, Some(210.0));
     }
 
     #[test]

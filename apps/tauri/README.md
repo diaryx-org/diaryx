@@ -3,29 +3,18 @@ title: tauri
 description: Web app + native backend
 author: adammharris
 audience:
-  - public
-  - developers
-part_of: "[README](/apps/README.md)"
+- public
+- developers
+part_of: '[README](/apps/README.md)'
+updated: 2026-03-29T19:40:38-06:00
 ---
-
 # Diaryx Tauri
 
 The Tauri backend for Diaryx, providing native filesystem access for the web frontend.
 
-The desktop/mobile config also enables Tauri's built-in `asset` protocol for
-common local-user directories so image previews can use native file-backed
-URLs (`convertFileSrc`) instead of copying attachment bytes through JS when the
-workspace path falls inside those scopes. Preview flows still fall back to the
-blob/binary path when a file is outside scope or native loading is unavailable.
-The Rust app enables the matching Tauri `protocol-asset` feature in
-`src-tauri/Cargo.toml`.
+The desktop/mobile config also enables Tauri's built-in `asset` protocol for common local-user directories so image previews can use native file-backed URLs (`convertFileSrc`) instead of copying attachment bytes through JS when the workspace path falls inside those scopes. Preview flows still fall back to the blob/binary path when a file is outside scope or native loading is unavailable. The Rust app enables the matching Tauri `protocol-asset` feature in`src-tauri/Cargo.toml`.
 
-Mac App Store / TestFlight builds now keep sandbox-safe behavior for workspace
-folders by persisting security-scoped bookmarks for any folder chosen through
-the native picker. On the next launch or workspace switch, the app resolves the
-bookmark and re-opens access before reading the workspace-local `.diaryx`
-metadata directory, which keeps plugin installation working for externally
-chosen folders in sandboxed releases. The App Store entitlements therefore need
+Mac App Store / TestFlight builds now keep sandbox-safe behavior for workspace folders by persisting security-scoped bookmarks for any folder chosen through the native picker. On the next launch or workspace switch, the app resolves the bookmark and re-opens access before reading the workspace-local `.diaryx` metadata directory, which keeps plugin installation working for externally chosen folders in sandboxed releases. The App Store entitlements therefore need
 both `com.apple.security.files.user-selected.read-write` and
 `com.apple.security.files.bookmarks.app-scope` so the sandboxed build can
 persist and reopen those bookmarks across launches.
@@ -116,6 +105,7 @@ All IPC commands are defined in `src-tauri/src/commands.rs` and registered in `s
 
 The validation system checks workspace link integrity and can automatically fix issues.
 
+
 | Command                     | Description                            |
 | --------------------------- | -------------------------------------- |
 | `validate_workspace`        | Validate entire workspace from root    |
@@ -129,21 +119,24 @@ The validation system checks workspace link integrity and can automatically fix 
 | `fix_missing_part_of`       | Set missing `part_of` property         |
 | `fix_all_validation_issues` | Fix all errors and fixable warnings    |
 
+
 ### Other Commands
 
-| Category       | Commands                                                                                  |
-| -------------- | ----------------------------------------------------------------------------------------- |
-| Workspace      | `get_workspace_tree`, `get_filesystem_tree`, `create_workspace`, `reveal_in_file_manager` |
-| Entries        | `get_entry`, `save_entry`, `create_entry`, `delete_entry`, `move_entry`                   |
-| Entries (cont) | `attach_entry_to_parent`, `convert_to_index`, `convert_to_leaf`                           |
-| Entries (cont) | `create_child_entry`, `rename_entry`, `ensure_daily_entry`                                |
-| Frontmatter    | `get_frontmatter`, `set_frontmatter_property`, `remove_frontmatter_property`              |
-| Attachments    | `get_attachments`, `upload_attachment`, `delete_attachment`                               |
-| Search         | `search_workspace`                                                                        |
-| Export         | `get_available_audiences`, `plan_export`, `export_to_memory`, `export_to_html`            |
-| Backup         | `backup_workspace`, `restore_workspace`, `backup_to_s3`, `backup_to_google_drive`         |
-| Import         | `import_from_zip`, `pick_and_import_zip`                                                  |
+
+| Category       | Commands                                                                                                                         |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace      | `get_workspace_tree`, `get_filesystem_tree`, `create_workspace`, `reveal_in_file_manager`                                        |
+| Entries        | `get_entry`, `save_entry`, `create_entry`, `delete_entry`, `move_entry`                                                          |
+| Entries (cont) | `attach_entry_to_parent`, `convert_to_index`, `convert_to_leaf`                                                                  |
+| Entries (cont) | `create_child_entry`, `rename_entry`, `ensure_daily_entry`                                                                       |
+| Frontmatter    | `get_frontmatter`, `set_frontmatter_property`, `remove_frontmatter_property`                                                     |
+| Attachments    | `get_attachments`, `upload_attachment`, `delete_attachment`                                                                      |
+| Search         | `search_workspace`                                                                                                               |
+| Export         | `get_available_audiences`, `plan_export`, `export_to_memory`, `export_to_html`                                                   |
+| Backup         | `backup_workspace`, `restore_workspace`, `backup_to_s3`, `backup_to_google_drive`                                                |
+| Import         | `import_from_zip`, `pick_and_import_zip`                                                                                         |
 | Apple/iCloud   | `set_icloud_enabled`, `get_icloud_workspace_info`, `list_icloud_workspaces`, `link_icloud_workspace`, `restore_icloud_workspace` |
+
 
 ## Plugin Host Transport
 
@@ -177,10 +170,10 @@ installed app can download GitHub Release updates from inside Diaryx.
 
 - **Feature flag**: `desktop-updater` for Windows, Linux, and non-App-Store macOS builds
 - **Config source**: `apps/tauri/scripts/render-updater-config.mjs` writes the merged
-  `src-tauri/tauri.updater.conf.json` file from `TAURI_UPDATER_PUBLIC_KEY`
+`src-tauri/tauri.updater.conf.json` file from `TAURI_UPDATER_PUBLIC_KEY`
 - **Release endpoint**: `https://github.com/diaryx-org/diaryx/releases/latest/download/latest.json`
 - **Frontend behavior**: `App.svelte` kicks off a background update check through
-  `updaterService.ts` once the Tauri backend is ready and shows an install toast only when a new build is available
+`updaterService.ts` once the Tauri backend is ready and shows an install toast only when a new build is available
 
 Mac App Store builds must not include the updater. That split now lives in the
 Cargo features: direct desktop releases enable `desktop-updater`, while App

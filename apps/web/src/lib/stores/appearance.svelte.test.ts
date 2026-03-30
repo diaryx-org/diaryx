@@ -12,6 +12,7 @@ import type {
   TypographyDefinition,
   UserAppearance,
 } from "./appearance.types";
+import { readWorkspaceText } from "$lib/workspace/workspaceAssetStorage";
 
 // ---------------------------------------------------------------------------
 // Mock workspace persistence (async I/O not needed in unit tests)
@@ -56,6 +57,7 @@ function cloneCustomTypography(id: string, name: string): TypographyDefinition {
 
 beforeEach(() => {
   localStorage.clear();
+  vi.clearAllMocks();
 
   if (!window.matchMedia) {
     Object.defineProperty(window, "matchMedia", {
@@ -77,6 +79,19 @@ beforeEach(() => {
 // ===========================================================================
 
 describe("appearanceStore theme library", () => {
+  it("hydrates theme selection from workspace config and persists later changes through the callback", () => {
+    const store = createAppearanceStore();
+    const persistFn = vi.fn().mockResolvedValue(undefined);
+
+    store.hydrateWorkspaceTheme({ presetId: "sepia", accentHue: 180 }, persistFn);
+
+    expect(store.presetId).toBe("sepia");
+    expect(store.accentHue).toBe(180);
+
+    store.setAccentHue(210);
+    expect(persistFn).toHaveBeenCalledWith({ presetId: "sepia", accentHue: 210 });
+  });
+
   it("installs, applies, and uninstalls custom themes with fallback", () => {
     const store = createAppearanceStore();
     const customTheme = cloneCustomTheme("custom.sunset", "Sunset");
@@ -595,6 +610,24 @@ describe("appearanceStore reset", () => {
 // ===========================================================================
 
 describe("appearanceStore persistence", () => {
+  it("reloads legacy workspace theme settings and migrates them through the workspace callback", async () => {
+    vi.mocked(readWorkspaceText)
+      .mockResolvedValueOnce(JSON.stringify({ presetId: "nord", accentHue: 220 }))
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+
+    const store = createAppearanceStore();
+    const persistFn = vi.fn().mockResolvedValue(undefined);
+    store.hydrateWorkspaceTheme({}, persistFn);
+
+    await store.reloadFromWorkspace();
+
+    expect(store.presetId).toBe("nord");
+    expect(store.accentHue).toBe(220);
+    expect(persistFn).toHaveBeenCalledWith({ presetId: "nord", accentHue: 220 });
+  });
+
   it("loads appearance from localStorage on creation", () => {
     const saved: UserAppearance = {
       presetId: "nord",

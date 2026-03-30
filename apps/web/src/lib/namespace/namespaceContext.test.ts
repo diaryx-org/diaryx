@@ -506,19 +506,16 @@ describe('NamespaceContext', () => {
       });
       ctx.init(api);
 
-      // Mock global fetch for loadCapabilities
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      mockProxyFetch.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({}),
-      }));
+      });
 
       ctx.tryLoad();
 
       // Should have called executePluginCommand (via loadPublishConfig)
       expect(api.executePluginCommand).toHaveBeenCalled();
       expect(mockConfigStore.load).toHaveBeenCalledWith('/workspace/root');
-
-      vi.unstubAllGlobals();
     });
 
     it('skips if same rootPath already initialized', () => {
@@ -528,10 +525,10 @@ describe('NamespaceContext', () => {
       });
       ctx.init(api);
 
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      mockProxyFetch.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({}),
-      }));
+      });
 
       ctx.tryLoad();
       api.executePluginCommand.mockClear();
@@ -540,8 +537,6 @@ describe('NamespaceContext', () => {
       ctx.tryLoad();
       expect(api.executePluginCommand).not.toHaveBeenCalled();
       expect(mockConfigStore.load).not.toHaveBeenCalled();
-
-      vi.unstubAllGlobals();
     });
   });
 

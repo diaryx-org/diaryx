@@ -3,11 +3,13 @@ title: apps
 description: GUI frontends for Diaryx
 author: adammharris
 audience:
-- public
+- developers
+- agents
 contents:
 - '[README](/apps/web/README.md)'
 - '[README](/apps/tauri/README.md)'
 part_of: '[Diaryx](/Diaryx.md)'
+updated: 2026-03-29T19:37:18-06:00
 ---
 # Diaryx Frontend Apps
 
@@ -48,13 +50,13 @@ The key to supporting both Tauri (desktop) and pure web targets is the **Backend
 
 ### How It Works
 
-1. `**interface.ts**` - Defines the `Backend` interface with all operations (getConfig, getEntry, saveEntry, search, etc.)
-2. `**tauri.ts**` - Implements `Backend` using Tauri's `invoke()` IPC to call Rust backend
-3. `**wasm.ts**` - Implements `Backend` using:
+1. `interface.ts` - Defines the `Backend` interface with all operations (getConfig, getEntry, saveEntry, search, etc.)
+2. `tauri.ts` - Implements `Backend` using Tauri's `invoke()` IPC to call Rust backend
+3. `wasm.ts` - Implements `Backend` using:
   - `InMemoryFileSystem` for synchronous file operations
   - IndexedDB for persistence
   - JavaScript fallbacks (or WASM module) for parsing/rendering
-4. `**index.ts**` - Factory that auto-detects the runtime environment:
+4. `index.ts` - Factory that auto-detects the runtime environment:
   ```typescript
    import { getBackend } from "./lib/backend";
 

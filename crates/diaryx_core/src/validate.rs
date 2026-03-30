@@ -247,6 +247,13 @@ pub enum ValidationError {
         /// The attachment path that doesn't exist
         attachment: String,
     },
+    /// A file's `links` references a non-existent file.
+    BrokenLinkRef {
+        /// The file containing the broken reference
+        file: PathBuf,
+        /// The link target that doesn't exist
+        target: String,
+    },
 }
 
 /// A validation warning indicating a potential issue.
@@ -324,6 +331,31 @@ pub enum ValidationWarning {
         /// The non-markdown file that was referenced
         target: String,
     },
+    /// A file's declared `link` does not resolve back to itself.
+    InvalidSelfLink {
+        /// The file containing the invalid self-link
+        file: PathBuf,
+        /// The problematic link value
+        value: String,
+        /// The suggested canonical self-link
+        suggested: String,
+    },
+    /// A file declares an outbound link but the target is missing a backlink.
+    MissingBacklink {
+        /// The target file that should contain the backlink
+        file: PathBuf,
+        /// The source file that should appear in `link_of`
+        source: String,
+        /// Suggested backlink value to add
+        suggested: String,
+    },
+    /// A file has a backlink whose source file is missing or no longer links back.
+    StaleBacklink {
+        /// The file containing the stale backlink
+        file: PathBuf,
+        /// The stale backlink value in `link_of`
+        value: String,
+    },
     /// A filename contains characters that are not portable across platforms.
     /// Chrome's File System Access API rejects these even on macOS/Linux.
     NonPortableFilename {
@@ -349,6 +381,9 @@ impl ValidationWarning {
             Self::OrphanBinaryFile { .. } => "Binary file not attached",
             Self::MissingPartOf { .. } => "Missing part_of reference",
             Self::InvalidContentsRef { .. } => "Non-markdown file in contents",
+            Self::InvalidSelfLink { .. } => "Invalid canonical link",
+            Self::MissingBacklink { .. } => "Missing backlink",
+            Self::StaleBacklink { .. } => "Stale backlink",
             Self::NonPortableFilename { .. } => "Non-portable filename",
         }
     }
@@ -385,6 +420,9 @@ impl ValidationWarning {
             } => suggested_file.is_some() && suggested_remove_part_of.is_some(),
             Self::MultipleIndexes { .. } => false,
             Self::InvalidContentsRef { .. } => false,
+            Self::InvalidSelfLink { .. } => true,
+            Self::MissingBacklink { .. } => true,
+            Self::StaleBacklink { .. } => true,
             Self::NonPortableFilename { .. } => true,
         }
     }
@@ -400,6 +438,9 @@ impl ValidationWarning {
             Self::NonPortablePath { file, .. } => Some(file),
             Self::MultipleIndexes { directory, .. } => Some(directory),
             Self::InvalidContentsRef { index, .. } => Some(index),
+            Self::InvalidSelfLink { file, .. } => Some(file),
+            Self::MissingBacklink { file, .. } => Some(file),
+            Self::StaleBacklink { file, .. } => Some(file),
             Self::NonPortableFilename { file, .. } => Some(file),
         }
     }
@@ -436,6 +477,7 @@ impl ValidationError {
             Self::BrokenPartOf { .. } => "Broken part_of reference",
             Self::BrokenContentsRef { .. } => "Broken contents reference",
             Self::BrokenAttachment { .. } => "Broken attachment reference",
+            Self::BrokenLinkRef { .. } => "Broken link reference",
         }
     }
 
@@ -445,6 +487,7 @@ impl ValidationError {
             Self::BrokenPartOf { file, .. } => file,
             Self::BrokenContentsRef { index, .. } => index,
             Self::BrokenAttachment { file, .. } => file,
+            Self::BrokenLinkRef { file, .. } => file,
         }
     }
 }
@@ -888,6 +931,111 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         // Try to parse as index (with link format hint for proper path resolution)
         if let Ok(index) = self.ws.parse_index_with_hint(path, ctx.link_format).await {
             let dir = index.directory().unwrap_or_else(|| Path::new(""));
+            let file_canonical = workspace_relative_canonical_path(path, ctx.workspace_root);
+            if let Some(link) = index.frontmatter.link.as_deref() {
+                let parsed = link_parser::parse_link(link);
+                let resolved = link_parser::to_canonical_with_link_format(
+                    &parsed,
+                    Path::new(&file_canonical),
+                    ctx.link_format,
+                );
+                if resolved != file_canonical {
+                    ctx.result
+                        .warnings
+                        .push(ValidationWarning::InvalidSelfLink {
+                            file: path.to_path_buf(),
+                            value: link.to_string(),
+                            suggested: expected_self_link(
+                                &file_canonical,
+                                index.frontmatter.title.as_deref(),
+                                ctx.link_format,
+                            ),
+                        });
+                }
+            }
+
+            for link_ref in index.frontmatter.links_list() {
+                let target_path = index.resolve_path(link_ref);
+                let absolute_target_path = if target_path.is_absolute() {
+                    target_path.clone()
+                } else {
+                    ctx.workspace_root.join(&target_path)
+                };
+
+                if !self.ws.fs_ref().exists(&absolute_target_path).await {
+                    ctx.result.errors.push(ValidationError::BrokenLinkRef {
+                        file: path.to_path_buf(),
+                        target: link_ref.clone(),
+                    });
+                    continue;
+                }
+
+                if let Ok(target_index) = self
+                    .ws
+                    .parse_index_with_hint(&absolute_target_path, ctx.link_format)
+                    .await
+                {
+                    let target_canonical = workspace_relative_canonical_path(
+                        &absolute_target_path,
+                        ctx.workspace_root,
+                    );
+                    if !list_contains_canonical_link(
+                        target_index.frontmatter.link_of_list(),
+                        &file_canonical,
+                        &target_canonical,
+                        ctx.link_format,
+                    ) {
+                        ctx.result
+                            .warnings
+                            .push(ValidationWarning::MissingBacklink {
+                                file: absolute_target_path.clone(),
+                                source: file_canonical.clone(),
+                                suggested: expected_self_link(
+                                    &file_canonical,
+                                    index.frontmatter.title.as_deref(),
+                                    ctx.link_format,
+                                ),
+                            });
+                    }
+                }
+            }
+
+            for backlink in index.frontmatter.link_of_list() {
+                let source_path = index.resolve_path(backlink);
+                let absolute_source_path = if source_path.is_absolute() {
+                    source_path.clone()
+                } else {
+                    ctx.workspace_root.join(&source_path)
+                };
+
+                let stale = if !self.ws.fs_ref().exists(&absolute_source_path).await {
+                    true
+                } else if let Ok(source_index) = self
+                    .ws
+                    .parse_index_with_hint(&absolute_source_path, ctx.link_format)
+                    .await
+                {
+                    let source_canonical = workspace_relative_canonical_path(
+                        &absolute_source_path,
+                        ctx.workspace_root,
+                    );
+                    !list_contains_canonical_link(
+                        source_index.frontmatter.links_list(),
+                        &file_canonical,
+                        &source_canonical,
+                        ctx.link_format,
+                    )
+                } else {
+                    true
+                };
+
+                if stale {
+                    ctx.result.warnings.push(ValidationWarning::StaleBacklink {
+                        file: path.to_path_buf(),
+                        value: backlink.clone(),
+                    });
+                }
+            }
 
             // Check all contents references
             for child_ref in index.frontmatter.contents_list() {
@@ -1082,6 +1230,103 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         // Try to parse and validate (with link format hint)
         if let Ok(index) = self.ws.parse_index_with_hint(&path, link_format).await {
             let dir = index.directory().unwrap_or_else(|| Path::new(""));
+            let file_canonical = workspace_relative_canonical_path(&path, &workspace_root);
+            if let Some(link) = index.frontmatter.link.as_deref() {
+                let parsed = link_parser::parse_link(link);
+                let resolved = link_parser::to_canonical_with_link_format(
+                    &parsed,
+                    Path::new(&file_canonical),
+                    link_format,
+                );
+                if resolved != file_canonical {
+                    result.warnings.push(ValidationWarning::InvalidSelfLink {
+                        file: path.clone(),
+                        value: link.to_string(),
+                        suggested: expected_self_link(
+                            &file_canonical,
+                            index.frontmatter.title.as_deref(),
+                            link_format,
+                        ),
+                    });
+                }
+            }
+
+            for link_ref in index.frontmatter.links_list() {
+                let target_path = index.resolve_path(link_ref);
+                let absolute_target_path = if target_path.is_absolute() {
+                    target_path.clone()
+                } else {
+                    workspace_root.join(&target_path)
+                };
+
+                if !self.ws.fs_ref().exists(&absolute_target_path).await {
+                    result.errors.push(ValidationError::BrokenLinkRef {
+                        file: path.clone(),
+                        target: link_ref.clone(),
+                    });
+                    continue;
+                }
+
+                if let Ok(target_index) = self
+                    .ws
+                    .parse_index_with_hint(&absolute_target_path, link_format)
+                    .await
+                {
+                    let target_canonical =
+                        workspace_relative_canonical_path(&absolute_target_path, &workspace_root);
+                    if !list_contains_canonical_link(
+                        target_index.frontmatter.link_of_list(),
+                        &file_canonical,
+                        &target_canonical,
+                        link_format,
+                    ) {
+                        result.warnings.push(ValidationWarning::MissingBacklink {
+                            file: absolute_target_path.clone(),
+                            source: file_canonical.clone(),
+                            suggested: expected_self_link(
+                                &file_canonical,
+                                index.frontmatter.title.as_deref(),
+                                link_format,
+                            ),
+                        });
+                    }
+                }
+            }
+
+            for backlink in index.frontmatter.link_of_list() {
+                let source_path = index.resolve_path(backlink);
+                let absolute_source_path = if source_path.is_absolute() {
+                    source_path.clone()
+                } else {
+                    workspace_root.join(&source_path)
+                };
+
+                let stale = if !self.ws.fs_ref().exists(&absolute_source_path).await {
+                    true
+                } else if let Ok(source_index) = self
+                    .ws
+                    .parse_index_with_hint(&absolute_source_path, link_format)
+                    .await
+                {
+                    let source_canonical =
+                        workspace_relative_canonical_path(&absolute_source_path, &workspace_root);
+                    !list_contains_canonical_link(
+                        source_index.frontmatter.links_list(),
+                        &file_canonical,
+                        &source_canonical,
+                        link_format,
+                    )
+                } else {
+                    true
+                };
+
+                if stale {
+                    result.warnings.push(ValidationWarning::StaleBacklink {
+                        file: path.clone(),
+                        value: backlink.clone(),
+                    });
+                }
+            }
 
             // Collect listed files (normalized to just filenames for comparison)
             let contents_list = index.frontmatter.contents_list();
@@ -1381,6 +1626,47 @@ fn check_non_portable_path(
     None
 }
 
+fn workspace_relative_canonical_path(path: &Path, workspace_root: &Path) -> String {
+    let relative = path.strip_prefix(workspace_root).unwrap_or(path);
+    normalize_sync_path(&relative.to_string_lossy())
+}
+
+fn expected_self_link(
+    file_canonical: &str,
+    title: Option<&str>,
+    link_format: Option<LinkFormat>,
+) -> String {
+    let resolved_title = title
+        .map(ToString::to_string)
+        .unwrap_or_else(|| link_parser::path_to_title(file_canonical));
+    link_parser::format_link_with_format(
+        file_canonical,
+        &resolved_title,
+        link_format.unwrap_or_default(),
+        file_canonical,
+    )
+}
+
+fn canonicalize_link_value(
+    raw_value: &str,
+    file_canonical: &str,
+    link_format: Option<LinkFormat>,
+) -> String {
+    let parsed = link_parser::parse_link(raw_value);
+    link_parser::to_canonical_with_link_format(&parsed, Path::new(file_canonical), link_format)
+}
+
+fn list_contains_canonical_link(
+    values: &[String],
+    target_canonical: &str,
+    file_canonical: &str,
+    link_format: Option<LinkFormat>,
+) -> bool {
+    values.iter().any(|value| {
+        canonicalize_link_value(value, file_canonical, link_format) == target_canonical
+    })
+}
+
 /// Find a single index file in a directory. Returns Some if exactly one index found, None otherwise.
 /// Excludes the file specified in `exclude` from the search.
 async fn find_index_in_directory<FS: AsyncFileSystem>(
@@ -1659,6 +1945,12 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         }
     }
 
+    async fn format_self_link(&self, file: &Path) -> String {
+        let canonical = self.get_canonical(file);
+        let title = self.resolve_title(file).await;
+        link_parser::format_link_with_format(&canonical, &title, self.link_format, &canonical)
+    }
+
     // ==================== Fix Methods ====================
 
     /// Fix a broken `part_of` reference by removing it.
@@ -1791,7 +2083,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     )),
                 }
             }
-            "contents" | "attachments" => {
+            "contents" | "attachments" | "links" | "link_of" => {
                 match self.get_frontmatter_property(file, property).await {
                     Some(serde_yaml::Value::Sequence(items)) => {
                         let updated: Vec<serde_yaml::Value> = items
@@ -1993,6 +2285,171 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         }
     }
 
+    /// Fix a broken `links` reference by removing it.
+    pub async fn fix_broken_link_ref(&self, file: &Path, target: &str) -> FixResult {
+        match self.get_frontmatter_property(file, "links").await {
+            Some(serde_yaml::Value::Sequence(items)) => {
+                let filtered: Vec<serde_yaml::Value> = items
+                    .into_iter()
+                    .filter(|item| match item {
+                        serde_yaml::Value::String(s) => s != target,
+                        _ => true,
+                    })
+                    .collect();
+
+                if filtered.is_empty() {
+                    match self.remove_frontmatter_property(file, "links").await {
+                        Ok(_) => FixResult::success(format!(
+                            "Removed broken link '{}' from {}",
+                            target,
+                            file.display()
+                        )),
+                        Err(e) => FixResult::failure(format!(
+                            "Failed to update links in {}: {}",
+                            file.display(),
+                            e
+                        )),
+                    }
+                } else {
+                    match self
+                        .set_frontmatter_property(
+                            file,
+                            "links",
+                            serde_yaml::Value::Sequence(filtered),
+                        )
+                        .await
+                    {
+                        Ok(_) => FixResult::success(format!(
+                            "Removed broken link '{}' from {}",
+                            target,
+                            file.display()
+                        )),
+                        Err(e) => FixResult::failure(format!(
+                            "Failed to update links in {}: {}",
+                            file.display(),
+                            e
+                        )),
+                    }
+                }
+            }
+            _ => FixResult::failure(format!("Could not read links from {}", file.display())),
+        }
+    }
+
+    /// Fix an invalid `link` by rewriting it to the canonical self-link.
+    pub async fn fix_invalid_self_link(&self, file: &Path) -> FixResult {
+        let formatted = self.format_self_link(file).await;
+
+        match self
+            .set_frontmatter_property(file, "link", serde_yaml::Value::String(formatted.clone()))
+            .await
+        {
+            Ok(_) => {
+                FixResult::success(format!("Set link to '{}' in {}", formatted, file.display()))
+            }
+            Err(e) => {
+                FixResult::failure(format!("Failed to set link in {}: {}", file.display(), e))
+            }
+        }
+    }
+
+    /// Fix a missing backlink by appending the suggested source link to `link_of`.
+    pub async fn fix_missing_backlink(&self, file: &Path, suggested: &str) -> FixResult {
+        match self.get_frontmatter_property(file, "link_of").await {
+            Some(serde_yaml::Value::Sequence(mut items)) => {
+                items.push(serde_yaml::Value::String(suggested.to_string()));
+                match self
+                    .set_frontmatter_property(file, "link_of", serde_yaml::Value::Sequence(items))
+                    .await
+                {
+                    Ok(_) => FixResult::success(format!(
+                        "Added backlink '{}' to {}",
+                        suggested,
+                        file.display()
+                    )),
+                    Err(e) => FixResult::failure(format!(
+                        "Failed to update link_of in {}: {}",
+                        file.display(),
+                        e
+                    )),
+                }
+            }
+            None => match self
+                .set_frontmatter_property(
+                    file,
+                    "link_of",
+                    serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
+                        suggested.to_string(),
+                    )]),
+                )
+                .await
+            {
+                Ok(_) => FixResult::success(format!(
+                    "Added backlink '{}' to {}",
+                    suggested,
+                    file.display()
+                )),
+                Err(e) => FixResult::failure(format!(
+                    "Failed to create link_of in {}: {}",
+                    file.display(),
+                    e
+                )),
+            },
+            _ => FixResult::failure(format!("Could not read link_of from {}", file.display())),
+        }
+    }
+
+    /// Fix a stale backlink by removing it from `link_of`.
+    pub async fn fix_stale_backlink(&self, file: &Path, value: &str) -> FixResult {
+        match self.get_frontmatter_property(file, "link_of").await {
+            Some(serde_yaml::Value::Sequence(items)) => {
+                let filtered: Vec<serde_yaml::Value> = items
+                    .into_iter()
+                    .filter(|item| match item {
+                        serde_yaml::Value::String(s) => s != value,
+                        _ => true,
+                    })
+                    .collect();
+
+                if filtered.is_empty() {
+                    match self.remove_frontmatter_property(file, "link_of").await {
+                        Ok(_) => FixResult::success(format!(
+                            "Removed stale backlink '{}' from {}",
+                            value,
+                            file.display()
+                        )),
+                        Err(e) => FixResult::failure(format!(
+                            "Failed to update link_of in {}: {}",
+                            file.display(),
+                            e
+                        )),
+                    }
+                } else {
+                    match self
+                        .set_frontmatter_property(
+                            file,
+                            "link_of",
+                            serde_yaml::Value::Sequence(filtered),
+                        )
+                        .await
+                    {
+                        Ok(_) => FixResult::success(format!(
+                            "Removed stale backlink '{}' from {}",
+                            value,
+                            file.display()
+                        )),
+                        Err(e) => FixResult::failure(format!(
+                            "Failed to update link_of in {}: {}",
+                            file.display(),
+                            e
+                        )),
+                    }
+                }
+            }
+            _ => FixResult::failure(format!("Could not read link_of from {}", file.display())),
+        }
+    }
+
     /// Fix a circular reference by removing a contents reference from a file.
     ///
     /// This removes the specified reference from the file's `contents` array,
@@ -2050,6 +2507,9 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             }
             ValidationError::BrokenAttachment { file, attachment } => {
                 self.fix_broken_attachment(file, attachment).await
+            }
+            ValidationError::BrokenLinkRef { file, target } => {
+                self.fix_broken_link_ref(file, target).await
             }
         }
     }
@@ -2143,6 +2603,15 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                 self.fix_non_portable_filename(file, suggested_filename)
                     .await,
             ),
+            ValidationWarning::InvalidSelfLink { file, .. } => {
+                Some(self.fix_invalid_self_link(file).await)
+            }
+            ValidationWarning::MissingBacklink {
+                file, suggested, ..
+            } => Some(self.fix_missing_backlink(file, suggested).await),
+            ValidationWarning::StaleBacklink { file, value } => {
+                Some(self.fix_stale_backlink(file, value).await)
+            }
             // These cannot be auto-fixed
             ValidationWarning::MultipleIndexes { .. } => None,
             ValidationWarning::InvalidContentsRef { .. } => None,
@@ -2271,6 +2740,137 @@ mod tests {
             }
             _ => panic!("Expected BrokenPartOf"),
         }
+    }
+
+    #[test]
+    fn test_valid_self_link_passes_validation() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\nlink: \"[Root](/README.md)\"\ncontents:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("note.md"),
+            "---\ntitle: Note\nlink: \"[Note](/note.md)\"\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        assert!(result.is_ok());
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|warning| matches!(warning, ValidationWarning::InvalidSelfLink { .. }))
+        );
+    }
+
+    #[test]
+    fn test_invalid_self_link_warns_with_suggestion() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("note.md"),
+            "---\ntitle: Note\nlink: \"[Wrong](/other.md)\"\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let warning = result
+            .warnings
+            .iter()
+            .find(|warning| matches!(warning, ValidationWarning::InvalidSelfLink { .. }))
+            .expect("expected InvalidSelfLink warning");
+
+        match warning {
+            ValidationWarning::InvalidSelfLink {
+                file,
+                value,
+                suggested,
+            } => {
+                assert_eq!(file, Path::new("note.md"));
+                assert_eq!(value, "[Wrong](/other.md)");
+                assert_eq!(suggested, "[Note](/note.md)");
+            }
+            other => panic!("expected InvalidSelfLink warning, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_broken_link_ref_reports_error() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\nlinks:\n  - missing.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        assert!(result.errors.iter().any(|error| matches!(
+            error,
+            ValidationError::BrokenLinkRef { target, .. } if target == "missing.md"
+        )));
+    }
+
+    #[test]
+    fn test_missing_backlink_warns() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\nlinks:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("note.md"), "---\ntitle: Note\n---\n")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            ValidationWarning::MissingBacklink { file, source, .. }
+                if file == Path::new("note.md") && source == "README.md"
+        )));
+    }
+
+    #[test]
+    fn test_stale_backlink_warns() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\nlink_of:\n  - ghost.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            ValidationWarning::StaleBacklink { file, value }
+                if file == Path::new("README.md") && value == "ghost.md"
+        )));
     }
 
     #[test]

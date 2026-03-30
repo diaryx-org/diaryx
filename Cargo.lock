@@ -2487,6 +2487,7 @@ dependencies = [
  "tauri-plugin-updater",
  "thiserror 2.0.18",
  "tokio",
+ "ureq",
  "url",
  "uuid",
  "zip 2.4.2",

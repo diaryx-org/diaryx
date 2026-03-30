@@ -227,7 +227,36 @@ pub fn parse_snapshot_markdown(
         diaryx_core::link_parser::to_canonical(&parsed_link, file_path)
     });
 
+    let link = fm.get("link").and_then(|v| v.as_str()).map(|raw| {
+        let parsed_link = diaryx_core::link_parser::parse_link(raw);
+        diaryx_core::link_parser::to_canonical(&parsed_link, file_path)
+    });
+
     let contents = fm.get("contents").and_then(|v| {
+        v.as_sequence().map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str())
+                .map(|raw| {
+                    let parsed_link = diaryx_core::link_parser::parse_link(raw);
+                    diaryx_core::link_parser::to_canonical(&parsed_link, file_path)
+                })
+                .collect::<Vec<String>>()
+        })
+    });
+
+    let links = fm.get("links").and_then(|v| {
+        v.as_sequence().map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str())
+                .map(|raw| {
+                    let parsed_link = diaryx_core::link_parser::parse_link(raw);
+                    diaryx_core::link_parser::to_canonical(&parsed_link, file_path)
+                })
+                .collect::<Vec<String>>()
+        })
+    });
+
+    let link_of = fm.get("link_of").and_then(|v| {
         v.as_sequence().map(|seq| {
             seq.iter()
                 .filter_map(|v| v.as_str())
@@ -294,6 +323,9 @@ pub fn parse_snapshot_markdown(
     // Preserve extra frontmatter keys not handled by known fields
     let known_keys: &[&str] = &[
         "title",
+        "link",
+        "links",
+        "link_of",
         "part_of",
         "contents",
         "attachments",
@@ -315,6 +347,9 @@ pub fn parse_snapshot_markdown(
     let metadata = FileMetadata {
         filename,
         title: fm.get("title").and_then(|v| v.as_str()).map(String::from),
+        link,
+        links,
+        link_of,
         part_of,
         contents,
         attachments,

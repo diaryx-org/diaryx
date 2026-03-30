@@ -90,6 +90,9 @@ let runtimeManifestOverrides = $state<Record<string, PluginManifest>>({});
 /** Persisted enable/disable state by plugin ID. Defaults to true. */
 let pluginEnabledState = $state<Record<string, boolean>>({});
 
+/** Reactive bump so derived UI entries re-read cached icons after async preload. */
+let pluginIconCacheVersion = $state(0);
+
 /** Combined manifests from backend + browser plugins + runtime overrides. */
 const allManifests = $derived.by(() => mergeManifests());
 
@@ -503,6 +506,7 @@ function getEditorInsertCommands(): {
   block: PluginInsertCommand[];
   mark: PluginInsertCommand[];
 } {
+  void pluginIconCacheVersion;
   const inline: PluginInsertCommand[] = [];
   const block: PluginInsertCommand[] = [];
   const mark: PluginInsertCommand[] = [];
@@ -560,6 +564,7 @@ export interface MarkToolbarEntry {
 
 /** InlineMark extensions with toolbar config — drives BubbleMenu and iOS toolbar pickers. */
 function getMarkToolbarEntries(): MarkToolbarEntry[] {
+  void pluginIconCacheVersion;
   const entries: MarkToolbarEntry[] = [];
   for (const manifest of manifests) {
     for (const ui of manifest.ui) {
@@ -596,6 +601,7 @@ function getMarkToolbarEntries(): MarkToolbarEntry[] {
 
 /** Eagerly load icons for all plugin insert commands. Call after plugins load. */
 async function preloadInsertCommandIcons(): Promise<void> {
+  let loadedAnyIcons = false;
   for (const manifest of manifests) {
     for (const ui of manifest.ui) {
       if (ui.slot !== "EditorExtension") continue;
@@ -603,11 +609,17 @@ async function preloadInsertCommandIcons(): Promise<void> {
       const ext = ui as any;
       if (ext.insert_command?.icon) {
         await loadPluginIcon(ext.insert_command.icon);
+        loadedAnyIcons = true;
       }
       if (ext.toolbar?.icon) {
         await loadPluginIcon(ext.toolbar.icon);
+        loadedAnyIcons = true;
       }
     }
+  }
+
+  if (loadedAnyIcons) {
+    pluginIconCacheVersion += 1;
   }
 }
 

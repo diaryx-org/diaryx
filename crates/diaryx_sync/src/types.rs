@@ -56,6 +56,18 @@ pub struct FileMetadata {
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub title: Option<String>,
 
+    /// Canonical self-link declared in frontmatter.
+    #[serde(default)]
+    pub link: Option<String>,
+
+    /// Explicit outbound links declared in frontmatter.
+    #[serde(default)]
+    pub links: Option<Vec<String>>,
+
+    /// Explicit backlinks declared in frontmatter.
+    #[serde(default)]
+    pub link_of: Option<Vec<String>>,
+
     /// Document ID of parent file (e.g., "abc123-uuid"), or None for root files.
     /// Note: For backward compatibility during migration, this may temporarily
     /// contain absolute paths which will be converted to doc_ids.
@@ -120,6 +132,9 @@ impl FileMetadata {
 
         let known_fields: &[&str] = &[
             "title",
+            "link",
+            "links",
+            "link_of",
             "part_of",
             "contents",
             "audience",
@@ -161,6 +176,27 @@ impl FileMetadata {
 
         if let Some(title) = fm.get("title") {
             metadata.title = title.as_str().map(String::from);
+        }
+        if let Some(link) = fm.get("link") {
+            metadata.link = link.as_str().map(String::from);
+        }
+        if let Some(links) = fm.get("links")
+            && let Some(seq) = links.as_sequence()
+        {
+            metadata.links = Some(
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+            );
+        }
+        if let Some(link_of) = fm.get("link_of")
+            && let Some(seq) = link_of.as_sequence()
+        {
+            metadata.link_of = Some(
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+            );
         }
         if let Some(part_of) = fm.get("part_of") {
             metadata.part_of = part_of.as_str().map(String::from);
@@ -289,6 +325,9 @@ impl FileMetadata {
     pub fn is_content_equal(&self, other: &Self) -> bool {
         self.filename == other.filename
             && self.title == other.title
+            && self.link == other.link
+            && self.links == other.links
+            && self.link_of == other.link_of
             && self.part_of == other.part_of
             && self.contents == other.contents
             && self.attachments == other.attachments

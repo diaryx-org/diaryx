@@ -61,6 +61,7 @@
   import { getLinkFormatStore } from "$lib/stores/linkFormatStore.svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import type { TreeNode } from "$lib/backend";
+  import { shouldKeepBubbleMenuVisible } from "./editorMenuVisibility";
 
   // On iOS Tauri, a native UIToolbar replaces the web BubbleMenu
   const useNativeToolbar = isTauri() && isIOS();
@@ -120,6 +121,7 @@
   let floatingMenuRef: { expand: () => void } | undefined = $state();
   // BubbleMenu element ref - must exist before editor creation
   let bubbleMenuElement: HTMLDivElement | undefined = $state();
+  let bubbleMenuLinkPopoverOpen = $state(false);
   let isUpdatingContent = false; // Flag to skip onchange during programmatic updates
 
   // Track the last content prop value applied into the editor.
@@ -902,8 +904,24 @@
               // Must be editable
               if (!ed.isEditable) return false;
 
-              // Must have focus
-              if (!view.hasFocus()) return false;
+              // Keep the bubble menu open while focus moves into the menu itself
+              // (for example, the link popover URL field) or while the link
+              // popover is explicitly open. Without this, opening the link UI
+              // can immediately hide the BubbleMenu on desktop webviews.
+              if (
+                !shouldKeepBubbleMenuVisible({
+                  bubbleMenuElement,
+                  activeElement: document.activeElement,
+                  editorHasFocus: view.hasFocus(),
+                  linkPopoverOpen: bubbleMenuLinkPopoverOpen,
+                })
+              ) {
+                return false;
+              }
+
+              if (bubbleMenuLinkPopoverOpen) {
+                return true;
+              }
 
               // Show in tables for header toggle / delete table controls
               if (ed.isActive("table")) return true;
@@ -1428,7 +1446,13 @@
 <!-- BubbleMenu for inline formatting (appears when text is selected) -->
 <!-- On iOS Tauri, a native UIToolbar above the keyboard replaces this -->
 {#if !readonly && !useNativeToolbar}
-  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {entryPath} {api} />
+  <BubbleMenuComponent
+    {editor}
+    bind:element={bubbleMenuElement}
+    bind:linkPopoverOpen={bubbleMenuLinkPopoverOpen}
+    {entryPath}
+    {api}
+  />
 {/if}
 
 <style global>

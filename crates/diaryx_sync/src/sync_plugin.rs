@@ -1661,6 +1661,9 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
             for (key, value) in &parsed.frontmatter {
                 if ![
                     "title",
+                    "link",
+                    "links",
+                    "link_of",
                     "part_of",
                     "contents",
                     "attachments",
@@ -1686,6 +1689,41 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
             let metadata = FileMetadata {
                 filename,
                 title,
+                link: parsed
+                    .frontmatter
+                    .get("link")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                links: parsed.frontmatter.get("links").and_then(|v| {
+                    v.as_sequence().map(|seq| {
+                        seq.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(|raw_value| {
+                                let parsed_link = link_parser::parse_link(raw_value);
+                                link_parser::to_canonical_with_link_format(
+                                    &parsed_link,
+                                    Path::new(&canonical_path),
+                                    link_format_hint,
+                                )
+                            })
+                            .collect()
+                    })
+                }),
+                link_of: parsed.frontmatter.get("link_of").and_then(|v| {
+                    v.as_sequence().map(|seq| {
+                        seq.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(|raw_value| {
+                                let parsed_link = link_parser::parse_link(raw_value);
+                                link_parser::to_canonical_with_link_format(
+                                    &parsed_link,
+                                    Path::new(&canonical_path),
+                                    link_format_hint,
+                                )
+                            })
+                            .collect()
+                    })
+                }),
                 part_of: parent_path.clone(),
                 contents,
                 attachments,

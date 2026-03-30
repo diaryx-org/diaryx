@@ -665,6 +665,15 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                 crdt.filename.clone()
             },
             title: crdt.title.clone().or_else(|| disk.title.clone()),
+            link: crdt.link.clone().or_else(|| disk.link.clone()),
+            links: match &crdt.links {
+                None => disk.links.clone(),
+                Some(_) => crdt.links.clone(),
+            },
+            link_of: match &crdt.link_of {
+                None => disk.link_of.clone(),
+                Some(_) => crdt.link_of.clone(),
+            },
             part_of: crdt.part_of.clone().or_else(|| disk.part_of.clone()),
             // Only fall back to disk if crdt.contents is None (not set).
             // Some([]) means explicitly cleared and should not be overwritten.
@@ -737,6 +746,9 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
 
         let known_keys: &[&str] = &[
             "title",
+            "link",
+            "links",
+            "link_of",
             "part_of",
             "contents",
             "attachments",
@@ -758,6 +770,21 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         Ok(FileMetadata {
             filename,
             title: fm.get("title").and_then(|v| v.as_str()).map(String::from),
+            link: fm.get("link").and_then(|v| v.as_str()).map(String::from),
+            links: fm.get("links").and_then(|v| {
+                v.as_sequence().map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+            }),
+            link_of: fm.get("link_of").and_then(|v| {
+                v.as_sequence().map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+            }),
             part_of: fm.get("part_of").and_then(|v| v.as_str()).map(String::from),
             contents: fm.get("contents").and_then(|v| {
                 v.as_sequence().map(|seq| {

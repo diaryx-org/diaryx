@@ -1055,6 +1055,29 @@
             }
           });
 
+          appearanceStore.hydrateWorkspaceTheme(
+            {
+              presetId: wsConfig.theme_preset,
+              accentHue: wsConfig.theme_accent_hue,
+            },
+            async ({ presetId, accentHue }) => {
+              try {
+                const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+                  tree?.path ?? null,
+                );
+                if (!nextRootIndexPath) return;
+                await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'theme_preset', presetId);
+                await apiInstance.setWorkspaceConfig(
+                  nextRootIndexPath,
+                  'theme_accent_hue',
+                  accentHue === null ? 'null' : JSON.stringify(accentHue),
+                );
+              } catch (e) {
+                console.warn('[App] Failed to persist workspace theme selection:', e);
+              }
+            },
+          );
+
           // Hydrate audience colors
           getAudienceColorStore().hydrate(wsConfig.audience_colors as Record<string, string> | undefined, async (colors) => {
             try {
@@ -1238,6 +1261,29 @@
             console.warn('[App] Failed to persist theme_mode:', e);
           }
         });
+
+        appearanceStore.hydrateWorkspaceTheme(
+          {
+            presetId: wsConfig.theme_preset,
+            accentHue: wsConfig.theme_accent_hue,
+          },
+          async ({ presetId, accentHue }) => {
+            try {
+              const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
+                tree?.path ?? null,
+              );
+              if (!nextRootIndexPath) return;
+              await api!.setWorkspaceConfig(nextRootIndexPath, 'theme_preset', presetId);
+              await api!.setWorkspaceConfig(
+                nextRootIndexPath,
+                'theme_accent_hue',
+                accentHue === null ? 'null' : JSON.stringify(accentHue),
+              );
+            } catch (e) {
+              console.warn('[App] Failed to persist workspace theme selection:', e);
+            }
+          },
+        );
 
         // Hydrate audience colors
         getAudienceColorStore().hydrate(wsConfig.audience_colors as Record<string, string> | undefined, async (colors) => {

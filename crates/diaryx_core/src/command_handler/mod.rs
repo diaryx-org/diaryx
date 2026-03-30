@@ -509,6 +509,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 depth,
                 audience,
             } => self.cmd_get_workspace_tree(path, depth, audience).await,
+            Command::GetWorkspaceFileSet { path } => self.cmd_get_workspace_file_set(path).await,
             Command::PrepareMultiDelete { paths, tree_path } => {
                 self.cmd_prepare_multi_delete(paths, tree_path).await
             }
@@ -618,6 +619,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             // === Filesystem Operations ===
             Command::FileExists { path } => self.cmd_file_exists(path).await,
             Command::ReadFile { path } => self.cmd_read_file(path).await,
+            Command::GetFileInfo { path } => self.cmd_get_file_info(path).await,
             Command::WriteFile { path, content } => self.cmd_write_file(path, content).await,
             Command::DeleteFile { path } => self.cmd_delete_file(path).await,
             Command::ClearDirectory { path } => self.cmd_clear_directory(path).await,

@@ -76,7 +76,22 @@
 
   // Import auth
   import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState, getWorkspaces, isSyncEnabled } from "./lib/auth";
-  import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, getWorkspaceStorageType, discoverOpfsWorkspaces, createLocalWorkspace, setCurrentWorkspaceId, removeLocalWorkspace } from "$lib/storage/localWorkspaceRegistry.svelte";
+  import {
+    getLocalWorkspace,
+    getLocalWorkspaces,
+    getCurrentWorkspaceId,
+    getWorkspaceStorageType,
+    discoverOpfsWorkspaces,
+    createLocalWorkspace,
+    setCurrentWorkspaceId,
+    removeLocalWorkspace,
+    getPrimaryWorkspaceProviderLink,
+    getWorkspaceProviderLink,
+    isWorkspaceSyncEnabled as isWorkspaceProviderSyncEnabled,
+    setPluginMetadata,
+  } from "$lib/storage/localWorkspaceRegistry.svelte";
+  import { getProviderDisplayLabel } from "$lib/sync/builtinProviders";
+  import { linkWorkspace, unlinkWorkspace } from "$lib/sync/workspaceProviderService";
 
   // Initialize theme store immediately
   const themeStore = getThemeStore();
@@ -175,6 +190,51 @@
     return () => {
       backendInstance.offFileSystemEvent?.(subscriptionId);
     };
+  }
+
+  async function withLiveSyncSetupProgress<T>(
+    onProgress: ((progress: { percent: number; message: string; detail?: string }) => void) | undefined,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    if (!onProgress) {
+      return await task();
+    }
+
+    const backend = workspaceStore.backend ?? await getBackend();
+    if (!backend?.onFileSystemEvent || !backend?.offFileSystemEvent) {
+      return await task();
+    }
+
+    const subscriptionId = backend.onFileSystemEvent((event: any) => {
+      if (event?.type === "SyncProgress") {
+        const total = Number(event.total ?? 0);
+        const completed = Number(event.completed ?? 0);
+        const percent = typeof event.percent === "number"
+          ? event.percent
+          : total > 0
+            ? Math.round((completed / total) * 100)
+            : 0;
+        onProgress({
+          percent,
+          message: typeof event.message === "string" && event.message.length > 0
+            ? event.message
+            : "Syncing workspace...",
+          detail: typeof event.path === "string" && event.path.length > 0 ? event.path : undefined,
+        });
+      } else if (event?.type === "SyncStatusChanged" && event.status === "error" && event.error) {
+        onProgress({
+          percent: 100,
+          message: "Sync failed",
+          detail: String(event.error),
+        });
+      }
+    });
+
+    try {
+      return await task();
+    } finally {
+      backend.offFileSystemEvent(subscriptionId);
+    }
   }
 
   // Import controllers
@@ -3170,10 +3230,10 @@
         entryStore.setLoading(false);
       }
     }}
-    onCreateWithProvider={async (bundle, providerPluginId, pluginOverrides, restoreNamespace) => {
+    onCreateWithProvider={async (bundle, providerPluginId, pluginOverrides, restoreNamespace, onProgress) => {
       entryStore.setLoading(true);
       try {
-        const result = await handleCreateWithProviderController(
+        const result = await withLiveSyncSetupProgress(onProgress, async () => await handleCreateWithProviderController(
           {
             autoCreateDeps: buildAutoCreateDeps(),
             installLocalPlugin: (bytes, name) => installLocalPlugin(bytes, name),
@@ -3190,6 +3250,8 @@
           providerPluginId,
           pluginOverrides,
           restoreNamespace,
+          onProgress,
+        ),
         );
         showWelcomeScreen = false;
 
@@ -3205,6 +3267,76 @@
       } finally {
         entryStore.setLoading(false);
         // Clear the launch zoom overlay so it doesn't block the welcome screen on error
+        launchOverlay = null;
+        launchOverlayDone = false;
+      }
+    }}
+    onMoveCurrentWorkspace={async (providerPluginId, onProgress) => {
+      const workspaceId = getCurrentWorkspaceId();
+      const workspace = workspaceId ? getLocalWorkspace(workspaceId) : null;
+      if (!workspaceId || !workspace) {
+        throw new Error("No current workspace is available.");
+      }
+
+      const currentLink = getPrimaryWorkspaceProviderLink(workspaceId);
+      const currentProviderId = currentLink?.pluginId ?? null;
+      const currentProviderLabel = currentProviderId
+        ? getProviderDisplayLabel(currentProviderId) ?? currentProviderId
+        : null;
+
+      entryStore.setLoading(true);
+      try {
+        await withLiveSyncSetupProgress(onProgress, async () => {
+        if (!providerPluginId) {
+          if (!currentProviderId) {
+            toast.message("This workspace is already stored only on this device.");
+            showWelcomeScreen = false;
+            welcomeReturnWorkspaceName = null;
+            return;
+          }
+
+          if (isWorkspaceProviderSyncEnabled(workspaceId)) {
+            onProgress?.({ percent: 20, message: "Disconnecting cloud sync..." });
+            await unlinkWorkspace(currentProviderId, workspaceId);
+          } else {
+            setPluginMetadata(workspaceId, currentProviderId, null);
+          }
+
+          toast.success(`"${workspace.name}" now lives only on this device.`);
+        } else {
+          const providerLabel = getProviderDisplayLabel(providerPluginId) ?? providerPluginId;
+          const existingTargetLink = getWorkspaceProviderLink(workspaceId, providerPluginId);
+
+          if (currentProviderId && currentProviderId !== providerPluginId) {
+            if (isWorkspaceProviderSyncEnabled(workspaceId)) {
+              onProgress?.({ percent: 18, message: "Disconnecting previous provider..." });
+              await unlinkWorkspace(currentProviderId, workspaceId);
+            } else {
+              setPluginMetadata(workspaceId, currentProviderId, null);
+            }
+          }
+
+          if (currentProviderId === providerPluginId && isWorkspaceProviderSyncEnabled(workspaceId)) {
+            toast.message(`"${workspace.name}" is already stored with ${providerLabel}.`);
+          } else {
+            await linkWorkspace(providerPluginId, {
+              localId: workspaceId,
+              name: workspace.name,
+              remoteId: existingTargetLink?.remoteWorkspaceId,
+            }, onProgress);
+            toast.success(
+              currentProviderLabel && currentProviderId !== providerPluginId
+                ? `Moved "${workspace.name}" from ${currentProviderLabel} to ${providerLabel}.`
+                : `"${workspace.name}" is now stored with ${providerLabel}.`,
+            );
+          }
+        }
+        });
+
+        showWelcomeScreen = false;
+        welcomeReturnWorkspaceName = null;
+      } finally {
+        entryStore.setLoading(false);
         launchOverlay = null;
         launchOverlayDone = false;
       }

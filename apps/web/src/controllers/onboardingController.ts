@@ -547,6 +547,12 @@ export interface OnCreateWithProviderResult {
   spotlightSteps: any[] | null;
 }
 
+export interface OnboardingProgress {
+  percent: number;
+  message: string;
+  detail?: string;
+}
+
 /**
  * Orchestrates workspace creation/restore with a sync provider.
  *
@@ -561,6 +567,7 @@ export async function handleCreateWithProvider(
   providerPluginId: string | null | undefined,
   pluginOverrides: Array<{ targetPluginId: string; bytes: ArrayBuffer; fileName: string }> | null | undefined,
   restoreNamespace: { id: string; metadata?: { provider?: string; name?: string; [key: string]: unknown } | null } | null | undefined,
+  onProgress?: (progress: OnboardingProgress) => void,
 ): Promise<OnCreateWithProviderResult> {
   if (restoreNamespace) {
     // Restore from remote: download provider plugin bytes, restore the
@@ -577,10 +584,12 @@ export async function handleCreateWithProvider(
     if (isBuiltinProvider(providerId)) {
       pluginWasm = null;
     } else if (providerOverride) {
+      onProgress?.({ percent: 12, message: "Preparing provider plugin..." });
       // Use the user-provided override instead of fetching from the marketplace
       pluginWasm = new Uint8Array(providerOverride.bytes);
       console.info(`[onboarding] Using local override for provider plugin "${providerId}"`);
     } else {
+      onProgress?.({ percent: 12, message: "Downloading provider plugin..." });
       // Fetch the sync plugin wasm bytes from registry (don't install yet — no workspace context)
       const { fetchPluginRegistry } = await import("$lib/plugins/pluginRegistry");
       const registry = await fetchPluginRegistry();
@@ -628,7 +637,7 @@ export async function handleCreateWithProvider(
         remoteId: effectiveRestoreNamespace.id,
         name,
         link: true,
-      }, undefined, undefined, pluginWasm);
+      }, onProgress, undefined, pluginWasm);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isUnsupported = msg.includes("only available in host-integrated runtimes")
@@ -658,6 +667,7 @@ export async function handleCreateWithProvider(
     );
 
     // Reload plugins with full lifecycle now that the workspace has content
+    onProgress?.({ percent: 78, message: "Loading restored workspace..." });
     const { loadAllPlugins } = await import("$lib/plugins/browserPluginManager.svelte");
     await loadAllPlugins();
 
@@ -669,6 +679,7 @@ export async function handleCreateWithProvider(
     }
 
     try {
+      onProgress?.({ percent: 86, message: "Checking restored plugins..." });
       const rootIndexPath = await dlApi.resolveWorkspaceRootIndexPath(
         dlBackend.getWorkspacePath(),
       );
@@ -710,8 +721,10 @@ export async function handleCreateWithProvider(
     const effectiveBundle = bundle && overrideIds.size > 0
       ? excludeOverriddenPlugins(bundle, pluginOverrides)
       : bundle;
+    onProgress?.({ percent: 10, message: "Creating workspace..." });
     const { id, name } = await autoCreateDefaultWorkspace(deps.autoCreateDeps, effectiveBundle);
     if (pluginOverrides?.length) {
+      onProgress?.({ percent: 36, message: "Installing selected plugins..." });
       for (const o of pluginOverrides) {
         await deps.installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
       }
@@ -720,6 +733,7 @@ export async function handleCreateWithProvider(
       const { linkWorkspace } = await import("$lib/sync/workspaceProviderService");
       let remoteId: string | undefined;
       if (providerPluginId === BUILTIN_ICLOUD_PROVIDER_ID && isAuthenticated()) {
+        onProgress?.({ percent: 48, message: "Preparing cloud workspace..." });
         const workspaceKey = generateUUID();
         remoteId = makeIcloudNamespaceId(workspaceKey);
         await createNamespace(remoteId, {
@@ -731,10 +745,11 @@ export async function handleCreateWithProvider(
           workspace_key: workspaceKey,
         });
       }
-      await linkWorkspace(providerPluginId, { localId: id, name, remoteId });
+      await linkWorkspace(providerPluginId, { localId: id, name, remoteId }, onProgress);
     }
   }
 
+  onProgress?.({ percent: 94, message: "Finishing setup..." });
   await deps.refreshTree();
   const tree = deps.getTree();
   if (tree) {

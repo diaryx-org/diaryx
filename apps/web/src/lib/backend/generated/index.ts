@@ -25,6 +25,7 @@ export type { ExclusionReason } from './ExclusionReason';
 export type { ExportFile } from './ExportFile';
 export type { ExportPlan } from './ExportPlan';
 export type { ExportedFile } from './ExportedFile';
+export type { FileInfo } from './FileInfo';
 export type { FileMetadata } from './FileMetadata';
 export type { FileSearchResult } from './FileSearchResult';
 export type { FileSystemEvent } from './FileSystemEvent';

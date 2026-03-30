@@ -28,6 +28,24 @@ where
     }
 }
 
+/// Lightweight filesystem metadata returned by backend commands and plugin hosts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub struct FileInfo {
+    /// Whether the path currently exists.
+    #[serde(default)]
+    pub exists: bool,
+
+    /// File size in bytes when known.
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+
+    /// Modification time in milliseconds since Unix epoch when known.
+    #[serde(default)]
+    pub modified_at_ms: Option<i64>,
+}
+
 /// Metadata for a file in the workspace CRDT.
 ///
 /// This represents the synchronized state of a file's frontmatter properties,

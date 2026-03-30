@@ -461,6 +461,20 @@ impl FileSystem for InMemoryFileSystem {
 
         Ok(result)
     }
+
+    fn get_file_size(&self, path: &Path) -> Option<u64> {
+        let normalized = Self::normalize_path(path);
+
+        {
+            let binary_files = self.binary_files.read().unwrap();
+            if let Some(data) = binary_files.get(&normalized) {
+                return Some(data.len() as u64);
+            }
+        }
+
+        let files = self.files.read().unwrap();
+        files.get(&normalized).map(|s| s.len() as u64)
+    }
 }
 
 #[cfg(test)]

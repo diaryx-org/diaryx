@@ -120,6 +120,21 @@ pub trait AsyncFileSystem: Send + Sync {
         })
     }
 
+    /// Compute the SHA-256 hash of a file and return it as lowercase hex.
+    fn hash_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+        Box::pin(async move {
+            use sha2::{Digest, Sha256};
+
+            let bytes = self.read_binary(path).await?;
+            let hash = Sha256::digest(&bytes);
+            Ok(hash.iter().fold(String::with_capacity(64), |mut s, b| {
+                use std::fmt::Write;
+                let _ = write!(s, "{:02x}", b);
+                s
+            }))
+        })
+    }
+
     /// Write binary content to a file.
     fn write_binary<'a>(
         &'a self,
@@ -191,6 +206,13 @@ pub trait AsyncFileSystem: Send + Sync {
     /// Returns `None` if the file doesn't exist or the modification time
     /// cannot be determined (e.g., in WASM environments without real filesystem).
     fn get_modified_time<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, Option<i64>> {
+        Box::pin(async move { None })
+    }
+
+    /// Get file size in bytes.
+    ///
+    /// Returns `None` if the file doesn't exist or the size cannot be determined.
+    fn get_file_size<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, Option<u64>> {
         Box::pin(async move { None })
     }
 
@@ -290,6 +312,21 @@ pub trait AsyncFileSystem {
         })
     }
 
+    /// Compute the SHA-256 hash of a file and return it as lowercase hex.
+    fn hash_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+        Box::pin(async move {
+            use sha2::{Digest, Sha256};
+
+            let bytes = self.read_binary(path).await?;
+            let hash = Sha256::digest(&bytes);
+            Ok(hash.iter().fold(String::with_capacity(64), |mut s, b| {
+                use std::fmt::Write;
+                let _ = write!(s, "{:02x}", b);
+                s
+            }))
+        })
+    }
+
     /// Write binary content to a file.
     fn write_binary<'a>(
         &'a self,
@@ -361,6 +398,13 @@ pub trait AsyncFileSystem {
     /// Returns `None` if the file doesn't exist or the modification time
     /// cannot be determined (e.g., in WASM environments without real filesystem).
     fn get_modified_time<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, Option<i64>> {
+        Box::pin(async move { None })
+    }
+
+    /// Get file size in bytes.
+    ///
+    /// Returns `None` if the file doesn't exist or the size cannot be determined.
+    fn get_file_size<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, Option<u64>> {
         Box::pin(async move { None })
     }
 
@@ -482,6 +526,10 @@ impl<F: FileSystem + Send + Sync> AsyncFileSystem for SyncToAsyncFs<F> {
         Box::pin(async move { self.inner.read_binary(path) })
     }
 
+    fn hash_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+        Box::pin(async move { self.inner.hash_file(path) })
+    }
+
     fn write_binary<'a>(&'a self, path: &'a Path, content: &'a [u8]) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move { self.inner.write_binary(path, content) })
     }
@@ -492,6 +540,10 @@ impl<F: FileSystem + Send + Sync> AsyncFileSystem for SyncToAsyncFs<F> {
 
     fn get_modified_time<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<i64>> {
         Box::pin(async move { self.inner.get_modified_time(path) })
+    }
+
+    fn get_file_size<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<u64>> {
+        Box::pin(async move { self.inner.get_file_size(path) })
     }
 }
 
@@ -541,6 +593,10 @@ impl<F: FileSystem> AsyncFileSystem for SyncToAsyncFs<F> {
         Box::pin(async move { self.inner.read_binary(path) })
     }
 
+    fn hash_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+        Box::pin(async move { self.inner.hash_file(path) })
+    }
+
     fn write_binary<'a>(&'a self, path: &'a Path, content: &'a [u8]) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move { self.inner.write_binary(path, content) })
     }
@@ -551,6 +607,10 @@ impl<F: FileSystem> AsyncFileSystem for SyncToAsyncFs<F> {
 
     fn get_modified_time<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<i64>> {
         Box::pin(async move { self.inner.get_modified_time(path) })
+    }
+
+    fn get_file_size<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<u64>> {
+        Box::pin(async move { self.inner.get_file_size(path) })
     }
 }
 
@@ -605,6 +665,10 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
         (*self).read_binary(path)
     }
 
+    fn hash_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+        (*self).hash_file(path)
+    }
+
     fn write_binary<'a>(&'a self, path: &'a Path, content: &'a [u8]) -> BoxFuture<'a, Result<()>> {
         (*self).write_binary(path, content)
     }
@@ -615,6 +679,10 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
 
     fn get_modified_time<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<i64>> {
         (*self).get_modified_time(path)
+    }
+
+    fn get_file_size<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<u64>> {
+        (*self).get_file_size(path)
     }
 
     fn mark_sync_write_start(&self, path: &Path) {
@@ -677,6 +745,10 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
         (*self).read_binary(path)
     }
 
+    fn hash_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+        (*self).hash_file(path)
+    }
+
     fn write_binary<'a>(&'a self, path: &'a Path, content: &'a [u8]) -> BoxFuture<'a, Result<()>> {
         (*self).write_binary(path, content)
     }
@@ -687,6 +759,10 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
 
     fn get_modified_time<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<i64>> {
         (*self).get_modified_time(path)
+    }
+
+    fn get_file_size<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<u64>> {
+        (*self).get_file_size(path)
     }
 
     fn mark_sync_write_start(&self, path: &Path) {

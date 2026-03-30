@@ -7,6 +7,8 @@ audience:
 - developers
 part_of: '[README](/apps/README.md)'
 updated: 2026-03-29T19:40:38-06:00
+exclude:
+- '**/gen'
 ---
 # Diaryx Tauri
 

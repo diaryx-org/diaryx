@@ -13,17 +13,22 @@ contents:
 - '[README](/crates/README.md)'
 - '[ROADMAP](/ROADMAP.md)'
 - '[Scripts](/scripts/scripts.md)'
+- '[Terms of Service](/terms.md)'
+- '[Privacy Policy](/privacy.md)'
 audience:
 - public
 - developers
 - agents
 exclude:
 - '*.lock'
+- '**/target'
+- .git
+- patches
+- '**/dist'
 attachments:
 - '[flake.nix](/flake.nix)'
 - '[release.toml](/release.toml)'
 - '[Cargo.toml](/Cargo.toml)'
-- '[diaryx-icon.svg](/_attachments/diaryx-icon.svg)'
 - rust-analyzer.toml
 workspace_config:
   link_format: markdown_root
@@ -36,25 +41,44 @@ workspace_config:
 plugins:
   diaryx.publish:
     permissions:
-      create_files:
-        exclude: []
-        include:
-        - all
-      edit_files:
-        exclude: []
-        include:
-        - all
       read_files:
-        exclude: []
         include:
         - all
-    public_audiences:
-    - public
-    audience_states:
-      public:
-        state: public
-        email_on_publish: false
-    namespace_id: 595cca2a-5648-462b-b082-1fd9e556a8e8
+        exclude: []
+      edit_files:
+        include:
+        - all
+        exclude: []
+      create_files:
+        include:
+        - all
+        exclude: []
+  diaryx.sync:
+    permissions:
+      read_files:
+        include:
+        - all
+        exclude: []
+      edit_files:
+        include:
+        - all
+        exclude: []
+      create_files:
+        include:
+        - all
+        exclude: []
+      delete_files:
+        include:
+        - all
+        exclude: []
+      http_requests:
+        include:
+        - all
+        exclude: []
+      plugin_storage:
+        include:
+        - all
+        exclude: []
 ---
 <div>
   <p align="center">

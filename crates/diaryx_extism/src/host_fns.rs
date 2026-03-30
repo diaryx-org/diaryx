@@ -452,11 +452,25 @@ pub fn register_host_functions(
             host_list_files,
         )
         .with_function(
+            "host_workspace_file_set",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_workspace_file_set,
+        )
+        .with_function(
             "host_file_exists",
             [ValType::I64],
             [ValType::I64],
             user_data.clone(),
             host_file_exists,
+        )
+        .with_function(
+            "host_file_metadata",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_file_metadata,
         )
         .with_function(
             "host_write_file",
@@ -761,6 +775,55 @@ fn host_list_files(
     Ok(())
 }
 
+/// Host function: `host_workspace_file_set({}) -> string[] JSON`
+///
+/// Returns the canonical workspace-relative file set for the current
+/// workspace, including reachable markdown files and declared attachments.
+fn host_workspace_file_set(
+    plugin: &mut CurrentPlugin,
+    _inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    let runtime = ctx.runtime_context_provider.get_context(&ctx.plugin_id);
+    let workspace_path = runtime
+        .get("current_workspace")
+        .and_then(|value| value.as_object())
+        .and_then(|workspace| workspace.get("path"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            ExtismError::msg("host_workspace_file_set: missing current_workspace.path")
+        })?;
+
+    ctx.check_perm(PermissionType::ReadFiles, workspace_path)?;
+
+    let workspace = diaryx_core::workspace::Workspace::new(ctx.fs.as_ref());
+    let workspace_path = Path::new(workspace_path);
+    let root_index = if workspace_path
+        .extension()
+        .is_some_and(|extension| extension == "md")
+    {
+        workspace_path.to_path_buf()
+    } else {
+        futures_lite::future::block_on(workspace.find_root_index_in_dir(workspace_path))
+            .map_err(|e| ExtismError::msg(format!("host_workspace_file_set: {e}")))?
+            .ok_or_else(|| {
+                ExtismError::msg("host_workspace_file_set: workspace root index not found")
+            })?
+    };
+
+    let files = futures_lite::future::block_on(workspace.collect_workspace_file_set(&root_index))
+        .map_err(|e| ExtismError::msg(format!("host_workspace_file_set: {e}")))?;
+    let json = serde_json::to_string(&files)
+        .map_err(|e| ExtismError::msg(format!("host_workspace_file_set: serialize: {e}")))?;
+
+    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+    Ok(())
+}
+
 /// Host function: `host_file_exists(input: {path}) -> bool JSON`
 ///
 /// Checks if a file exists in the workspace.
@@ -788,6 +851,52 @@ fn host_file_exists(
 
     let json = serde_json::to_string(&exists)
         .map_err(|e| ExtismError::msg(format!("host_file_exists: serialize: {e}")))?;
+
+    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_file_metadata(input: {path}) -> {exists, size_bytes?, modified_at_ms?}`
+///
+/// Returns lightweight metadata for a workspace file without reading its bytes.
+fn host_file_metadata(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct MetadataInput {
+        path: String,
+    }
+
+    let parsed: MetadataInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_file_metadata: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
+    let path = Path::new(&parsed.path);
+    let exists = futures_lite::future::block_on(ctx.fs.exists(path));
+    let json = if exists {
+        let size_bytes = futures_lite::future::block_on(ctx.fs.get_file_size(path));
+        let modified_at_ms = futures_lite::future::block_on(ctx.fs.get_modified_time(path));
+        serde_json::json!({
+            "exists": true,
+            "size_bytes": size_bytes,
+            "modified_at_ms": modified_at_ms,
+        })
+        .to_string()
+    } else {
+        serde_json::json!({
+            "exists": false,
+            "size_bytes": serde_json::Value::Null,
+            "modified_at_ms": serde_json::Value::Null,
+        })
+        .to_string()
+    };
 
     plugin.memory_set_val(&mut outputs[0], json.as_str())?;
     Ok(())
@@ -1357,8 +1466,6 @@ fn host_hash_file(
     outputs: &mut [Val],
     user_data: UserData<HostContext>,
 ) -> Result<(), ExtismError> {
-    use sha2::{Digest, Sha256};
-
     let input: String = plugin.memory_get_val(&inputs[0])?;
 
     #[derive(serde::Deserialize)]
@@ -1373,21 +1480,13 @@ fn host_hash_file(
     let ctx = ctx.lock().unwrap();
     ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
 
-    let bytes = match futures_lite::future::block_on(ctx.fs.read_binary(Path::new(&parsed.path))) {
-        Ok(bytes) => bytes,
+    let hash = match futures_lite::future::block_on(ctx.fs.hash_file(Path::new(&parsed.path))) {
+        Ok(hash) => hash,
         Err(_) => {
             plugin.memory_set_val(&mut outputs[0], "")?;
             return Ok(());
         }
     };
-
-    let hash = Sha256::digest(&bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut s, b| {
-            use std::fmt::Write;
-            let _ = write!(s, "{:02x}", b);
-            s
-        });
 
     let json = serde_json::json!({ "hash": hash }).to_string();
     plugin.memory_set_val(&mut outputs[0], json.as_str())?;

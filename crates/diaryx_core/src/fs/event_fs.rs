@@ -313,6 +313,10 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for EventEmittingFs<FS> 
         self.inner.read_binary(path)
     }
 
+    fn hash_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+        self.inner.hash_file(path)
+    }
+
     fn write_binary<'a>(&'a self, path: &'a Path, content: &'a [u8]) -> BoxFuture<'a, Result<()>> {
         // Binary files don't emit events (they're attachments managed differently)
         self.inner.write_binary(path, content)
@@ -324,6 +328,10 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for EventEmittingFs<FS> 
 
     fn get_modified_time<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<i64>> {
         self.inner.get_modified_time(path)
+    }
+
+    fn get_file_size<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<u64>> {
+        self.inner.get_file_size(path)
     }
 
     fn mark_sync_write_start(&self, path: &Path) {
@@ -489,6 +497,10 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for EventEmittingFs<FS> {
         self.inner.read_binary(path)
     }
 
+    fn hash_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+        self.inner.hash_file(path)
+    }
+
     fn write_binary<'a>(&'a self, path: &'a Path, content: &'a [u8]) -> BoxFuture<'a, Result<()>> {
         // Binary files don't emit events (they're attachments managed differently)
         self.inner.write_binary(path, content)
@@ -500,6 +512,10 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for EventEmittingFs<FS> {
 
     fn get_modified_time<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<i64>> {
         self.inner.get_modified_time(path)
+    }
+
+    fn get_file_size<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<u64>> {
+        self.inner.get_file_size(path)
     }
 
     fn mark_sync_write_start(&self, path: &Path) {

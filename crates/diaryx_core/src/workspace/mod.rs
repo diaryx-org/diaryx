@@ -22,7 +22,7 @@ mod types;
 pub use tree_selection::*;
 pub use types::{IndexFile, IndexFrontmatter, TreeNode, format_tree_node};
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -549,6 +549,86 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         .await?;
         files.sort();
         Ok(files)
+    }
+
+    /// Collect the canonical workspace file set for sync/export operations.
+    ///
+    /// This includes all markdown files reachable from the logical workspace
+    /// tree plus any attachment files declared in reachable entries'
+    /// frontmatter.
+    pub async fn collect_workspace_file_set(&self, index_path: &Path) -> Result<Vec<String>> {
+        let workspace_root = index_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let link_format = self
+            .get_workspace_config(index_path)
+            .await
+            .map(|c| c.link_format)
+            .ok();
+
+        let mut files = BTreeSet::new();
+        let mut visited = HashSet::new();
+        self.collect_workspace_file_set_recursive(
+            index_path,
+            &workspace_root,
+            link_format,
+            &mut files,
+            &mut visited,
+        )
+        .await?;
+        Ok(files.into_iter().collect())
+    }
+
+    async fn collect_workspace_file_set_recursive(
+        &self,
+        path: &Path,
+        workspace_root: &Path,
+        link_format: Option<LinkFormat>,
+        files: &mut BTreeSet<String>,
+        visited: &mut HashSet<String>,
+    ) -> Result<()> {
+        let canonical_path = canonical_workspace_path(path, workspace_root);
+        if !visited.insert(canonical_path.clone()) {
+            return Ok(());
+        }
+        files.insert(canonical_path);
+
+        let index = match self.parse_index_with_hint(path, link_format).await {
+            Ok(index) => index,
+            Err(_) => return Ok(()),
+        };
+
+        for attachment_ref in index.frontmatter.attachments_list() {
+            let attachment_full_path =
+                resolve_workspace_path(workspace_root, &index.resolve_path(attachment_ref));
+
+            if self.fs.exists(&attachment_full_path).await {
+                files.insert(canonical_workspace_path(
+                    &attachment_full_path,
+                    workspace_root,
+                ));
+            }
+        }
+
+        if !index.frontmatter.is_index() {
+            return Ok(());
+        }
+
+        for child_ref in index.frontmatter.contents_list() {
+            let child_full_path =
+                resolve_workspace_path(workspace_root, &index.resolve_path(child_ref));
+
+            if self.fs.exists(&child_full_path).await {
+                Box::pin(self.collect_workspace_file_set_recursive(
+                    &child_full_path,
+                    workspace_root,
+                    link_format,
+                    files,
+                    visited,
+                ))
+                .await?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Recursive helper for collecting workspace files
@@ -1360,22 +1440,42 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             .await
     }
 
-    /// Build a filesystem tree with optional depth limiting for lazy loading
+    /// Build a filesystem tree with optional depth limiting for lazy loading.
+    /// Reads `exclude` patterns from the root directory's index file and skips
+    /// matching entries during traversal.
     pub async fn build_filesystem_tree_with_depth(
         &self,
         root_dir: &Path,
         show_hidden: bool,
         max_depth: Option<usize>,
     ) -> Result<TreeNode> {
-        self.build_filesystem_tree_recursive(root_dir, show_hidden, max_depth)
-            .await
+        // Collect exclude patterns from the root directory's index
+        let exclude_patterns = if let Ok(Some(index)) = self.find_any_index_in_dir(root_dir).await {
+            if let Ok(parsed) = self.parse_index(&index).await {
+                parsed.frontmatter.exclude_list().to_vec()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        self.build_filesystem_tree_recursive(
+            root_dir,
+            root_dir,
+            show_hidden,
+            max_depth,
+            &exclude_patterns,
+        )
+        .await
     }
 
     async fn build_filesystem_tree_recursive(
         &self,
         dir: &Path,
+        root_dir: &Path,
         show_hidden: bool,
         max_depth: Option<usize>,
+        exclude_patterns: &[String],
     ) -> Result<TreeNode> {
         // Get directory name for display
         let dir_name = dir
@@ -1408,7 +1508,10 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             let mut entries: Vec<_> = entries.into_iter().collect();
             entries.sort(); // Sort alphabetically
 
-            // Filter out hidden files and temporary files to get accurate count
+            // Filter out hidden files, temporary files, and excluded patterns.
+            // Exclude patterns are matched against the path relative to root_dir,
+            // so `target` only matches at the root while `**/node_modules` matches
+            // at any depth.
             let entries: Vec<_> = entries
                 .into_iter()
                 .filter(|entry| {
@@ -1418,7 +1521,14 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                         .unwrap_or_default();
                     let hidden = !show_hidden && file_name.starts_with('.');
                     let temp = crate::fs::is_temp_file(&file_name);
-                    !hidden && !temp
+                    let rel_path = entry
+                        .strip_prefix(root_dir)
+                        .unwrap_or(entry)
+                        .to_string_lossy();
+                    let excluded = exclude_patterns
+                        .iter()
+                        .any(|pattern| crate::utils::matches_glob_pattern(pattern, &rel_path));
+                    !hidden && !temp && !excluded
                 })
                 .collect();
 
@@ -1445,8 +1555,10 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                         // Recurse into subdirectory with decremented depth
                         if let Ok(child_tree) = Box::pin(self.build_filesystem_tree_recursive(
                             &entry,
+                            root_dir,
                             show_hidden,
                             next_depth,
+                            exclude_patterns,
                         ))
                         .await
                         {
@@ -3416,6 +3528,20 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     }
 }
 
+fn canonical_workspace_path(path: &Path, workspace_root: &Path) -> String {
+    let relative = path.strip_prefix(workspace_root).unwrap_or(path);
+    let raw = relative.to_string_lossy().replace('\\', "/");
+    normalize_sync_path(&raw)
+}
+
+fn resolve_workspace_path(workspace_root: &Path, resolved_path: &Path) -> PathBuf {
+    if resolved_path.is_absolute() || resolved_path.starts_with(workspace_root) {
+        resolved_path.to_path_buf()
+    } else {
+        workspace_root.join(resolved_path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4241,6 +4367,46 @@ mod tests {
             !root_contents.iter().any(|e| e == "entry.md"),
             "expected README.md to no longer reference entry.md, got {:?}",
             root_contents
+        );
+    }
+
+    #[test]
+    fn test_collect_workspace_file_set_includes_reachable_markdown_and_attachments() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("workspace/index.md"),
+            "---\ntitle: Root\ncontents:\n  - Notes/day.md\nattachments:\n  - assets/root.png\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("workspace/Notes/day.md"),
+            "---\ntitle: Day\npart_of: /index.md\nattachments:\n  - ./_attachments/day.jpg\n  - /shared/manual.pdf\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("workspace/assets/root.png"), "root")
+            .unwrap();
+        fs.write_file(Path::new("workspace/Notes/_attachments/day.jpg"), "day")
+            .unwrap();
+        fs.write_file(Path::new("workspace/shared/manual.pdf"), "manual")
+            .unwrap();
+        fs.write_file(Path::new("workspace/node_modules/nope.js"), "ignored")
+            .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let file_set =
+            block_on_test(ws.collect_workspace_file_set(Path::new("workspace/index.md"))).unwrap();
+
+        assert_eq!(
+            file_set,
+            vec![
+                "Notes/_attachments/day.jpg".to_string(),
+                "Notes/day.md".to_string(),
+                "assets/root.png".to_string(),
+                "index.md".to_string(),
+                "shared/manual.pdf".to_string(),
+            ]
         );
     }
 }

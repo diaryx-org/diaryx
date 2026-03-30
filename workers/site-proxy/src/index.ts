@@ -242,11 +242,16 @@ async function serveCustomDomain(
     object = await env.SITES_BUCKET.get(key);
   }
 
+  if (!object && !path.includes('.')) {
+    key = `${slug}/${auth.audience}/${path}.html`;
+    object = await env.SITES_BUCKET.get(key);
+  }
+
   if (!object) {
     return notFound();
   }
 
-  const contentType = object.httpMetadata?.contentType ?? contentTypeForPath(path);
+  const contentType = object.httpMetadata?.contentType ?? contentTypeForPath(key);
   const headers = new Headers();
   headers.set('Content-Type', contentType);
   headers.set('Cache-Control', 'public, max-age=60');
@@ -367,11 +372,16 @@ async function serveStaticPage(
     object = await env.SITES_BUCKET.get(key);
   }
 
+  if (!object && !path.includes('.')) {
+    key = `${slug}/${effectiveAudience}/${path}.html`;
+    object = await env.SITES_BUCKET.get(key);
+  }
+
   if (!object) {
     return notFound();
   }
 
-  const contentType = object.httpMetadata?.contentType ?? contentTypeForPath(path);
+  const contentType = object.httpMetadata?.contentType ?? contentTypeForPath(key);
   const headers = new Headers();
   headers.set('Content-Type', contentType);
   headers.set('Cache-Control', 'public, max-age=60');
@@ -724,6 +734,14 @@ async function serveNamespaceSiteRoute(
     });
   }
 
+  if (response.status === 404 && !objectPath.includes('.')) {
+    response = await serveNamespaceObjectByKey(request, url, env, nsId, `${audience}/${objectPath}.html`, {
+      allowedAudience: audience,
+      htmlPrefix,
+      cookiePath,
+    });
+  }
+
   return response.status === 404 ? notFound() : response;
 }
 
@@ -772,6 +790,11 @@ async function serveSubdomainSite(
         allowedAudience: queryAudience,
       });
     }
+    if (response.status === 404 && !objectPath.includes('.')) {
+      response = await serveNamespaceObjectByKey(request, url, env, nsId, `${queryAudience}/${objectPath}.html`, {
+        allowedAudience: queryAudience,
+      });
+    }
     return response;
   }
 
@@ -800,6 +823,18 @@ async function serveSubdomainSite(
   if (!objectPath.endsWith('/index.html')) {
     const fallback = `${objectPath.replace(/\/$/, '')}/index.html`;
     response = await serveNamespaceObjectByKey(request, url, env, nsId, fallback);
+    if (response.status !== 404) return response;
+  }
+
+  // .html extension fallback (e.g. /terms → terms.html).
+  if (!objectPath.includes('.')) {
+    if (mapping.default_audience) {
+      response = await serveNamespaceObjectByKey(request, url, env, nsId, `${mapping.default_audience}/${objectPath}.html`, {
+        allowedAudience: mapping.default_audience,
+      });
+      if (response.status !== 404) return response;
+    }
+    response = await serveNamespaceObjectByKey(request, url, env, nsId, `${objectPath}.html`);
     if (response.status !== 404) return response;
   }
 
@@ -848,6 +883,18 @@ async function serveNamespaceCustomDomain(
   if (!objectPath.endsWith('/index.html')) {
     const fallback = `${objectPath.replace(/\/$/, '')}/index.html`;
     response = await serveNamespaceObjectByKey(request, url, env, nsId, fallback, {
+      allowedAudience: audience,
+    });
+    if (response.status !== 404) return response;
+  }
+
+  // .html extension fallback (e.g. /terms → terms.html).
+  if (!objectPath.includes('.')) {
+    response = await serveNamespaceObjectByKey(request, url, env, nsId, `${audience}/${objectPath}.html`, {
+      allowedAudience: audience,
+    });
+    if (response.status !== 404) return response;
+    response = await serveNamespaceObjectByKey(request, url, env, nsId, `${objectPath}.html`, {
       allowedAudience: audience,
     });
     if (response.status !== 404) return response;

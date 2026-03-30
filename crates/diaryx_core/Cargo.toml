@@ -19,6 +19,7 @@ pathdiff = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+sha2 = "0.10"
 thiserror.workspace = true
 async-trait = "0.1"
 urlencoding = "2"

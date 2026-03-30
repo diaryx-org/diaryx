@@ -24,6 +24,7 @@ use serde_json::Value as JsonValue;
 
 use crate::link_parser::LinkFormat;
 use crate::search::SearchResults;
+use crate::types::FileInfo;
 use crate::validate::{FixResult, ValidationResult, ValidationResultWithMeta};
 use crate::workspace::{TreeNode, WorkspaceConfig};
 
@@ -197,6 +198,15 @@ pub enum Command {
         depth: Option<u32>,
         /// Optional audience filter. When set, only entries visible to this audience are included.
         audience: Option<String>,
+    },
+
+    /// Get the canonical file set for a workspace.
+    ///
+    /// Returns the workspace-relative markdown files reachable from the
+    /// logical workspace tree, plus any declared attachment files.
+    GetWorkspaceFileSet {
+        /// Path to the workspace root index file.
+        path: String,
     },
 
     /// Compute an ordered deletion plan: prune roots, expand descendants, order children-first.
@@ -464,6 +474,12 @@ pub enum Command {
         path: String,
     },
 
+    /// Get lightweight filesystem metadata for a path.
+    GetFileInfo {
+        /// Path to inspect.
+        path: String,
+    },
+
     /// Write content to a file.
     WriteFile {
         /// Path to write.
@@ -683,13 +699,15 @@ impl Command {
             | Command::GetAncestorAttachments { path }
             | Command::FileExists { path }
             | Command::ReadFile { path }
+            | Command::GetFileInfo { path }
             | Command::WriteFile { path, .. }
             | Command::DeleteFile { path }
             | Command::ClearDirectory { path }
             | Command::WriteFileWithMetadata { path, .. }
             | Command::UpdateFileMetadata { path, .. }
             | Command::GetAvailableAudiences { path }
-            | Command::GetEffectiveAudience { path } => {
+            | Command::GetEffectiveAudience { path }
+            | Command::GetWorkspaceFileSet { path } => {
                 *path = normalizer(path);
             }
 
@@ -959,6 +977,9 @@ pub enum Response {
 
     /// Entry data response.
     Entry(EntryData),
+
+    /// Lightweight filesystem metadata response.
+    FileInfo(FileInfo),
 
     /// Tree node response.
     Tree(TreeNode),

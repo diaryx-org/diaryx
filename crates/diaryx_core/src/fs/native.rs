@@ -5,7 +5,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::{self, OpenOptions};
 #[cfg(not(target_arch = "wasm32"))]
-use std::io::{Error, ErrorKind, Result, Write};
+use std::io::{Error, ErrorKind, Read, Result, Write};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
@@ -115,6 +115,29 @@ impl FileSystem for RealFileSystem {
         fs::read(path)
     }
 
+    fn hash_file(&self, path: &Path) -> Result<String> {
+        use sha2::{Digest, Sha256};
+
+        let mut file = fs::File::open(path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+
+        let hash = hasher.finalize();
+        Ok(hash.iter().fold(String::with_capacity(64), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{:02x}", b);
+            s
+        }))
+    }
+
     fn write_binary(&self, path: &Path, content: &[u8]) -> Result<()> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -133,5 +156,9 @@ impl FileSystem for RealFileSystem {
                     .ok()
                     .map(|d| d.as_millis() as i64)
             })
+    }
+
+    fn get_file_size(&self, path: &Path) -> Option<u64> {
+        fs::metadata(path).ok().map(|m| m.len())
     }
 }

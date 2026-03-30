@@ -191,6 +191,29 @@ impl AsyncFileSystem for PluginFileSystem {
         })
     }
 
+    fn hash_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+        Box::pin(async move {
+            let data = self.call_command(
+                "HashFile",
+                serde_json::json!({ "path": path.to_string_lossy() }),
+            );
+            if let Ok(data) = data
+                && let Some(hash) = data.get("hash").and_then(|v| v.as_str())
+            {
+                return Ok(hash.to_string());
+            }
+
+            use sha2::{Digest, Sha256};
+            let bytes = self.read_binary(path).await?;
+            let hash = Sha256::digest(&bytes);
+            Ok(hash.iter().fold(String::with_capacity(64), |mut s, b| {
+                use std::fmt::Write;
+                let _ = write!(s, "{:02x}", b);
+                s
+            }))
+        })
+    }
+
     fn write_binary<'a>(&'a self, path: &'a Path, content: &'a [u8]) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             use base64::Engine;

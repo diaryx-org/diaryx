@@ -209,6 +209,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         Ok(Response::Tree(tree))
     }
 
+    pub(crate) async fn cmd_get_workspace_file_set(&self, path: String) -> Result<Response> {
+        let resolved_root_path = self.resolve_fs_path(&path);
+        let files = self
+            .workspace()
+            .inner()
+            .collect_workspace_file_set(&resolved_root_path)
+            .await?;
+        Ok(Response::Strings(files))
+    }
+
     pub(crate) async fn cmd_get_filesystem_tree(
         &self,
         path: Option<String>,

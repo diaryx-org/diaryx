@@ -971,6 +971,35 @@ function buildHostFunctions(
           return cp.store("[]");
         }
       },
+      async host_workspace_file_set(cp: CallContext, _offs: bigint) {
+        try {
+          const runtime = await getRuntimeContextSnapshot();
+          const currentWorkspace =
+            runtime.current_workspace && typeof runtime.current_workspace === "object"
+              ? runtime.current_workspace as Record<string, unknown>
+              : null;
+          const workspacePath = normalizeWorkspaceRoot(
+            typeof currentWorkspace?.path === "string" ? currentWorkspace.path : null,
+          );
+          if (!workspacePath) return cp.store("[]");
+          await requirePermission(opts, "read_files", workspacePath);
+
+          const backend = getBackendSync();
+          const rootIndex = workspacePath.endsWith(".md")
+            ? workspacePath
+            : await resolveWorkspaceRootIndex(workspacePath);
+          const response: any = await backend.execute({
+            type: "GetWorkspaceFileSet",
+            params: { path: rootIndex },
+          } as any);
+          if (response.type !== "Strings") {
+            return cp.store("[]");
+          }
+          return cp.store(JSON.stringify(response.data));
+        } catch {
+          return cp.store("[]");
+        }
+      },
       async host_file_exists(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as { path: string } | undefined;
@@ -988,6 +1017,39 @@ function buildHostFunctions(
           return cp.store("false");
         } catch {
           return cp.store("false");
+        }
+      },
+      async host_file_metadata(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as { path: string } | undefined;
+          if (!input) {
+            return cp.store(JSON.stringify({
+              exists: false,
+              size_bytes: null,
+              modified_at_ms: null,
+            }));
+          }
+          const path = normalizeExtismHostPath(input.path);
+          await requirePermission(opts, "read_files", path);
+          const backend = getBackendSync();
+          const response: any = await backend.execute({
+            type: "GetFileInfo",
+            params: { path },
+          } as any);
+          if (response.type === "FileInfo") {
+            return cp.store(JSON.stringify(response.data));
+          }
+          return cp.store(JSON.stringify({
+            exists: false,
+            size_bytes: null,
+            modified_at_ms: null,
+          }));
+        } catch {
+          return cp.store(JSON.stringify({
+            exists: false,
+            size_bytes: null,
+            modified_at_ms: null,
+          }));
         }
       },
       async host_storage_get(cp: CallContext, offs: bigint) {

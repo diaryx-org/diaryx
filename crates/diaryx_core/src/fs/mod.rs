@@ -114,6 +114,19 @@ pub trait FileSystem: Send + Sync {
         self.read_to_string(path).map(|s| s.into_bytes())
     }
 
+    /// Compute the SHA-256 hash of a file and return it as lowercase hex.
+    fn hash_file(&self, path: &Path) -> Result<String> {
+        use sha2::{Digest, Sha256};
+
+        let bytes = self.read_binary(path)?;
+        let hash = Sha256::digest(&bytes);
+        Ok(hash.iter().fold(String::with_capacity(64), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{:02x}", b);
+            s
+        }))
+    }
+
     /// Write binary content to a file
     fn write_binary(&self, _path: &Path, _content: &[u8]) -> Result<()> {
         // Default implementation: not supported
@@ -172,6 +185,13 @@ pub trait FileSystem: Send + Sync {
     fn get_modified_time(&self, _path: &Path) -> Option<i64> {
         None
     }
+
+    /// Get file size in bytes.
+    ///
+    /// Returns `None` if the file doesn't exist or the size cannot be determined.
+    fn get_file_size(&self, _path: &Path) -> Option<u64> {
+        None
+    }
 }
 
 // Blanket implementation for references to FileSystem
@@ -220,6 +240,10 @@ impl<T: FileSystem> FileSystem for &T {
         (*self).read_binary(path)
     }
 
+    fn hash_file(&self, path: &Path) -> Result<String> {
+        (*self).hash_file(path)
+    }
+
     fn write_binary(&self, path: &Path, content: &[u8]) -> Result<()> {
         (*self).write_binary(path, content)
     }
@@ -230,5 +254,9 @@ impl<T: FileSystem> FileSystem for &T {
 
     fn get_modified_time(&self, path: &Path) -> Option<i64> {
         (*self).get_modified_time(path)
+    }
+
+    fn get_file_size(&self, path: &Path) -> Option<u64> {
+        (*self).get_file_size(path)
     }
 }

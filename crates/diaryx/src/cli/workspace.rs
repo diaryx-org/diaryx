@@ -454,6 +454,27 @@ fn handle_validate(
                         );
                     }
                 }
+                ValidationError::BrokenLinkRef { file, target } => {
+                    if fix {
+                        let result = block_on(fixer.fix_broken_link_ref(file, target));
+                        if result.success {
+                            println!(
+                                "  ✓ Fixed: Removed broken link '{}' from {}",
+                                target,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ✗ Broken link: {} -> {} (failed to fix)",
+                                file.display(),
+                                target
+                            );
+                        }
+                    } else {
+                        println!("  ✗ Broken link: {} -> {}", file.display(), target);
+                    }
+                }
             }
         }
     }
@@ -752,6 +773,88 @@ fn handle_validate(
                         );
                     }
                 }
+                ValidationWarning::InvalidSelfLink {
+                    file,
+                    value,
+                    suggested,
+                } => {
+                    if fix {
+                        let result = block_on(fixer.fix_invalid_self_link(file));
+                        if result.success {
+                            println!(
+                                "  ✓ Fixed: Corrected self-link '{}' -> '{}' in {}",
+                                value,
+                                suggested,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Invalid self-link: '{}' in {} (suggested: '{}') (failed to fix)",
+                                value,
+                                file.display(),
+                                suggested
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Invalid self-link: '{}' in {} (suggested: '{}')",
+                            value,
+                            file.display(),
+                            suggested
+                        );
+                    }
+                }
+                ValidationWarning::MissingBacklink {
+                    file,
+                    source,
+                    suggested,
+                } => {
+                    if fix {
+                        let result = block_on(fixer.fix_missing_backlink(file, suggested));
+                        if result.success {
+                            println!(
+                                "  ✓ Fixed: Added backlink '{}' to {}",
+                                suggested,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Missing backlink: {} should link back to {} (failed to fix)",
+                                file.display(),
+                                source
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Missing backlink: {} should link back to {}",
+                            file.display(),
+                            source
+                        );
+                    }
+                }
+                ValidationWarning::StaleBacklink { file, value } => {
+                    if fix {
+                        let result = block_on(fixer.fix_stale_backlink(file, value));
+                        if result.success {
+                            println!(
+                                "  ✓ Fixed: Removed stale backlink '{}' from {}",
+                                value,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Stale backlink: '{}' in {} (failed to fix)",
+                                value,
+                                file.display()
+                            );
+                        }
+                    } else {
+                        println!("  ⚠ Stale backlink: '{}' in {}", value, file.display());
+                    }
+                }
             }
         }
     }
@@ -969,6 +1072,27 @@ fn report_and_fix_validation(
                             file.display(),
                             attachment
                         );
+                    }
+                }
+                ValidationError::BrokenLinkRef { file, target } => {
+                    if fix {
+                        let fix_result = block_on(fixer.fix_broken_link_ref(file, target));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Removed broken link '{}' from {}",
+                                target,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ✗ Broken link: {} -> {} (failed to fix)",
+                                file.display(),
+                                target
+                            );
+                        }
+                    } else {
+                        println!("  ✗ Broken link: {} -> {}", file.display(), target);
                     }
                 }
             }
@@ -1268,6 +1392,88 @@ fn report_and_fix_validation(
                             reason,
                             suggested_filename
                         );
+                    }
+                }
+                ValidationWarning::InvalidSelfLink {
+                    file,
+                    value,
+                    suggested,
+                } => {
+                    if fix {
+                        let fix_result = block_on(fixer.fix_invalid_self_link(file));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Corrected self-link '{}' -> '{}' in {}",
+                                value,
+                                suggested,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Invalid self-link: '{}' in {} (suggested: '{}') (failed to fix)",
+                                value,
+                                file.display(),
+                                suggested
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Invalid self-link: '{}' in {} (suggested: '{}')",
+                            value,
+                            file.display(),
+                            suggested
+                        );
+                    }
+                }
+                ValidationWarning::MissingBacklink {
+                    file,
+                    source,
+                    suggested,
+                } => {
+                    if fix {
+                        let fix_result = block_on(fixer.fix_missing_backlink(file, suggested));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Added backlink '{}' to {}",
+                                suggested,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Missing backlink: {} should link back to {} (failed to fix)",
+                                file.display(),
+                                source
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Missing backlink: {} should link back to {}",
+                            file.display(),
+                            source
+                        );
+                    }
+                }
+                ValidationWarning::StaleBacklink { file, value } => {
+                    if fix {
+                        let fix_result = block_on(fixer.fix_stale_backlink(file, value));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Removed stale backlink '{}' from {}",
+                                value,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Stale backlink: '{}' in {} (failed to fix)",
+                                value,
+                                file.display()
+                            );
+                        }
+                    } else {
+                        println!("  ⚠ Stale backlink: '{}' in {}", value, file.display());
                     }
                 }
             }

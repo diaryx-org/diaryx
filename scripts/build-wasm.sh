@@ -8,21 +8,13 @@ WEB_DIR="$WORKSPACE_ROOT/apps/web"
 
 echo "Building WASM from workspace: $WORKSPACE_ROOT"
 
-# Check if node_modules exists and has wasm-pack, install dependencies if not
-if [ ! -f "$WEB_DIR/node_modules/.bin/wasm-pack" ]; then
-    echo "wasm-pack not found, installing dependencies..."
-    cd "$WEB_DIR"
-    bun install
-    cd "$WORKSPACE_ROOT"
-fi
-
-# Verify wasm-pack is available
-if [ ! -f "$WEB_DIR/node_modules/.bin/wasm-pack" ]; then
-    echo "Error: wasm-pack still not found after installing dependencies"
+# Verify wasm-pack is available on PATH (installed via cargo or nix)
+if ! command -v wasm-pack >/dev/null 2>&1; then
+    echo "Error: wasm-pack not found. Install it with: cargo install wasm-pack"
     exit 1
 fi
 
-echo "Using wasm-pack at: $WEB_DIR/node_modules/.bin/wasm-pack"
+echo "Using wasm-pack at: $(command -v wasm-pack)"
 echo "Building in directory: $WORKSPACE_ROOT/crates/diaryx_wasm"
 
 # On macOS, propagate Xcode SDK settings so host build helpers don't emit
@@ -53,7 +45,7 @@ cd "$WORKSPACE_ROOT"
 # Build with wasm-pack, then run wasm-opt with aggressive size optimization.
 # wasm-pack runs wasm-opt internally but only with default flags; re-running
 # with -Oz squeezes out additional bytes.
-$WEB_DIR/node_modules/.bin/wasm-pack build crates/diaryx_wasm --target web --out-dir "$WEB_DIR/src/lib/wasm"
+wasm-pack build crates/diaryx_wasm --target web --out-dir "$WEB_DIR/src/lib/wasm"
 
 WASM_FILE="$WEB_DIR/src/lib/wasm/diaryx_wasm_bg.wasm"
 if command -v wasm-opt >/dev/null 2>&1; then

@@ -24,3 +24,4 @@ apps/web/test.sh
 **/blobs/**
 .playwright-mcp
 .diaryx
+apps/web/src/LICENSE.md

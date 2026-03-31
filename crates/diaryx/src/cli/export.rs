@@ -287,7 +287,7 @@ fn walkdir(dir: &Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 visit(&path, results);
-            } else if path.extension().map_or(false, |ext| ext == "md") {
+            } else if path.extension().is_some_and(|ext| ext == "md") {
                 results.push(path);
             }
         }

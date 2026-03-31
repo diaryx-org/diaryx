@@ -100,6 +100,11 @@ Tauri dev now ignores markdown edits under repo code directories
 That keeps in-app editing of workspace documentation from triggering a frontend
 reload while `cargo tauri dev` is running against this repo as a workspace.
 
+Shared Tauri frontend startup now also treats the initial IPC bridge as
+best-effort during dev reloads: `initialize_app` / `reinitialize_workspace`
+have a frontend timeout plus a short dev-only retry window so transient
+custom-protocol fallback issues can recover after the webview remounts.
+
 For iOS dev builds, `bun run tauri:ios` now runs `bun run clean:ios-swift-cache`
 first. This clears stale `swift-rs` module artifacts for Tauri and Tauri plugin
 build scripts under `target/` that can break builds after moving the repository

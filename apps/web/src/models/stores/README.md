@@ -25,3 +25,7 @@ Svelte stores for reactive application state.
 
 `pluginStore` is now the primary source for sync/share/history/status surfaces;
 the host renders these generically from plugin contributions.
+
+Workspace switches re-run `pluginStore.init(...)` against the new backend so
+workspace-scoped plugin manifests update immediately without requiring a full
+webview reload.

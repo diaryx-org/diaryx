@@ -8,8 +8,6 @@ audience:
 part_of: '[README](/crates/README.md)'
 contents:
 - '[README](/crates/diaryx_server/src/README.md)'
-attachments:
-- '[Cargo.toml](/crates/diaryx_server/Cargo.toml)'
 exclude:
 - '*.lock'
 ---

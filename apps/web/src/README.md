@@ -1,17 +1,16 @@
 ---
 title: web src
 description: Source code for the Diaryx web application
-part_of: "[README](/apps/web/README.md)"
+part_of: '[README](/apps/web/README.md)'
 contents:
-  - "[README](/apps/web/src/controllers/README.md)"
-  - "[README](/apps/web/src/lib/README.md)"
-  - "[README](/apps/web/src/models/README.md)"
-  - "[README](/apps/web/src/views/README.md)"
-  - "[LICENSE](/apps/web/src/LICENSE.md)"
+- '[README](/apps/web/src/controllers/README.md)'
+- '[README](/apps/web/src/lib/README.md)'
+- '[README](/apps/web/src/models/README.md)'
+- '[README](/apps/web/src/views/README.md)'
 exclude:
-  - "*.lock"
-  - "**/*.ts"
-  - "test/**"
+- '*.lock'
+- '**/*.ts'
+- test/**
 ---
 
 # Diaryx Web Source
@@ -103,6 +102,11 @@ command so sandboxed macOS builds persist a security-scoped bookmark for
 "create here", "open existing folder", and "relocate workspace" selections
 instead of saving a raw path that cannot be reopened on the next workspace
 switch.
+
+On teardown/reload, `App.svelte` now also stops the sync scheduler, clears
+pending autosave/tree-refresh timers, drops filesystem subscriptions, and
+resets the backend singleton so dev-mode remounts do not inherit stale
+frontend async state from a previous webview instance.
 
 When restoring a remote workspace from onboarding, the welcome flow now skips
 bundle selection and instead inspects the restored root frontmatter to install

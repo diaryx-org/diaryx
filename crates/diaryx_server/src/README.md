@@ -2,18 +2,6 @@
 title: diaryx_server src
 description: Platform-agnostic core modules for Diaryx server adapters
 part_of: '[README](/crates/diaryx_server/README.md)'
-attachments:
-- '[lib.rs](/crates/diaryx_server/src/lib.rs)'
-- '[domain.rs](/crates/diaryx_server/src/domain.rs)'
-- '[ports.rs](/crates/diaryx_server/src/ports.rs)'
-- '[use_cases/current_user.rs](/crates/diaryx_server/src/use_cases/current_user.rs)'
-- '[use_cases/domains.rs](/crates/diaryx_server/src/use_cases/domains.rs)'
-- '[use_cases/namespaces.rs](/crates/diaryx_server/src/use_cases/namespaces.rs)'
-- '[use_cases/audiences.rs](/crates/diaryx_server/src/use_cases/audiences.rs)'
-- '[use_cases/sessions.rs](/crates/diaryx_server/src/use_cases/sessions.rs)'
-- '[use_cases/objects.rs](/crates/diaryx_server/src/use_cases/objects.rs)'
-- '[use_cases/auth.rs](/crates/diaryx_server/src/use_cases/auth.rs)'
-- '[schema/mod.rs](/crates/diaryx_server/src/schema/mod.rs)'
 exclude:
 - '*.lock'
 ---

@@ -2,14 +2,6 @@
 title: Controllers
 description: Controller logic for UI actions
 part_of: '[README](/apps/web/src/README.md)'
-attachments:
-  - '[index.ts](/apps/web/src/controllers/index.ts)'
-  - '[attachmentController.ts](/apps/web/src/controllers/attachmentController.ts)'
-  - '[commandPaletteController.ts](/apps/web/src/controllers/commandPaletteController.ts)'
-  - '[entryController.ts](/apps/web/src/controllers/entryController.ts)'
-  - '[linkController.ts](/apps/web/src/controllers/linkController.ts)'
-  - '[workspaceController.ts](/apps/web/src/controllers/workspaceController.ts)'
-  - '[onboardingController.ts](/apps/web/src/controllers/onboardingController.ts)'
 exclude:
   - '*.lock'
 ---

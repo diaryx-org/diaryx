@@ -122,7 +122,6 @@ pub fn run_cli() {
         if !dispatch_core_command(cli) {
             std::process::exit(1);
         }
-        return;
     }
 
     #[cfg(feature = "plugins")]

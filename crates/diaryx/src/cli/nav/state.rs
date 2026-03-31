@@ -30,9 +30,10 @@ pub enum PickAction {
 }
 
 /// Current input mode for the TUI
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum InputMode {
     /// Normal browsing mode
+    #[default]
     Normal,
     /// Text input mode (create, rename)
     TextInput {
@@ -52,12 +53,6 @@ pub enum InputMode {
         source_path: PathBuf,
         action: PickAction,
     },
-}
-
-impl Default for InputMode {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Navigation application state
@@ -242,10 +237,10 @@ impl NavState {
 
     /// Clear status message if it has expired (3 seconds)
     pub fn clear_expired_status(&mut self) {
-        if let Some((_, when, _)) = &self.status_message {
-            if when.elapsed().as_secs() >= 3 {
-                self.status_message = None;
-            }
+        if let Some((_, when, _)) = &self.status_message
+            && when.elapsed().as_secs() >= 3
+        {
+            self.status_message = None;
         }
     }
 }

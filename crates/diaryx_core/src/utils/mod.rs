@@ -2,6 +2,9 @@
 //!
 //! This module consolidates various utility functions used across the crate.
 
+use std::ffi::OsStr;
+use std::path::{Component, Path};
+
 /// Date parsing and path generation utilities.
 pub mod date;
 /// Workspace naming, URL normalization, and publishing slug validation.
@@ -11,6 +14,35 @@ pub mod path;
 
 // Re-export commonly used items for convenience
 pub use path::{relative_path_from_dir_to_target, relative_path_from_file_to_target};
+
+/// Directory names that are usually build artifacts, dependencies, or VCS data.
+pub const WORKSPACE_SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    ".git",
+    ".svn",
+    "dist",
+    "build",
+    "__pycache__",
+    ".next",
+    ".nuxt",
+    "vendor",
+    ".cargo",
+];
+
+/// Return true when a path contains a directory component that should not be
+/// traversed as part of normal workspace scans.
+pub fn is_workspace_skip_dir(path: &Path) -> bool {
+    path.components().any(|component| {
+        if let Component::Normal(name) = component {
+            WORKSPACE_SKIP_DIRS
+                .iter()
+                .any(|skip| name == OsStr::new(skip))
+        } else {
+            false
+        }
+    })
+}
 
 /// Simple glob pattern matching for exclude patterns.
 /// Supports:

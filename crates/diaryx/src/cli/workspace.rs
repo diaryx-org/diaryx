@@ -10,9 +10,26 @@ use serde_yaml::Value;
 use std::path::{Path, PathBuf};
 
 use crate::cli::args::WorkspaceCommands;
-use crate::cli::util::{format_workspace_link, rename_file_with_refs, resolve_paths};
+use crate::cli::util::{format_workspace_link, resolve_paths};
 use crate::cli::{CliDiaryxAppSync, CliWorkspace, block_on};
 use crate::editor::launch_editor;
+
+/// Create a rooted workspace with link format from workspace config.
+///
+/// The core's `move_entry`/`sync_move_metadata` need the workspace root and
+/// link format to properly format `contents` and `part_of` references.
+fn make_rooted_workspace(ws: &CliWorkspace, path: &Path) -> CliWorkspace {
+    if let Ok(Some(root_index)) = block_on(ws.detect_workspace(path)) {
+        let workspace_root = root_index.parent().unwrap_or(Path::new("")).to_path_buf();
+        let link_format = block_on(ws.get_workspace_config(&root_index))
+            .map(|c| c.link_format)
+            .unwrap_or_default();
+        Workspace::with_link_format(ws.fs_ref().clone(), workspace_root, link_format)
+    } else {
+        // Fallback: no workspace detected, return unrooted workspace
+        Workspace::new(ws.fs_ref().clone())
+    }
+}
 
 /// Returns true on success, false on error
 pub fn handle_workspace_command(
@@ -1577,35 +1594,58 @@ fn handle_mv(
         return;
     }
 
-    // Use shared utility for workspace-aware rename/move
-    let result = rename_file_with_refs(app, Some(ws), source_path, &dest_path, dry_run);
+    if dry_run {
+        println!(
+            "Would move '{}' to '{}'",
+            source_path.display(),
+            dest_path.display()
+        );
+        if let Some(index_name) = new_index {
+            let index_filename = if index_name.ends_with(".md") {
+                index_name
+            } else {
+                format!("{}.md", index_name)
+            };
+            let index_path = dest_path
+                .parent()
+                .map(|p| p.join(&index_filename))
+                .unwrap_or_else(|| PathBuf::from(&index_filename));
+            if index_path.exists() {
+                println!(
+                    "Would set part_of to existing index '{}'",
+                    index_path.display()
+                );
+            } else {
+                println!(
+                    "Would create new index '{}' and set as parent",
+                    index_path.display()
+                );
+            }
+        }
+        return;
+    }
+
+    // Use the core workspace's move_entry which properly handles link format
+    // normalization and workspace config (contents/part_of updates).
+    // Create a rooted workspace so the core knows the workspace root and link format.
+    let rooted_ws = make_rooted_workspace(ws, source_path);
+    match block_on(rooted_ws.move_entry(source_path, &dest_path)) {
+        Ok(()) => {
+            println!(
+                "✓ Moved '{}' to '{}'",
+                source_path.display(),
+                dest_path.display()
+            );
+        }
+        Err(e) => {
+            eprintln!("✗ Error moving file: {}", e);
+            return;
+        }
+    }
 
     // If --new-index is specified and move succeeded, create/use index as parent
-    if result.success && !dry_run {
-        if let Some(index_name) = new_index {
-            set_new_index_as_parent(app, ws, &dest_path, &index_name);
-        }
-    } else if dry_run && let Some(index_name) = new_index {
-        let index_filename = if index_name.ends_with(".md") {
-            index_name
-        } else {
-            format!("{}.md", index_name)
-        };
-        let index_path = dest_path
-            .parent()
-            .map(|p| p.join(&index_filename))
-            .unwrap_or_else(|| PathBuf::from(&index_filename));
-        if index_path.exists() {
-            println!(
-                "Would set part_of to existing index '{}'",
-                index_path.display()
-            );
-        } else {
-            println!(
-                "Would create new index '{}' and set as parent",
-                index_path.display()
-            );
-        }
+    if let Some(index_name) = new_index {
+        set_new_index_as_parent(app, ws, &dest_path, &index_name);
     }
 }
 
@@ -1818,16 +1858,16 @@ fn collect_md_files_recursive_helper(
             let path = entry.path();
             if path.is_dir() {
                 // Check if we should skip this directory
-                if !search_build_folders {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        // Skip hidden directories
-                        if name.starts_with('.') {
-                            continue;
-                        }
-                        // Skip common build/dependency directories
-                        if DEFAULT_SKIP_DIRS.contains(&name) {
-                            continue;
-                        }
+                if !search_build_folders
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    // Skip hidden directories
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    // Skip common build/dependency directories
+                    if DEFAULT_SKIP_DIRS.contains(&name) {
+                        continue;
                     }
                 }
                 collect_md_files_recursive_helper(&path, files, search_build_folders);
@@ -2955,7 +2995,7 @@ fn handle_create(
     });
 
     let template_name = template.as_deref().unwrap_or("note");
-    let filename = child_filename.trim_end_matches(".md");
+    let _filename = child_filename.trim_end_matches(".md");
 
     // Try to render template via the templating plugin
     let content = 'tmpl: {
@@ -3434,13 +3474,14 @@ fn handle_convert_links(
     }
 
     // Update workspace config (unless dry run)
-    if !dry_run && files_modified > 0 {
-        if let Err(e) = block_on(ws.set_link_format(&root_index, target_format)) {
-            eprintln!(
-                "Warning: Failed to update workspace link_format setting: {}",
-                e
-            );
-        }
+    if !dry_run
+        && files_modified > 0
+        && let Err(e) = block_on(ws.set_link_format(&root_index, target_format))
+    {
+        eprintln!(
+            "Warning: Failed to update workspace link_format setting: {}",
+            e
+        );
     }
 
     println!();
@@ -3619,84 +3660,85 @@ fn convert_file_links(
     }
 
     // Convert contents if present
-    if let Some(contents_value) = fm.get("contents") {
-        if let Some(contents_seq) = contents_value.as_sequence() {
-            let mut new_contents = Vec::new();
-            let mut contents_changed = false;
+    if let Some(contents_value) = fm.get("contents")
+        && let Some(contents_seq) = contents_value.as_sequence()
+    {
+        let mut new_contents = Vec::new();
+        let mut contents_changed = false;
 
-            for item in contents_seq {
-                if let Some(item_str) = item.as_str() {
-                    let converted = link_parser::convert_link_with_hint(
-                        item_str,
-                        target_format,
-                        relative_path,
-                        None,
-                        source_format_hint,
-                    );
-                    if converted != item_str {
-                        track_source_format(&mut result.source_formats, item_str);
-                        contents_changed = true;
-                        result.links_converted += 1;
-                    }
-                    new_contents.push(Value::String(converted));
-                } else {
-                    new_contents.push(item.clone());
+        for item in contents_seq {
+            if let Some(item_str) = item.as_str() {
+                let converted = link_parser::convert_link_with_hint(
+                    item_str,
+                    target_format,
+                    relative_path,
+                    None,
+                    source_format_hint,
+                );
+                if converted != item_str {
+                    track_source_format(&mut result.source_formats, item_str);
+                    contents_changed = true;
+                    result.links_converted += 1;
                 }
+                new_contents.push(Value::String(converted));
+            } else {
+                new_contents.push(item.clone());
             }
+        }
 
-            if contents_changed {
-                fm.insert("contents".to_string(), Value::Sequence(new_contents));
-                result.was_modified = true;
-            }
+        if contents_changed {
+            fm.insert("contents".to_string(), Value::Sequence(new_contents));
+            result.was_modified = true;
         }
     }
 
     // Convert attachments if present
-    if let Some(attachments_value) = fm.get("attachments") {
-        if let Some(attachments_seq) = attachments_value.as_sequence() {
-            let mut new_attachments = Vec::new();
-            let mut attachments_changed = false;
+    if let Some(attachments_value) = fm.get("attachments")
+        && let Some(attachments_seq) = attachments_value.as_sequence()
+    {
+        let mut new_attachments = Vec::new();
+        let mut attachments_changed = false;
 
-            for item in attachments_seq {
-                if let Some(item_str) = item.as_str() {
-                    let parsed = link_parser::parse_link(item_str);
-                    let canonical_target = resolve_attachment_link_target_with_hint(
-                        item_str,
-                        relative_path,
-                        source_format_hint,
-                    );
-                    let title = parsed
-                        .title
-                        .unwrap_or_else(|| attachment_title(&canonical_target));
-                    let converted = link_parser::format_link_with_format(
-                        &canonical_target,
-                        &title,
-                        target_format,
-                        relative_path,
-                    );
-                    if converted != item_str {
-                        track_source_format(&mut result.source_formats, item_str);
-                        attachments_changed = true;
-                        result.links_converted += 1;
-                    }
-                    new_attachments.push(Value::String(converted));
-                } else {
-                    new_attachments.push(item.clone());
+        for item in attachments_seq {
+            if let Some(item_str) = item.as_str() {
+                let parsed = link_parser::parse_link(item_str);
+                let canonical_target = resolve_attachment_link_target_with_hint(
+                    item_str,
+                    relative_path,
+                    source_format_hint,
+                );
+                let title = parsed
+                    .title
+                    .unwrap_or_else(|| attachment_title(&canonical_target));
+                let converted = link_parser::format_link_with_format(
+                    &canonical_target,
+                    &title,
+                    target_format,
+                    relative_path,
+                );
+                if converted != item_str {
+                    track_source_format(&mut result.source_formats, item_str);
+                    attachments_changed = true;
+                    result.links_converted += 1;
                 }
+                new_attachments.push(Value::String(converted));
+            } else {
+                new_attachments.push(item.clone());
             }
+        }
 
-            if attachments_changed {
-                fm.insert("attachments".to_string(), Value::Sequence(new_attachments));
-                result.was_modified = true;
-            }
+        if attachments_changed {
+            fm.insert("attachments".to_string(), Value::Sequence(new_attachments));
+            result.was_modified = true;
         }
     }
 
     // Write the file if modified and not dry run
-    if result.was_modified && !dry_run {
-        if let Ok(new_content) = frontmatter::serialize(&fm, &parsed.body) {
-            let _ = fs.write_file(file_path, &new_content);
-        }
+    if result.was_modified
+        && !dry_run
+        && let Ok(new_content) = frontmatter::serialize(&fm, &parsed.body)
+    {
+        let _ = fs.write_file(file_path, &new_content);
     }
 
     result

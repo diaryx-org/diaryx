@@ -147,6 +147,15 @@ function isRootIndexPath(path: string): boolean {
   return /(^|\/)(README|index)\.md$/.test(path);
 }
 
+function isMarkdownPath(path: string): boolean {
+  return /\.md$/i.test(path);
+}
+
+function parentDirectory(path: string): string | null {
+  const slash = path.lastIndexOf('/');
+  return slash > 0 ? path.slice(0, slash) : null;
+}
+
 function normalizePluginPermissionTarget(
   backend: Backend,
   permissionType: PermissionType,
@@ -499,6 +508,7 @@ export function createApi(backend: Backend) {
     async resolveWorkspaceRootIndexPath(preferredPath?: string | null): Promise<string | null> {
       const candidates = [preferredPath, backend.getWorkspacePath?.()];
       const seenCandidates = new Set<string>();
+      const backendWorkspaceRoot = normalizeWorkspaceRootPath(backend.getWorkspacePath?.());
 
       for (const candidate of candidates) {
         const normalizedCandidate = normalizeWorkspacePathCandidate(candidate);
@@ -509,6 +519,14 @@ export function createApi(backend: Backend) {
         seenCandidates.add(normalizedCandidate);
 
         if (isRootIndexPath(normalizedCandidate)) {
+          return normalizedCandidate;
+        }
+
+        if (
+          backendWorkspaceRoot &&
+          isMarkdownPath(normalizedCandidate) &&
+          parentDirectory(normalizedCandidate) === backendWorkspaceRoot
+        ) {
           return normalizedCandidate;
         }
 

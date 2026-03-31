@@ -46,10 +46,10 @@ pub fn run(
         }
 
         // Handle events (with timeout for responsiveness)
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                handle_key(state, key, ws);
-            }
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            handle_key(state, key, ws);
         }
     }
 

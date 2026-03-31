@@ -55,10 +55,10 @@ pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
 pub fn handle_create(
     _app: &CliDiaryxAppSync,
     path: &str,
-    template: Option<String>,
+    _template: Option<String>,
     title: Option<String>,
 ) -> bool {
-    let config = match load_config() {
+    let _config = match load_config() {
         Some(c) => c,
         None => return false,
     };
@@ -84,7 +84,7 @@ pub fn handle_create(
             .to_string()
     });
 
-    let filename = path_buf
+    let _filename = path_buf
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("untitled");

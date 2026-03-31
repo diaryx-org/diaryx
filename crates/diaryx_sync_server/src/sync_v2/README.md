@@ -2,11 +2,6 @@
 title: Y-sync v2 Module
 description: Siphonophore-based sync implementation (experimental)
 part_of: '[README](/crates/diaryx_sync_server/src/README.md)'
-attachments:
-  - '[mod.rs](/crates/diaryx_sync_server/src/sync_v2/mod.rs)'
-  - '[hooks.rs](/crates/diaryx_sync_server/src/sync_v2/hooks.rs)'
-  - '[server.rs](/crates/diaryx_sync_server/src/sync_v2/server.rs)'
-  - '[handshake.rs](/crates/diaryx_sync_server/src/sync_v2/handshake.rs)'
 ---
 
 # Y-sync v2 Module

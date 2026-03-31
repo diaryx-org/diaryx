@@ -146,10 +146,10 @@ pub fn format_workspace_link(
     to_path: &Path,
     title: Option<&str>,
 ) -> String {
-    if let Some(formatter) = LinkFormatter::from_path(ws, from_path) {
-        if let Some(link) = formatter.format_link(from_path, to_path, title) {
-            return link;
-        }
+    if let Some(formatter) = LinkFormatter::from_path(ws, from_path)
+        && let Some(link) = formatter.format_link(from_path, to_path, title)
+    {
+        return link;
     }
 
     // Fallback to simple relative path

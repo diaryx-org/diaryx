@@ -69,6 +69,7 @@
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
   import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
   import { startSyncScheduler, stopSyncScheduler } from "$lib/sync/syncScheduler";
+  import { createLatestOnlyRunner } from "$lib/latestOnlyRunner";
   import {
     registerE2EBridge,
     unregisterE2EBridge,
@@ -275,7 +276,6 @@
   // Entry navigation intent tracking (keeps sidebar selection responsive while
   // the backend is still opening the next file).
   let pendingEntryPath = $state<string | null>(null);
-  let openEntryRequestId = 0;
 
   // ========================================================================
   // Store-backed state (using getters for now, will migrate fully later)
@@ -1229,12 +1229,23 @@
     unregisterE2EBridge();
     // Cleanup blob URLs
     revokeBlobUrls();
+    stopSyncScheduler();
     // Cleanup filesystem event subscription
     cleanupEventSubscription?.();
+    cleanupEventSubscription = null;
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+    if (refreshTreeTimeout) {
+      clearTimeout(refreshTreeTimeout);
+      refreshTreeTimeout = null;
+    }
     mobileGestures.cleanup();
     clearMobileFocusChromeRevealTimer();
     // Cleanup import:complete listener
     window.removeEventListener("import:complete", handleImportComplete);
+    resetBackend();
   });
 
   // FSA reconnect: user clicks button (providing the gesture), then we retry init
@@ -1391,30 +1402,32 @@
   }
 
   // Open an entry - thin wrapper that handles auto-save and delegates to controller
-  async function openEntry(path: string) {
+  const runLatestOpenEntry = createLatestOnlyRunner<string>(async (path) => {
     if (!api || !backend) return;
-    const requestId = ++openEntryRequestId;
-    pendingEntryPath = path;
 
     try {
-      // Auto-save before switching documents
+      // Auto-save before switching documents. The latest-only runner ensures
+      // rapid navigation collapses to the final target instead of flooding the backend.
       if (isDirty) {
         cancelAutoSave();
         await save();
       }
-      if (requestId !== openEntryRequestId) return;
 
-      // Delegate to controller
-      await openEntryController(api, path, tree, collaborationEnabled, {
-        isCurrentRequest: () => requestId === openEntryRequestId,
-      });
-      if (requestId !== openEntryRequestId) return;
+      if (currentEntry?.path === path && !isDirty) {
+        return;
+      }
 
+      await openEntryController(api, path, tree, collaborationEnabled);
     } finally {
-      if (requestId === openEntryRequestId) {
+      if (pendingEntryPath === path) {
         pendingEntryPath = null;
       }
     }
+  });
+
+  async function openEntry(path: string) {
+    pendingEntryPath = path;
+    await runLatestOpenEntry(path);
   }
 
   // Save current entry - delegates to controller with sync support

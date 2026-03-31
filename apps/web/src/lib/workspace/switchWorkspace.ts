@@ -1,5 +1,7 @@
 import { getBackend, resetBackend } from "$lib/backend";
+import { createApi } from "$lib/backend/api";
 import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
+import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 import { setActiveWorkspaceId } from "$lib/auth";
 import {
   setCurrentWorkspaceId,
@@ -34,6 +36,7 @@ export async function switchWorkspace(
     getWorkspaceStoragePluginId(workspaceId),
   );
   workspaceStore.setBackend(backend);
+  await getPluginStore().init(createApi(backend));
 
   options?.onReady?.();
 }

@@ -9,16 +9,13 @@ use std::path::{Path, PathBuf};
 
 use diaryx_core::config::Config;
 use diaryx_core::entry::{DiaryxApp, slugify_title, sync_h1_in_body};
-use diaryx_core::link_parser::LinkFormat;
 use diaryx_core::workspace::{Workspace, prepare_delete_plan, selection_includes_descendants};
 
 use crate::cli::{CliWorkspace, block_on};
 
 /// Build a workspace with the root path set for correct link resolution.
 fn rooted_ws(ws: &CliWorkspace, workspace_root: &Path) -> CliWorkspace {
-    let link_format = Config::load()
-        .map(|c| c.link_format)
-        .unwrap_or(LinkFormat::default());
+    let link_format = Config::load().map(|c| c.link_format).unwrap_or_default();
     Workspace::with_link_format(
         ws.fs_ref().clone(),
         workspace_root.to_path_buf(),

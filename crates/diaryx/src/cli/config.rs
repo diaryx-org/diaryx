@@ -224,10 +224,10 @@ fn find_workspace_root(
     }
 
     // Fall back to config's default workspace
-    if let Some(cfg) = config {
-        if let Ok(Some(root)) = block_on(ws.find_root_index_in_dir(&cfg.default_workspace)) {
-            return Some(root);
-        }
+    if let Some(cfg) = config
+        && let Ok(Some(root)) = block_on(ws.find_root_index_in_dir(&cfg.default_workspace))
+    {
+        return Some(root);
     }
 
     None

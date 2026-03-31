@@ -5,9 +5,6 @@ part_of: '[README](/crates/README.md)'
 audience:
 - developers
 contents: []
-attachments:
-- '[Cargo.toml](/crates/diaryx_wasm/Cargo.toml)'
-- '[build.rs](/crates/diaryx_wasm/build.rs)'
 exclude:
 - '*.lock'
 - '*.db'

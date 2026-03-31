@@ -114,6 +114,22 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
 - Validation matches exclude patterns against both basenames and
   workspace-relative paths, and now prunes excluded files/directories during
   the orphan scan instead of walking them first and suppressing warnings later.
+- Validation also prunes hidden dot-directories before recursion, so local tool
+  caches like `.direnv`, `.zig-cache`, and `.diaryx` do not inflate monorepo
+  orphan scans.
+- Validation also prunes common build/dependency directories such as `target`,
+  `node_modules`, `dist`, `build`, and `.git` before recursing into them, so
+  large monorepo artifacts do not dominate orphan-scan startup time.
+- Filesystem-tree mode (`GetFilesystemTree`, used by "Show All Files") now uses
+  the same basename + workspace-relative exclude matching, inherits excludes
+  from the nearest nested index and its `part_of` ancestors, and prunes the
+  same built-in non-workspace directories before recursion.
+- Validation and filesystem-tree scans now also emit log summaries with the
+  number of directories explored/pruned, plus debug-level directory lists for
+  tracing monorepo-specific slow paths.
+- Export binary attachment enumeration now derives from the logical workspace
+  file set (`collect_workspace_file_set`) rather than a raw filesystem walk, so
+  it stays scoped to reachable workspace entries and attachments.
 
 ## Command Path Resolution Notes
 

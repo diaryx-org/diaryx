@@ -19,24 +19,6 @@ contents:
   - "[README](/apps/web/src/lib/storage/README.md)"
   - "[README](/apps/web/src/lib/stores/README.md)"
   - "[README](/apps/web/src/lib/wasm/README.md)"
-attachments:
-  - "[utils.ts](/apps/web/src/lib/utils.ts)"
-  - "[windowDrag.ts](/apps/web/src/lib/windowDrag.ts)"
-  - "[editorMenuVisibility.ts](/apps/web/src/lib/editorMenuVisibility.ts)"
-  - "[credentials.ts](/apps/web/src/lib/credentials.ts)"
-  - "[mobileSwipe.ts](/apps/web/src/lib/mobileSwipe.ts)"
-  - "[leftSidebarSelection.ts](/apps/web/src/lib/leftSidebarSelection.ts)"
-  - "[wasm-stub.js](/apps/web/src/lib/wasm-stub.js)"
-  - "[CommandPalette.svelte](/apps/web/src/lib/CommandPalette.svelte)"
-  - "[Editor.svelte](/apps/web/src/lib/Editor.svelte)"
-  - "[ExportDialog.svelte](/apps/web/src/lib/ExportDialog.svelte)"
-  - "[LeftSidebar.svelte](/apps/web/src/lib/LeftSidebar.svelte)"
-  - "[NewEntryModal.svelte](/apps/web/src/lib/NewEntryModal.svelte)"
-  - "[MarketplaceDialog.svelte](/apps/web/src/lib/MarketplaceDialog.svelte)"
-  - "[RightSidebar.svelte](/apps/web/src/lib/RightSidebar.svelte)"
-  - "[SettingsDialog.svelte](/apps/web/src/lib/SettingsDialog.svelte)"
-  - "[components/PluginSidebarPanel.svelte](/apps/web/src/lib/components/PluginSidebarPanel.svelte)"
-  - "[components/PluginStatusItems.svelte](/apps/web/src/lib/components/PluginStatusItems.svelte)"
 exclude:
   - "*.lock"
 ---
@@ -79,6 +61,14 @@ Workspace-root normalization for Tauri now also lives in
 `workspace/rootPath.ts`. Callers that need the workspace directory or the
 actual root index file should use those helpers or `api.resolveWorkspaceRootIndexPath(...)`
 instead of hardcoding `README.md` / `index.md` filename assumptions.
+
+Workspace switches now also refresh `pluginStore` against the newly-created
+backend in `workspace/switchWorkspace.ts`, so marketplace/settings/sidebar
+plugin surfaces do not momentarily show manifests from the previous workspace.
+
+Rapid entry navigation now also uses `latestOnlyRunner.ts` to coalesce repeated
+open-entry requests to the most recent target instead of letting every
+intermediate click hit the backend.
 
 ## Onboarding Workspace Setup
 

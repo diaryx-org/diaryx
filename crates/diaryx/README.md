@@ -7,8 +7,6 @@ audience:
 part_of: '[README](/crates/README.md)'
 contents:
 - '[README](/crates/diaryx/src/README.md)'
-attachments:
-- '[Cargo.toml](/crates/diaryx/Cargo.toml)'
 exclude:
 - '*.lock'
 - '**/*.rs'
@@ -243,6 +241,10 @@ Patterns are inherited up the `part_of` hierarchy. Validation matches them
 against both basenames and workspace-relative paths, so directory globs like
 `**/target` or `build/**` also prune those directories from the validation
 scan instead of only hiding the resulting orphan warnings.
+
+Validation also skips common build/dependency directories such as `target`,
+`node_modules`, `dist`, `build`, and `.git` even without explicit `exclude`
+patterns, which keeps large monorepos responsive during startup validation.
 
 You can also validate specific files or directories:
 

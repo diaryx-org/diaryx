@@ -2,10 +2,6 @@
 title: site-proxy worker
 description: Cloudflare Worker for serving audience-gated published Diaryx sites
 part_of: '[README](/README.md)'
-attachments:
-  - '[wrangler.jsonc](/workers/site-proxy/wrangler.jsonc)'
-  - '[src/index.ts](/workers/site-proxy/src/index.ts)'
-  - '[src/token.ts](/workers/site-proxy/src/token.ts)'
 exclude:
   - '*.lock'
 ---

@@ -3,18 +3,18 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.4.0
-updated: 2026-03-30T15:34:53-06:00
+updated: 2026-03-30T22:04:56-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
 - '[LICENSE](/LICENSE.md)'
 - '[PHILOSOPHY](/PHILOSOPHY.md)'
+- '[Privacy Policy](/privacy.md)'
 - '[README](/apps/README.md)'
 - '[README](/crates/README.md)'
 - '[ROADMAP](/ROADMAP.md)'
 - '[Scripts](/scripts/scripts.md)'
 - '[Terms of Service](/terms.md)'
-- '[Privacy Policy](/privacy.md)'
 audience:
 - public
 - developers
@@ -30,9 +30,7 @@ exclude:
 - '**/*.toml'
 - deploy
 - flake.nix
-attachments:
-- '[Diaryx light logo](/_attachments/icon.png.md)'
-- '[Diaryx dark logo](/_attachments/icon-dark.png.md)'
+- '**/*.sh'
 workspace_config:
   link_format: markdown_root
   audience_colors:
@@ -90,7 +88,7 @@ plugins:
         include:
         - all
         exclude: []
-    workspace_id: 12b87774-ebd6-4535-b5f7-06e39f0bbcb9
+    workspace_id: 8fd558fa-1c3c-4260-a506-0f52866089e0
 links:
 - '[ROADMAP](/ROADMAP.md)'
 - '[PHILOSOPHY](/PHILOSOPHY.md)'
@@ -104,14 +102,60 @@ links:
     </picture>
   </p>
   <h1 align="center">Diaryx</h1>
-  <p align="center"><strong>Your journal. Worth sharing.</strong></p>
+  <p align="center"><strong>Your writing. Worth sharing.</strong></p>
 </div>
 
 
-Diaryx is a writing format and CMS software designed to make two previously difficult things about writing very easy:
+Diaryx is a writing space that lets you choose who sees what. So you can write honestly and share without fear.
 
-- **Filtering your writing by its intended audience**, so that you can publish *once* and reach *everyone*.
-- **Using a portable, readable plain text format without compromising features**. So you can use **bold**, *italic*, or even =={red}colored== =={blue}highlights==, and still read your file with whatever software you want.
+- [Start writing](https://app.diaryx.org)
+
+---
+
+### The problem: you already censor yourself.
+
+Most writing tools force a choice. Either your writing is private, locked away where nobody benefits from it, or it's public, exposed to everyone equally. There's no middle ground.
+
+Diaryx gives you that middle ground. Write once, then decide which parts are for which people.
+
+### How it works: label a file, a folder, or a paragraph.
+
+Tag any section of your writing with an audience — just you, family, close friends, or everyone. When you share, each person sees only what's meant for them.[^1]
+
+> Public:
+>
+>
+>
+> We're launching the redesigned homepage next week. The new layout prioritizes clarity and puts the product demo front and center.
+>
+>
+>
+> ~~Team only:~~
+>
+>
+>
+> ~~We're still waiting on final assets from the design contractor. If they slip past Wednesday, we'll need a fallback plan — Sara has a simplified version ready.~~
+>
+>
+>
+> ||Private note:||
+>
+>
+>
+>  ||I'm not confident the contractor will deliver on time. Starting to think we should have hired in-house for this. Lesson for next quarter.||
+
+### We never hold your words hostage.
+
+Diaryx is local-first. Your entries live on your device as plain Markdown files you can open in any text editor. Sync is optional, and you can leave any time with everything you wrote.
+
+- **Works everywhere**: Web, iOS, Mac, Windows, Linux, even CLI!
+- **Plain Markdown**: No proprietary format. Your files are yours, readable forever.
+- **Share your way**: Publish to your own diaryx.org subdomain, email a filtered version, or share in person.
+- **Extend with plugins**: Add drawing, audio recording, cloud sync, =={red}colored== =={brown}highlights==, and more through a growing plugin library.
+
+---
+
+**Use Diaryx for free at [app.diaryx.org](https://app.diaryx.org)!**
 
 ---
 
@@ -119,3 +163,5 @@ Read more:
 
 - See the [Diaryx Roadmap](/ROADMAP.md)
 - Read about the [Diaryx Philosophy](/PHILOSOPHY.md)
+
+[^1]: (editor’s note: a better filtering demo is forthcoming)

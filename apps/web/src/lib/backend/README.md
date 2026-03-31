@@ -210,9 +210,15 @@ flow for browser and Tauri installs.
   component render once after the user allows it.
 - `api.ts` also exposes `resolveWorkspaceRootIndexPath(...)`, which normalizes
   workspace-directory vs root-index-file inputs before frontmatter or workspace
-  config flows read `README.md` / `index.md`. Shared frontend callers use that
-  helper to avoid attempting `GetFrontmatter`/`GetWorkspaceConfig` directly on
-  a directory path in Tauri/App Store/TestFlight builds.
+  config flows run. It recognizes standard roots (`README.md`, `index.md`) and
+  nonstandard root markdown filenames already living at the configured
+  workspace root, which avoids repeated `FindRootIndex(...)` retries and
+  `WorkspaceNotFound` warnings on Tauri workspaces like `Diaryx.md`.
+- `tauri.ts` now also guards `initialize_app` / `reinitialize_workspace` with
+  a frontend timeout and a small dev-only retry window for transient IPC
+  fallback failures. That lets a reloaded webview recover from temporary
+  custom-protocol/postMessage handoff issues instead of hanging indefinitely
+  behind an abandoned native invoke callback.
 - `workspaceAccess.ts` now does the same kind of app-wide bridging for
   sandboxed workspace picks: shared folder-picker flows call the native
   `authorize_workspace_path` command immediately after selection so TestFlight

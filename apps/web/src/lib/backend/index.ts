@@ -162,6 +162,7 @@ async function initializeBackend(workspaceId?: string, workspaceName?: string, s
     await instance.init(storageType, workspaceId, workspaceName, storagePluginId);
     console.log("[Backend] Backend initialized successfully");
     setBackendInstance(instance);
+    setInitPromise(null);
     setBackendWorkspaceId(workspaceId);
     setBackendWorkspaceName(workspaceName);
     setBackendStorageType(storageType);

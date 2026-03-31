@@ -582,65 +582,30 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
     /// Walk a directory tree collecting binary (non-text) file paths.
     pub async fn collect_binary_attachments(&self, root_path: &Path) -> Vec<BinaryFileInfo> {
         let root_dir = root_path.parent().unwrap_or(root_path);
-        let mut attachments = Vec::new();
-        let mut visited_dirs = HashSet::new();
-        self.collect_binaries_recursive(root_dir, root_dir, &mut attachments, &mut visited_dirs)
-            .await;
-        attachments
-    }
-
-    async fn collect_binaries_recursive(
-        &self,
-        dir: &Path,
-        root_dir: &Path,
-        attachments: &mut Vec<BinaryFileInfo>,
-        visited_dirs: &mut HashSet<PathBuf>,
-    ) {
-        if visited_dirs.contains(dir) {
-            return;
-        }
-        visited_dirs.insert(dir.to_path_buf());
-
-        // Skip hidden directories
-        if let Some(name) = dir.file_name().and_then(|n| n.to_str())
-            && name.starts_with('.')
-        {
-            return;
-        }
-
-        let entries = match self.workspace.fs_ref().list_files(dir).await {
-            Ok(e) => e,
-            Err(e) => {
-                log::warn!("[Exporter] list_files failed for {:?}: {}", dir, e);
-                return;
-            }
+        let Ok(file_set) = self.workspace.collect_workspace_file_set(root_path).await else {
+            return Vec::new();
         };
 
-        for entry_path in entries {
-            // Skip hidden files/dirs
-            if let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
-                && name.starts_with('.')
-            {
+        let mut attachments = Vec::new();
+        for relative_path in file_set {
+            let entry_path = root_dir.join(&relative_path);
+            if entry_path.extension().is_some_and(|ext| ext == "md") {
+                continue;
+            }
+            if !self.workspace.fs_ref().exists(&entry_path).await {
+                continue;
+            }
+            if !is_binary_file(&entry_path) {
                 continue;
             }
 
-            if self.workspace.fs_ref().is_dir(&entry_path).await {
-                Box::pin(self.collect_binaries_recursive(
-                    &entry_path,
-                    root_dir,
-                    attachments,
-                    visited_dirs,
-                ))
-                .await;
-            } else if is_binary_file(&entry_path) {
-                let relative_path = pathdiff::diff_paths(&entry_path, root_dir)
-                    .unwrap_or_else(|| entry_path.clone());
-                attachments.push(BinaryFileInfo {
-                    source_path: entry_path.to_string_lossy().to_string(),
-                    relative_path: relative_path.to_string_lossy().to_string(),
-                });
-            }
+            attachments.push(BinaryFileInfo {
+                source_path: entry_path.to_string_lossy().to_string(),
+                relative_path,
+            });
         }
+
+        attachments
     }
 }
 
@@ -934,5 +899,39 @@ mod tests {
         assert_eq!(plan_family.excluded.len(), 0);
         assert_eq!(plan_engl.included.len(), 2);
         assert_eq!(plan_engl.excluded.len(), 0);
+    }
+
+    #[test]
+    fn test_collect_binary_attachments_uses_logical_workspace_file_set() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("/workspace/Diaryx.md"),
+            "---\ntitle: Root\ncontents:\n  - notes/day.md\nattachments:\n  - assets/root.png\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("/workspace/notes/day.md"),
+            "---\ntitle: Day\npart_of: ../Diaryx.md\nattachments:\n  - _attachments/day.jpg\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("/workspace/assets/root.png"), "root")
+            .unwrap();
+        fs.write_file(Path::new("/workspace/notes/_attachments/day.jpg"), "day")
+            .unwrap();
+        fs.write_file(Path::new("/workspace/target/debug/app.bin"), "bin")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let exporter = Exporter::new(async_fs);
+        let attachments =
+            block_on_test(exporter.collect_binary_attachments(Path::new("/workspace/Diaryx.md")));
+
+        assert_eq!(
+            attachments
+                .iter()
+                .map(|file| file.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["assets/root.png", "notes/_attachments/day.jpg"]
+        );
     }
 }

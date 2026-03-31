@@ -8,13 +8,6 @@ contents:
 - '[README](/crates/diaryx_sync_server/src/email/README.md)'
 - '[README](/crates/diaryx_sync_server/src/handlers/README.md)'
 - '[README](/crates/diaryx_sync_server/src/sync_v2/README.md)'
-attachments:
-- '[adapters.rs](/crates/diaryx_sync_server/src/adapters.rs)'
-- '[lib.rs](/crates/diaryx_sync_server/src/lib.rs)'
-- '[main.rs](/crates/diaryx_sync_server/src/main.rs)'
-- '[config.rs](/crates/diaryx_sync_server/src/config.rs)'
-- '[git_ops.rs](/crates/diaryx_sync_server/src/git_ops.rs)'
-- '[publish.rs](/crates/diaryx_sync_server/src/publish.rs)'
 exclude:
 - '*.lock'
 ---

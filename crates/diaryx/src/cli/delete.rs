@@ -5,7 +5,6 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use diaryx_core::config::Config;
-use diaryx_core::link_parser::LinkFormat;
 use diaryx_core::workspace::{Workspace, prepare_delete_plan, selection_includes_descendants};
 
 use crate::cli::util::{load_config, resolve_paths};
@@ -73,9 +72,7 @@ pub fn handle_delete(
         .to_path_buf();
 
     // Build a rooted workspace for correct link resolution
-    let link_format = Config::load()
-        .map(|c| c.link_format)
-        .unwrap_or(LinkFormat::default());
+    let link_format = Config::load().map(|c| c.link_format).unwrap_or_default();
     let rws = Workspace::with_link_format(ws.fs_ref().clone(), workspace_root.clone(), link_format);
 
     // Build the workspace tree

@@ -22,7 +22,7 @@ mod types;
 pub use tree_selection::*;
 pub use types::{IndexFile, IndexFrontmatter, TreeNode, format_tree_node};
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,7 @@ use crate::error::{DiaryxError, Result};
 use crate::fs::AsyncFileSystem;
 use crate::link_parser::{self, LinkFormat};
 use crate::path_utils::normalize_sync_path;
+use crate::utils::{is_workspace_skip_dir, matches_glob_pattern};
 
 /// How to generate filenames from entry titles.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +143,30 @@ pub struct WorkspaceConfig {
     #[cfg_attr(feature = "typescript", ts(optional))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_plugins: Option<Vec<String>>,
+}
+
+#[derive(Default)]
+struct FilesystemTreeTrace {
+    explored_dirs: BTreeSet<String>,
+    pruned_excluded_dirs: BTreeSet<String>,
+    pruned_skip_dirs: BTreeSet<String>,
+}
+
+impl FilesystemTreeTrace {
+    fn record_explored(&mut self, path: &Path) {
+        self.explored_dirs
+            .insert(path.to_string_lossy().to_string());
+    }
+
+    fn record_pruned_excluded(&mut self, path: &Path) {
+        self.pruned_excluded_dirs
+            .insert(path.to_string_lossy().to_string());
+    }
+
+    fn record_pruned_skip(&mut self, path: &Path) {
+        self.pruned_skip_dirs
+            .insert(path.to_string_lossy().to_string());
+    }
 }
 
 /// Workspace operations (async-first).
@@ -432,6 +457,29 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         Ok(index)
     }
 
+    /// Parse a markdown file with caching. Returns a clone from the cache on hit,
+    /// or parses and inserts on miss. `None` is cached for non-parseable files.
+    async fn parse_index_cached(
+        &self,
+        path: &Path,
+        cache: &mut HashMap<PathBuf, Option<IndexFile>>,
+    ) -> Result<IndexFile> {
+        let key = path.to_path_buf();
+        if let Some(cached) = cache.get(&key) {
+            return cached.clone().ok_or(DiaryxError::NoFrontmatter(key));
+        }
+        match self.parse_index(path).await {
+            Ok(index) => {
+                cache.insert(key, Some(index.clone()));
+                Ok(index)
+            }
+            Err(e) => {
+                cache.insert(key, None);
+                Err(e)
+            }
+        }
+    }
+
     /// Check if a file is an index file (has contents property)
     pub async fn is_index_file(&self, path: &Path) -> bool {
         if path.extension().is_none_or(|ext| ext != "md") {
@@ -495,6 +543,39 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     return Ok(Some(file));
                 }
                 // Otherwise remember the first index we find
+                if found_index.is_none() {
+                    found_index = Some(file);
+                }
+            }
+        }
+
+        Ok(found_index)
+    }
+
+    /// Cached variant of `find_any_index_in_dir` for use during tree builds.
+    async fn find_any_index_in_dir_cached(
+        &self,
+        dir: &Path,
+        cache: &mut HashMap<PathBuf, Option<IndexFile>>,
+    ) -> Result<Option<PathBuf>> {
+        let md_files = self
+            .fs
+            .list_md_files(dir)
+            .await
+            .map_err(|e| DiaryxError::FileRead {
+                path: dir.to_path_buf(),
+                source: e,
+            })?;
+
+        let mut found_index: Option<PathBuf> = None;
+
+        for file in md_files {
+            if let Ok(index) = self.parse_index_cached(&file, cache).await
+                && index.frontmatter.is_index()
+            {
+                if index.frontmatter.is_root() {
+                    return Ok(Some(file));
+                }
                 if found_index.is_none() {
                     found_index = Some(file);
                 }
@@ -575,6 +656,86 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         )
         .await?;
         Ok(files.into_iter().collect())
+    }
+
+    /// Cached variant of `collect_exclude_patterns` for use during tree builds.
+    async fn collect_exclude_patterns_cached(
+        &self,
+        index_path: &Path,
+        cache: &mut HashMap<PathBuf, Option<IndexFile>>,
+    ) -> Vec<String> {
+        let mut patterns = Vec::new();
+        let mut current_path = index_path.to_path_buf();
+        let link_format = self
+            .get_workspace_config(index_path)
+            .await
+            .ok()
+            .map(|c| c.link_format);
+
+        loop {
+            // Use parse_index_cached but apply the link_format hint afterward
+            let Ok(mut index) = self.parse_index_cached(&current_path, cache).await else {
+                break;
+            };
+            index.link_format_hint = link_format;
+
+            patterns.extend(index.frontmatter.exclude_list().iter().cloned());
+
+            if let Some(part_of_ref) = index.frontmatter.part_of.as_ref() {
+                let parent_path = resolve_workspace_path(
+                    current_path.parent().unwrap_or(Path::new(".")),
+                    &index.resolve_path(part_of_ref),
+                );
+
+                if self.fs.exists(&parent_path).await {
+                    current_path = parent_path;
+                    continue;
+                }
+            }
+
+            break;
+        }
+
+        patterns
+    }
+
+    /// Cached variant of `exclude_patterns_for_dir` for use during tree builds.
+    async fn exclude_patterns_for_dir_cached(
+        &self,
+        dir: &Path,
+        workspace_root: &Path,
+        cache: &mut HashMap<PathBuf, Option<IndexFile>>,
+    ) -> Vec<String> {
+        let mut current = Some(dir);
+        while let Some(candidate) = current {
+            if !candidate.starts_with(workspace_root) {
+                break;
+            }
+
+            if let Ok(Some(index)) = self.find_any_index_in_dir_cached(candidate, cache).await {
+                return self.collect_exclude_patterns_cached(&index, cache).await;
+            }
+
+            current = candidate.parent();
+        }
+
+        Vec::new()
+    }
+
+    fn workspace_relative_path(&self, workspace_root: &Path, path: &Path) -> String {
+        let relative = path.strip_prefix(workspace_root).unwrap_or(path);
+        normalize_sync_path(&relative.to_string_lossy().replace('\\', "/"))
+    }
+
+    fn path_matches_exclude(
+        &self,
+        pattern: &str,
+        workspace_root: &Path,
+        path: &Path,
+        file_name: &str,
+    ) -> bool {
+        let relative_path = self.workspace_relative_path(workspace_root, path);
+        matches_glob_pattern(pattern, file_name) || matches_glob_pattern(pattern, &relative_path)
     }
 
     async fn collect_workspace_file_set_recursive(
@@ -1449,26 +1610,46 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         show_hidden: bool,
         max_depth: Option<usize>,
     ) -> Result<TreeNode> {
-        // Collect exclude patterns from the root directory's index
-        let exclude_patterns = if let Ok(Some(index)) = self.find_any_index_in_dir(root_dir).await {
-            if let Ok(parsed) = self.parse_index(&index).await {
-                parsed.frontmatter.exclude_list().to_vec()
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-        self.build_filesystem_tree_recursive(
-            root_dir,
-            root_dir,
-            show_hidden,
-            max_depth,
-            &exclude_patterns,
-        )
-        .await
+        let mut parse_cache: HashMap<PathBuf, Option<IndexFile>> = HashMap::new();
+        let exclude_patterns = self
+            .exclude_patterns_for_dir_cached(root_dir, root_dir, &mut parse_cache)
+            .await;
+        let mut trace = FilesystemTreeTrace::default();
+        let tree = self
+            .build_filesystem_tree_recursive(
+                root_dir,
+                root_dir,
+                show_hidden,
+                max_depth,
+                &exclude_patterns,
+                &mut trace,
+                &mut parse_cache,
+            )
+            .await?;
+
+        log::info!(
+            "[Workspace] Filesystem tree explored {} directories, pruned {} excluded dirs and {} built-in skip dirs",
+            trace.explored_dirs.len(),
+            trace.pruned_excluded_dirs.len(),
+            trace.pruned_skip_dirs.len(),
+        );
+        log::debug!(
+            "[Workspace] Filesystem tree explored directories: {:?}",
+            trace.explored_dirs
+        );
+        log::debug!(
+            "[Workspace] Filesystem tree pruned excluded directories: {:?}",
+            trace.pruned_excluded_dirs
+        );
+        log::debug!(
+            "[Workspace] Filesystem tree pruned built-in skip directories: {:?}",
+            trace.pruned_skip_dirs
+        );
+
+        Ok(tree)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_filesystem_tree_recursive(
         &self,
         dir: &Path,
@@ -1476,7 +1657,10 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         show_hidden: bool,
         max_depth: Option<usize>,
         exclude_patterns: &[String],
+        trace: &mut FilesystemTreeTrace,
+        parse_cache: &mut HashMap<PathBuf, Option<IndexFile>>,
     ) -> Result<TreeNode> {
+        trace.record_explored(dir);
         // Get directory name for display
         let dir_name = dir
             .file_name()
@@ -1485,8 +1669,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // Try to find an index file in this directory to get title/description
         let (name, description, index_path) =
-            if let Ok(Some(index)) = self.find_any_index_in_dir(dir).await {
-                if let Ok(parsed) = self.parse_index(&index).await {
+            if let Ok(Some(index)) = self.find_any_index_in_dir_cached(dir, parse_cache).await {
+                if let Ok(parsed) = self.parse_index_cached(&index, parse_cache).await {
                     let title = parsed.frontmatter.title.unwrap_or_else(|| dir_name.clone());
                     (title, parsed.frontmatter.description, Some(index))
                 } else {
@@ -1508,34 +1692,37 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             let mut entries: Vec<_> = entries.into_iter().collect();
             entries.sort(); // Sort alphabetically
 
-            // Filter out hidden files, temporary files, and excluded patterns.
-            // Exclude patterns are matched against the path relative to root_dir,
-            // so `target` only matches at the root while `**/node_modules` matches
-            // at any depth.
-            let entries: Vec<_> = entries
-                .into_iter()
-                .filter(|entry| {
-                    let file_name = entry
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let hidden = !show_hidden && file_name.starts_with('.');
-                    let temp = crate::fs::is_temp_file(&file_name);
-                    let rel_path = entry
-                        .strip_prefix(root_dir)
-                        .unwrap_or(entry)
-                        .to_string_lossy();
-                    let excluded = exclude_patterns
-                        .iter()
-                        .any(|pattern| crate::utils::matches_glob_pattern(pattern, &rel_path));
-                    !hidden && !temp && !excluded
-                })
-                .collect();
+            let mut filtered_entries = Vec::new();
+            for entry in entries {
+                let file_name = entry
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let hidden = !show_hidden && file_name.starts_with('.');
+                let temp = crate::fs::is_temp_file(&file_name);
+                let excluded = exclude_patterns.iter().any(|pattern| {
+                    self.path_matches_exclude(pattern, root_dir, &entry, &file_name)
+                });
+
+                if hidden || temp || excluded {
+                    if excluded && self.fs.is_dir(&entry).await {
+                        trace.record_pruned_excluded(&entry);
+                    }
+                    continue;
+                }
+
+                if self.fs.is_dir(&entry).await && is_workspace_skip_dir(&entry) {
+                    trace.record_pruned_skip(&entry);
+                    continue;
+                }
+
+                filtered_entries.push(entry);
+            }
 
             // If at depth limit, show truncation indicator
-            if at_depth_limit && !entries.is_empty() {
+            if at_depth_limit && !filtered_entries.is_empty() {
                 children.push(TreeNode {
-                    name: format!("... ({} more)", entries.len()),
+                    name: format!("... ({} more)", filtered_entries.len()),
                     description: None,
                     path: node_path.clone(),
                     is_index: false,
@@ -1545,54 +1732,69 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             } else {
                 let next_depth = max_depth.map(|d| d.saturating_sub(1));
 
-                for entry in entries {
+                for entry in filtered_entries {
                     let file_name = entry
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
 
                     if self.fs.is_dir(&entry).await {
+                        let child_exclude_patterns = self
+                            .exclude_patterns_for_dir_cached(&entry, root_dir, parse_cache)
+                            .await;
                         // Recurse into subdirectory with decremented depth
                         if let Ok(child_tree) = Box::pin(self.build_filesystem_tree_recursive(
                             &entry,
                             root_dir,
                             show_hidden,
                             next_depth,
-                            exclude_patterns,
+                            &child_exclude_patterns,
+                            trace,
+                            parse_cache,
                         ))
                         .await
                         {
                             children.push(child_tree);
                         }
                     } else {
-                        // It's a file - skip index files (already represented by parent dir)
-                        if self.is_index_file(&entry).await {
-                            continue;
-                        }
-
-                        // Get title from frontmatter if it's a markdown file
-                        let (file_title, file_desc) =
-                            if entry.extension().is_some_and(|e| e == "md") {
-                                if let Ok(parsed) = self.parse_index(&entry).await {
-                                    (
-                                        parsed.frontmatter.title.unwrap_or(file_name.clone()),
-                                        parsed.frontmatter.description,
-                                    )
-                                } else {
-                                    (file_name.clone(), None)
+                        // For markdown files, parse once and use for both
+                        // index detection and title extraction.
+                        if entry.extension().is_some_and(|e| e == "md") {
+                            if let Ok(parsed) = self.parse_index_cached(&entry, parse_cache).await {
+                                // Skip index files (already represented by parent dir)
+                                if parsed.frontmatter.is_index() {
+                                    continue;
                                 }
+                                children.push(TreeNode {
+                                    name: parsed.frontmatter.title.unwrap_or(file_name.clone()),
+                                    description: parsed.frontmatter.description,
+                                    path: entry,
+                                    is_index: false,
+                                    children: Vec::new(),
+                                    properties: std::collections::HashMap::new(),
+                                });
                             } else {
-                                (file_name.clone(), None)
-                            };
-
-                        children.push(TreeNode {
-                            name: file_title,
-                            description: file_desc,
-                            path: entry,
-                            is_index: false,
-                            children: Vec::new(),
-                            properties: std::collections::HashMap::new(),
-                        });
+                                // Non-parseable .md file — show as leaf
+                                children.push(TreeNode {
+                                    name: file_name.clone(),
+                                    description: None,
+                                    path: entry,
+                                    is_index: false,
+                                    children: Vec::new(),
+                                    properties: std::collections::HashMap::new(),
+                                });
+                            }
+                        } else {
+                            // Non-markdown file
+                            children.push(TreeNode {
+                                name: file_name.clone(),
+                                description: None,
+                                path: entry,
+                                is_index: false,
+                                children: Vec::new(),
+                                properties: std::collections::HashMap::new(),
+                            });
+                        }
                     }
                 }
             }
@@ -4496,6 +4698,99 @@ mod tests {
                 "index.md".to_string(),
                 "shared/manual.pdf".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn test_build_filesystem_tree_inherits_nested_index_excludes() {
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("workspace/scripts")).unwrap();
+        fs.write_file(
+            Path::new("workspace/Diaryx.md"),
+            "---\ntitle: Root\ncontents: []\nexclude:\n  - \"**/target\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("workspace/scripts/scripts.md"),
+            "---\ntitle: Scripts\ncontents: []\nexclude:\n  - \"*.sh\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("workspace/scripts/keep.txt"), "keep")
+            .unwrap();
+        fs.write_file(Path::new("workspace/scripts/run.sh"), "echo hi")
+            .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let tree =
+            block_on_test(ws.build_filesystem_tree_with_depth(Path::new("workspace"), false, None))
+                .unwrap();
+
+        let scripts = tree
+            .children
+            .iter()
+            .find(|child| child.path == PathBuf::from("workspace/scripts/scripts.md"))
+            .expect("scripts directory should be present");
+
+        let child_names: Vec<_> = scripts
+            .children
+            .iter()
+            .map(|child| child.name.as_str())
+            .collect();
+        assert!(
+            child_names.contains(&"keep.txt"),
+            "expected keep.txt to remain visible, got {:?}",
+            child_names
+        );
+        assert!(
+            !child_names.contains(&"run.sh"),
+            "expected nested index exclude to hide run.sh, got {:?}",
+            child_names
+        );
+    }
+
+    #[test]
+    fn test_build_filesystem_tree_prunes_builtin_skip_directories() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("workspace/Diaryx.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("workspace/visible.txt"), "ok")
+            .unwrap();
+        fs.write_file(Path::new("workspace/target/debug/app.bin"), "bin")
+            .unwrap();
+        fs.write_file(Path::new("workspace/node_modules/pkg/index.js"), "js")
+            .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let tree =
+            block_on_test(ws.build_filesystem_tree_with_depth(Path::new("workspace"), false, None))
+                .unwrap();
+
+        let child_paths: Vec<_> = tree
+            .children
+            .iter()
+            .map(|child| child.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            child_paths.contains(&"workspace/visible.txt".to_string()),
+            "expected visible file in tree, got {:?}",
+            child_paths
+        );
+        assert!(
+            !child_paths.iter().any(|path| path.contains("target")),
+            "expected target to be pruned, got {:?}",
+            child_paths
+        );
+        assert!(
+            !child_paths.iter().any(|path| path.contains("node_modules")),
+            "expected node_modules to be pruned, got {:?}",
+            child_paths
         );
     }
 }

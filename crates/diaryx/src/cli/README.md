@@ -7,28 +7,6 @@ audience:
 - public
 contents:
 - '[README](/crates/diaryx/src/cli/nav/README.md)'
-attachments:
-- '[mod.rs](/crates/diaryx/src/cli/mod.rs)'
-- '[args.rs](/crates/diaryx/src/cli/args.rs)'
-- '[attachment.rs](/crates/diaryx/src/cli/attachment.rs)'
-- '[config.rs](/crates/diaryx/src/cli/config.rs)'
-- '[content.rs](/crates/diaryx/src/cli/content.rs)'
-- '[entry.rs](/crates/diaryx/src/cli/entry.rs)'
-- '[export.rs](/crates/diaryx/src/cli/export.rs)'
-- '[normalize.rs](/crates/diaryx/src/cli/normalize.rs)'
-- '[property.rs](/crates/diaryx/src/cli/property.rs)'
-- '[publish.rs](/crates/diaryx/src/cli/publish.rs)'
-- '[search.rs](/crates/diaryx/src/cli/search.rs)'
-- '[sort.rs](/crates/diaryx/src/cli/sort.rs)'
-- '[template.rs](/crates/diaryx/src/cli/template.rs)'
-- '[util.rs](/crates/diaryx/src/cli/util.rs)'
-- '[workspace.rs](/crates/diaryx/src/cli/workspace.rs)'
-- '[plugin_loader.rs](/crates/diaryx/src/cli/plugin_loader.rs)'
-- '[plugin_storage.rs](/crates/diaryx/src/cli/plugin_storage.rs)'
-- '[plugin_manager.rs](/crates/diaryx/src/cli/plugin_manager.rs)'
-- '[plugin_dispatch.rs](/crates/diaryx/src/cli/plugin_dispatch.rs)'
-- '[preview.rs](/crates/diaryx/src/cli/preview.rs)'
-- '[edit.rs](/crates/diaryx/src/cli/edit.rs)'
 exclude:
 - '*.lock'
 ---

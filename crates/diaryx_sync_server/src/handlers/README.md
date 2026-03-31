@@ -2,17 +2,6 @@
 title: Handlers module
 description: HTTP route handlers
 part_of: "[README](/crates/diaryx_sync_server/src/README.md)"
-attachments:
-  - "[mod.rs](/crates/diaryx_sync_server/src/handlers/mod.rs)"
-  - "[ai.rs](/crates/diaryx_sync_server/src/handlers/ai.rs)"
-  - "[auth.rs](/crates/diaryx_sync_server/src/handlers/auth.rs)"
-  - "[audiences.rs](/crates/diaryx_sync_server/src/handlers/audiences.rs)"
-  - "[domains.rs](/crates/diaryx_sync_server/src/handlers/domains.rs)"
-  - "[namespaces.rs](/crates/diaryx_sync_server/src/handlers/namespaces.rs)"
-  - "[ns_sessions.rs](/crates/diaryx_sync_server/src/handlers/ns_sessions.rs)"
-  - "[objects.rs](/crates/diaryx_sync_server/src/handlers/objects.rs)"
-  - "[stripe.rs](/crates/diaryx_sync_server/src/handlers/stripe.rs)"
-  - "[apple.rs](/crates/diaryx_sync_server/src/handlers/apple.rs)"
 exclude:
   - "*.lock"
 ---

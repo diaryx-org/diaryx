@@ -5,13 +5,6 @@ part_of: '[README](/crates/diaryx/src/cli/README.md)'
 author: adammharris
 audience:
 - public
-attachments:
-- '[mod.rs](/crates/diaryx/src/cli/nav/mod.rs)'
-- '[app.rs](/crates/diaryx/src/cli/nav/app.rs)'
-- '[state.rs](/crates/diaryx/src/cli/nav/state.rs)'
-- '[keys.rs](/crates/diaryx/src/cli/nav/keys.rs)'
-- '[tree.rs](/crates/diaryx/src/cli/nav/tree.rs)'
-- '[ui.rs](/crates/diaryx/src/cli/nav/ui.rs)'
 ---
 # Navigation TUI Module
 

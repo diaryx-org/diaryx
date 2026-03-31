@@ -3,7 +3,7 @@ title: ROADMAP
 description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
-updated: 2026-03-30T15:33:59-06:00
+updated: 2026-03-30T18:30:36-06:00
 audience:
 - public
 - agents
@@ -15,31 +15,24 @@ link: '[ROADMAP](/ROADMAP.md)'
 ---
 # ROADMAP
 
-## Todo (short-term, medium priority)
-
-- Upload to iOS/Mac App Store
-- Also bundle for stores for various platforms
-- Publish updated diaryx.org site
-  - Include this ROADMAP in the site
-
-## v1.4.0 - Bundles and Release
-
-- [x] Fleshing out plugin functionality
-  - Better onboarding
-- [x] Bundles can include "spotlight" onboarding
-- [x] Log in from onboarding screen
-- [x] Browse bundles from onboarding screen
-- [x] Set up terms and conditions on diaryx.org; update links in purchase section
-- [ ] Release to app store!
-- [x] Stretch goal: make sync plugin work seamlessly
-
 ## v1.5.0 - Commercial Viability
 
-- AI plugin: Integrate with agents, pin down Diaryx philosophy
-- Publish plugin: Configure identity providers (email, phone#, maybe oauth?), perhaps other methods of publishing besides a website (email, others?)
-- Test Obsidian plugin robustness
-- Make sync plugin work if not already
-- Flesh out import and export—deliver on the "import/export anywhere" promise.
+**AI plugin**
+
+- [ ] Pin down Diaryx philosophy with AI, brainstorm good AI integrations
+
+**Publish plugin**
+
+- [ ] Phone number/SMS support
+- [ ] Alternative theming support for website publishing
+- [ ] Support rich interactive content in websites (like Ammon's demo)
+
+**Other**
+
+- [ ] Publish Obsidian plugin
+- [ ] Make sync plugin work if not already
+- [ ] Big upgrade to plugin-import and plugin-pandoc
+- [ ] Finish TestFlight and publish to app store
 
 ## v1.6.0 - Real world usability
 

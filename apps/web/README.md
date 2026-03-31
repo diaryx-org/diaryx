@@ -10,11 +10,6 @@ contents:
 - '[README](/apps/web/src/README.md)'
 - '[README](/apps/web/worker/README.md)'
 - '[Tiptap Custom Extensions](/apps/web/docs/tiptap-custom-extensions.md)'
-attachments:
-- '[package.json](/apps/web/package.json)'
-- '[svelte.config.js](/apps/web/svelte.config.js)'
-- '[components.json](/apps/web/components.json)'
-- '[index.html](/apps/web/index.html)'
 exclude:
 - '*.lock'
 - '**/*.ts'

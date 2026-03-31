@@ -2,10 +2,6 @@
 title: Database module
 description: SQLite database schema and repository
 part_of: '[README](/crates/diaryx_sync_server/src/README.md)'
-attachments:
-  - '[mod.rs](/crates/diaryx_sync_server/src/db/mod.rs)'
-  - '[repo.rs](/crates/diaryx_sync_server/src/db/repo.rs)'
-  - '[schema.rs](/crates/diaryx_sync_server/src/db/schema.rs)'
 exclude:
   - '*.lock'
 ---

@@ -2,15 +2,6 @@
 title: diaryx_wasm src
 description: Source code for WASM bindings
 part_of: '[README](/crates/diaryx_wasm/README.md)'
-attachments:
-  - '[lib.rs](/crates/diaryx_wasm/src/lib.rs)'
-  - '[backend.rs](/crates/diaryx_wasm/src/backend.rs)'
-  - '[error.rs](/crates/diaryx_wasm/src/error.rs)'
-  - '[fsa_fs.rs](/crates/diaryx_wasm/src/fsa_fs.rs)'
-  - '[indexeddb_fs.rs](/crates/diaryx_wasm/src/indexeddb_fs.rs)'
-  - '[js_async_fs.rs](/crates/diaryx_wasm/src/js_async_fs.rs)'
-  - '[opfs_fs.rs](/crates/diaryx_wasm/src/opfs_fs.rs)'
-  - '[utils.rs](/crates/diaryx_wasm/src/utils.rs)'
 exclude:
   - '*.lock'
 ---

@@ -9,7 +9,7 @@ pub fn handle_template_command(command: TemplateCommands) -> bool {
     {
         let _ = command;
         eprintln!("Template commands require the 'plugins' feature.");
-        return false;
+        false
     }
 
     #[cfg(feature = "plugins")]

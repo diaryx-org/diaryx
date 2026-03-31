@@ -7,8 +7,6 @@ audience:
 part_of: '[README](/crates/README.md)'
 contents:
 - '[README](/crates/diaryx_core/src/README.md)'
-attachments:
-- '[Cargo.toml](/crates/diaryx_core/Cargo.toml)'
 exclude:
 - '*.lock'
 - '**/*.rs'
@@ -189,7 +187,12 @@ let validator = Validator::new(fs);
 // - None for unlimited depth (full workspace scan)
 // Exclude patterns from the nearest index + its part_of ancestors are
 // honored during that scan, including workspace-relative directory globs
-// such as "**/target" and "**/dist/**".
+// such as "**/target" and "**/dist/**". Validation also prunes common
+// build/dependency directories such as target, node_modules, dist, build,
+// and .git before recursing into them, plus hidden dot-directories such as
+// .direnv and .zig-cache.
+// "Show All Files" / filesystem-tree mode now uses the same exclude inheritance
+// and built-in directory pruning rules.
 let root_path = Path::new("./workspace/README.md");
 let result = futures_lite::future::block_on(
     validator.validate_workspace(&root_path, Some(2))

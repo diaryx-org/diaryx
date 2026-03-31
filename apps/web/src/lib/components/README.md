@@ -4,18 +4,6 @@ description: Reusable Svelte components
 part_of: '[README](/apps/web/src/lib/README.md)'
 contents:
   - '[README](/apps/web/src/lib/components/ui/README.md)'
-attachments:
-  - '[AttachmentPicker.svelte](/apps/web/src/lib/components/AttachmentPicker.svelte)'
-  - '[AttachmentPickerNodeView.svelte](/apps/web/src/lib/components/AttachmentPickerNodeView.svelte)'
-  - '[BubbleMenuComponent.svelte](/apps/web/src/lib/components/BubbleMenuComponent.svelte)'
-  - '[FloatingMenuComponent.svelte](/apps/web/src/lib/components/FloatingMenuComponent.svelte)'
-  - '[HighlightColorPicker.svelte](/apps/web/src/lib/components/HighlightColorPicker.svelte)'
-  - '[MoreStylesPicker.svelte](/apps/web/src/lib/components/MoreStylesPicker.svelte)'
-  - '[PluginStatusItems.svelte](/apps/web/src/lib/components/PluginStatusItems.svelte)'
-  - '[PluginIframe.svelte](/apps/web/src/lib/components/PluginIframe.svelte)'
-  - '[PluginSidebarPanel.svelte](/apps/web/src/lib/components/PluginSidebarPanel.svelte)'
-  - '[UpgradeBanner.svelte](/apps/web/src/lib/components/UpgradeBanner.svelte)'
-  - '[HtmlBlockNodeView.svelte](/apps/web/src/lib/components/HtmlBlockNodeView.svelte)'
 exclude:
   - '*.lock'
   - '**/*.ts'
@@ -39,7 +27,7 @@ Reusable Svelte components for the editor and UI.
 | `HighlightColorPicker.svelte` | Text highlight color picker |
 | `HtmlBlockNodeView.svelte` | Raw HTML block preview/editor shell; preview sanitization now also rewrites `<picture><source srcset>` image candidates in addition to `<img src>` so local images render correctly in Tauri and web preview flows. |
 | `MoreStylesPicker.svelte` | Overflow formatting menu (strikethrough, inline code, spoiler) |
-| `PluginStatusItems.svelte` | Footer status-bar renderer for plugin-contributed items; the host displays plugin-reported status but does not hardcode sync-specific actions. |
+| `PluginStatusItems.svelte` | Footer status-bar renderer for plugin-contributed items; fetches status once on mount and then refreshes on `SyncStatusChanged`/`SyncProgress` filesystem events instead of polling, eliminating the previous 3-second interval that flooded the IPC channel. |
 | `PluginIframe.svelte` | Sandboxed plugin iframe host with direct `get_component_html` loading when the runtime exposes it, command bridge fallback for older/plugin-command-only guests, managed-context injection for `diaryx.ai`, and response-shape normalization for plugin HTML payloads. |
 | `PluginSidebarPanel.svelte` | Sidebar wrapper for plugin component refs (Builtin/Declarative/Iframe). |
 | `SpotlightOverlay.svelte` | Marketplace onboarding spotlight overlay; geometry, tooltip placement, and swipe interpretation live in `spotlightOverlay.ts` so the component shell stays thin and the interaction rules can be unit-tested directly. |

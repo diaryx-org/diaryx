@@ -85,3 +85,18 @@ Files with non-portable filenames produce a `NonPortableFilename` warning with a
 Tree building now deduplicates child paths per index when `contents` includes
 the same target more than once. This prevents duplicate `TreeNode.path` values
 from propagating to clients and avoids keyed-render crashes in UIs.
+
+## Filesystem Tree Mode
+
+`build_filesystem_tree*()` powers "Show All Files" mode. It now:
+
+- matches `exclude` patterns against both basenames and workspace-relative paths
+- inherits excludes from the nearest nested index and its `part_of` ancestors
+- prunes common non-workspace directories such as `target`, `node_modules`,
+  `dist`, `build`, and `.git` before recursing
+- caches parsed frontmatter across the recursive traversal so each file is
+  read and parsed at most once (eliminates the previous double-parse of
+  `is_index_file` + title extraction, and shares results with
+  `exclude_patterns_for_dir` and `find_any_index_in_dir`)
+- logs how many directories were explored and pruned, with debug-level path
+  lists for diagnosis

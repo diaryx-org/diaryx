@@ -1874,6 +1874,15 @@ describe('api', () => {
       expect(mockBackend.execute).not.toHaveBeenCalled()
       expect(result).toBe('/Users/test/journal/index.md')
     })
+
+    it('should recognize a nonstandard root markdown filename when it lives at the workspace root', async () => {
+      mockBackend.getWorkspacePath = vi.fn().mockReturnValue('/Users/test/journal/')
+
+      const result = await api.resolveWorkspaceRootIndexPath('/Users/test/journal/Diaryx.md')
+
+      expect(mockBackend.execute).not.toHaveBeenCalled()
+      expect(result).toBe('/Users/test/journal/Diaryx.md')
+    })
   })
 
   describe('deleteEntry with hard_delete', () => {

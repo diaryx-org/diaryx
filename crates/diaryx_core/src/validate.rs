@@ -10,7 +10,7 @@
 //! For synchronous contexts (CLI, tests), wrap a sync filesystem with
 //! `SyncToAsyncFs` and use `futures_lite::future::block_on()`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -20,8 +20,8 @@ use crate::error::Result;
 use crate::fs::{AsyncFileSystem, is_temp_file};
 use crate::link_parser::{self, LinkFormat};
 use crate::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
-use crate::utils::matches_glob_pattern;
 use crate::utils::path::relative_path_from_file_to_target;
+use crate::utils::{is_workspace_skip_dir, matches_glob_pattern};
 use crate::workspace::Workspace;
 
 /// Normalize a path by removing `.` and `..` components without filesystem access.
@@ -611,6 +611,36 @@ struct ValidationContext<'a> {
     workspace_root: &'a Path,
 }
 
+#[derive(Default)]
+struct ValidationScanTrace {
+    explored_dirs: BTreeSet<String>,
+    pruned_hidden_dirs: BTreeSet<String>,
+    pruned_excluded_dirs: BTreeSet<String>,
+    pruned_skip_dirs: BTreeSet<String>,
+}
+
+impl ValidationScanTrace {
+    fn record_explored(&mut self, path: &Path) {
+        self.explored_dirs
+            .insert(path.to_string_lossy().to_string());
+    }
+
+    fn record_pruned_excluded(&mut self, path: &Path) {
+        self.pruned_excluded_dirs
+            .insert(path.to_string_lossy().to_string());
+    }
+
+    fn record_pruned_hidden(&mut self, path: &Path) {
+        self.pruned_hidden_dirs
+            .insert(path.to_string_lossy().to_string());
+    }
+
+    fn record_pruned_skip(&mut self, path: &Path) {
+        self.pruned_skip_dirs
+            .insert(path.to_string_lossy().to_string());
+    }
+}
+
 impl<FS: AsyncFileSystem> Validator<FS> {
     /// Create a new validator.
     pub fn new(fs: FS) -> Self {
@@ -663,6 +693,10 @@ impl<FS: AsyncFileSystem> Validator<FS> {
     ) -> bool {
         let relative_path = self.workspace_relative_path(workspace_root, path);
         matches_glob_pattern(pattern, file_name) || matches_glob_pattern(pattern, &relative_path)
+    }
+
+    fn should_skip_workspace_dir(&self, path: &Path) -> bool {
+        is_workspace_skip_dir(path)
     }
 
     async fn exclude_patterns_for_dir(&self, dir: &Path, workspace_root: &Path) -> Vec<String> {
@@ -728,6 +762,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         let root_exclude_patterns = self
             .exclude_patterns_for_dir(workspace_root, workspace_root)
             .await;
+        let mut scan_trace = ValidationScanTrace::default();
         let all_entries = self
             .list_files_with_depth(
                 workspace_root,
@@ -735,8 +770,33 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 0,
                 max_depth,
                 &root_exclude_patterns,
+                &mut scan_trace,
             )
             .await;
+
+        log::info!(
+            "[Validator] Orphan scan explored {} directories, pruned {} hidden dirs, {} excluded dirs and {} built-in skip dirs",
+            scan_trace.explored_dirs.len(),
+            scan_trace.pruned_hidden_dirs.len(),
+            scan_trace.pruned_excluded_dirs.len(),
+            scan_trace.pruned_skip_dirs.len(),
+        );
+        log::debug!(
+            "[Validator] Orphan scan explored directories: {:?}",
+            scan_trace.explored_dirs
+        );
+        log::debug!(
+            "[Validator] Orphan scan pruned hidden directories: {:?}",
+            scan_trace.pruned_hidden_dirs
+        );
+        log::debug!(
+            "[Validator] Orphan scan pruned excluded directories: {:?}",
+            scan_trace.pruned_excluded_dirs
+        );
+        log::debug!(
+            "[Validator] Orphan scan pruned built-in skip directories: {:?}",
+            scan_trace.pruned_skip_dirs
+        );
 
         if !all_entries.is_empty() {
             // Normalize visited paths for comparison using path normalization
@@ -781,21 +841,6 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 None
             };
 
-            // Directories to skip (common build/dependency directories)
-            let skip_dirs = [
-                "node_modules",
-                "target",
-                ".git",
-                ".svn",
-                "dist",
-                "build",
-                "__pycache__",
-                ".next",
-                ".nuxt",
-                "vendor",
-                ".cargo",
-            ];
-
             for entry in all_entries {
                 // Skip entries that are in hidden directories or are hidden files
                 // Check all path components, not just the filename
@@ -812,15 +857,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 }
 
                 // Skip entries in common non-workspace directories
-                let should_skip = entry.components().any(|c| {
-                    if let std::path::Component::Normal(name) = c {
-                        skip_dirs.iter().any(|&d| name == std::ffi::OsStr::new(d))
-                    } else {
-                        false
-                    }
-                });
-
-                if should_skip {
+                if self.should_skip_workspace_dir(&entry) {
                     continue;
                 }
 
@@ -857,21 +894,33 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     if extension == Some("md") {
                         // Markdown file not in hierarchy
                         if !is_excluded {
-                            result.warnings.push(ValidationWarning::OrphanFile {
-                                file: entry.clone(),
-                                suggested_index: suggested_index.clone(),
-                            });
+                            // Attachment notes (files with the `attachment` property) are
+                            // managed via `attachments` lists, not `contents`/`part_of`.
+                            // Skip contents/part_of validation for them.
+                            let is_attachment_note =
+                                if let Ok(idx) = self.ws.parse_index(&entry).await {
+                                    idx.frontmatter.attachment.is_some()
+                                } else {
+                                    false
+                                };
 
-                            // Also check if this orphan file is missing part_of
-                            if let Ok(index) = self.ws.parse_index(&entry).await {
-                                let is_index = index.frontmatter.contents.is_some()
-                                    || !index.frontmatter.contents_list().is_empty();
+                            if !is_attachment_note {
+                                result.warnings.push(ValidationWarning::OrphanFile {
+                                    file: entry.clone(),
+                                    suggested_index: suggested_index.clone(),
+                                });
 
-                                if !is_index && index.frontmatter.part_of.is_none() {
-                                    result.warnings.push(ValidationWarning::MissingPartOf {
-                                        file: entry.clone(),
-                                        suggested_index,
-                                    });
+                                // Also check if this orphan file is missing part_of
+                                if let Ok(index) = self.ws.parse_index(&entry).await {
+                                    let is_index = index.frontmatter.contents.is_some()
+                                        || !index.frontmatter.contents_list().is_empty();
+
+                                    if !is_index && index.frontmatter.part_of.is_none() {
+                                        result.warnings.push(ValidationWarning::MissingPartOf {
+                                            file: entry.clone(),
+                                            suggested_index,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -898,6 +947,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         current_depth: usize,
         max_depth: Option<usize>,
         exclude_patterns: &[String],
+        trace: &mut ValidationScanTrace,
     ) -> Vec<PathBuf> {
         // Check if we've exceeded max depth
         if let Some(max) = max_depth
@@ -907,12 +957,22 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         }
 
         let mut all_entries = Vec::new();
+        trace.record_explored(dir);
 
         if let Ok(entries) = self.ws.fs_ref().list_files(dir).await {
             for entry in entries {
                 // Skip symlinks entirely - they're filesystem implementation details.
                 // Also avoids potential infinite loops from circular symlinks.
                 if self.ws.fs_ref().is_symlink(&entry).await {
+                    continue;
+                }
+
+                if let Some(name) = entry.file_name().and_then(|n| n.to_str())
+                    && name.starts_with('.')
+                {
+                    if self.ws.fs_ref().is_dir(&entry).await {
+                        trace.record_pruned_hidden(&entry);
+                    }
                     continue;
                 }
 
@@ -927,13 +987,21 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 if exclude_patterns.iter().any(|pattern| {
                     self.path_matches_exclude(pattern, workspace_root, &entry, file_name)
                 }) {
+                    if self.ws.fs_ref().is_dir(&entry).await {
+                        trace.record_pruned_excluded(&entry);
+                    }
                     continue;
                 }
 
-                all_entries.push(entry.clone());
-
                 // Recurse into subdirectories
                 if self.ws.fs_ref().is_dir(&entry).await {
+                    if self.should_skip_workspace_dir(&entry) {
+                        trace.record_pruned_skip(&entry);
+                        continue;
+                    }
+
+                    all_entries.push(entry.clone());
+
                     let child_exclude_patterns =
                         self.exclude_patterns_for_dir(&entry, workspace_root).await;
                     let sub_entries = Box::pin(self.list_files_with_depth(
@@ -942,9 +1010,12 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         current_depth + 1,
                         max_depth,
                         &child_exclude_patterns,
+                        trace,
                     ))
                     .await;
                     all_entries.extend(sub_entries);
+                } else {
+                    all_entries.push(entry.clone());
                 }
             }
         }
@@ -1174,10 +1245,12 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 // File has no part_of but was reached from a parent's contents.
                 // Non-index files should have part_of to maintain hierarchy links.
                 // Index files without part_of could be sub-roots, which is allowed.
+                // Attachment notes are managed via `attachments`, not `contents`/`part_of`.
                 let is_index = index.frontmatter.contents.is_some()
                     || !index.frontmatter.contents_list().is_empty();
+                let is_attachment_note = index.frontmatter.attachment.is_some();
 
-                if !is_index {
+                if !is_index && !is_attachment_note {
                     let suggested_index = find_index_in_directory(&self.ws, dir, Some(path)).await;
                     ctx.result.warnings.push(ValidationWarning::MissingPartOf {
                         file: path.to_path_buf(),
@@ -1462,11 +1535,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 // File has no part_of - check if it's a root index
                 // Non-index files (files without contents) should have part_of
                 // Index files without part_of are potential root indexes, which is allowed
+                // Attachment notes are managed via `attachments`, not `contents`/`part_of`
                 // But if it has no contents AND no part_of, it's definitely orphaned
                 let is_index = index.frontmatter.contents.is_some()
                     || !index.frontmatter.contents_list().is_empty();
+                let is_attachment_note = index.frontmatter.attachment.is_some();
 
-                if !is_index {
+                if !is_index && !is_attachment_note {
                     // Regular file with no part_of = orphan
                     // Try to find an index in the same directory to suggest
                     let suggested_index = find_index_in_directory(&self.ws, dir, Some(&path)).await;
@@ -1597,10 +1672,24 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                                             });
 
                                         if !is_excluded {
-                                            result.warnings.push(ValidationWarning::OrphanFile {
-                                                file: entry_path,
-                                                suggested_index: Some(path.clone()),
-                                            });
+                                            // Skip attachment notes - they use `attachments`
+                                            // lists, not `contents`/`part_of`.
+                                            let is_attachment_note = if let Ok(idx) =
+                                                self.ws.parse_index(&entry_path).await
+                                            {
+                                                idx.frontmatter.attachment.is_some()
+                                            } else {
+                                                false
+                                            };
+
+                                            if !is_attachment_note {
+                                                result.warnings.push(
+                                                    ValidationWarning::OrphanFile {
+                                                        file: entry_path,
+                                                        suggested_index: Some(path.clone()),
+                                                    },
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -3573,6 +3662,101 @@ contents:
     }
 
     #[test]
+    fn test_validate_workspace_prunes_builtin_skip_directories_during_scan() {
+        let fs = make_test_fs();
+
+        fs.create_dir_all(Path::new("target/debug")).unwrap();
+        fs.create_dir_all(Path::new("node_modules/pkg")).unwrap();
+
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("target/debug/app.bin"), "bin")
+            .unwrap();
+        fs.write_file(Path::new("node_modules/pkg/index.js"), "js")
+            .unwrap();
+        fs.write_file(Path::new("visible.json"), "{}").unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let orphan_paths: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|warning| match warning {
+                ValidationWarning::OrphanBinaryFile { file, .. } => {
+                    Some(file.to_string_lossy().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !orphan_paths.iter().any(|path| path.starts_with("target/")),
+            "target should be pruned before traversal, got warnings: {:?}",
+            orphan_paths
+        );
+        assert!(
+            !orphan_paths
+                .iter()
+                .any(|path| path.starts_with("node_modules/")),
+            "node_modules should be pruned before traversal, got warnings: {:?}",
+            orphan_paths
+        );
+        assert!(
+            orphan_paths.contains(&"visible.json".to_string()),
+            "visible.json should still warn, got warnings: {:?}",
+            orphan_paths
+        );
+    }
+
+    #[test]
+    fn test_validate_workspace_prunes_hidden_directories_during_scan() {
+        let fs = make_test_fs();
+
+        fs.create_dir_all(Path::new(".direnv/cache")).unwrap();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new(".direnv/cache/stale.bin"), "bin")
+            .unwrap();
+        fs.write_file(Path::new("visible.json"), "{}").unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let orphan_paths: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|warning| match warning {
+                ValidationWarning::OrphanBinaryFile { file, .. } => {
+                    Some(file.to_string_lossy().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !orphan_paths.iter().any(|path| path.starts_with(".direnv/")),
+            "hidden directories should be pruned before traversal, got warnings: {:?}",
+            orphan_paths
+        );
+        assert!(
+            orphan_paths.contains(&"visible.json".to_string()),
+            "visible.json should still warn, got warnings: {:?}",
+            orphan_paths
+        );
+    }
+
+    #[test]
     fn test_exclude_patterns_suppress_unlisted_markdown_warnings() {
         // Test that exclude patterns suppress OrphanFile warnings for markdown files
         let fs = make_test_fs();
@@ -3813,6 +3997,58 @@ contents:
             missing_part_of.len(),
             1,
             "Expected 1 MissingPartOf warning for orphan, got: {:?}",
+            missing_part_of
+        );
+    }
+
+    #[test]
+    fn test_attachment_notes_excluded_from_contents_part_of_validation() {
+        // Attachment notes (files with the `attachment` property) should not produce
+        // OrphanFile or MissingPartOf warnings - they are managed via `attachments` lists.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("note.md"),
+            "---\ntitle: Note\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+        // This is an attachment note - it has the `attachment` property
+        fs.write_file(
+            Path::new("_attachments/photo.md"),
+            "---\ntitle: Photo\nattachment: photo.jpg\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let orphan_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::OrphanFile { .. }))
+            .collect();
+        let missing_part_of: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::MissingPartOf { .. }))
+            .collect();
+
+        assert_eq!(
+            orphan_warnings.len(),
+            0,
+            "Attachment notes should not produce OrphanFile warnings, got: {:?}",
+            orphan_warnings
+        );
+        assert_eq!(
+            missing_part_of.len(),
+            0,
+            "Attachment notes should not produce MissingPartOf warnings, got: {:?}",
             missing_part_of
         );
     }

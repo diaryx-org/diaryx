@@ -62,6 +62,41 @@ type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
 // Error kinds that are expected during normal operation (e.g., validation checking broken refs)
 const EXPECTED_ERROR_KINDS = new Set(["FileRead", "NotFound", "FileNotFound", "IoError"]);
+const TAURI_INIT_TIMEOUT_MS = 15000;
+const TAURI_INIT_RETRY_DELAYS_MS = [250, 750];
+
+async function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isRetryableInitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("timed out") ||
+    message.includes("Load failed") ||
+    message.includes("postMessage") ||
+    message.includes("ipc") ||
+    message.includes("IPC")
+  );
+}
+
+async function wait(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function handleError(error: unknown): never {
   // Extract error kind to determine log level
@@ -139,6 +174,40 @@ export class TauriBackend implements Backend {
   private syncEventUnlisteners: UnlistenFn[] = [];
   private extismEventUnlisteners: UnlistenFn[] = [];
 
+  private async invokeInitWithRetry<T>(
+    command: "initialize_app" | "reinitialize_workspace",
+    args?: Record<string, unknown>,
+  ): Promise<T> {
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt <= TAURI_INIT_RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        return await withTimeout(
+          this.invoke!<T>(command, args),
+          TAURI_INIT_TIMEOUT_MS,
+          `${command} timed out after ${TAURI_INIT_TIMEOUT_MS}ms`,
+        );
+      } catch (error) {
+        lastError = error;
+        const shouldRetry =
+          import.meta.env.DEV &&
+          isRetryableInitError(error) &&
+          attempt < TAURI_INIT_RETRY_DELAYS_MS.length;
+        if (!shouldRetry) {
+          break;
+        }
+        const delayMs = TAURI_INIT_RETRY_DELAYS_MS[attempt];
+        console.warn(
+          `[TauriBackend] ${command} failed during dev startup, retrying in ${delayMs}ms:`,
+          error,
+        );
+        await wait(delayMs);
+      }
+    }
+
+    throw lastError;
+  }
+
   async init(
     _storageTypeOverride?: string,
     workspaceId?: string,
@@ -186,22 +255,25 @@ export class TauriBackend implements Backend {
             "needs_crdt:",
             needsCrdt,
           );
-          const result = await this.invoke<AppPaths>("reinitialize_workspace", {
-            workspacePath,
-            needsCrdt,
-          });
+          const result = await this.invokeInitWithRetry<AppPaths>(
+            "reinitialize_workspace",
+            {
+              workspacePath,
+              needsCrdt,
+            },
+          );
           this.appPaths = result;
         } else {
           // No path stored (first launch or web-style workspace) — use default
           console.log(
             "[TauriBackend] No workspace path found, using default init",
           );
-          const result = await this.invoke<AppPaths>("initialize_app");
+          const result = await this.invokeInitWithRetry<AppPaths>("initialize_app");
           this.appPaths = result;
         }
       } else {
         // Default initialization
-        const result = await this.invoke<AppPaths>("initialize_app");
+        const result = await this.invokeInitWithRetry<AppPaths>("initialize_app");
         this.appPaths = result;
       }
       console.log("[TauriBackend] Step 2 complete: workspace initialized");

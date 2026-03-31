@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import type { Api } from "$lib/backend/api";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import { getWorkspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { runManualSyncNow } from "$lib/sync/syncScheduler";
 
   interface Props {
@@ -18,6 +19,7 @@
   let { api }: Props = $props();
 
   const pluginStore = getPluginStore();
+  const workspaceStore = getWorkspaceStore();
   const statusItems = $derived(pluginStore.statusBarItems);
 
   let dataByItemId = $state<Record<string, SyncStatusLike>>({});
@@ -54,11 +56,30 @@
   }
 
   onMount(() => {
+    // Initial fetch
     void refreshStatusItems();
-    const intervalId = window.setInterval(() => {
-      void refreshStatusItems();
-    }, 3000);
-    return () => window.clearInterval(intervalId);
+
+    // Subscribe to filesystem events for event-driven updates instead of polling.
+    // SyncStatusChanged / SyncProgress events are emitted by the sync plugin
+    // when state actually changes, so we only re-fetch on real transitions.
+    const backend = workspaceStore.backend;
+    let fsEventSubId: number | undefined;
+    if (backend?.onFileSystemEvent) {
+      fsEventSubId = backend.onFileSystemEvent((event: any) => {
+        if (
+          event?.type === "SyncStatusChanged" ||
+          event?.type === "SyncProgress"
+        ) {
+          void refreshStatusItems();
+        }
+      });
+    }
+
+    return () => {
+      if (fsEventSubId !== undefined && backend?.offFileSystemEvent) {
+        backend.offFileSystemEvent(fsEventSubId);
+      }
+    };
   });
 
   $effect(() => {

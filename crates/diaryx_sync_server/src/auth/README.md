@@ -2,10 +2,6 @@
 title: Auth module
 description: Authentication middleware and magic link handling
 part_of: '[README](/crates/diaryx_sync_server/src/README.md)'
-attachments:
-  - '[mod.rs](/crates/diaryx_sync_server/src/auth/mod.rs)'
-  - '[magic_link.rs](/crates/diaryx_sync_server/src/auth/magic_link.rs)'
-  - '[middleware.rs](/crates/diaryx_sync_server/src/auth/middleware.rs)'
 exclude:
   - '*.lock'
 ---

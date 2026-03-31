@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-30T22:29:40Z
+updated: 2026-03-31T05:20:38Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -19,6 +19,7 @@ Diaryx - README/repo for the Diaryx project - README.md
 ├── CONTRIBUTING - A guide for making contributions in the Diaryx repo - CONTRIBUTING.md
 ├── LICENSE - PolyForm Shield License 1.0.0 - LICENSE.md
 ├── PHILOSOPHY - PHILOSOPHY.md
+├── Privacy Policy - Privacy Policy for Diaryx - privacy.md
 ├── apps - GUI frontends for Diaryx - apps/README.md
 │   ├── web - Svelte + Tiptap frontend for Diaryx - apps/web/README.md
 │   │   ├── web src - Source code for the Diaryx web application - apps/web/src/README.md
@@ -81,8 +82,7 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   └── crates/diaryx_extism/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 ├── Scripts - scripts/scripts.md
-├── Terms of Service - Terms of Service for Diaryx - terms.md
-└── Privacy Policy - Privacy Policy for Diaryx - privacy.md
+└── Terms of Service - Terms of Service for Diaryx - terms.md
 ```
 
 ## Entry Points

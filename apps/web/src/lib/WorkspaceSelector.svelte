@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import * as Popover from "$lib/components/ui/popover";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import { Input } from "$lib/components/ui/input";
   import {
     ChevronsUpDown,
@@ -489,38 +490,37 @@
                   {/if}
                 </button>
                 <!-- Three-dot menu -->
-                <div class="relative pr-2">
-                  <button
-                    type="button"
-                    class="size-11 md:size-6 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 hover:bg-accent-foreground/10 transition-all {menuOpenId === ws.id ? 'opacity-100' : ''}"
-                    aria-label={"Workspace actions for " + ws.name}
-                    onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === ws.id ? null : ws.id; }}
-                  >
-                    <Ellipsis class="size-4 md:size-3.5 text-muted-foreground" />
-                  </button>
-                  {#if menuOpenId === ws.id}
-                    <div class="absolute right-0 top-7 z-50 min-w-[120px] rounded-md border bg-popover p-1 shadow-md">
-                      <button
-                        type="button"
-                        class="flex items-center gap-2 w-full px-2 py-1.5 text-sm rounded-sm hover:bg-accent transition-colors"
-                        onclick={(e) => { e.stopPropagation(); startRename(ws); }}
+                <div class="pr-2">
+                  <DropdownMenu.Root bind:open={
+                    () => menuOpenId === ws.id,
+                    (v) => { menuOpenId = v ? ws.id : null; }
+                  }>
+                    <DropdownMenu.Trigger
+                      class="size-11 md:size-6 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 hover:bg-accent-foreground/10 transition-all {menuOpenId === ws.id ? 'opacity-100' : ''}"
+                      aria-label={"Workspace actions for " + ws.name}
+                      onclick={(e: MouseEvent) => { e.stopPropagation(); }}
+                    >
+                      <Ellipsis class="size-4 md:size-3.5 text-muted-foreground" />
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content align="end" side="bottom" class="min-w-[120px]">
+                      <DropdownMenu.Item
+                        onclick={(e: Event) => { e.stopPropagation(); startRename(ws); }}
                       >
                         <Pencil class="size-3.5" />
                         Rename
-                      </button>
-                      <button
-                        type="button"
-                        class="flex items-center gap-2 w-full px-2 py-1.5 text-sm rounded-sm hover:bg-accent transition-colors text-destructive disabled:opacity-50"
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        variant="destructive"
                         disabled={currentWsId === ws.id}
                         aria-label={"Delete workspace " + ws.name}
                         title={currentWsId === ws.id ? "Switch to another workspace first" : "Delete workspace"}
-                        onclick={(e) => { e.stopPropagation(); startDelete(ws); }}
+                        onclick={(e: Event) => { e.stopPropagation(); startDelete(ws); }}
                       >
                         <Trash2 class="size-3.5" />
                         Delete
-                      </button>
-                    </div>
-                  {/if}
+                      </DropdownMenu.Item>
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Root>
                 </div>
               </div>
             {/if}

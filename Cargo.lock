@@ -2291,12 +2291,9 @@ name = "diaryx_core"
 version = "1.4.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
  "futures-lite 2.6.1",
- "git2",
- "glob",
  "html-to-markdown-rs",
  "indexmap 2.13.0",
  "log",

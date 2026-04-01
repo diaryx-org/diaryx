@@ -11,7 +11,6 @@ keywords = ["diary", "journal", "markdown", "frontmatter"]
 categories = ["text-processing"]
 
 [dependencies]
-base64 = "0.22"
 chrono.workspace = true
 indexmap.workspace = true
 log = "0.4"
@@ -28,7 +27,6 @@ uuid = { version = "1", features = ["v4", "rng-getrandom"] }
 # Optional dependencies
 toml = { version = "0.9.8", optional = true }
 ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"], optional = true }
-git2 = { version = "0.19", optional = true, default-features = false }
 
 # Day One ZIP import (works on all platforms including WASM)
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
@@ -40,7 +38,6 @@ mbox-reader = { version = "0.2", optional = true }
 # Native-only dependencies (not available in WASM)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "6.0"
-glob = "0.3"
 futures-lite = "2"
 rusqlite = { version = "0.34", features = ["bundled"], optional = true }
 html-to-markdown-rs = { version = "2", optional = true }
@@ -51,12 +48,6 @@ html-to-markdown-rs = { version = "2", optional = true }
 # wasm-bindgen = "0.2"
 
 [features]
-# Kept for backward compatibility.
-markdown = []
-
-# Placeholder feature for workspace crates that currently enable it.
-live-sync = []
-
 # TOML config file support (native CLI/Tauri only, not needed in WASM)
 toml-config = ["dep:toml"]
 
@@ -71,10 +62,6 @@ import-email = ["dep:mailparse", "dep:mbox-reader", "dep:html-to-markdown-rs"]
 
 # Enable Day One journal import (ZIP with media or Journal.json)
 import-dayone = ["dep:zip"]
-
-# Enable markdown directory import (folders of .md files)
-import-markdown = []
-
 
 # Browser WASM support (uuid/js for browser crypto)
 browser-js = ["uuid/js"]

@@ -15,16 +15,11 @@
 //! |----------|------------------|---------------------------------------------------|
 //! | Email    | `import-email`   | `mailparse`, `mbox-reader`, `html-to-markdown-rs` |
 //! | Day One  | `import-dayone`  | `zip` (ZIP extraction + media resolution)         |
-//! | Markdown | `import-markdown`| *(none — uses `frontmatter` crate module)*        |
-
 #[cfg(feature = "import-email")]
 pub mod email;
 
 #[cfg(feature = "import-dayone")]
 pub mod dayone;
-
-#[cfg(feature = "import-markdown")]
-pub mod markdown;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};

@@ -191,7 +191,7 @@ function formatLocalRfc3339(date: Date = new Date()): string {
   return `${year}-${month}-${day}T${hour}:${minute}:${second}${sign}${offsetHours}:${offsetRemainder}`;
 }
 
-function base64ToBytes(base64: string): Uint8Array {
+function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -724,7 +724,7 @@ class BrowserSyncTransportController {
     }, delay);
   }
 
-  private sendBinary(data: Uint8Array): void {
+  private sendBinary(data: Uint8Array<ArrayBuffer>): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       // DEBUG: log doc_id from v2 frame
       if (data.length > 1) {

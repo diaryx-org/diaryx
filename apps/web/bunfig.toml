@@ -1,0 +1,7 @@
+[serve.static]
+plugins = [
+  "./bun-plugins/svelte.ts",
+  "bun-plugin-tailwind",
+  "./bun-plugins/svelte-conditions.ts",
+  "./bun-plugins/vite-env.ts",
+]

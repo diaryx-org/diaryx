@@ -124,7 +124,7 @@
           wasm-bindgen-cli = pkgs.buildWasmBindgenCli rec {
             src = pkgs.fetchCrate {
               pname = "wasm-bindgen-cli";
-              version = "1.4.0";
+              version = "0.2.114";
               hash = "sha256-xrCym+rFY6EUQFWyWl6OPA+LtftpUAE5pIaElAIVqW0=";
             };
             cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
@@ -257,6 +257,7 @@
               export LLVM_PROFDATA="$LLVM_TOOLS_DIR/llvm-profdata"
               export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
 
+              export PATH="$HOME/.bun/bin:$PATH"
               echo "Welcome to the Diaryx development environment!"
               echo "Targets enabled: x86_64-linux, aarch64-darwin, wasm32"
               echo "Rust: $(rustc --version)"

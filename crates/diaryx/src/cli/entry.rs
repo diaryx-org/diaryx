@@ -93,12 +93,12 @@ pub fn handle_create(
     let content = 'tmpl: {
         #[cfg(feature = "plugins")]
         {
-            let workspace_root = &config.default_workspace;
+            let workspace_root = &_config.default_workspace;
             if let Ok(ctx) = CliPluginContext::load(workspace_root, "diaryx.templating") {
                 let params = serde_json::json!({
-                    "template": template.as_deref().unwrap_or("note"),
+                    "template": _template.as_deref().unwrap_or("note"),
                     "title": title,
-                    "filename": filename,
+                    "filename": _filename,
                 });
                 if let Ok(result) = ctx.cmd("RenderCreationTemplate", params) {
                     if let Some(content) = result.as_str() {

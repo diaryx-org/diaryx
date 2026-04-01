@@ -18,6 +18,7 @@ path = "src/main.rs"
 diaryx_core = { path = "../diaryx_core", version = "1.3.1", default-features = false, features = ["toml-config"] }
 diaryx_extism = { path = "../diaryx_extism", version = "1.3.0", optional = true, features = ["http", "ws-transport"] }
 diaryx_sync = { path = "../diaryx_sync", version = "1.3.1", default-features = false, features = ["server"], optional = true }
+async-trait = "0.1"
 clap = { version = "4.5", features = ["derive", "env"] }
 base64 = "0.22"
 serde.workspace = true
@@ -30,8 +31,8 @@ pathdiff = "0.2"
 futures-lite = "2.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal"], optional = true }
 sha2 = { version = "0.10", optional = true }
-ureq = { version = "3", optional = true }
-urlencoding = { version = "2.1", optional = true }
+ureq = "3"
+urlencoding = "2.1"
 ratatui = "0.30"
 tui-tree-widget = "0.24"
 crossterm = "0.29"
@@ -41,8 +42,8 @@ open = { version = "5", optional = true }
 
 [features]
 default = []
-edit = ["dep:diaryx_sync", "dep:tokio", "dep:axum", "dep:open", "dep:urlencoding"]
-plugins = ["dep:diaryx_extism", "dep:tokio", "dep:axum", "dep:tower-http", "dep:open", "dep:sha2", "dep:ureq"]
+edit = ["dep:diaryx_sync", "dep:tokio", "dep:axum", "dep:open"]
+plugins = ["dep:diaryx_extism", "dep:tokio", "dep:axum", "dep:tower-http", "dep:open", "dep:sha2"]
 
 [build-dependencies]
 diaryx_core = { path = "../diaryx_core", version = "1.3.1", default-features = false }

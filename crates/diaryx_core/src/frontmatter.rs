@@ -94,6 +94,38 @@ pub fn serialize(frontmatter: &IndexMap<String, Value>, body: &str) -> Result<St
     Ok(format!("---\n{}---\n{}", yaml_str, body))
 }
 
+/// Extract the raw YAML string from between frontmatter delimiters.
+///
+/// Returns the YAML text without the `---` delimiters, or `None` if no
+/// valid frontmatter delimiters are found.
+pub fn extract_yaml(content: &str) -> Option<&str> {
+    if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
+        return None;
+    }
+    let rest = &content[4..];
+    let end = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n"))?;
+    Some(&rest[..end])
+}
+
+/// Parse a typed struct from YAML frontmatter in a markdown file.
+///
+/// Extracts the YAML between `---` delimiters and deserializes it into `T`.
+/// If no frontmatter delimiters are found, attempts to parse the entire content as YAML.
+pub fn parse_typed<T: serde::de::DeserializeOwned>(
+    content: &str,
+) -> std::result::Result<T, serde_yaml::Error> {
+    let yaml = extract_yaml(content).unwrap_or(content);
+    serde_yaml::from_str(yaml)
+}
+
+/// Serialize a typed struct as YAML frontmatter in a markdown file.
+pub fn serialize_typed<T: serde::Serialize>(
+    value: &T,
+) -> std::result::Result<String, serde_yaml::Error> {
+    let yaml = serde_yaml::to_string(value)?;
+    Ok(format!("---\n{}---\n", yaml))
+}
+
 /// Extract only the body from markdown content, stripping frontmatter.
 ///
 /// If no frontmatter exists, returns the content unchanged.

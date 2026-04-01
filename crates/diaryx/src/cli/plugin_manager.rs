@@ -76,17 +76,23 @@ pub fn handle_plugin_command(command: PluginCommands) {
     }
 }
 
-/// Return the plugins directory (`~/.diaryx/plugins/`).
-fn plugins_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".diaryx")
-        .join("plugins")
+/// Return the workspace-local plugins directory (first one found walking up from cwd).
+fn workspace_plugins_dir() -> PathBuf {
+    super::plugin_loader::workspace_plugin_dirs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| {
+            // Fallback: .diaryx/plugins in cwd
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(".diaryx")
+                .join("plugins")
+        })
 }
 
-/// Return the plugin directory for a given ID.
+/// Return the plugin directory for a given ID (workspace-local).
 fn plugin_dir(id: &str) -> PathBuf {
-    plugins_dir().join(format!("{}.diaryx", id))
+    workspace_plugins_dir().join(id)
 }
 
 fn read_manifest_json(path: &Path) -> Option<serde_json::Value> {
@@ -95,15 +101,28 @@ fn read_manifest_json(path: &Path) -> Option<serde_json::Value> {
 }
 
 fn read_installed_plugins() -> Vec<InstalledPlugin> {
-    let dir = plugins_dir();
-    if !dir.exists() {
-        return Vec::new();
+    let mut installed = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+
+    for dir in super::plugin_loader::workspace_plugin_dirs() {
+        if !dir.exists() {
+            continue;
+        }
+        scan_plugins_in_dir(&dir, &mut installed, &mut seen_ids);
     }
 
-    let mut installed = Vec::new();
-    let entries = match std::fs::read_dir(&dir) {
+    installed.sort_by(|a, b| a.id.cmp(&b.id));
+    installed
+}
+
+fn scan_plugins_in_dir(
+    dir: &Path,
+    installed: &mut Vec<InstalledPlugin>,
+    seen_ids: &mut std::collections::HashSet<String>,
+) {
+    let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+        Err(_) => return,
     };
 
     for entry in entries.flatten() {
@@ -152,6 +171,11 @@ fn read_installed_plugins() -> Vec<InstalledPlugin> {
             .and_then(|v| v.as_str())
             .map(|v| v.to_string());
 
+        // Skip if we've already seen this plugin from a higher-priority directory
+        if !seen_ids.insert(id.clone()) {
+            continue;
+        }
+
         installed.push(InstalledPlugin {
             id,
             name,
@@ -165,9 +189,6 @@ fn read_installed_plugins() -> Vec<InstalledPlugin> {
             path,
         });
     }
-
-    installed.sort_by(|a, b| a.id.cmp(&b.id));
-    installed
 }
 
 fn normalize_optional_filter(value: &Option<String>) -> Option<String> {
@@ -548,7 +569,7 @@ fn cache_manifest_from_wasm(wasm_path: &Path) -> Result<(), String> {
 /// Remove an installed plugin.
 fn handle_remove(id: &str, yes: bool) {
     let canonical = plugin_dir(id);
-    let legacy = plugins_dir().join(id);
+    let legacy = workspace_plugins_dir().join(format!("{}.diaryx", id));
     let dest = if canonical.exists() {
         canonical
     } else if legacy.exists() {

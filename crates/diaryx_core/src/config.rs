@@ -1,15 +1,18 @@
 //! Configuration types for Diaryx.
 //!
 //! This module provides the [`Config`] struct which stores user preferences
-//! and workspace settings. Configuration is persisted as TOML (typically at
-//! `~/.config/diaryx/config.toml` on Unix systems).
+//! and workspace settings. Configuration is persisted as a markdown file with
+//! YAML frontmatter (typically at `~/.config/diaryx/config.md` on Unix systems).
+//!
+//! The config directory forms a mini-workspace: `config.md` is the root index
+//! with `contents: [auth.md]`, and `auth.md` has `part_of: config.md`.
 //!
 //! # Key Configuration Fields
 //!
 //! - `default_workspace`: Primary workspace directory path
 //! - `editor`: Preferred editor command
 //! - `link_format`: Format for `part_of`/`contents`/`attachments` links
-//! - `sync_*`: Cloud synchronization settings
+//! - `sync_*`: Cloud synchronization settings (legacy, see `auth.md`)
 //!
 //! # Async-first Design
 //!
@@ -49,6 +52,14 @@ use crate::workspace_registry::{WorkspaceEntry, WorkspaceRegistry};
 /// `Config` is a data structure that represents the parts of Diaryx that the user can configure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Workspace title (config.md is a root index)
+    #[serde(default = "default_config_title")]
+    pub title: String,
+
+    /// Contents list (workspace hierarchy — points to auth.md)
+    #[serde(default = "default_config_contents")]
+    pub contents: Vec<String>,
+
     /// Default workspace directory
     /// This is the main directory for your workspace/journal
     #[serde(alias = "base_dir")]
@@ -144,6 +155,14 @@ fn is_default_link_format(format: &LinkFormat) -> bool {
     *format == LinkFormat::default()
 }
 
+fn default_config_title() -> String {
+    "Diaryx Configuration".to_string()
+}
+
+fn default_config_contents() -> Vec<String> {
+    vec!["auth.md".to_string()]
+}
+
 impl Config {
     /// Alias for backwards compatibility
     pub fn base_dir(&self) -> &PathBuf {
@@ -153,6 +172,8 @@ impl Config {
     /// Create a new config with the given workspace directory
     pub fn new(default_workspace: PathBuf) -> Self {
         Self {
+            title: default_config_title(),
+            contents: default_config_contents(),
             default_workspace,
             editor: None,
             link_format: LinkFormat::default(),
@@ -174,6 +195,8 @@ impl Config {
         _default_template: Option<String>,
     ) -> Self {
         Self {
+            title: default_config_title(),
+            contents: default_config_contents(),
             default_workspace,
             editor,
             link_format: LinkFormat::default(),
@@ -245,8 +268,17 @@ impl Config {
                 source: e,
             })?;
 
-        let config: Config = toml::from_str(&contents)?;
-        Ok(config)
+        // Detect format: if path ends in .toml or content doesn't start with ---, parse as TOML
+        let is_toml = path.extension().is_some_and(|ext| ext == "toml")
+            || (!contents.starts_with("---\n") && !contents.starts_with("---\r\n"));
+
+        if is_toml {
+            let config: Config = toml::from_str(&contents)?;
+            Ok(config)
+        } else {
+            let config: Config = crate::frontmatter::parse_typed(&contents)?;
+            Ok(config)
+        }
     }
 
     /// Save config to a specific path using an AsyncFileSystem.
@@ -263,7 +295,7 @@ impl Config {
             fs.create_dir_all(parent).await?;
         }
 
-        let contents = toml::to_string_pretty(self)?;
+        let contents = crate::frontmatter::serialize_typed(self)?;
         fs.write_file(path, &contents).await?;
         Ok(())
     }
@@ -328,6 +360,8 @@ impl Default for Config {
             .join("diaryx");
 
         Self {
+            title: default_config_title(),
+            contents: default_config_contents(),
             default_workspace: default_base,
             editor: None,
             link_format: LinkFormat::default(),
@@ -345,28 +379,54 @@ impl Default for Config {
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
 impl Config {
-    /// Get the config file path (~/.config/diaryx/config.toml)
+    /// Get the config file path (~/.config/diaryx/config.md)
     /// Only available on native platforms
     pub fn config_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|dir| dir.join("diaryx").join("config.md"))
+    }
+
+    /// Legacy TOML config path for migration.
+    fn legacy_config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|dir| dir.join("diaryx").join("config.toml"))
     }
 
-    /// Load config from default location, or return default if file doesn't exist
+    /// Load config from default location, or return default if file doesn't exist.
+    /// Automatically migrates from `config.toml` to `config.md` if needed.
     /// Only available on native platforms
     pub fn load() -> Result<Self> {
+        // Try new config.md first
         if let Some(path) = Self::config_path()
             && path.exists()
         {
             let contents = std::fs::read_to_string(&path)?;
-            let config: Config = toml::from_str(&contents)?;
+            let config: Config = crate::frontmatter::parse_typed(&contents)?;
             return Ok(config);
         }
 
-        // Return default config if file doesn't exist
+        // Try legacy config.toml and migrate
+        if let Some(legacy_path) = Self::legacy_config_path()
+            && legacy_path.exists()
+        {
+            let contents = std::fs::read_to_string(&legacy_path)?;
+            let mut config: Config = toml::from_str(&contents)?;
+            // Ensure workspace fields are populated after TOML migration
+            if config.title.is_empty() {
+                config.title = default_config_title();
+            }
+            if config.contents.is_empty() {
+                config.contents = default_config_contents();
+            }
+            // Save as new format and remove legacy file
+            config.save()?;
+            let _ = std::fs::remove_file(&legacy_path);
+            return Ok(config);
+        }
+
+        // Return default config if no file exists
         Ok(Config::default())
     }
 
-    /// Save config to default location
+    /// Save config to default location as markdown with YAML frontmatter.
     /// Only available on native platforms
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path().ok_or(DiaryxError::NoConfigDir)?;
@@ -376,7 +436,7 @@ impl Config {
             std::fs::create_dir_all(parent)?;
         }
 
-        let contents = toml::to_string_pretty(self)?;
+        let contents = crate::frontmatter::serialize_typed(self)?;
         std::fs::write(&path, contents)?;
 
         Ok(())
@@ -392,6 +452,8 @@ impl Config {
     /// Only available on native platforms
     pub fn init_with_options(default_workspace: PathBuf) -> Result<Self> {
         let config = Config {
+            title: default_config_title(),
+            contents: default_config_contents(),
             default_workspace,
             editor: None,
             link_format: LinkFormat::default(),
@@ -420,6 +482,8 @@ impl Default for Config {
         // In WASM, we use a simple default path
         // The actual workspace location will be virtual
         Self {
+            title: default_config_title(),
+            contents: default_config_contents(),
             default_workspace: PathBuf::from("/workspace"),
             editor: None,
             link_format: LinkFormat::default(),
@@ -474,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn toml_round_trip_with_workspaces() {
+    fn yaml_frontmatter_round_trip_with_workspaces() {
         let mut config = Config::new(PathBuf::from("/ws"));
         config.workspaces.push(WorkspaceEntry {
             id: "local-123".into(),
@@ -482,8 +546,9 @@ mod tests {
             path: Some(PathBuf::from("/ws")),
         });
         config.set_workspace_bookmark(PathBuf::from("/ws"), "bookmark-data".into());
-        let toml_str = toml::to_string_pretty(&config).unwrap();
-        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        let md_str = crate::frontmatter::serialize_typed(&config).unwrap();
+        assert!(md_str.starts_with("---\n"));
+        let parsed: Config = crate::frontmatter::parse_typed(&md_str).unwrap();
         assert_eq!(parsed.workspaces.len(), 1);
         assert_eq!(parsed.workspaces[0].id, "local-123");
         assert_eq!(parsed.workspaces[0].name, "personal");
@@ -491,16 +556,16 @@ mod tests {
             parsed.workspace_bookmark(PathBuf::from("/ws").as_path()),
             Some("bookmark-data")
         );
+        assert_eq!(parsed.title, "Diaryx Configuration");
+        assert_eq!(parsed.contents, vec!["auth.md"]);
     }
 
     #[test]
-    fn toml_round_trip_without_workspaces() {
+    fn yaml_frontmatter_round_trip_without_workspaces() {
         let config = Config::new(PathBuf::from("/ws"));
-        let toml_str = toml::to_string_pretty(&config).unwrap();
-        // workspaces should be omitted when empty
-        assert!(!toml_str.contains("workspaces"));
-        assert!(!toml_str.contains("workspace_bookmarks"));
-        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        let md_str = crate::frontmatter::serialize_typed(&config).unwrap();
+        assert!(md_str.starts_with("---\n"));
+        let parsed: Config = crate::frontmatter::parse_typed(&md_str).unwrap();
         assert!(parsed.workspaces.is_empty());
         assert!(parsed.workspace_bookmarks.is_empty());
     }

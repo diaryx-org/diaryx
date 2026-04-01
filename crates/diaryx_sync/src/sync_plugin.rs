@@ -1612,7 +1612,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            let attachments_list: Vec<String> = parsed
+            let attachments_note_paths: Vec<String> = parsed
                 .frontmatter
                 .get("attachments")
                 .and_then(|v| v.as_sequence())
@@ -1630,6 +1630,22 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
                         .collect()
                 })
                 .unwrap_or_default();
+
+            // Resolve attachment notes to their actual binary paths
+            let mut attachments_list: Vec<String> =
+                Vec::with_capacity(attachments_note_paths.len());
+            for note_path in attachments_note_paths {
+                let note_full = base_path.join(&note_path);
+                if let Some(binary_path) = ws
+                    .resolve_attachment_binary(&note_full, &base_path, link_format_hint)
+                    .await
+                {
+                    attachments_list.push(binary_path);
+                } else {
+                    // Not an attachment note, or no `attachment` field — use as-is
+                    attachments_list.push(note_path);
+                }
+            }
 
             let attachments: Vec<BinaryRef> = attachments_list
                 .into_iter()

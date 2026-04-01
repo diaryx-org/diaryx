@@ -26,7 +26,9 @@ AuthService
 
 ## Native hosts
 
-`NativeFileAuthStorage` persists credentials to `~/.config/diaryx/auth.toml`
-(or the platform equivalent) and falls back to legacy `Config.sync_*` fields
+`NativeFileAuthStorage` persists credentials to `~/.config/diaryx/auth.md`
+(or the platform equivalent) as a markdown file with YAML frontmatter. The
+file includes `part_of: config.md` so that the config directory forms a mini
+Diaryx workspace. Falls back to legacy `auth.toml` and `Config.sync_*` fields
 for migration/compatibility. CLI plugin hosts load these credentials into the
 runtime context passed to sync-capable plugins.

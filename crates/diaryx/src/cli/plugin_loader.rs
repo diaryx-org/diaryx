@@ -237,46 +237,36 @@ impl CliPluginContext {
 
 /// Find the path to a plugin's WASM file.
 ///
-/// Search order:
-/// 1. `~/.diaryx/plugins/{id}.diaryx/plugin.wasm` (new convention)
-/// 2. `~/.diaryx/plugins/{id}/plugin.wasm` (legacy)
-/// 3. `$XDG_DATA_HOME/diaryx/plugins/{id}/plugin.wasm` (Tauri compat)
+/// Searches workspace-local `.diaryx/plugins/{id}/plugin.wasm` only.
 fn find_plugin_wasm_exact(plugin_id: &str) -> Result<PathBuf, String> {
-    // Check user plugins directory (new .diaryx extension convention)
-    if let Some(home) = dirs::home_dir() {
-        let new_path = home
-            .join(".diaryx")
-            .join("plugins")
-            .join(format!("{}.diaryx", plugin_id))
-            .join("plugin.wasm");
-        if new_path.exists() {
-            return Ok(new_path);
-        }
-
-        // Legacy path without .diaryx extension
-        let legacy_path = home
-            .join(".diaryx")
-            .join("plugins")
-            .join(plugin_id)
-            .join("plugin.wasm");
-        if legacy_path.exists() {
-            return Ok(legacy_path);
-        }
-    }
-
-    // Check XDG data directory (Tauri compat)
-    if let Some(data_dir) = dirs::data_dir() {
-        let xdg_path = data_dir
-            .join("diaryx")
-            .join("plugins")
-            .join(plugin_id)
-            .join("plugin.wasm");
-        if xdg_path.exists() {
-            return Ok(xdg_path);
+    for workspace_dir in workspace_plugin_dirs() {
+        let path = workspace_dir.join(plugin_id).join("plugin.wasm");
+        if path.exists() {
+            return Ok(path);
         }
     }
 
     Err(format!("Plugin '{}' not found", plugin_id))
+}
+
+/// Return workspace-local plugin directories by walking up from cwd looking for `.diaryx/plugins/`.
+pub fn workspace_plugin_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut dir = cwd.as_path();
+        loop {
+            let candidate = dir.join(".diaryx").join("plugins");
+            if candidate.is_dir() {
+                dirs.push(candidate);
+                break;
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break,
+            }
+        }
+    }
+    dirs
 }
 
 /// Find plugin.wasm using the canonical plugin ID.
@@ -297,19 +287,7 @@ fn find_plugin_wasm(plugin_id: &str) -> Result<PathBuf, String> {
 pub fn discover_plugin_manifests() -> Vec<(String, PluginManifest)> {
     let mut results = Vec::new();
 
-    let dirs_to_scan: Vec<PathBuf> = {
-        let mut dirs = Vec::new();
-        if let Some(home) = dirs::home_dir() {
-            dirs.push(home.join(".diaryx").join("plugins"));
-        }
-        if let Some(data_dir) = dirs::data_dir() {
-            let xdg = data_dir.join("diaryx").join("plugins");
-            if !dirs.contains(&xdg) {
-                dirs.push(xdg);
-            }
-        }
-        dirs
-    };
+    let dirs_to_scan = workspace_plugin_dirs();
 
     for dir in &dirs_to_scan {
         if !dir.exists() {

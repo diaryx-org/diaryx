@@ -632,6 +632,26 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         Ok(files)
     }
 
+    /// Given the absolute path of an attachment note, reads its `attachment`
+    /// frontmatter field and resolves it to the canonical binary path.
+    ///
+    /// Returns `None` if the file cannot be parsed or has no `attachment` field.
+    pub async fn resolve_attachment_binary(
+        &self,
+        note_path: &Path,
+        workspace_root: &Path,
+        link_format: Option<LinkFormat>,
+    ) -> Option<String> {
+        let index = self
+            .parse_index_with_hint(note_path, link_format)
+            .await
+            .ok()?;
+        let attachment_link = index.frontmatter.attachment.as_ref()?;
+        let binary_resolved = index.resolve_path(attachment_link);
+        let binary_full = resolve_workspace_path(workspace_root, &binary_resolved);
+        Some(canonical_workspace_path(&binary_full, workspace_root))
+    }
+
     /// Collect the canonical workspace file set for sync/export operations.
     ///
     /// This includes all markdown files reachable from the logical workspace
@@ -766,6 +786,18 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     &attachment_full_path,
                     workspace_root,
                 ));
+
+                // Follow the note's `attachment` field to include the actual binary
+                if let Some(binary_canonical) = self
+                    .resolve_attachment_binary(&attachment_full_path, workspace_root, link_format)
+                    .await
+                {
+                    let binary_full =
+                        resolve_workspace_path(workspace_root, Path::new(&binary_canonical));
+                    if self.fs.exists(&binary_full).await {
+                        files.insert(binary_canonical);
+                    }
+                }
             }
         }
 

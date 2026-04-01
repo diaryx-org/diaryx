@@ -2995,7 +2995,7 @@ fn handle_create(
     });
 
     let template_name = template.as_deref().unwrap_or("note");
-    let _filename = child_filename.trim_end_matches(".md");
+    let filename = child_filename.trim_end_matches(".md");
 
     // Try to render template via the templating plugin
     let content = 'tmpl: {

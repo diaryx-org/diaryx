@@ -241,6 +241,30 @@ pub enum Commands {
         command: PluginCommands,
     },
 
+    /// Sign in to the Diaryx sync server via magic link
+    Login {
+        /// Email address
+        email: String,
+
+        /// Sync server URL (default: https://app.diaryx.org/api)
+        #[arg(short, long)]
+        server: Option<String>,
+    },
+
+    /// Sign out and clear stored session
+    Logout,
+
+    /// Show current account info
+    #[command(alias = "me")]
+    Whoami,
+
+    /// Manage server namespaces (list, delete)
+    #[command(aliases = ["ns"])]
+    Namespace {
+        #[command(subcommand)]
+        command: NamespaceCommands,
+    },
+
     /// Navigate workspace hierarchy with interactive TUI
     /// Opens a tree view with preview pane for browsing entries
     #[command(alias = "go")]
@@ -909,6 +933,96 @@ pub enum AttachmentCommands {
     List {
         /// Path to the entry file (supports fuzzy matching)
         entry: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum NamespaceCommands {
+    /// List namespaces on the sync server
+    #[command(alias = "ls")]
+    List {
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Delete a namespace from the sync server
+    #[command(alias = "rm")]
+    Delete {
+        /// Namespace ID to delete
+        id: String,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Manage objects within a namespace
+    #[command(alias = "obj")]
+    Objects {
+        #[command(subcommand)]
+        command: NamespaceObjectCommands,
+    },
+
+    /// Manage namespace subdomains
+    #[command(alias = "sub")]
+    Subdomain {
+        #[command(subcommand)]
+        command: NamespaceSubdomainCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum NamespaceObjectCommands {
+    /// List objects in a namespace
+    #[command(alias = "ls")]
+    List {
+        /// Namespace ID
+        id: String,
+
+        /// Filter by key prefix (e.g. "files/")
+        #[arg(short, long)]
+        prefix: Option<String>,
+
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Delete an object from a namespace
+    #[command(alias = "rm")]
+    Delete {
+        /// Namespace ID
+        id: String,
+
+        /// Object key to delete
+        key: String,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum NamespaceSubdomainCommands {
+    /// Claim a subdomain for a namespace
+    Claim {
+        /// Namespace ID
+        id: String,
+
+        /// Subdomain name (e.g., "mysite" for mysite.diaryx.org)
+        subdomain: String,
+
+        /// Default audience for the subdomain
+        #[arg(short, long)]
+        audience: Option<String>,
+    },
+
+    /// Release a namespace's subdomain
+    Release {
+        /// Namespace ID
+        id: String,
     },
 }
 

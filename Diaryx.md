@@ -92,6 +92,9 @@ plugins:
 links:
 - '[ROADMAP](/ROADMAP.md)'
 - '[PHILOSOPHY](/PHILOSOPHY.md)'
+attachments:
+- '[icon-dark.png](/_attachments/icon-dark.png.md)'
+- '[icon.png](/_attachments/icon.png.md)'
 ---
 <div>
   <p align="center">

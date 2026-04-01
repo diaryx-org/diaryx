@@ -1,5 +1,8 @@
 #![doc = include_str!("./README.md")]
 
+/// Account management (login, logout, whoami)
+mod account;
+
 /// Clap argument definitions
 mod args;
 
@@ -40,6 +43,9 @@ mod search;
 
 /// diaryx sort command (sorting frontmatter properties)
 mod sort;
+
+/// Server namespace management
+mod namespace;
 
 /// Navigate workspace hierarchy with TUI
 mod nav;
@@ -290,6 +296,12 @@ fn dispatch_core_command(cli: Cli) -> bool {
             plugin_manager::handle_plugin_command(command);
             true
         }
+        Commands::Login { email, server } => account::handle_login(&email, server.as_deref()),
+        Commands::Logout => account::handle_logout(),
+        Commands::Whoami => account::handle_whoami(),
+
+        Commands::Namespace { command } => namespace::handle_namespace_command(command),
+
         Commands::Nav { path, depth } => {
             let current_dir = std::env::current_dir().unwrap_or_default();
             let config = Config::load().ok();

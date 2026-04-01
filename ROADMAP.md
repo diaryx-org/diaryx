@@ -3,7 +3,7 @@ title: ROADMAP
 description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
-updated: 2026-03-30T18:30:36-06:00
+updated: 2026-04-01T15:19:04-06:00
 audience:
 - public
 - agents
@@ -11,6 +11,7 @@ audience:
 part_of: '[Diaryx](/Diaryx.md)'
 link_of:
 - '[Diaryx](/Diaryx.md)'
+attachments: []
 link: '[ROADMAP](/ROADMAP.md)'
 ---
 # ROADMAP
@@ -20,6 +21,7 @@ link: '[ROADMAP](/ROADMAP.md)'
 **AI plugin**
 
 - [ ] Pin down Diaryx philosophy with AI, brainstorm good AI integrations
+- [ ] “AI iframe” plugin, similar to Claude’s interactive diagrams?
 
 **Publish plugin**
 

@@ -100,7 +100,15 @@ fn js_uuid_v4() -> String {
 }
 
 /// Authenticate the request, returning the user ID on success.
-async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> Result<String> {
+///
+/// On failure, returns `Ok(Response)` with the correct HTTP status code (401
+/// for missing/invalid tokens, or the status mapped by [`error_response`] for
+/// other `ServerCoreError` variants) instead of `Err(worker::Error)` which
+/// the Workers runtime would surface as a generic 500.
+async fn authenticate(
+    req: &Request,
+    ctx: &RouteContext<()>,
+) -> Result<std::result::Result<String, Response>> {
     let auth_store = D1AuthStore::new(db(ctx)?);
     let session_store = D1AuthSessionStore::new(db(ctx)?);
 
@@ -108,20 +116,36 @@ async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> Result<String> {
     let cookie = req.headers().get("Cookie")?;
     let query = req.url()?.query().map(|s| s.to_string());
 
-    let token = extract_token(
+    let token = match extract_token(
         authorization.as_deref(),
         cookie.as_deref(),
         query.as_deref(),
-    )
-    .ok_or_else(|| Error::from("Authentication required"))?;
+    ) {
+        Some(t) => t,
+        None => {
+            return Ok(Err(Response::from_json(
+                &serde_json::json!({ "error": "Authentication required" }),
+            )
+            .map(|r| r.with_status(401))?));
+        }
+    };
 
     let service = SessionValidationService::new(&auth_store, &session_store);
-    let auth_ctx = service
-        .validate(&token)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?;
+    match service.validate(&token).await {
+        Ok(auth_ctx) => Ok(Ok(auth_ctx.user.id)),
+        Err(e) => Ok(Err(error_response(e)?)),
+    }
+}
 
-    Ok(auth_ctx.user.id)
+/// Convenience macro to call [`authenticate`] and early-return the error
+/// response on auth failure, avoiding changes to every handler call-site.
+macro_rules! require_auth {
+    ($req:expr, $ctx:expr) => {
+        match authenticate($req, $ctx).await? {
+            Ok(user_id) => user_id,
+            Err(resp) => return Ok(resp),
+        }
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +166,7 @@ pub async fn capabilities(_req: Request, _ctx: RouteContext<()>) -> Result<Respo
 // ---------------------------------------------------------------------------
 
 pub async fn create_namespace(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let body: CreateNamespaceRequest = req.json().await?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let service = NamespaceService::new(&ns_store);
@@ -165,7 +189,7 @@ pub async fn create_namespace(mut req: Request, ctx: RouteContext<()>) -> Result
 }
 
 pub async fn list_namespaces(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let service = NamespaceService::new(&ns_store);
 
@@ -180,7 +204,7 @@ pub async fn list_namespaces(req: Request, ctx: RouteContext<()>) -> Result<Resp
 }
 
 pub async fn get_namespace(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let service = NamespaceService::new(&ns_store);
@@ -192,7 +216,7 @@ pub async fn get_namespace(req: Request, ctx: RouteContext<()>) -> Result<Respon
 }
 
 pub async fn update_namespace(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
     let body: UpdateNamespaceRequest = req.json().await?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
@@ -209,7 +233,7 @@ pub async fn update_namespace(mut req: Request, ctx: RouteContext<()>) -> Result
 }
 
 pub async fn delete_namespace(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let domain_cache = KvDomainMappingCache::new(domains_kv(&ctx)?);
@@ -229,7 +253,7 @@ pub async fn delete_namespace(req: Request, ctx: RouteContext<()>) -> Result<Res
 // ---------------------------------------------------------------------------
 
 pub async fn list_objects(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -277,7 +301,7 @@ pub async fn list_objects(req: Request, ctx: RouteContext<()>) -> Result<Respons
 }
 
 pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -318,7 +342,7 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
 }
 
 pub async fn get_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?;
@@ -340,7 +364,7 @@ pub async fn get_object(req: Request, ctx: RouteContext<()>) -> Result<Response>
 }
 
 pub async fn delete_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?;
@@ -421,7 +445,7 @@ struct SetAudienceBody {
 }
 
 pub async fn set_audience(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -443,7 +467,7 @@ pub async fn set_audience(mut req: Request, ctx: RouteContext<()>) -> Result<Res
 }
 
 pub async fn list_audiences(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?;
@@ -459,7 +483,7 @@ pub async fn list_audiences(req: Request, ctx: RouteContext<()>) -> Result<Respo
 }
 
 pub async fn delete_audience(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -613,7 +637,7 @@ pub async fn add_subscriber(mut req: Request, ctx: RouteContext<()>) -> Result<R
 }
 
 pub async fn list_subscribers(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -658,7 +682,7 @@ pub async fn list_subscribers(req: Request, ctx: RouteContext<()>) -> Result<Res
 }
 
 pub async fn remove_subscriber(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -694,7 +718,7 @@ pub async fn remove_subscriber(req: Request, ctx: RouteContext<()>) -> Result<Re
 }
 
 pub async fn bulk_import_subscribers(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -737,7 +761,7 @@ pub async fn bulk_import_subscribers(mut req: Request, ctx: RouteContext<()>) ->
 }
 
 pub async fn send_audience_email(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -901,7 +925,7 @@ pub async fn send_audience_email(mut req: Request, ctx: RouteContext<()>) -> Res
 // ---------------------------------------------------------------------------
 
 pub async fn list_domains(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let _user_id = authenticate(&req, &ctx).await?;
+    let _user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -934,7 +958,7 @@ struct RegisterDomainBody {
 }
 
 pub async fn register_domain(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let _user_id = authenticate(&req, &ctx).await?;
+    let _user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -1007,7 +1031,7 @@ pub async fn register_domain(mut req: Request, ctx: RouteContext<()>) -> Result<
 }
 
 pub async fn remove_domain(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let _user_id = authenticate(&req, &ctx).await?;
+    let _user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -1084,7 +1108,7 @@ struct ClaimSubdomainBody {
 }
 
 pub async fn claim_subdomain(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let _user_id = authenticate(&req, &ctx).await?;
+    let _user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -1109,7 +1133,7 @@ pub async fn claim_subdomain(mut req: Request, ctx: RouteContext<()>) -> Result<
 }
 
 pub async fn release_subdomain(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let _user_id = authenticate(&req, &ctx).await?;
+    let _user_id = require_auth!(&req, &ctx);
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
@@ -1137,7 +1161,7 @@ struct CreateSessionBody {
 }
 
 pub async fn create_session(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let body: CreateSessionBody = req.json().await?;
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
@@ -1177,7 +1201,7 @@ pub async fn get_session(_req: Request, ctx: RouteContext<()>) -> Result<Respons
 }
 
 pub async fn delete_session(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let code = ctx
         .param("code")
         .ok_or_else(|| Error::from("missing code"))?;
@@ -1448,7 +1472,7 @@ pub async fn verify_code(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
 // ---------------------------------------------------------------------------
 
 pub async fn get_usage(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
@@ -1467,7 +1491,7 @@ pub async fn get_usage(req: Request, ctx: RouteContext<()>) -> Result<Response> 
 
 /// POST /api/stripe/checkout — Create a Stripe Checkout Session for upgrading to Plus.
 pub async fn stripe_checkout(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
 
     let stripe_secret =
         config::stripe_secret_key(&ctx.env).ok_or_else(|| Error::from("Stripe not configured"))?;
@@ -1557,7 +1581,7 @@ pub async fn stripe_checkout(req: Request, ctx: RouteContext<()>) -> Result<Resp
 
 /// POST /api/stripe/portal — Create a Stripe Customer Portal session.
 pub async fn stripe_portal(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
 
     let stripe_secret =
         config::stripe_secret_key(&ctx.env).ok_or_else(|| Error::from("Stripe not configured"))?;
@@ -1793,7 +1817,7 @@ mod tests {
 /// Matches the native server's validation: JWS signature, product ID, bundle ID,
 /// appAccountToken, revocation, and expiry checks.
 pub async fn apple_verify_receipt(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let body: diaryx_server::api::billing::AppleVerifyReceiptRequest = req.json().await?;
 
     // Verify JWS signature and decode transaction payload
@@ -1864,7 +1888,7 @@ pub async fn apple_verify_receipt(mut req: Request, ctx: RouteContext<()>) -> Re
 ///
 /// Each JWS is verified. Invalid, revoked, or expired transactions are skipped.
 pub async fn apple_restore(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let body: diaryx_server::api::billing::AppleRestoreRequest = req.json().await?;
 
     let billing_store = D1BillingStore::new(db(&ctx)?);
@@ -2357,7 +2381,7 @@ struct SetTierBody {
 
 /// POST /api/tier — Admin endpoint to set a user's tier (requires admin secret).
 pub async fn set_tier(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let body: SetTierBody = req.json().await?;
 
     let user_store = D1UserStore::new(db(&ctx)?);
@@ -2387,7 +2411,7 @@ fn rp_id(ctx: &RouteContext<()>) -> String {
 
 /// POST /api/auth/passkeys/register/start (authenticated)
 pub async fn passkey_register_start(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
 
     let auth_store = D1AuthStore::new(db(&ctx)?);
     let user_info = auth_store
@@ -2410,7 +2434,7 @@ pub async fn passkey_register_start(req: Request, ctx: RouteContext<()>) -> Resu
 
 /// POST /api/auth/passkeys/register/finish (authenticated)
 pub async fn passkey_register_finish(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let body: PasskeyRegisterFinishRequest = req.json().await?;
 
     let passkey_store = D1PasskeyStore::new(db(&ctx)?);
@@ -2512,7 +2536,7 @@ pub async fn passkey_auth_finish(mut req: Request, ctx: RouteContext<()>) -> Res
 
 /// GET /api/auth/passkeys (authenticated) — list user's passkeys
 pub async fn passkey_list(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let passkey_store = D1PasskeyStore::new(db(&ctx)?);
     let service = PasskeyService::new(&passkey_store, &rp_id(&ctx));
 
@@ -2524,7 +2548,7 @@ pub async fn passkey_list(req: Request, ctx: RouteContext<()>) -> Result<Respons
 
 /// DELETE /api/auth/passkeys/:id (authenticated)
 pub async fn passkey_delete(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
 
     let passkey_store = D1PasskeyStore::new(db(&ctx)?);
@@ -2577,14 +2601,14 @@ pub async fn upgrade_sync_ws(req: Request, ctx: RouteContext<()>) -> Result<Resp
 
         // Guest user_id: try to authenticate, fall back to anonymous
         let guest_id = match authenticate(&req, &ctx).await {
-            Ok(id) => id,
-            Err(_) => format!("guest:{}", code),
+            Ok(Ok(id)) => id,
+            _ => format!("guest:{}", code),
         };
 
         (guest_id, true, session.read_only)
     } else {
         // Owner path: standard authentication + ownership check
-        let user_id = authenticate(&req, &ctx).await?;
+        let user_id = require_auth!(&req, &ctx);
 
         let ns_store = D1NamespaceStore::new(db(&ctx)?);
         let ns = ns_store
@@ -2637,7 +2661,7 @@ pub async fn upgrade_sync_ws(req: Request, ctx: RouteContext<()>) -> Result<Resp
 /// Resolves credentials from env secrets, validates tier/quota, and forwards
 /// the request to the configured upstream. Supports streaming (SSE passthrough).
 pub async fn proxy_request(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = authenticate(&req, &ctx).await?;
+    let user_id = require_auth!(&req, &ctx);
     let proxy_id = ctx
         .param("proxy_id")
         .ok_or_else(|| Error::from("missing proxy_id"))?

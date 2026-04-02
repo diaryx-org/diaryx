@@ -11,7 +11,7 @@ license-file.workspace = true
 
 [dependencies]
 # Internal crate (types module used for FileMetadata, BinaryRef, CrdtStorage, etc.)
-diaryx_core = { path = "../diaryx_core", version = "1.3.1", default-features = false }
+diaryx_core = { path = "../diaryx_core", version = "1.3.1", default-features = false, features = ["uuid"] }
 
 # Always-on: CRDT types and sync protocol (WASM-compatible)
 yrs = { version = "0.25", features = ["sync"] }

@@ -22,7 +22,7 @@ sha2 = "0.10"
 thiserror.workspace = true
 async-trait = "0.1"
 urlencoding = "2"
-uuid = { version = "1", features = ["v4", "rng-getrandom"] }
+uuid = { version = "1", features = ["v4", "rng-getrandom"], optional = true }
 
 # Optional dependencies
 toml = { version = "0.9.8", optional = true }
@@ -63,12 +63,15 @@ import-email = ["dep:mailparse", "dep:mbox-reader", "dep:html-to-markdown-rs"]
 # Enable Day One journal import (ZIP with media or Journal.json)
 import-dayone = ["dep:zip"]
 
+# UUID generation for workspace registry IDs
+uuid = ["dep:uuid"]
+
 # Browser WASM support (uuid/js for browser crypto)
-browser-js = ["uuid/js"]
+browser-js = ["uuid", "uuid/js"]
 
 # Default features — enabled for native builds (CLI, Tauri, Apple, Extism guests).
 # diaryx_wasm uses default-features = false to exclude these from the WASM binary.
-default = ["toml-config", "typescript"]
+default = ["toml-config", "typescript", "uuid"]
 
 [package.metadata.release]
 # This crate should be published to crates.io

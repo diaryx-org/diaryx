@@ -7,7 +7,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
 /// A single workspace known to the user.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,6 +56,7 @@ impl WorkspaceRegistry {
     ///
     /// Generates a `local-<uuid>` ID. If a workspace with the same path already
     /// exists, returns a reference to the existing entry instead.
+    #[cfg(feature = "uuid")]
     pub fn register(&mut self, name: String, path: Option<PathBuf>) -> &WorkspaceEntry {
         // Dedup by path if one is provided
         if let Some(ref p) = path
@@ -69,7 +69,7 @@ impl WorkspaceRegistry {
         }
 
         let entry = WorkspaceEntry {
-            id: format!("local-{}", Uuid::new_v4()),
+            id: format!("local-{}", uuid::Uuid::new_v4()),
             name,
             path,
         };

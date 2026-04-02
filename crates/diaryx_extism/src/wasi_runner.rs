@@ -98,19 +98,13 @@ pub fn run_wasi_module(
     ctx_builder.stdout(Box::new(stdout_pipe.clone()));
     ctx_builder.stderr(Box::new(stderr_pipe.clone()));
 
-    // Preopen the work directory as "/"
+    // Preopen the work directory as "." — this is the only directory the WASI
+    // module can access. We do NOT preopen "/" to prevent escape from the sandbox.
     let preopen_dir = Dir::open_ambient_dir(work_dir, ambient_authority())
         .map_err(|e| format!("Failed to open work dir: {e}"))?;
     ctx_builder
-        .preopened_dir(preopen_dir, "/")
+        .preopened_dir(preopen_dir, ".")
         .map_err(|e| format!("Failed to preopen dir: {e}"))?;
-
-    // Also preopen as "." for programs that use relative paths
-    let preopen_dir_dot = Dir::open_ambient_dir(work_dir, ambient_authority())
-        .map_err(|e| format!("Failed to open work dir (dot): {e}"))?;
-    ctx_builder
-        .preopened_dir(preopen_dir_dot, ".")
-        .map_err(|e| format!("Failed to preopen dir (.): {e}"))?;
 
     let wasi_ctx = ctx_builder.build();
 

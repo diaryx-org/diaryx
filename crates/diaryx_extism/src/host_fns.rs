@@ -352,6 +352,8 @@ pub struct HostContext {
     pub event_emitter: Arc<dyn EventEmitter>,
     /// Which plugin this context belongs to.
     pub plugin_id: String,
+    /// Whether the plugin ID has been set from a guest manifest and should not be overwritten.
+    pub plugin_id_locked: bool,
     /// Permission checker (None = deny all).
     pub permission_checker: Option<Arc<dyn PermissionChecker>>,
     /// Provider of user-selected files (e.g. from CLI args or browser file picker).
@@ -364,7 +366,14 @@ pub struct HostContext {
     pub runtime_context_provider: Arc<dyn RuntimeContextProvider>,
     /// Provider of namespace object operations (upload, delete, list, sync).
     pub namespace_provider: Arc<dyn NamespaceProvider>,
+    /// Current cross-plugin command call depth (prevents infinite recursion).
+    pub plugin_command_depth: u32,
+    /// Maximum storage bytes per plugin (0 = unlimited). Default: 1 MiB.
+    pub storage_quota_bytes: u64,
 }
+
+/// Default plugin storage quota: 1 MiB.
+pub const DEFAULT_STORAGE_QUOTA_BYTES: u64 = 1024 * 1024;
 
 impl HostContext {
     /// Create a context with just a filesystem (backwards compatible).
@@ -375,12 +384,15 @@ impl HostContext {
             secret_store: Arc::new(NoopSecretStore),
             event_emitter: Arc::new(NoopEventEmitter),
             plugin_id: String::new(),
+            plugin_id_locked: false,
             permission_checker: Some(Arc::new(DenyAllPermissionChecker)),
             file_provider: Arc::new(NoopFileProvider),
             ws_bridge: Arc::new(NoopWebSocketBridge),
             plugin_command_bridge: Arc::new(NoopPluginCommandBridge),
             runtime_context_provider: Arc::new(NoopRuntimeContextProvider),
             namespace_provider: Arc::new(NoopNamespaceProvider),
+            plugin_command_depth: 0,
+            storage_quota_bytes: DEFAULT_STORAGE_QUOTA_BYTES,
         }
     }
 
@@ -395,6 +407,44 @@ impl HostContext {
                 "Permission checker is not configured for this plugin host context",
             ))
         }
+    }
+
+    /// Validate HTTP header names and values to prevent header injection.
+    ///
+    /// Rejects headers containing newlines, null bytes, or carriage returns.
+    fn validate_http_headers(
+        headers: &std::collections::HashMap<String, String>,
+    ) -> Result<(), ExtismError> {
+        for (name, value) in headers {
+            if name.contains('\n')
+                || name.contains('\r')
+                || name.contains('\0')
+                || value.contains('\n')
+                || value.contains('\r')
+                || value.contains('\0')
+            {
+                return Err(ExtismError::msg(format!(
+                    "Invalid HTTP header: name or value contains forbidden characters (header: '{name}')"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate and canonicalize a file path to prevent directory traversal.
+    ///
+    /// Rejects paths containing `..` components that could escape the workspace.
+    /// Returns the cleaned path string suitable for passing to the filesystem.
+    fn validate_file_path(path: &str) -> Result<String, ExtismError> {
+        let normalized = path.replace('\\', "/");
+        for component in normalized.split('/') {
+            if component == ".." {
+                return Err(ExtismError::msg(format!(
+                    "Path traversal not allowed: '{path}'"
+                )));
+            }
+        }
+        Ok(path.to_string())
     }
 
     fn storage_key(&self, key: &str) -> String {
@@ -694,17 +744,20 @@ fn host_read_file(
 
     let parsed: ReadInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_read_file: invalid input: {e}")))?;
+    let path = HostContext::validate_file_path(&parsed.path)?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_read_file: lock: {e}")))?;
 
-    if let Err(e) = ctx.check_perm(PermissionType::ReadFiles, &parsed.path) {
+    if let Err(e) = ctx.check_perm(PermissionType::ReadFiles, &path) {
         let err = serde_json::json!({ "error": e.to_string() }).to_string();
         plugin.memory_set_val(&mut outputs[0], err.as_str())?;
         return Ok(());
     }
 
-    match futures_lite::future::block_on(ctx.fs.read_to_string(Path::new(&parsed.path))) {
+    match futures_lite::future::block_on(ctx.fs.read_to_string(Path::new(&path))) {
         Ok(content) => {
             plugin.memory_set_val(&mut outputs[0], content.as_str())?;
         }
@@ -736,11 +789,14 @@ fn host_read_binary(
 
     let parsed: ReadInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_read_binary: invalid input: {e}")))?;
+    let path = HostContext::validate_file_path(&parsed.path)?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
-    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
-    let bytes = futures_lite::future::block_on(ctx.fs.read_binary(Path::new(&parsed.path)))
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_read_binary: lock: {e}")))?;
+    ctx.check_perm(PermissionType::ReadFiles, &path)?;
+    let bytes = futures_lite::future::block_on(ctx.fs.read_binary(Path::new(&path)))
         .map_err(|e| ExtismError::msg(format!("host_read_binary: {e}")))?;
     let json = serde_json::json!({
         "data": base64::engine::general_purpose::STANDARD.encode(&bytes)
@@ -769,13 +825,15 @@ fn host_list_files(
 
     let parsed: ListInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_list_files: invalid input: {e}")))?;
+    let prefix = HostContext::validate_file_path(&parsed.prefix)?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
-    ctx.check_perm(PermissionType::ReadFiles, &parsed.prefix)?;
-    let files =
-        futures_lite::future::block_on(ctx.fs.list_all_files_recursive(Path::new(&parsed.prefix)))
-            .map_err(|e| ExtismError::msg(format!("host_list_files: {e}")))?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_list_files: lock: {e}")))?;
+    ctx.check_perm(PermissionType::ReadFiles, &prefix)?;
+    let files = futures_lite::future::block_on(ctx.fs.list_all_files_recursive(Path::new(&prefix)))
+        .map_err(|e| ExtismError::msg(format!("host_list_files: {e}")))?;
 
     let file_strings: Vec<String> = files
         .iter()
@@ -799,7 +857,9 @@ fn host_workspace_file_set(
     user_data: UserData<HostContext>,
 ) -> Result<(), ExtismError> {
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_workspace_file_set: lock: {e}")))?;
     let runtime = ctx.runtime_context_provider.get_context(&ctx.plugin_id);
     let workspace_path = runtime
         .get("current_workspace")
@@ -855,12 +915,14 @@ fn host_file_exists(
 
     let parsed: ExistsInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_file_exists: invalid input: {e}")))?;
+    let path = HostContext::validate_file_path(&parsed.path)?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
-    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
-    // exists() returns bool directly (not Result<bool>)
-    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&parsed.path)));
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_file_exists: lock: {e}")))?;
+    ctx.check_perm(PermissionType::ReadFiles, &path)?;
+    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&path)));
 
     let json = serde_json::to_string(&exists)
         .map_err(|e| ExtismError::msg(format!("host_file_exists: serialize: {e}")))?;
@@ -887,11 +949,14 @@ fn host_file_metadata(
 
     let parsed: MetadataInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_file_metadata: invalid input: {e}")))?;
+    let validated_path = HostContext::validate_file_path(&parsed.path)?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
-    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
-    let path = Path::new(&parsed.path);
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_file_metadata: lock: {e}")))?;
+    ctx.check_perm(PermissionType::ReadFiles, &validated_path)?;
+    let path = Path::new(&validated_path);
     let exists = futures_lite::future::block_on(ctx.fs.exists(path));
     let json = if exists {
         let size_bytes = futures_lite::future::block_on(ctx.fs.get_file_size(path));
@@ -934,18 +999,20 @@ fn host_write_file(
 
     let parsed: WriteInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_write_file: invalid input: {e}")))?;
+    let path = HostContext::validate_file_path(&parsed.path)?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
-    // Check edit or create based on whether the file exists
-    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&parsed.path)));
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_write_file: lock: {e}")))?;
+    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&path)));
     let perm = if exists {
         PermissionType::EditFiles
     } else {
         PermissionType::CreateFiles
     };
-    ctx.check_perm(perm, &parsed.path)?;
-    futures_lite::future::block_on(ctx.fs.write_file(Path::new(&parsed.path), &parsed.content))
+    ctx.check_perm(perm, &path)?;
+    futures_lite::future::block_on(ctx.fs.write_file(Path::new(&path), &parsed.content))
         .map_err(|e| ExtismError::msg(format!("host_write_file: {e}")))?;
 
     plugin.memory_set_val(&mut outputs[0], "")?;
@@ -970,11 +1037,14 @@ fn host_delete_file(
 
     let parsed: DeleteInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_delete_file: invalid input: {e}")))?;
+    let path = HostContext::validate_file_path(&parsed.path)?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
-    ctx.check_perm(PermissionType::DeleteFiles, &parsed.path)?;
-    futures_lite::future::block_on(ctx.fs.delete_file(Path::new(&parsed.path)))
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_delete_file: lock: {e}")))?;
+    ctx.check_perm(PermissionType::DeleteFiles, &path)?;
+    futures_lite::future::block_on(ctx.fs.delete_file(Path::new(&path)))
         .map_err(|e| ExtismError::msg(format!("host_delete_file: {e}")))?;
 
     plugin.memory_set_val(&mut outputs[0], "")?;
@@ -1007,16 +1077,20 @@ fn host_write_binary(
         .decode(&parsed.content)
         .map_err(|e| ExtismError::msg(format!("host_write_binary: base64 decode: {e}")))?;
 
+    let path = HostContext::validate_file_path(&parsed.path)?;
+
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
-    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&parsed.path)));
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_write_binary: lock: {e}")))?;
+    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&path)));
     let perm = if exists {
         PermissionType::EditFiles
     } else {
         PermissionType::CreateFiles
     };
-    ctx.check_perm(perm, &parsed.path)?;
-    futures_lite::future::block_on(ctx.fs.write_binary(Path::new(&parsed.path), &bytes))
+    ctx.check_perm(perm, &path)?;
+    futures_lite::future::block_on(ctx.fs.write_binary(Path::new(&path), &bytes))
         .map_err(|e| ExtismError::msg(format!("host_write_binary: {e}")))?;
 
     plugin.memory_set_val(&mut outputs[0], "")?;
@@ -1035,7 +1109,9 @@ fn host_emit_event(
     let event_json: String = plugin.memory_get_val(&inputs[0])?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_emit_event: lock: {e}")))?;
     ctx.event_emitter.emit(&event_json);
 
     plugin.memory_set_val(&mut outputs[0], "")?;
@@ -1064,7 +1140,9 @@ fn host_storage_get(
         .map_err(|e| ExtismError::msg(format!("host_storage_get: invalid input: {e}")))?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_storage_get: lock: {e}")))?;
     ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
     let storage_key = ctx.storage_key(&parsed.key);
 
@@ -1107,8 +1185,17 @@ fn host_storage_set(
         .map_err(|e| ExtismError::msg(format!("host_storage_set: base64 decode: {e}")))?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_storage_set: lock: {e}")))?;
     ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    if ctx.storage_quota_bytes > 0 && bytes.len() as u64 > ctx.storage_quota_bytes {
+        return Err(ExtismError::msg(format!(
+            "host_storage_set: data size ({} bytes) exceeds plugin storage quota ({} bytes)",
+            bytes.len(),
+            ctx.storage_quota_bytes
+        )));
+    }
     let storage_key = ctx.storage_key(&parsed.key);
     ctx.storage.set(&storage_key, &bytes);
 
@@ -1136,7 +1223,9 @@ fn host_secret_get(
         .map_err(|e| ExtismError::msg(format!("host_secret_get: invalid input: {e}")))?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_secret_get: lock: {e}")))?;
     ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
     let secret_key = ctx.secret_key(&parsed.key);
 
@@ -1170,7 +1259,9 @@ fn host_secret_set(
         .map_err(|e| ExtismError::msg(format!("host_secret_set: invalid input: {e}")))?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_secret_set: lock: {e}")))?;
     ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
     let secret_key = ctx.secret_key(&parsed.key);
     ctx.secret_store.set(&secret_key, &parsed.value);
@@ -1199,7 +1290,9 @@ fn host_secret_delete(
         .map_err(|e| ExtismError::msg(format!("host_secret_delete: invalid input: {e}")))?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_secret_delete: lock: {e}")))?;
     ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
     let secret_key = ctx.secret_key(&parsed.key);
     ctx.secret_store.delete(&secret_key);
@@ -1229,7 +1322,9 @@ fn host_run_wasi_module(
 
     // Load the WASM module bytes from plugin storage
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_run_wasi_module: lock: {e}")))?;
     ctx.check_perm(PermissionType::PluginStorage, &request.module_key)?;
     let storage_key = ctx.storage_key(&request.module_key);
     let wasm_bytes = ctx.storage.get(&storage_key).ok_or_else(|| {
@@ -1357,7 +1452,9 @@ fn host_request_file(
         .map_err(|e| ExtismError::msg(format!("host_request_file: invalid input: {e}")))?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_request_file: lock: {e}")))?;
 
     let result = ctx
         .file_provider
@@ -1390,9 +1487,20 @@ fn host_plugin_command(
         .map_err(|e| ExtismError::msg(format!("host_plugin_command: invalid input: {e}")))?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_plugin_command: lock: {e}")))?;
 
-    let response = if parsed.plugin_id.trim().is_empty() || parsed.command.trim().is_empty() {
+    const MAX_PLUGIN_COMMAND_DEPTH: u32 = 8;
+
+    let response = if ctx.plugin_command_depth >= MAX_PLUGIN_COMMAND_DEPTH {
+        serde_json::json!({
+            "success": false,
+            "error": format!(
+                "Cross-plugin command call depth limit exceeded (max {MAX_PLUGIN_COMMAND_DEPTH})"
+            ),
+        })
+    } else if parsed.plugin_id.trim().is_empty() || parsed.command.trim().is_empty() {
         serde_json::json!({
             "success": false,
             "error": "plugin_id and command are required",
@@ -1443,7 +1551,9 @@ fn host_get_runtime_context(
     user_data: UserData<HostContext>,
 ) -> Result<(), ExtismError> {
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_get_runtime_context: lock: {e}")))?;
     let json = serde_json::to_string(&ctx.runtime_context_provider.get_context(&ctx.plugin_id))
         .map_err(|e| ExtismError::msg(format!("host_get_runtime_context: serialize: {e}")))?;
     plugin.memory_set_val(&mut outputs[0], json.as_str())?;
@@ -1463,7 +1573,9 @@ fn host_ws_request(
 ) -> Result<(), ExtismError> {
     let input: String = plugin.memory_get_val(&inputs[0])?;
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_ws_request: lock: {e}")))?;
     let result = ctx.ws_bridge.request(&input).map_err(ExtismError::msg)?;
     plugin.memory_set_val(&mut outputs[0], result.as_str())?;
     Ok(())
@@ -1488,12 +1600,15 @@ fn host_hash_file(
 
     let parsed: HashInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_hash_file: invalid input: {e}")))?;
+    let path = HostContext::validate_file_path(&parsed.path)?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
-    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_hash_file: lock: {e}")))?;
+    ctx.check_perm(PermissionType::ReadFiles, &path)?;
 
-    let hash = match futures_lite::future::block_on(ctx.fs.hash_file(Path::new(&parsed.path))) {
+    let hash = match futures_lite::future::block_on(ctx.fs.hash_file(Path::new(&path))) {
         Ok(hash) => hash,
         Err(_) => {
             plugin.memory_set_val(&mut outputs[0], "")?;
@@ -1548,10 +1663,14 @@ fn host_proxy_request(
     let parsed: ProxyInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_proxy_request: invalid input: {e}")))?;
 
+    HostContext::validate_http_headers(&parsed.headers)?;
+
     // Resolve server URL and auth token from runtime context
     let (server_url, auth_token) = {
         let ctx = user_data.get()?;
-        let ctx = ctx.lock().unwrap();
+        let ctx = ctx
+            .lock()
+            .map_err(|e| ExtismError::msg(format!("host_proxy_request: lock: {e}")))?;
 
         let runtime_json = ctx.runtime_context_provider.get_context(&ctx.plugin_id);
         let server_url = runtime_json
@@ -1685,9 +1804,13 @@ fn host_http_request(
     let parsed: HttpInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_http_request: invalid input: {e}")))?;
 
+    HostContext::validate_http_headers(&parsed.headers)?;
+
     {
         let ctx = user_data.get()?;
-        let ctx = ctx.lock().unwrap();
+        let ctx = ctx
+            .lock()
+            .map_err(|e| ExtismError::msg(format!("host_http_request: lock: {e}")))?;
         ctx.check_perm(PermissionType::HttpRequests, &parsed.url)?;
     }
 
@@ -1826,7 +1949,9 @@ fn host_namespace_put_object(
         .map_err(|e| ExtismError::msg(format!("host_namespace_put_object: base64 decode: {e}")))?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_put_object: lock: {e}")))?;
     let result = ctx.namespace_provider.put_object(
         &parsed.ns_id,
         &parsed.key,
@@ -1863,7 +1988,9 @@ fn host_namespace_delete_object(
     })?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_delete_object: lock: {e}")))?;
     let result = ctx
         .namespace_provider
         .delete_object(&parsed.ns_id, &parsed.key);
@@ -1895,7 +2022,9 @@ fn host_namespace_list_objects(
     })?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_list_objects: lock: {e}")))?;
     let result = ctx.namespace_provider.list_objects(&parsed.ns_id);
 
     let json = match result {
@@ -1927,7 +2056,9 @@ fn host_namespace_sync_audience(
     })?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_sync_audience: lock: {e}")))?;
     let result =
         ctx.namespace_provider
             .sync_audience(&parsed.ns_id, &parsed.audience, &parsed.access);
@@ -1961,7 +2092,9 @@ fn host_namespace_send_email(
         .map_err(|e| ExtismError::msg(format!("host_namespace_send_email: invalid input: {e}")))?;
 
     let ctx = user_data.get()?;
-    let ctx = ctx.lock().unwrap();
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_send_email: lock: {e}")))?;
     let result = ctx.namespace_provider.send_audience_email(
         &parsed.ns_id,
         &parsed.audience,

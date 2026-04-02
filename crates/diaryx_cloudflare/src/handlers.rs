@@ -37,6 +37,23 @@ mod bindings {
     include!(concat!(env!("OUT_DIR"), "/wrangler_bindings.rs"));
 }
 
+/// Check the Cloudflare native rate limiter for auth endpoints.
+///
+/// Returns `Ok(true)` if the request is allowed, `Ok(false)` if rate limited.
+/// Falls back to allowing the request if the rate limiter binding is not configured.
+async fn check_auth_rate_limit(ctx: &RouteContext<()>, key: &str) -> Result<bool> {
+    match ctx.env.rate_limiter("AUTH_RATE_LIMITER") {
+        Ok(limiter) => match limiter.limit(key.to_string()).await {
+            Ok(outcome) => Ok(outcome.success),
+            Err(e) => {
+                worker::console_warn!("Rate limiter error: {e}");
+                Ok(true) // fail open
+            }
+        },
+        Err(_) => Ok(true), // binding not configured, allow
+    }
+}
+
 fn error_response(err: ServerCoreError) -> Result<Response> {
     let (status, msg) = match &err {
         ServerCoreError::NotFound(m) => (404, m.as_str()),
@@ -1315,6 +1332,16 @@ struct MagicLinkBody {
 
 pub async fn request_magic_link(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let body: MagicLinkBody = req.json().await?;
+
+    // Rate limit by email address (Cloudflare native rate limiter)
+    let rate_key = format!("magic_link:{}", body.email.to_lowercase());
+    if !check_auth_rate_limit(&ctx, &rate_key).await? {
+        return Response::from_json(&serde_json::json!({
+            "error": "Too many requests. Please try again later."
+        }))
+        .map(|r| r.with_status(429));
+    }
+
     let cfg = auth_cfg(&ctx);
 
     let ml_store = D1MagicLinkStore::new(db(&ctx)?);
@@ -1352,14 +1379,20 @@ pub async fn request_magic_link(mut req: Request, ctx: RouteContext<()>) -> Resu
             "success": true,
             "message": "Check your email for a sign-in link.",
         }))
-    } else {
-        // Dev mode: return the link and code directly
+    } else if config::dev_mode(&ctx.env) {
+        // Dev mode: return the link and code directly (requires explicit DEV_MODE=true)
         Response::from_json(&serde_json::json!({
             "success": true,
-            "message": "Email not configured. Use the dev link below.",
+            "message": "Email not configured (dev mode). Use the dev link below.",
             "dev_link": magic_link_url,
             "dev_code": code,
         }))
+    } else {
+        // Production without email configured: don't leak tokens
+        Response::from_json(&serde_json::json!({
+            "error": "Email service is not configured"
+        }))
+        .map(|r| r.with_status(503))
     }
 }
 
@@ -1374,6 +1407,16 @@ pub async fn verify_magic_link(req: Request, ctx: RouteContext<()>) -> Result<Re
     let url = req.url()?;
     let query: VerifyQuery =
         serde_qs::from_str(url.query().unwrap_or("")).map_err(|e| Error::from(e.to_string()))?;
+
+    // Rate limit by token prefix to prevent brute-force
+    let rate_key = format!("verify_link:{}", &query.token[..query.token.len().min(16)]);
+    if !check_auth_rate_limit(&ctx, &rate_key).await? {
+        return Response::from_json(&serde_json::json!({
+            "error": "Too many requests. Please try again later."
+        }))
+        .map(|r| r.with_status(429));
+    }
+
     let cfg = auth_cfg(&ctx);
 
     let ml_store = D1MagicLinkStore::new(db(&ctx)?);
@@ -1425,6 +1468,16 @@ struct VerifyCodeBody {
 
 pub async fn verify_code(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let body: VerifyCodeBody = req.json().await?;
+
+    // Rate limit by email address (Cloudflare native rate limiter)
+    let rate_key = format!("verify_code:{}", body.email.to_lowercase());
+    if !check_auth_rate_limit(&ctx, &rate_key).await? {
+        return Response::from_json(&serde_json::json!({
+            "error": "Too many requests. Please try again later."
+        }))
+        .map(|r| r.with_status(429));
+    }
+
     let cfg = auth_cfg(&ctx);
 
     let ml_store = D1MagicLinkStore::new(db(&ctx)?);
@@ -2455,6 +2508,18 @@ pub async fn passkey_register_finish(mut req: Request, ctx: RouteContext<()>) ->
 /// POST /api/auth/passkeys/authenticate/start (public)
 pub async fn passkey_auth_start(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let body: PasskeyAuthStartRequest = req.json().await?;
+
+    // Rate limit passkey authentication attempts
+    let rate_key = format!(
+        "passkey_auth:{}",
+        body.email.as_deref().unwrap_or("anonymous")
+    );
+    if !check_auth_rate_limit(&ctx, &rate_key).await? {
+        return Response::from_json(&serde_json::json!({
+            "error": "Too many requests. Please try again later."
+        }))
+        .map(|r| r.with_status(429));
+    }
 
     let email = body
         .email

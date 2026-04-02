@@ -17,6 +17,7 @@ use crate::macos_security_scoped::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use diaryx_core::{
     Command,
@@ -122,6 +123,9 @@ pub struct AppState {
     pub workspace_path: Mutex<Option<PathBuf>>,
     /// Cached Diaryx instance.
     pub diaryx: Mutex<Option<Arc<Diaryx<TauriBaseFs>>>>,
+    /// When the plugin WASM files were last loaded into memory.
+    /// Used to detect external updates (e.g. CLI `diaryx plugin update`).
+    pub plugins_loaded_at: Mutex<Option<SystemTime>>,
     /// Active macOS security-scoped workspace access, when needed.
     #[cfg(target_os = "macos")]
     pub workspace_access: Mutex<Option<ActiveSecurityScopedAccess>>,
@@ -132,6 +136,7 @@ impl AppState {
         Self {
             workspace_path: Mutex::new(None),
             diaryx: Mutex::new(None),
+            plugins_loaded_at: Mutex::new(None),
             #[cfg(target_os = "macos")]
             workspace_access: Mutex::new(None),
         }
@@ -776,12 +781,15 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
         secret_store: make_plugin_secret_store(app),
         event_emitter,
         plugin_id: String::new(),
+        plugin_id_locked: false,
         permission_checker: Some(make_permission_checker(workspace_root_opt)),
         file_provider,
         ws_bridge: ws_bridge.clone(),
         plugin_command_bridge: Arc::new(TauriPluginCommandBridge { app: app.clone() }),
         runtime_context_provider: Arc::new(TauriRuntimeContextProvider { app: app.clone() }),
         namespace_provider: Arc::new(TauriNamespaceProvider { app: app.clone() }),
+        plugin_command_depth: 0,
+        storage_quota_bytes: diaryx_extism::DEFAULT_STORAGE_QUOTA_BYTES,
     });
     let mut adapters = Vec::new();
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
@@ -1259,12 +1267,15 @@ pub async fn install_user_plugin<R: Runtime>(
         secret_store: Arc::new(diaryx_extism::NoopSecretStore),
         event_emitter: Arc::new(diaryx_extism::NoopEventEmitter),
         plugin_id: String::new(),
+        plugin_id_locked: false,
         permission_checker: Some(Arc::new(diaryx_extism::DenyAllPermissionChecker)),
         file_provider: Arc::new(diaryx_extism::NoopFileProvider),
         ws_bridge: Arc::new(diaryx_extism::NoopWebSocketBridge),
         plugin_command_bridge: Arc::new(diaryx_extism::NoopPluginCommandBridge),
         runtime_context_provider: Arc::new(diaryx_extism::NoopRuntimeContextProvider),
         namespace_provider: Arc::new(diaryx_extism::NoopNamespaceProvider),
+        plugin_command_depth: 0,
+        storage_quota_bytes: diaryx_extism::DEFAULT_STORAGE_QUOTA_BYTES,
     });
 
     log::info!(
@@ -1371,6 +1382,8 @@ pub async fn install_user_plugin<R: Runtime>(
             plugin_id
         );
         *diaryx_guard = None;
+        let mut loaded_guard = acquire_lock(&app_state.plugins_loaded_at)?;
+        *loaded_guard = None;
     }
 
     log::info!(
@@ -1768,10 +1781,54 @@ fn sync_loaded_plugin_adapters<R: Runtime>(
     }
 }
 
+/// Check whether any `plugin.wasm` file under the workspace plugins directory
+/// has been modified since we last loaded plugins. Returns `true` if the cache
+/// should be invalidated.
+fn plugins_changed_on_disk(workspace_path: Option<&Path>, loaded_at: Option<SystemTime>) -> bool {
+    let loaded_at = match loaded_at {
+        Some(t) => t,
+        None => return false, // never loaded — nothing to invalidate
+    };
+    let plugins_dir = match workspace_path {
+        Some(ws) => ws.join(".diaryx").join("plugins"),
+        None => return false,
+    };
+    let entries = match std::fs::read_dir(&plugins_dir) {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    for entry in entries.flatten() {
+        let wasm_path = entry.path().join("plugin.wasm");
+        if let Ok(meta) = std::fs::metadata(&wasm_path) {
+            if let Ok(mtime) = meta.modified() {
+                if mtime > loaded_at {
+                    log::info!(
+                        "[plugins] Detected updated plugin on disk: {}",
+                        wasm_path.display()
+                    );
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 async fn get_or_init_tauri_diaryx<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<Arc<Diaryx<TauriBaseFs>>, SerializableError> {
     let app_state = app.state::<AppState>();
+
+    // Check if plugins were updated on disk by an external process (e.g. CLI).
+    {
+        let ws_guard = acquire_lock(&app_state.workspace_path)?;
+        let loaded_at = *acquire_lock(&app_state.plugins_loaded_at)?;
+        if plugins_changed_on_disk(ws_guard.as_deref(), loaded_at) {
+            log::info!("[execute] Plugin files changed on disk, invalidating cache");
+            let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
+            *diaryx_guard = None;
+        }
+    }
 
     let cached_diaryx = {
         let diaryx_guard = acquire_lock(&app_state.diaryx)?;
@@ -1810,6 +1867,8 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
     {
         let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
         *diaryx_guard = Some(Arc::clone(&new_diaryx));
+        let mut loaded_guard = acquire_lock(&app_state.plugins_loaded_at)?;
+        *loaded_guard = Some(SystemTime::now());
         log::debug!("[execute] Cached Diaryx instance for future commands");
     }
 

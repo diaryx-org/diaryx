@@ -18,4 +18,19 @@ describe("normalizeExtismHostPath", () => {
     expect(normalizeExtismHostPath("")).toBe(".");
     expect(normalizeExtismHostPath(undefined)).toBe(".");
   });
+
+  it("rejects directory traversal with ..", () => {
+    expect(() => normalizeExtismHostPath("../etc/passwd")).toThrow(
+      "Path traversal not allowed",
+    );
+    expect(() => normalizeExtismHostPath("nested/../../etc/passwd")).toThrow(
+      "Path traversal not allowed",
+    );
+    expect(() => normalizeExtismHostPath("..")).toThrow(
+      "Path traversal not allowed",
+    );
+    expect(() => normalizeExtismHostPath("foo/..")).toThrow(
+      "Path traversal not allowed",
+    );
+  });
 });

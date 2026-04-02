@@ -155,6 +155,7 @@ pub fn inspect_plugin_wasm_manifest(wasm_path: &Path) -> Result<GuestManifest, E
     let fs = Arc::new(SyncToAsyncFs::new(RealFileSystem));
     let user_data = UserData::new(HostContext {
         plugin_id: plugin_name.clone(),
+        plugin_id_locked: false,
         ..HostContext::with_fs(fs)
     });
     let mut builder = PluginBuilder::new(extism_manifest).with_wasi(true);
@@ -262,12 +263,15 @@ pub fn load_plugin_from_wasm(
         secret_store: host_context.secret_store.clone(),
         event_emitter: host_context.event_emitter.clone(),
         plugin_id: plugin_name.clone(),
+        plugin_id_locked: false,
         permission_checker: host_context.permission_checker.clone(),
         file_provider: host_context.file_provider.clone(),
         ws_bridge: host_context.ws_bridge.clone(),
         plugin_command_bridge: host_context.plugin_command_bridge.clone(),
         runtime_context_provider: host_context.runtime_context_provider.clone(),
         namespace_provider: host_context.namespace_provider.clone(),
+        plugin_command_depth: 0,
+        storage_quota_bytes: crate::host_fns::DEFAULT_STORAGE_QUOTA_BYTES,
     });
 
     let mut builder = PluginBuilder::new(extism_manifest).with_wasi(true);
@@ -285,10 +289,13 @@ pub fn load_plugin_from_wasm(
     validate_protocol_version(&guest_manifest, &plugin_name)?;
     validate_app_version(&guest_manifest, &plugin_name)?;
 
+    // Set the plugin ID from the guest manifest exactly once, then lock it.
     if let Ok(ctx) = user_data.get()
         && let Ok(mut guard) = ctx.lock()
+        && !guard.plugin_id_locked
     {
         guard.plugin_id = guest_manifest.id.clone();
+        guard.plugin_id_locked = true;
     }
 
     // Cache the manifest.json alongside the WASM for fast discovery.
@@ -335,12 +342,15 @@ fn load_single_plugin(
         secret_store: host_context.secret_store.clone(),
         event_emitter: host_context.event_emitter.clone(),
         plugin_id: plugin_name.to_string(),
+        plugin_id_locked: false,
         permission_checker: host_context.permission_checker.clone(),
         file_provider: host_context.file_provider.clone(),
         ws_bridge: host_context.ws_bridge.clone(),
         plugin_command_bridge: host_context.plugin_command_bridge.clone(),
         runtime_context_provider: host_context.runtime_context_provider.clone(),
         namespace_provider: host_context.namespace_provider.clone(),
+        plugin_command_depth: 0,
+        storage_quota_bytes: crate::host_fns::DEFAULT_STORAGE_QUOTA_BYTES,
     });
 
     let mut builder = PluginBuilder::new(extism_manifest).with_wasi(true);
@@ -372,10 +382,13 @@ fn load_single_plugin(
     validate_protocol_version(&guest_manifest, plugin_name)?;
     validate_app_version(&guest_manifest, plugin_name)?;
 
+    // Set the plugin ID from the guest manifest exactly once, then lock it.
     if let Ok(ctx) = user_data.get()
         && let Ok(mut guard) = ctx.lock()
+        && !guard.plugin_id_locked
     {
         guard.plugin_id = guest_manifest.id.clone();
+        guard.plugin_id_locked = true;
     }
 
     // Load config sidecar.

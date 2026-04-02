@@ -8,5 +8,12 @@ export function normalizeExtismHostPath(path: string | null | undefined): string
   }
   normalized = normalized.replace(/\/\.(?=\/|$)/g, "");
 
+  // Reject directory traversal attempts
+  for (const component of normalized.split("/")) {
+    if (component === "..") {
+      throw new Error(`Path traversal not allowed: '${path}'`);
+    }
+  }
+
   return normalized.length > 0 ? normalized : ".";
 }

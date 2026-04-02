@@ -139,6 +139,13 @@ pub fn stripe_publishable_key(env: &Env) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Whether dev mode is explicitly enabled (for token disclosure in magic link flow).
+pub fn dev_mode(env: &Env) -> bool {
+    env.var("DEV_MODE")
+        .map(|v| v.to_string() == "true")
+        .unwrap_or(false)
+}
+
 /// Read CORS allowed origins.
 pub fn cors_origins(env: &Env) -> Vec<String> {
     env.var("CORS_ORIGINS")

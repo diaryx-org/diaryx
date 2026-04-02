@@ -380,6 +380,7 @@ fn create_host_context(
         )),
         event_emitter,
         plugin_id: plugin_id.to_string(),
+        plugin_id_locked: false,
         permission_checker: Some(Arc::new(FrontmatterPermissionChecker::from_workspace_root(
             Some(workspace_root.to_path_buf()),
         ))),
@@ -388,6 +389,8 @@ fn create_host_context(
         plugin_command_bridge: Arc::new(diaryx_extism::NoopPluginCommandBridge),
         runtime_context_provider: Arc::new(CliRuntimeContextProvider::new(workspace_root)),
         namespace_provider: Arc::new(diaryx_extism::NoopNamespaceProvider),
+        plugin_command_depth: 0,
+        storage_quota_bytes: diaryx_extism::DEFAULT_STORAGE_QUOTA_BYTES,
     })
 }
 

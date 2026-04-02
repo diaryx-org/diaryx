@@ -151,7 +151,10 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
 fn cors_preflight(env: &Env) -> Result<Response> {
     let origins = config::cors_origins(env);
-    let allow_origin = origins.first().cloned().unwrap_or_else(|| "*".to_string());
+    let allow_origin = origins
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "https://app.diaryx.org".to_string());
 
     let headers = Headers::new();
     headers.set("Access-Control-Allow-Origin", &allow_origin)?;
@@ -171,7 +174,10 @@ fn cors_preflight(env: &Env) -> Result<Response> {
 
 fn add_cors_headers(mut response: Response, env: &Env) -> Result<Response> {
     let origins = config::cors_origins(env);
-    let allow_origin = origins.first().cloned().unwrap_or_else(|| "*".to_string());
+    let allow_origin = origins
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "https://app.diaryx.org".to_string());
 
     let headers = response.headers_mut();
     headers.set("Access-Control-Allow-Origin", &allow_origin)?;

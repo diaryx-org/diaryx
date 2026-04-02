@@ -163,6 +163,25 @@ const MIN_HTTP_TIMEOUT_MS = 1_000;
 const MAX_HTTP_TIMEOUT_MS = 300_000;
 const MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 const CURRENT_PROTOCOL_VERSION = 1;
+/** Maximum storage per key per plugin (1 MiB), matching native DEFAULT_STORAGE_QUOTA_BYTES. */
+const STORAGE_QUOTA_BYTES = 1024 * 1024;
+/** Maximum cross-plugin command call depth to prevent infinite recursion. */
+const MAX_PLUGIN_COMMAND_DEPTH = 8;
+let pluginCommandDepth = 0;
+
+/** Reject HTTP headers containing forbidden characters (newlines, null bytes). */
+function validateHttpHeaders(headers: Record<string, string>): void {
+  for (const [name, value] of Object.entries(headers)) {
+    if (
+      /[\r\n\0]/.test(name) ||
+      /[\r\n\0]/.test(value)
+    ) {
+      throw new Error(
+        `Invalid HTTP header: name or value contains forbidden characters (header: '${name}')`,
+      );
+    }
+  }
+}
 
 function resolveHttpTimeoutMs(timeoutMs: unknown): number | null {
   if (timeoutMs == null) return null;
@@ -293,7 +312,9 @@ async function getRuntimeContextSnapshot(): Promise<Record<string, unknown>> {
 
   return {
     server_url: authModule.getServerUrl() ?? authState.serverUrl ?? null,
-    auth_token: authModule.getToken() ?? null,
+    // Internal: full auth token for host-side use (sync transport, init payload).
+    // Redacted to null when exposed to plugins via host_get_runtime_context.
+    _auth_token: authModule.getToken() ?? null,
     tier: authState.tier ?? null,
     guest_mode: guestMode,
     current_workspace: currentWorkspace
@@ -430,7 +451,7 @@ async function buildBrowserPluginInitPayload(pluginId: string): Promise<Record<s
     workspace_id: readPluginWorkspaceId(runtime, pluginId),
     write_to_disk: true,
     server_url: typeof runtime.server_url === "string" ? runtime.server_url : null,
-    auth_token: typeof runtime.auth_token === "string" ? runtime.auth_token : null,
+    auth_token: typeof runtime._auth_token === "string" ? runtime._auth_token : null,
   };
 }
 
@@ -1114,10 +1135,16 @@ function buildHostFunctions(
             );
           }
           const pluginId = opts.getPluginId();
+          const bytes = base64ToBytes(input.data);
+          if (bytes.length > STORAGE_QUOTA_BYTES) {
+            throw new Error(
+              `host_storage_set: data size (${bytes.length} bytes) exceeds plugin storage quota (${STORAGE_QUOTA_BYTES} bytes)`,
+            );
+          }
           const backend = getBackendSync();
           await backend.writeBinary(
             getPluginStoragePath(pluginId, input.key),
-            base64ToBytes(input.data),
+            bytes,
           );
           return cp.store("");
         } catch {
@@ -1214,6 +1241,7 @@ function buildHostFunctions(
               JSON.stringify({ status: 0, headers: {}, body: "no input" }),
             );
           await requirePermission(opts, "http_requests", input.url);
+          validateHttpHeaders(input.headers ?? {});
           timeoutMs = resolveHttpTimeoutMs(input.timeout_ms);
           let fetchBody: BodyInit | undefined;
           if (input.body_base64) {
@@ -1429,18 +1457,32 @@ function buildHostFunctions(
             );
           }
 
+          if (pluginCommandDepth >= MAX_PLUGIN_COMMAND_DEPTH) {
+            return cp.store(
+              JSON.stringify({
+                success: false,
+                error: `Cross-plugin command call depth limit exceeded (max ${MAX_PLUGIN_COMMAND_DEPTH})`,
+              }),
+            );
+          }
+
           await requirePermission(
             opts,
             "execute_commands",
             `${targetPluginId}:${command}`,
           );
 
-          const result = await dispatchCommand(
-            targetPluginId,
-            command,
-            input?.params ?? {},
-          );
-          return cp.store(JSON.stringify(result));
+          pluginCommandDepth += 1;
+          try {
+            const result = await dispatchCommand(
+              targetPluginId,
+              command,
+              input?.params ?? {},
+            );
+            return cp.store(JSON.stringify(result));
+          } finally {
+            pluginCommandDepth = Math.max(0, pluginCommandDepth - 1);
+          }
         } catch (e) {
           return cp.store(
             JSON.stringify({
@@ -1452,7 +1494,11 @@ function buildHostFunctions(
       },
       async host_get_runtime_context(cp: CallContext, _offs: bigint) {
         try {
-          return cp.store(JSON.stringify(await getRuntimeContextSnapshot()));
+          const snapshot = await getRuntimeContextSnapshot();
+          // Redact internal auth token — plugins should use host_proxy_request
+          // or host_http_request which handle credentials automatically.
+          const { _auth_token, ...safeSnapshot } = snapshot;
+          return cp.store(JSON.stringify(safeSnapshot));
         } catch {
           return cp.store(JSON.stringify({}));
         }
@@ -1632,6 +1678,9 @@ function buildHostFunctions(
                 body: "host_proxy_request: missing proxy_id",
               }),
             );
+          }
+          if (input.headers) {
+            validateHttpHeaders(input.headers);
           }
 
           // Build proxy URL — same-origin request to the server's proxy endpoint
@@ -1886,8 +1935,8 @@ export async function loadBrowserPlugin(
         ? runtime.server_url
         : null;
     const authToken =
-      typeof runtime.auth_token === "string" && runtime.auth_token.trim().length > 0
-        ? runtime.auth_token
+      typeof runtime._auth_token === "string" && runtime._auth_token.trim().length > 0
+        ? runtime._auth_token
         : undefined;
 
     if (!workspaceId || !serverUrl) {
@@ -2012,6 +2061,23 @@ export async function loadBrowserPlugin(
   }
   const guestManifest: GuestManifest = manifestOutput.json();
   validateProtocolVersion(guestManifest);
+
+  // Validate that the guest-declared plugin ID matches the expected ID from
+  // the host context (if one has already been set from a prior manifest
+  // inspection). This prevents a malicious plugin from claiming a different
+  // ID to access another plugin's storage or bypass permission rules.
+  const expectedId = hostOpts?.getPluginId?.();
+  if (
+    expectedId &&
+    expectedId !== "unknown-plugin" &&
+    guestManifest.id !== expectedId
+  ) {
+    await plugin.close().catch(() => {});
+    throw new Error(
+      `Plugin ID mismatch: expected '${expectedId}' but guest manifest declares '${guestManifest.id}'`,
+    );
+  }
+
   const manifest = convertGuestManifest(guestManifest);
 
   function extractComponentHtml(value: unknown): string | null {

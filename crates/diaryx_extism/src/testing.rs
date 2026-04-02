@@ -247,6 +247,7 @@ impl PluginTestHarnessBuilder {
                 .event_emitter
                 .unwrap_or_else(|| Arc::new(NoopEventEmitter)),
             plugin_id: String::new(),
+            plugin_id_locked: false,
             permission_checker: Some(
                 self.permission_checker
                     .unwrap_or_else(|| Arc::new(AllowAllPermissionChecker)),
@@ -256,6 +257,8 @@ impl PluginTestHarnessBuilder {
             plugin_command_bridge: Arc::new(NoopPluginCommandBridge),
             runtime_context_provider: Arc::new(NoopRuntimeContextProvider),
             namespace_provider: Arc::new(crate::host_fns::NoopNamespaceProvider),
+            plugin_command_depth: 0,
+            storage_quota_bytes: crate::host_fns::DEFAULT_STORAGE_QUOTA_BYTES,
         });
 
         let adapter = load_plugin_from_wasm(&self.wasm_path, host_context, None)

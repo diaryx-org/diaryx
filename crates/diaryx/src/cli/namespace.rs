@@ -180,7 +180,7 @@ fn handle_list(json_output: bool) -> bool {
         return true;
     }
 
-    println!("{:<40} {:<22} {:<15} {}", "ID", "CREATED", "KIND", "NAME");
+    println!("{:<40} {:<22} {:<15} NAME", "ID", "CREATED", "KIND");
     println!("{}", "-".repeat(95));
     for ns in &namespaces {
         let name = ns
@@ -366,10 +366,7 @@ fn handle_objects_list(ns_id: &str, prefix: Option<&str>, json_output: bool) -> 
         return true;
     }
 
-    println!(
-        "{:<50} {:<25} {:<10} {}",
-        "KEY", "MIME TYPE", "SIZE", "UPDATED"
-    );
+    println!("{:<50} {:<25} {:<10} UPDATED", "KEY", "MIME TYPE", "SIZE");
     println!("{}", "-".repeat(110));
     for obj in &objects {
         println!(
@@ -501,11 +498,11 @@ fn handle_subdomain_claim(ns_id: &str, subdomain: &str, audience: Option<&str>) 
         }
         Ok(mut r) => {
             let resp_body = r.body_mut().read_to_string().unwrap_or_default();
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&resp_body) {
-                if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
-                    eprintln!("✗ {err}");
-                    return false;
-                }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&resp_body)
+                && let Some(err) = parsed.get("error").and_then(|v| v.as_str())
+            {
+                eprintln!("✗ {err}");
+                return false;
             }
             eprintln!("✗ Failed to claim subdomain: HTTP {}", r.status());
             false

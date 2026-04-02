@@ -90,6 +90,7 @@ pub fn handle_create(
         .unwrap_or("untitled");
 
     // Try to render template via the templating plugin
+    #[allow(unused_labels)]
     let content = 'tmpl: {
         #[cfg(feature = "plugins")]
         {

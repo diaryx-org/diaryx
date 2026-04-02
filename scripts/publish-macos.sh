@@ -37,7 +37,7 @@ cargo tauri build --bundles app -- --features apple
 # ── Step 1b: Fix Nix dylib paths ─────────────────────────────────────
 BINARY="$APP_BUNDLE/Contents/MacOS/diaryx_tauri"
 echo "==> Rewriting Nix dylib paths to system libraries..."
-otool -L "$BINARY" | grep '/nix/store\|/Volumes/VOLUME' | awk '{print $1}' | while read -r nix_path; do
+otool -L "$BINARY" | { grep '/nix/store\|/Volumes/VOLUME' || true; } | awk '{print $1}' | while read -r nix_path; do
   lib_name="$(basename "$nix_path")"
   system_path="/usr/lib/$lib_name"
   echo "    $nix_path -> $system_path"

@@ -47,7 +47,7 @@ The recognized properties in Diaryx are carefully considered and given useful fu
 
 ## Unimplemented
 
-Diaryx still doesn’t match its own philosophy perfectly. Some gaps that are intended to be implemented in the near future:
+~~Diaryx still doesn’t match its own philosophy perfectly. Some gaps that are intended to be implemented in the near future:~~ Now implemented in part!
 
 ### Links
 

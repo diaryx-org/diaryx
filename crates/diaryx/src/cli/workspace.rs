@@ -1937,6 +1937,7 @@ fn resolve_parent_name(
 }
 
 /// Handle the 'workspace info' command
+#[allow(clippy::too_many_arguments)]
 fn handle_info(
     workspace_override: Option<PathBuf>,
     ws: &CliWorkspace,
@@ -2995,9 +2996,10 @@ fn handle_create(
     });
 
     let template_name = template.as_deref().unwrap_or("note");
-    let filename = child_filename.trim_end_matches(".md");
+    let _filename = child_filename.trim_end_matches(".md");
 
     // Try to render template via the templating plugin
+    #[allow(unused_labels)]
     let content = 'tmpl: {
         #[cfg(feature = "plugins")]
         {
@@ -3016,7 +3018,7 @@ fn handle_create(
                 let params = serde_json::json!({
                     "template": template_name,
                     "title": display_title,
-                    "filename": filename,
+                    "filename": _filename,
                     "part_of": relative_parent,
                     "custom": custom,
                 });

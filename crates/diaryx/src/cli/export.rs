@@ -24,6 +24,7 @@ fn requires_converter(format: &str) -> bool {
 }
 
 /// Get the file extension for a given format.
+#[cfg(feature = "plugins")]
 fn format_extension(format: &str) -> &str {
     match format {
         "markdown" => "md",
@@ -44,6 +45,7 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 }
 
 /// Handle the export command
+#[allow(clippy::too_many_arguments)]
 pub fn handle_export(
     workspace_root: PathBuf,
     audience: &str,
@@ -276,6 +278,7 @@ fn print_verbose_plan(plan: &ExportPlan) {
 }
 
 /// Collect all `.md` files under a directory recursively.
+#[cfg(feature = "plugins")]
 fn walkdir(dir: &Path) -> Vec<PathBuf> {
     let mut results = Vec::new();
     fn visit(dir: &Path, results: &mut Vec<PathBuf>) {

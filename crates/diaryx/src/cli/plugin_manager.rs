@@ -547,13 +547,6 @@ fn verify_inspected_manifest(
         ));
     }
 
-    if inspected.description != registry_plugin.description {
-        return Err(format!(
-            "Manifest description mismatch for {}",
-            registry_plugin.id
-        ));
-    }
-
     Ok(())
 }
 

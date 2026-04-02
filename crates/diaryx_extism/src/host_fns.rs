@@ -674,9 +674,11 @@ fn host_log(
     Ok(())
 }
 
-/// Host function: `host_read_file(input: {path}) -> file content string`
+/// Host function: `host_read_file(input: {path}) -> file content string or {"error": "..."}`
 ///
 /// Reads a workspace file and returns its content.
+/// Returns a JSON error object instead of trapping on I/O or permission errors,
+/// so the guest can handle missing files gracefully via `.ok()`.
 fn host_read_file(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],
@@ -695,11 +697,22 @@ fn host_read_file(
 
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
-    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
-    let content = futures_lite::future::block_on(ctx.fs.read_to_string(Path::new(&parsed.path)))
-        .map_err(|e| ExtismError::msg(format!("host_read_file: {e}")))?;
 
-    plugin.memory_set_val(&mut outputs[0], content.as_str())?;
+    if let Err(e) = ctx.check_perm(PermissionType::ReadFiles, &parsed.path) {
+        let err = serde_json::json!({ "error": e.to_string() }).to_string();
+        plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+        return Ok(());
+    }
+
+    match futures_lite::future::block_on(ctx.fs.read_to_string(Path::new(&parsed.path))) {
+        Ok(content) => {
+            plugin.memory_set_val(&mut outputs[0], content.as_str())?;
+        }
+        Err(e) => {
+            let err = serde_json::json!({ "error": format!("host_read_file: {e}") }).to_string();
+            plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+        }
+    }
     Ok(())
 }
 

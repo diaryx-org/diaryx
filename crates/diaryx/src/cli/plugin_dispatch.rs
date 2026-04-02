@@ -288,12 +288,20 @@ fn to_pascal_case(s: &str) -> String {
         .collect()
 }
 
-/// Resolve workspace root from config or current directory.
+/// Resolve workspace root: prefer cwd if it looks like a workspace,
+/// otherwise fall back to the config default.
 fn resolve_workspace_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // If cwd contains a .diaryx directory, it's likely a workspace.
+    if cwd.join(".diaryx").exists() {
+        return cwd;
+    }
+
     Config::load()
         .ok()
         .map(|c| c.default_workspace)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .unwrap_or(cwd)
 }
 
 fn native_publish(matches: &ArgMatches, _workspace_root: Option<&Path>) {

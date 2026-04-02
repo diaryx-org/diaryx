@@ -1092,4 +1092,16 @@ pub enum PluginCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Link a local WASM build for development
+    Dev {
+        /// Plugin ID (for example: "diaryx.sync")
+        id: String,
+        /// Path to local WASM file
+        wasm_path: PathBuf,
+    },
+    /// Remove a dev symlink and restore the original plugin
+    Undev {
+        /// Plugin ID
+        id: String,
+    },
 }

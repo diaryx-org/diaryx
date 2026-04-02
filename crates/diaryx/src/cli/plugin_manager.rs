@@ -73,6 +73,8 @@ pub fn handle_plugin_command(command: PluginCommands) {
         ),
         PluginCommands::Update { id } => handle_update(id.as_deref()),
         PluginCommands::Info { id, json } => handle_info(&id, json),
+        PluginCommands::Dev { id, wasm_path } => handle_dev(&id, &wasm_path),
+        PluginCommands::Undev { id } => handle_undev(&id),
     }
 }
 
@@ -592,6 +594,132 @@ fn handle_remove(id: &str, yes: bool) {
     match std::fs::remove_dir_all(&dest) {
         Ok(()) => println!("Removed plugin '{id}'."),
         Err(err) => eprintln!("Failed to remove plugin '{id}': {err}"),
+    }
+}
+
+const DEV_MARKER: &str = ".dev-created";
+
+/// Link a local WASM build for development.
+fn handle_dev(id: &str, wasm_path: &Path) {
+    let wasm_path = match wasm_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            // Allow dangling symlinks — the target may not be built yet.
+            if wasm_path.is_absolute() {
+                wasm_path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(wasm_path)
+            }
+        }
+    };
+
+    let dir = plugin_dir(id);
+    let created_dir = !dir.exists();
+
+    if created_dir {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!("Failed to create plugin directory: {e}");
+            return;
+        }
+        // Leave a marker so `undev` knows to clean up the directory.
+        let _ = std::fs::write(dir.join(DEV_MARKER), b"");
+    }
+
+    let plugin_wasm = dir.join("plugin.wasm");
+
+    // Back up an existing real file (not a symlink).
+    if plugin_wasm.exists() && !plugin_wasm.is_symlink() {
+        let backup = dir.join("plugin.wasm.bak");
+        if let Err(e) = std::fs::rename(&plugin_wasm, &backup) {
+            eprintln!("Failed to back up existing plugin.wasm: {e}");
+            return;
+        }
+        println!("Backed up plugin.wasm → plugin.wasm.bak");
+    }
+
+    // Remove an existing symlink so we can replace it.
+    if plugin_wasm.is_symlink() {
+        let _ = std::fs::remove_file(&plugin_wasm);
+    }
+
+    #[cfg(unix)]
+    {
+        if let Err(e) = std::os::unix::fs::symlink(&wasm_path, &plugin_wasm) {
+            eprintln!("Failed to create symlink: {e}");
+            return;
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        eprintln!("Symlinks are not supported on this platform; copying instead.");
+        if let Err(e) = std::fs::copy(&wasm_path, &plugin_wasm) {
+            eprintln!("Failed to copy WASM file: {e}");
+            return;
+        }
+    }
+
+    if !wasm_path.exists() {
+        println!(
+            "Warning: {} does not exist yet. The symlink will work once you build it.",
+            wasm_path.display()
+        );
+    }
+
+    // Re-cache the manifest from the new WASM.
+    if wasm_path.exists() {
+        if let Err(e) = cache_manifest_from_wasm(&plugin_wasm) {
+            eprintln!("Warning: failed to cache manifest: {e}");
+        }
+    }
+
+    println!("Linked {} → {}", plugin_wasm.display(), wasm_path.display());
+}
+
+/// Remove a dev symlink and restore the original plugin.
+fn handle_undev(id: &str) {
+    let dir = plugin_dir(id);
+    if !dir.exists() {
+        eprintln!("Plugin '{id}' is not installed.");
+        return;
+    }
+
+    let plugin_wasm = dir.join("plugin.wasm");
+    let backup = dir.join("plugin.wasm.bak");
+    let was_dev_created = dir.join(DEV_MARKER).exists();
+
+    if !plugin_wasm.is_symlink() {
+        eprintln!("Plugin '{id}' is not in dev mode (plugin.wasm is not a symlink).");
+        return;
+    }
+
+    let _ = std::fs::remove_file(&plugin_wasm);
+
+    if was_dev_created {
+        // Directory was created by `dev` — clean it up entirely.
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            eprintln!("Failed to clean up plugin directory: {e}");
+            return;
+        }
+        println!("Removed dev plugin '{id}' (directory cleaned up).");
+        return;
+    }
+
+    // Restore the backup if it exists.
+    if backup.exists() {
+        if let Err(e) = std::fs::rename(&backup, &plugin_wasm) {
+            eprintln!("Failed to restore plugin.wasm.bak: {e}");
+            return;
+        }
+        // Re-cache the manifest from the restored WASM.
+        if let Err(e) = cache_manifest_from_wasm(&plugin_wasm) {
+            eprintln!("Warning: failed to re-cache manifest: {e}");
+        }
+        println!("Restored plugin.wasm from backup for '{id}'.");
+    } else {
+        println!("Removed dev symlink for '{id}' (no backup to restore).");
     }
 }
 

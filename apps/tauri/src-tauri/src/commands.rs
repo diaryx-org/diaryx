@@ -429,7 +429,15 @@ fn log_execute_error(e: &DiaryxError) {
 fn make_permission_checker(
     workspace_root: Option<PathBuf>,
 ) -> Arc<dyn diaryx_extism::PermissionChecker> {
-    Arc::new(diaryx_extism::FrontmatterPermissionChecker::from_workspace_root(workspace_root))
+    match workspace_root {
+        Some(_) => Arc::new(
+            diaryx_extism::FrontmatterPermissionChecker::from_workspace_root(workspace_root),
+        ),
+        // No workspace root (e.g. during workspace download before it exists
+        // on disk). The plugin is already installed and trusted, but there's no
+        // frontmatter to read restrictions from.
+        None => Arc::new(diaryx_extism::AllowAllPermissionChecker),
+    }
 }
 
 #[cfg(feature = "extism-plugins")]
@@ -4683,10 +4691,13 @@ pub fn is_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<bool, Serializable
 pub async fn reinitialize_workspace<R: Runtime>(
     app: AppHandle<R>,
     workspace_path: String,
+    create: Option<bool>,
 ) -> Result<AppPaths, SerializableError> {
+    let create = create.unwrap_or(false);
     log::info!(
-        "[reinitialize_workspace] Reinitializing for workspace: {}",
+        "[reinitialize_workspace] Reinitializing for workspace: {} (create={})",
         workspace_path,
+        create,
     );
 
     // 1. Clear cached diaryx (forces re-creation on next execute())
@@ -4820,8 +4831,9 @@ pub async fn reinitialize_workspace<R: Runtime>(
     // Check that the workspace directory actually exists. If it was moved or
     // deleted externally we must NOT silently recreate an empty directory —
     // the frontend should surface an error so the user can relocate or remove
-    // the stale workspace entry.
-    if !ws_path.exists() {
+    // the stale workspace entry.  Skip this check when `create` is true (new
+    // workspace being downloaded/created for the first time).
+    if !create && !ws_path.exists() {
         return Err(SerializableError {
             kind: "WorkspaceDirectoryMissing".to_string(),
             message: format!(

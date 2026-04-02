@@ -58,6 +58,11 @@ session. That lets provider-owned restore flows write the initial downloaded
 files before workspace frontmatter exists, without stalling on a hidden
 permission prompt behind the launch overlay.
 
+Tauri-hosted provider inspection now narrows the backend's opaque
+`requestedPermissions` payload before reading plugin default permissions, so
+workspace bootstrap can reuse the same permission defaults handling as the web
+runtime without leaning on unchecked property access.
+
 For live sync, the host forwards only generic file events. That includes
 emitting `file_saved` after non-title frontmatter edits so the guest can
 refresh workspace metadata and propagate create, rename, move, metadata, and

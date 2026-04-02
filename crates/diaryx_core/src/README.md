@@ -83,12 +83,12 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   than direct binary paths. Each binary is represented by a sibling note such
   as `_attachments/photo.png.md`, whose frontmatter carries `attachment` (the
   binary self-link) and `attachment_of` backlinks.
-- Attachment uploads now split into two steps: callers write raw bytes through
-  the filesystem API, then `Command::RegisterAttachment` formats and records the
-  attachment-note link in entry frontmatter, creating or updating the
-  attachment note as needed. This keeps large media off the
+- Attachment uploads now split into two steps: callers call
+  `Command::RegisterAttachment` first (which creates the attachment note and
+  returns `Strings([link, storage_path])`), then write raw bytes to the returned
+  storage path through the filesystem API. This keeps large media off the
   JSON/base64 command path while preserving one canonical link-formatting
-  implementation in Rust.
+  implementation in Rust and letting the backend own path resolution.
 - `GetAttachmentData`, `ResolveAttachmentPath`, `DeleteAttachment`, and
   `MoveAttachment` all resolve through the attachment note. Delete only removes
   the binary/note pair when the final `attachment_of` backlink is gone, and

@@ -636,14 +636,63 @@
               menu.style.left = `${Math.max(8, left)}px`;
             }
 
-            // Show menu on click when already selected
+            // Show menu on click when already selected (desktop only)
             wrapper.addEventListener("mousedown", (e) => {
+              if (useNativeToolbar) return;
               if (selected && !menu && !(e.target as HTMLElement).closest(".editor-media-menu")) {
                 // Prevent ProseMirror from stealing focus / re-selecting
                 e.preventDefault();
                 showMenu(e.clientX, e.clientY);
               }
             });
+
+            // Native iOS context menu: send image metadata on touchstart
+            if (useNativeToolbar) {
+              wrapper.addEventListener("touchstart", () => {
+                const imgEl = wrapper.querySelector("img");
+                if (!imgEl || isAudio) return;
+
+                // Generate a small thumbnail for the peek preview
+                let thumbnailBase64: string | null = null;
+                try {
+                  const canvas = document.createElement("canvas");
+                  const maxDim = 300;
+                  const scale = Math.min(maxDim / imgEl.naturalWidth, maxDim / imgEl.naturalHeight, 1);
+                  canvas.width = Math.round(imgEl.naturalWidth * scale);
+                  canvas.height = Math.round(imgEl.naturalHeight * scale);
+                  const ctx = canvas.getContext("2d");
+                  if (ctx) {
+                    ctx.drawImage(imgEl, 0, 0, canvas.width, canvas.height);
+                    thumbnailBase64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1] || null;
+                  }
+                } catch {
+                  // Canvas taint from cross-origin blob URLs — fall back to no preview
+                }
+
+                (window as any).webkit?.messageHandlers?.editorToolbar?.postMessage({
+                  type: "imageContextPrepare",
+                  nodePos: getPos(),
+                  src: src,
+                  alt: node.attrs.alt || "",
+                  width: node.attrs.width,
+                  height: node.attrs.height,
+                  naturalWidth: imgEl.naturalWidth || null,
+                  naturalHeight: imgEl.naturalHeight || null,
+                  isVideo: isVideo,
+                  thumbnailBase64: thumbnailBase64,
+                });
+              }, { passive: true });
+
+              const clearContextCache = () => {
+                setTimeout(() => {
+                  (window as any).webkit?.messageHandlers?.editorToolbar?.postMessage({
+                    type: "imageContextClear",
+                  });
+                }, 2500);
+              };
+              wrapper.addEventListener("touchend", clearContextCache, { passive: true });
+              wrapper.addEventListener("touchcancel", clearContextCache, { passive: true });
+            }
 
             // Close dropdown when clicking outside
             function handleDocClick(e: MouseEvent) {
@@ -776,6 +825,7 @@
       HtmlBlock.configure({
         entryPath,
         api,
+        useNativeToolbar,
       }),
       // Inline attachment picker node extension
       AttachmentPickerNode.configure({
@@ -1064,6 +1114,9 @@
       }
 
       (globalThis as any).__diaryx_nativeToolbar = {
+        triggerPreviewMedia: (mediaSrc: string) => {
+          if (onPreviewMedia) onPreviewMedia(mediaSrc);
+        },
         getEntries: () => flattenTree(workspaceStore.tree)
           .filter((e: { path: string }) => e.path !== entryPath),
         getEntryPath: () => entryPath ?? '',
@@ -1676,6 +1729,11 @@
     border-radius: 6px;
     transition: box-shadow 0.15s ease;
     cursor: pointer;
+  }
+
+  :global(.editor-media-wrapper img),
+  :global(.html-block-preview img) {
+    -webkit-touch-callout: none;
   }
 
   :global(.editor-media-selected) {

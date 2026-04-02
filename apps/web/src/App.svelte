@@ -68,7 +68,7 @@
   import { buildCommandRegistry } from "$lib/commandRegistry";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
   import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
-  import { startSyncScheduler, stopSyncScheduler } from "$lib/sync/syncScheduler";
+  import { startSyncScheduler, stopSyncScheduler, runManualSyncNow } from "$lib/sync/syncScheduler";
   import { createLatestOnlyRunner } from "$lib/latestOnlyRunner";
   import {
     registerE2EBridge,
@@ -2524,6 +2524,11 @@
       onOpenBackupImport: handleQuickBackupExport,
       onImportFromClipboard: handleImportFromClipboard,
       onImportMarkdownFile: handleImportMarkdownFile,
+      onSyncNow: runManualSyncNow,
+      isSyncAvailable: () => {
+        const wsId = getCurrentWorkspaceId();
+        return !!wsId && isWorkspaceProviderSyncEnabled(wsId);
+      },
       pluginBlockCommands,
       pluginBlockPickerItems,
     }),

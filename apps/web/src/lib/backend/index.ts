@@ -88,7 +88,7 @@ function setBackendStorageType(type: StorageType | undefined): void {
  * const config = await backend.getConfig();
  * ```
  */
-export async function getBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType, storagePluginId?: string): Promise<Backend> {
+export async function getBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType, storagePluginId?: string, options?: { create?: boolean }): Promise<Backend> {
   // In preview mode, return the pre-created mock backend
   const preview = getBackendInstance();
   if ((globalThis as any).__diaryx_preview && preview?.isReady()) {
@@ -119,7 +119,7 @@ export async function getBackend(workspaceId?: string, workspaceName?: string, s
   }
 
   console.log("[Backend] Starting initialization...", workspaceId ? `workspace: ${workspaceId}` : '', workspaceName ? `name: ${workspaceName}` : '', storageType ? `storage: ${storageType}` : '', storagePluginId ? `plugin: ${storagePluginId}` : '');
-  const promise = initializeBackend(workspaceId, workspaceName, storageType, storagePluginId);
+  const promise = initializeBackend(workspaceId, workspaceName, storageType, storagePluginId, options);
   setInitPromise(promise);
   return promise;
 }
@@ -127,7 +127,7 @@ export async function getBackend(workspaceId?: string, workspaceName?: string, s
 /**
  * Initialize the appropriate backend based on runtime environment.
  */
-async function initializeBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType, storagePluginId?: string): Promise<Backend> {
+async function initializeBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType, storagePluginId?: string, options?: { create?: boolean }): Promise<Backend> {
   console.log("[Backend] Detecting runtime environment...");
   console.log("[Backend] isTauri():", isTauri());
   console.log("[Backend] isBrowser():", isBrowser());
@@ -159,6 +159,10 @@ async function initializeBackend(workspaceId?: string, workspaceName?: string, s
     }
 
     console.log("[Backend] Calling backend.init()...");
+    // Pass create flag to Tauri backend so it can create new workspace directories
+    if (options?.create && 'setCreateWorkspace' in instance) {
+      (instance as { setCreateWorkspace: (v: boolean) => void }).setCreateWorkspace(true);
+    }
     await instance.init(storageType, workspaceId, workspaceName, storagePluginId);
     console.log("[Backend] Backend initialized successfully");
     setBackendInstance(instance);

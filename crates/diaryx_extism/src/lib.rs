@@ -83,7 +83,9 @@ pub use host_fns::{
 pub use loader::{
     ExtismLoadError, inspect_plugin_wasm_manifest, load_plugin_from_wasm, load_plugins_from_dir,
 };
-pub use permission_checker::{DenyAllPermissionChecker, FrontmatterPermissionChecker};
+pub use permission_checker::{
+    AllowAllPermissionChecker, DenyAllPermissionChecker, FrontmatterPermissionChecker,
+};
 
 #[cfg(test)]
 mod tests {

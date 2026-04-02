@@ -264,7 +264,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         entry_path: String,
         filename: String,
     ) -> Result<Response> {
-        let (note_canonical, _binary_canonical) =
+        let (note_canonical, binary_canonical) =
             self.ensure_attachment_note(&entry_path, &filename).await?;
         let entry_canonical = self.get_canonical_path(&entry_path);
         let link = self.format_link_for_file(&note_canonical, &entry_canonical);
@@ -273,7 +273,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         self.upsert_attachment_backlink(&note_canonical, &entry_path)
             .await?;
 
-        Ok(Response::String(link))
+        let storage_path = self
+            .resolve_fs_path(&binary_canonical)
+            .to_string_lossy()
+            .into_owned();
+        Ok(Response::Strings(vec![link, storage_path]))
     }
 
     pub(crate) async fn cmd_delete_attachment(

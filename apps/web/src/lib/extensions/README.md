@@ -16,6 +16,7 @@ Custom TipTap editor extensions.
 | File | Purpose |
 |------|---------|
 | `AttachmentExtension.ts` | Attachment node extension |
+| `HtmlBlock.ts` | Raw HTML block node extension with preview/source toggle |
 | `AttachmentPickerNode.ts` | Attachment picker node view |
 | `TableControls.ts` | Notion-style inline table controls (row/column grips, add buttons) |
 | `TemplateVariable.ts` | Render-time template variable pills (`{{ variable }}`) with live value resolution |

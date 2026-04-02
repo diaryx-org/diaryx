@@ -104,6 +104,8 @@
   let installingProviderPluginId = $state<string | null>(null);
   let workspacePickerProviderId = $state<string | null>(null);
   let workspacePickerBackView = $state<WelcomeView>('main');
+  /** True when provider-choice was reached via the "Move" button (not "Create new"). */
+  let isMovingCurrentWorkspace = $state(false);
   const pluginStore = getPluginStore();
   let workspaceProviders = $derived(pluginStore.workspaceProviders);
   const managingCurrentWorkspace = $derived(
@@ -154,7 +156,7 @@
     })),
   );
   const providerChoiceProviders = $derived(
-    managingCurrentWorkspace ? manageModeProviders : bundleProviders,
+    isMovingCurrentWorkspace ? manageModeProviders : bundleProviders,
   );
   const installableProviderPlugins = $derived.by(() => {
     const installedProviderIds = new Set(
@@ -275,6 +277,7 @@
     if (bundleProviders.length === 0 && registryProviderPlugins.length === 0) {
       await handleGetStarted(bundle, overrides);
     } else {
+      isMovingCurrentWorkspace = false;
       navigateTo('provider-choice');
     }
   }
@@ -302,7 +305,7 @@
       return;
     }
 
-    if (managingCurrentWorkspace) {
+    if (isMovingCurrentWorkspace) {
       await moveCurrentWorkspace(provider.pluginId);
       return;
     }
@@ -396,7 +399,11 @@
       return;
     }
 
-    if (managingCurrentWorkspace) {
+    // When called after sign-in (from the sign-in view), return to main so the
+    // user can pick a provider for their current workspace.  But when called
+    // directly from the main view (e.g. "Download remote workspace" button),
+    // fall through to the workspace-download flow.
+    if (managingCurrentWorkspace && currentView !== 'main') {
       navigateTo('main');
       return;
     }
@@ -640,7 +647,7 @@
                     type="button"
                     class="text-xs text-muted-foreground/70 hover:text-foreground transition-colors disabled:opacity-50"
                     disabled={!animationDone}
-                    onclick={() => navigateTo('provider-choice')}
+                    onclick={() => { isMovingCurrentWorkspace = true; navigateTo('provider-choice'); }}
                   >
                     Move
                   </button>
@@ -685,7 +692,7 @@
             <button
               type="button"
               class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors fade-in"
-              onclick={() => navigateTo(managingCurrentWorkspace ? 'main' : 'bundles')}
+              onclick={() => navigateTo(isMovingCurrentWorkspace ? 'main' : 'bundles')}
             >
               <ArrowLeft class="size-4" />
               Back
@@ -706,14 +713,14 @@
               type="button"
               class="w-full text-left p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-secondary/50 transition-colors disabled:opacity-50"
               disabled={settingUp}
-              onclick={() => managingCurrentWorkspace ? moveCurrentWorkspace(null) : handleGetStarted(selectedBundle)}
+              onclick={() => isMovingCurrentWorkspace ? moveCurrentWorkspace(null) : handleGetStarted(selectedBundle)}
             >
               <div class="flex items-center gap-3">
                 <HardDrive class="size-5 text-muted-foreground shrink-0" />
                 <div class="min-w-0">
                   <div class="font-medium text-sm">This device only</div>
                   <div class="text-xs text-muted-foreground">
-                    {#if managingCurrentWorkspace}
+                    {#if isMovingCurrentWorkspace}
                       Keep this workspace local to this device.
                     {:else}
                       Your workspace stays on this device.

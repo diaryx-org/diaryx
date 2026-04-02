@@ -172,6 +172,13 @@ export class TauriBackend implements Backend {
   // Sync event listeners
   private syncEventCallbacks = new Set<SyncEventCallback>();
   private syncEventUnlisteners: UnlistenFn[] = [];
+
+  /** When true, reinitialize_workspace will create the directory if missing. */
+  private createWorkspace = false;
+
+  setCreateWorkspace(value: boolean): void {
+    this.createWorkspace = value;
+  }
   private extismEventUnlisteners: UnlistenFn[] = [];
 
   private async invokeInitWithRetry<T>(
@@ -260,8 +267,10 @@ export class TauriBackend implements Backend {
             {
               workspacePath,
               needsCrdt,
+              ...(this.createWorkspace ? { create: true } : {}),
             },
           );
+          this.createWorkspace = false;
           this.appPaths = result;
         } else {
           // No path stored (first launch or web-style workspace) — use default

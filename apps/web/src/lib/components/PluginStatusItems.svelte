@@ -119,8 +119,8 @@
     return "text-muted-foreground";
   }
 
-  function isManualSyncItem(pluginId: string, itemId: string): boolean {
-    return pluginId === "diaryx.sync" && itemId === "sync-status";
+  function isManualSyncItem(_pluginId: string, itemId: string): boolean {
+    return itemId === "sync-status";
   }
 
   function itemAriaLabel(pluginId: string, itemId: string, fallbackLabel: string): string {

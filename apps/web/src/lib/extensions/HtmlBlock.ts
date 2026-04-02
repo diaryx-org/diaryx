@@ -35,6 +35,7 @@ const VOID_ELEMENTS = new Set([
 export interface HtmlBlockOptions {
   entryPath: string;
   api: Api | null;
+  useNativeToolbar: boolean;
 }
 
 declare module "@tiptap/core" {
@@ -61,6 +62,7 @@ export const HtmlBlock = Node.create<HtmlBlockOptions>({
     return {
       entryPath: "",
       api: null,
+      useNativeToolbar: false,
     };
   },
 
@@ -98,7 +100,7 @@ export const HtmlBlock = Node.create<HtmlBlockOptions>({
   },
 
   addNodeView() {
-    const { entryPath, api } = this.options;
+    const { entryPath, api, useNativeToolbar } = this.options;
 
     return ({ node, getPos, editor }) => {
       const dom = document.createElement("div");
@@ -132,6 +134,55 @@ export const HtmlBlock = Node.create<HtmlBlockOptions>({
       }
 
       mountComponent(currentContent);
+
+      // Native iOS context menu for images inside HTML blocks
+      if (useNativeToolbar) {
+        dom.addEventListener("touchstart", (e: TouchEvent) => {
+          const target = e.target as HTMLElement;
+          if (target.tagName !== "IMG") return;
+          const imgEl = target as HTMLImageElement;
+
+          let thumbnailBase64: string | null = null;
+          try {
+            const canvas = document.createElement("canvas");
+            const maxDim = 300;
+            const scale = Math.min(maxDim / imgEl.naturalWidth, maxDim / imgEl.naturalHeight, 1);
+            canvas.width = Math.round(imgEl.naturalWidth * scale);
+            canvas.height = Math.round(imgEl.naturalHeight * scale);
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.drawImage(imgEl, 0, 0, canvas.width, canvas.height);
+              thumbnailBase64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1] || null;
+            }
+          } catch {
+            // Canvas taint from cross-origin blob URLs
+          }
+
+          (window as any).webkit?.messageHandlers?.editorToolbar?.postMessage({
+            type: "imageContextPrepare",
+            nodePos: -1, // Not a standalone TipTap image node
+            src: imgEl.src,
+            alt: imgEl.alt || "",
+            width: null,
+            height: null,
+            naturalWidth: imgEl.naturalWidth || null,
+            naturalHeight: imgEl.naturalHeight || null,
+            isVideo: false,
+            isHtmlBlock: true,
+            thumbnailBase64,
+          });
+        }, { passive: true });
+
+        const clearContextCache = () => {
+          setTimeout(() => {
+            (window as any).webkit?.messageHandlers?.editorToolbar?.postMessage({
+              type: "imageContextClear",
+            });
+          }, 2500);
+        };
+        dom.addEventListener("touchend", clearContextCache, { passive: true });
+        dom.addEventListener("touchcancel", clearContextCache, { passive: true });
+      }
 
       return {
         dom,

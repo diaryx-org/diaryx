@@ -603,32 +603,21 @@ describe('api', () => {
     it('should upload attachment', async () => {
       vi.mocked(mockBackend.execute)
         .mockResolvedValueOnce({
-          type: 'String',
-          data: '/workspace/_attachments/image.png',
-        })
-        .mockResolvedValueOnce({
-          type: 'String',
-          data: '_attachments/image.png',
+          type: 'Strings',
+          data: ['_attachments/image.png', '/workspace/_attachments/image.png'],
         })
 
       const bytes = new Uint8Array([1, 2, 3])
       const result = await api.uploadAttachment('test.md', 'image.png', bytes)
 
-      expect(mockBackend.execute).toHaveBeenNthCalledWith(1, {
-        type: 'ResolveAttachmentPath',
-        params: {
-          entry_path: 'test.md',
-          attachment_path: '_attachments/image.png',
-        },
-      })
-      expect(mockBackend.writeBinary).toHaveBeenCalledWith('/workspace/_attachments/image.png', bytes)
-      expect(mockBackend.execute).toHaveBeenNthCalledWith(2, {
+      expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'RegisterAttachment',
         params: {
           entry_path: 'test.md',
           filename: 'image.png',
         },
       })
+      expect(mockBackend.writeBinary).toHaveBeenCalledWith('/workspace/_attachments/image.png', bytes)
       expect(result).toBe('_attachments/image.png')
     })
 

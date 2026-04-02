@@ -5,7 +5,7 @@
  * The host owns only local workspace registry updates.
  */
 
-import { getBackend, createApi } from "$lib/backend";
+import { getBackend, createApi, isTauri } from "$lib/backend";
 import type { Api } from "$lib/backend/api";
 import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
 import { resolveStorageType } from "$lib/backend/storageType";
@@ -384,22 +384,49 @@ export async function downloadWorkspace(
   }
 
   const capturedProviderPlugin = pluginWasm ?? await captureProviderPluginForTransfer(pluginId);
-  const workspacePluginDefaults = capturedProviderPlugin
-    ? (await inspectPluginWasm(toPluginBuffer(capturedProviderPlugin)))
-      .requestedPermissions?.defaults
-    : undefined;
+  let workspacePluginDefaults: PluginPermissions | undefined;
+  if (capturedProviderPlugin) {
+    if (isTauri()) {
+      const tauriBackend = await getBackend();
+      if (tauriBackend.inspectPlugin) {
+        const inspected = await tauriBackend.inspectPlugin(capturedProviderPlugin);
+        const requestedPermissions = inspected.requestedPermissions as
+          | { defaults?: PluginPermissions }
+          | undefined;
+        workspacePluginDefaults = requestedPermissions?.defaults;
+      }
+    } else {
+      workspacePluginDefaults = (await inspectPluginWasm(toPluginBuffer(capturedProviderPlugin)))
+        .requestedPermissions?.defaults;
+    }
+  }
   const storageType = await resolveStorageType();
 
   onProgress?.({ percent: 10, message: "Creating local workspace..." });
 
-  const localWs = createLocalWorkspace(params.name, storageType);
-  addLocalWorkspace({ id: localWs.id, name: params.name });
+  // On Tauri, determine a unique workspace directory BEFORE switching backends.
+  // Without this, getBackend falls back to the default workspace path
+  // (Documents/Diaryx on iOS) and new workspaces share the same directory.
+  let tauriWorkspacePath: string | undefined;
+  if (isTauri()) {
+    const currentBackend = await getBackend();
+    const appPaths = currentBackend.getAppPaths?.();
+    const docDir = typeof appPaths?.document_dir === 'string' ? appPaths.document_dir : null;
+    if (docDir) {
+      tauriWorkspacePath = `${docDir}/${params.name}`;
+    }
+  }
+
+  const localWs = createLocalWorkspace(params.name, storageType, tauriWorkspacePath);
+  addLocalWorkspace({ id: localWs.id, name: params.name, ...(tauriWorkspacePath ? { path: tauriWorkspacePath } : {}) });
   setCurrentWorkspaceId(localWs.id);
 
   const backend = await getBackend(
     localWs.id,
     params.name,
     getWorkspaceStorageType(localWs.id),
+    undefined,
+    tauriWorkspacePath ? { create: true } : undefined,
   );
   const workspaceRoot = backend
     .getWorkspacePath()
@@ -412,28 +439,36 @@ export async function downloadWorkspace(
 
   await installCapturedProviderPlugin(pluginId, capturedProviderPlugin);
 
-  // Load the provider plugin with a minimal init payload.
-  // The workspace is empty (no root index yet) so the standard
-  // buildBrowserPluginInitPayload would fail trying to resolve the
-  // workspace root.  We provide "." (the OPFS root) plus auth/server
-  // context so the plugin can connect and download.
-  if (capturedProviderPlugin) {
-    const buf = capturedProviderPlugin.buffer.slice(
-      capturedProviderPlugin.byteOffset,
-      capturedProviderPlugin.byteOffset + capturedProviderPlugin.byteLength,
-    ) as ArrayBuffer;
-
-    const { getServerUrl, getToken } = await import("$lib/auth");
-    await loadPluginWithCustomInit(buf, {
-      workspace_root: workspaceRoot || ".",
-      workspace_id: localWs.id,
-      write_to_disk: true,
-      server_url: getServerUrl() ?? null,
-      auth_token: getToken() ?? null,
-    });
+  if (isTauri()) {
+    // On Tauri, install the provider plugin through the native backend.
+    // The Tauri plugin system handles loading automatically.
+    if (capturedProviderPlugin && backend.installPlugin) {
+      await backend.installPlugin(capturedProviderPlugin);
+    }
   } else {
-    // Fallback: full load (existing workspace may already have content)
-    await loadAllPlugins();
+    // Load the provider plugin with a minimal init payload.
+    // The workspace is empty (no root index yet) so the standard
+    // buildBrowserPluginInitPayload would fail trying to resolve the
+    // workspace root.  We provide "." (the OPFS root) plus auth/server
+    // context so the plugin can connect and download.
+    if (capturedProviderPlugin) {
+      const buf = capturedProviderPlugin.buffer.slice(
+        capturedProviderPlugin.byteOffset,
+        capturedProviderPlugin.byteOffset + capturedProviderPlugin.byteLength,
+      ) as ArrayBuffer;
+
+      const { getServerUrl, getToken } = await import("$lib/auth");
+      await loadPluginWithCustomInit(buf, {
+        workspace_root: workspaceRoot || ".",
+        workspace_id: localWs.id,
+        write_to_disk: true,
+        server_url: getServerUrl() ?? null,
+        auth_token: getToken() ?? null,
+      });
+    } else {
+      // Fallback: full load (existing workspace may already have content)
+      await loadAllPlugins();
+    }
   }
 
   const workspaceApi = createApi(backend);

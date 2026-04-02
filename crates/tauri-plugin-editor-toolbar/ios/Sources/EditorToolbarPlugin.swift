@@ -11,10 +11,29 @@ func initPlugin() -> Plugin {
 
 // MARK: - Editor Toolbar Plugin
 
+// MARK: - Image Context Menu Cache
+
+struct CachedImageInfo {
+    let nodePos: Int
+    let src: String
+    let alt: String
+    let width: Int?
+    let height: Int?
+    let naturalWidth: Int?
+    let naturalHeight: Int?
+    let isVideo: Bool
+    let isHtmlBlock: Bool
+    let thumbnailImage: UIImage?
+    let timestamp: TimeInterval
+}
+
 class EditorToolbarPlugin: Plugin, WKScriptMessageHandler {
     private weak var webView: WKWebView?
     private var toolbar: EditorToolbar?
     private var keyboardObserver: NSObjectProtocol?
+    private var cachedImageInfo: CachedImageInfo?
+    private var contextMenuInteraction: UIContextMenuInteraction?
+    private var pendingImageDataCompletion: ((Data?) -> Void)?
 
     @objc public override func load(webview: WKWebView) {
         self.webView = webview
@@ -42,6 +61,7 @@ class EditorToolbarPlugin: Plugin, WKScriptMessageHandler {
             if !Self.swizzleInputAccessoryView(for: webview, toolbar: toolbar) {
                 self?.observeKeyboardForSwizzle(webview: webview, toolbar: toolbar)
             }
+            self?.setupContextMenuInteraction(for: webview)
         }
     }
 
@@ -98,6 +118,37 @@ class EditorToolbarPlugin: Plugin, WKScriptMessageHandler {
                   let image = UIImage(data: data) else { return }
             let name = body["name"] as? String ?? "Image"
             presentImagePreview(image: image, name: name)
+        case "imageContextPrepare":
+            guard let nodePos = body["nodePos"] as? Int,
+                  let src = body["src"] as? String else { return }
+            var thumbnail: UIImage? = nil
+            if let b64 = body["thumbnailBase64"] as? String,
+               let data = Data(base64Encoded: b64) {
+                thumbnail = UIImage(data: data)
+            }
+            cachedImageInfo = CachedImageInfo(
+                nodePos: nodePos,
+                src: src,
+                alt: body["alt"] as? String ?? "",
+                width: body["width"] as? Int,
+                height: body["height"] as? Int,
+                naturalWidth: body["naturalWidth"] as? Int,
+                naturalHeight: body["naturalHeight"] as? Int,
+                isVideo: body["isVideo"] as? Bool ?? false,
+                isHtmlBlock: body["isHtmlBlock"] as? Bool ?? false,
+                thumbnailImage: thumbnail,
+                timestamp: Date().timeIntervalSince1970
+            )
+        case "imageContextClear":
+            cachedImageInfo = nil
+        case "imageDataResult":
+            let completion = pendingImageDataCompletion
+            pendingImageDataCompletion = nil
+            if let b64 = body["base64"] as? String, let data = Data(base64Encoded: b64) {
+                completion?(data)
+            } else {
+                completion?(nil)
+            }
         default:
             break
         }
@@ -162,6 +213,393 @@ extension EditorToolbarPlugin {
             }
         }
         return nil
+    }
+}
+
+// MARK: - Image Context Menu Interaction
+
+extension EditorToolbarPlugin: UIContextMenuInteractionDelegate {
+
+    func setupContextMenuInteraction(for webView: WKWebView) {
+        guard let contentView = Self.findWKContentView(in: webView) else { return }
+        let interaction = UIContextMenuInteraction(delegate: self)
+        contentView.addInteraction(interaction)
+        self.contextMenuInteraction = interaction
+    }
+
+    public func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        configurationForMenuAtLocation location: CGPoint
+    ) -> UIContextMenuConfiguration? {
+        guard let info = cachedImageInfo,
+              Date().timeIntervalSince1970 - info.timestamp < 2.0 else {
+            return nil
+        }
+
+        return UIContextMenuConfiguration(
+            identifier: nil,
+            previewProvider: { [weak self] in
+                guard let img = self?.cachedImageInfo?.thumbnailImage else { return nil }
+                return ImageContextPreviewController(image: img)
+            },
+            actionProvider: { [weak self] _ in
+                self?.makeImageContextMenu(info: info)
+            }
+        )
+    }
+
+    public func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration,
+        animator: UIContextMenuInteractionCommitAnimating
+    ) {
+        animator.addCompletion { [weak self] in
+            guard let info = self?.cachedImageInfo else { return }
+            self?.handleImagePreview(info: info)
+        }
+    }
+
+    // MARK: Menu Builder
+
+    private func makeImageContextMenu(info: CachedImageInfo) -> UIMenu {
+        var actions: [UIMenuElement] = []
+
+        // Preview
+        actions.append(UIAction(
+            title: "Preview",
+            image: UIImage(systemName: "eye")
+        ) { [weak self] _ in
+            self?.handleImagePreview(info: info)
+        })
+
+        // Copy
+        actions.append(UIAction(
+            title: "Copy",
+            image: UIImage(systemName: "doc.on.doc")
+        ) { [weak self] _ in
+            self?.handleImageCopy(info: info)
+        })
+
+        // Share
+        actions.append(UIAction(
+            title: "Share",
+            image: UIImage(systemName: "square.and.arrow.up")
+        ) { [weak self] _ in
+            self?.handleImageShare(info: info)
+        })
+
+        // For HTML block images, only show Preview/Copy/Share
+        if info.isHtmlBlock {
+            return UIMenu(title: "", children: actions)
+        }
+
+        // Edit Alt Text (images only)
+        if !info.isVideo {
+            actions.append(UIAction(
+                title: "Edit Alt Text",
+                image: UIImage(systemName: "text.below.photo")
+            ) { [weak self] _ in
+                self?.handleEditAltText(info: info)
+            })
+        }
+
+        // Replace
+        actions.append(UIAction(
+            title: "Replace",
+            image: UIImage(systemName: "arrow.triangle.2.circlepath")
+        ) { [weak self] _ in
+            self?.handleReplace(info: info)
+        })
+
+        // Resize submenu (images only)
+        if !info.isVideo {
+            actions.append(makeResizeSubmenu(info: info))
+        }
+
+        // Delete (destructive)
+        actions.append(UIAction(
+            title: "Delete",
+            image: UIImage(systemName: "trash"),
+            attributes: .destructive
+        ) { [weak self] _ in
+            self?.handleImageDelete(info: info)
+        })
+
+        return UIMenu(title: "", children: actions)
+    }
+
+    private func makeResizeSubmenu(info: CachedImageInfo) -> UIMenu {
+        let natW = info.naturalWidth ?? 0
+
+        let presets: [(String, Double)] = [
+            ("25%", 0.25), ("50%", 0.5), ("75%", 0.75), ("100% (Original)", 1.0)
+        ]
+
+        var children: [UIMenuElement] = presets.map { (label, factor) in
+            UIAction(title: label) { [weak self] _ in
+                if factor == 1.0 {
+                    self?.applyImageResize(nodePos: info.nodePos, width: nil, height: nil)
+                } else if natW > 0 {
+                    self?.applyImageResize(nodePos: info.nodePos, width: Int(Double(natW) * factor), height: nil)
+                }
+            }
+        }
+
+        children.append(UIAction(title: "Custom\u{2026}") { [weak self] _ in
+            self?.handleResizeCustom(info: info)
+        })
+
+        return UIMenu(
+            title: "Resize",
+            image: UIImage(systemName: "arrow.up.left.and.arrow.down.right"),
+            children: children
+        )
+    }
+
+    // MARK: Action Handlers
+
+    private func handleImagePreview(info: CachedImageInfo) {
+        let src = info.src.replacingOccurrences(of: "'", with: "\\'")
+        webView?.evaluateJavaScript(
+            "globalThis.__diaryx_nativeToolbar?.triggerPreviewMedia?.('\(src)');",
+            completionHandler: nil
+        )
+    }
+
+    /// Fetch full image data from a blob/http URL via JS, then call the completion handler.
+    private func fetchImageData(src: String, completion: @escaping (Data?) -> Void) {
+        guard let webView = webView else { completion(nil); return }
+        let escaped = src.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        // First try canvas (works for same-origin images)
+        let js = """
+        (function() {
+          var img = document.querySelector('img[src="\(escaped)"]');
+          if (!img) return null;
+          try {
+            var c = document.createElement('canvas');
+            c.width = img.naturalWidth; c.height = img.naturalHeight;
+            var ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            return c.toDataURL('image/png').split(',')[1];
+          } catch(e) {
+            return null;
+          }
+        })()
+        """
+        webView.evaluateJavaScript(js) { [weak self] result, _ in
+            if let b64 = result as? String, let data = Data(base64Encoded: b64) {
+                completion(data)
+                return
+            }
+            // Canvas was tainted — try fetching blob URL via message handler
+            self?.fetchImageDataViaBlob(src: src, completion: completion)
+        }
+    }
+
+    /// Fallback: fetch blob URL, read as data URL, and post result back via message handler.
+    private func fetchImageDataViaBlob(src: String, completion: @escaping (Data?) -> Void) {
+        guard let webView = webView else { completion(nil); return }
+        let escaped = src.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+
+        // Store completion for the callback
+        pendingImageDataCompletion = completion
+
+        let js = """
+        (function() {
+          var src = '\(escaped)';
+          if (!src.startsWith('blob:')) {
+            window.webkit.messageHandlers.editorToolbar.postMessage({type:'imageDataResult',base64:null});
+            return;
+          }
+          fetch(src).then(function(r){return r.blob();}).then(function(b){
+            var reader = new FileReader();
+            reader.onloadend = function(){
+              var b64 = reader.result.split(',')[1] || null;
+              window.webkit.messageHandlers.editorToolbar.postMessage({type:'imageDataResult',base64:b64});
+            };
+            reader.readAsDataURL(b);
+          }).catch(function(){
+            window.webkit.messageHandlers.editorToolbar.postMessage({type:'imageDataResult',base64:null});
+          });
+        })();
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
+
+        // Timeout after 5 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            if let pending = self?.pendingImageDataCompletion {
+                self?.pendingImageDataCompletion = nil
+                pending(nil)
+            }
+        }
+    }
+
+    private func handleImageCopy(info: CachedImageInfo) {
+        fetchImageData(src: info.src) { data in
+            guard let data = data, let image = UIImage(data: data) else { return }
+            UIPasteboard.general.image = image
+        }
+    }
+
+    private func handleImageShare(info: CachedImageInfo) {
+        fetchImageData(src: info.src) { [weak self] data in
+            guard let data = data, let image = UIImage(data: data) else { return }
+            guard let vc = self?.toolbar?.findViewController() else { return }
+            let activityVC = UIActivityViewController(activityItems: [image], applicationActivities: nil)
+            if let popover = activityVC.popoverPresentationController {
+                popover.sourceView = vc.view
+                popover.sourceRect = CGRect(x: vc.view.bounds.midX, y: vc.view.bounds.midY, width: 0, height: 0)
+                popover.permittedArrowDirections = []
+            }
+            vc.present(activityVC, animated: true)
+        }
+    }
+
+    private func handleEditAltText(info: CachedImageInfo) {
+        guard let vc = toolbar?.findViewController() else { return }
+        let alert = UIAlertController(title: nil, message: "Alt text:", preferredStyle: .alert)
+        alert.addTextField { tf in tf.text = info.alt }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+            guard let newAlt = alert.textFields?.first?.text else { return }
+            let escaped = newAlt.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+                .replacingOccurrences(of: "\n", with: "\\n")
+            let js = """
+            (function() {
+              var e = globalThis.__diaryx_tiptapEditor;
+              if (!e) return;
+              var pos = \(info.nodePos);
+              var node = e.state.doc.nodeAt(pos);
+              if (!node) return;
+              e.chain().focus().command(function(c) {
+                c.tr.setNodeMarkup(pos, undefined, Object.assign({}, node.attrs, { alt: '\(escaped)' }));
+                return true;
+              }).run();
+            })();
+            """
+            self?.webView?.evaluateJavaScript(js, completionHandler: nil)
+        })
+        vc.present(alert, animated: true)
+    }
+
+    private func handleReplace(info: CachedImageInfo) {
+        let accept = info.isVideo ? "video/*" : "image/*,video/*"
+        let js = """
+        (function() {
+          var input = document.createElement('input');
+          input.type = 'file';
+          input.accept = '\(accept)';
+          input.onchange = function() {
+            var file = input.files && input.files[0];
+            if (!file) return;
+            var e = globalThis.__diaryx_tiptapEditor;
+            if (!e) return;
+            var pos = \(info.nodePos);
+            var node = e.state.doc.nodeAt(pos);
+            if (!node) return;
+            // Trigger the editor's onFileDrop flow by dispatching a synthetic event
+            // Instead, use the blob URL approach directly:
+            var url = URL.createObjectURL(file);
+            e.chain().focus().command(function(c) {
+              c.tr.setNodeMarkup(pos, undefined, Object.assign({}, node.attrs, { src: url }));
+              return true;
+            }).run();
+          };
+          input.click();
+        })();
+        """
+        webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    private func handleImageDelete(info: CachedImageInfo) {
+        let js = """
+        (function() {
+          var e = globalThis.__diaryx_tiptapEditor;
+          if (!e) return;
+          var pos = \(info.nodePos);
+          var node = e.state.doc.nodeAt(pos);
+          if (!node) return;
+          e.chain().focus().command(function(c) {
+            c.tr.delete(pos, pos + node.nodeSize);
+            return true;
+          }).run();
+        })();
+        """
+        webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    private func applyImageResize(nodePos: Int, width: Int?, height: Int?) {
+        let wStr = width != nil ? String(width!) : "null"
+        let hStr = height != nil ? String(height!) : "null"
+        let js = """
+        (function() {
+          var e = globalThis.__diaryx_tiptapEditor;
+          if (!e) return;
+          var pos = \(nodePos);
+          var node = e.state.doc.nodeAt(pos);
+          if (!node) return;
+          e.chain().focus().command(function(c) {
+            c.tr.setNodeMarkup(pos, undefined, Object.assign({}, node.attrs, { width: \(wStr), height: \(hStr) }));
+            return true;
+          }).run();
+        })();
+        """
+        webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    private func handleResizeCustom(info: CachedImageInfo) {
+        guard let vc = toolbar?.findViewController() else { return }
+        let currentW = info.width ?? info.naturalWidth ?? 0
+        let alert = UIAlertController(title: nil, message: "Enter size (width or widthxheight):", preferredStyle: .alert)
+        alert.addTextField { tf in tf.text = currentW > 0 ? String(currentW) : "" }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+            guard let input = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !input.isEmpty else { return }
+            // Parse WIDTHxHEIGHT or just WIDTH
+            let parts = input.split(separator: "x").compactMap { Int($0) }
+            guard let w = parts.first else { return }
+            let h = parts.count > 1 ? parts[1] : nil
+            self?.applyImageResize(nodePos: info.nodePos, width: w, height: h)
+        })
+        vc.present(alert, animated: true)
+    }
+}
+
+// MARK: - Image Context Preview Controller
+
+/// Lightweight view controller used for the UIContextMenuInteraction peek preview.
+private class ImageContextPreviewController: UIViewController {
+    private let image: UIImage
+
+    init(image: UIImage) {
+        self.image = image
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        let imageView = UIImageView(image: image)
+        imageView.contentMode = .scaleAspectFit
+        imageView.clipsToBounds = true
+        view = imageView
+
+        // Size the preview to match the image aspect ratio
+        let maxWidth: CGFloat = 300
+        let maxHeight: CGFloat = 400
+        let aspect = image.size.width / max(image.size.height, 1)
+        var w = min(image.size.width, maxWidth)
+        var h = w / aspect
+        if h > maxHeight {
+            h = maxHeight
+            w = h * aspect
+        }
+        preferredContentSize = CGSize(width: w, height: h)
     }
 }
 

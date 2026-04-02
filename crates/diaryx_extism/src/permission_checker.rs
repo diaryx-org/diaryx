@@ -12,6 +12,24 @@ use diaryx_core::workspace::Workspace;
 
 use crate::host_fns::PermissionChecker;
 
+/// A permissive checker that allows every permission request.
+///
+/// Use when the plugin is already trusted but no workspace frontmatter is
+/// available to read restrictions from (e.g. during workspace download
+/// before the root index exists on disk).
+pub struct AllowAllPermissionChecker;
+
+impl PermissionChecker for AllowAllPermissionChecker {
+    fn check_permission(
+        &self,
+        _plugin_id: &str,
+        _permission_type: PermissionType,
+        _target: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 /// A strict checker that denies every permission request.
 pub struct DenyAllPermissionChecker;
 

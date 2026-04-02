@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("$lib/backend", () => ({
   getBackend: mocks.getBackend,
   createApi: mocks.createApi,
+  isTauri: () => false,
+  resetBackend: vi.fn(),
 }));
 
 vi.mock("$lib/backend/storageType", () => ({
@@ -255,7 +257,7 @@ describe("workspaceProviderService", () => {
       name: "Remote Notes",
     });
     expect(mocks.setCurrentWorkspaceId).toHaveBeenCalledWith("local-1");
-    expect(mocks.getBackend).toHaveBeenCalledWith("local-1", "Remote Notes", "memory");
+    expect(mocks.getBackend).toHaveBeenCalledWith("local-1", "Remote Notes", "memory", undefined, undefined);
     expect(mocks.addLocalWorkspace).toHaveBeenNthCalledWith(2, {
       id: "local-1",
       name: "Remote Notes",

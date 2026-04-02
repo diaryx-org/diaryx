@@ -1101,15 +1101,14 @@ export function createApi(backend: Backend) {
 
     /** Upload an attachment over the binary backend path and register it in frontmatter. */
     async uploadAttachment(entryPath: string, filename: string, data: Uint8Array): Promise<string> {
-      const attachmentPath = `_attachments/${filename}`;
-      const storagePath = await resolveAttachmentStoragePath(entryPath, attachmentPath);
-      await backend.writeBinary(storagePath, data);
-
+      // Register first (creates attachment note, returns [link, storagePath])
       const response = await backend.execute({
         type: 'RegisterAttachment',
         params: { entry_path: entryPath, filename },
       });
-      return expectResponse(response, 'String').data;
+      const [link, storagePath] = expectResponse(response, 'Strings').data;
+      await backend.writeBinary(storagePath, data);
+      return link;
     },
 
     /** Delete an attachment. */

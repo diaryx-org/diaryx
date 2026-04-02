@@ -23,6 +23,10 @@ vi.mock("$lib/storage/localWorkspaceRegistry.svelte", () => registryMocks);
 
 vi.mock("$lib/plugins/browserPluginManager.svelte", () => pluginMocks);
 
+vi.mock("$lib/backend/interface", () => ({
+  isTauri: () => false,
+}));
+
 import { runManualSyncNow, startSyncScheduler, stopSyncScheduler } from "./syncScheduler";
 
 function setVisibilityState(state: DocumentVisibilityState): void {
@@ -33,8 +37,9 @@ function setVisibilityState(state: DocumentVisibilityState): void {
 }
 
 async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 5; i++) {
+    await Promise.resolve();
+  }
 }
 
 describe("syncScheduler", () => {

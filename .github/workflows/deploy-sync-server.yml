@@ -1,9 +1,8 @@
-name: Deploy Sync Server
+name: Deploy Sync Server (Self-Host)
 
+# Disabled: sync server now deploys to Cloudflare via CI.
+# Kept as a reference for self-hosting on a VPS.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag:

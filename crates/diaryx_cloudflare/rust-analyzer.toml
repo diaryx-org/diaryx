@@ -1,0 +1,6 @@
+# When opened as a standalone project, analyze for the wasm32 target.
+[cargo]
+target = "wasm32-unknown-unknown"
+
+[check]
+allTargets = false

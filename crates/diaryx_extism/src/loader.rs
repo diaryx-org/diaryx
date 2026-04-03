@@ -364,8 +364,20 @@ fn load_single_plugin(
     })?;
 
     // Try to read a cached manifest.json first; fall back to calling the guest.
+    // Invalidate the cache when plugin.wasm is newer than manifest.json (e.g.
+    // after an update that replaced the WASM binary).
     let manifest_path = plugin_dir.join("manifest.json");
-    let guest_manifest = if manifest_path.exists() {
+    let cache_is_fresh = manifest_path.exists() && {
+        let wasm_mtime = std::fs::metadata(wasm_path).and_then(|m| m.modified()).ok();
+        let cache_mtime = std::fs::metadata(&manifest_path)
+            .and_then(|m| m.modified())
+            .ok();
+        match (wasm_mtime, cache_mtime) {
+            (Some(wasm_t), Some(cache_t)) => cache_t >= wasm_t,
+            _ => false, // If we can't compare, treat the cache as stale.
+        }
+    };
+    let guest_manifest = if cache_is_fresh {
         let json = std::fs::read_to_string(&manifest_path).map_err(ExtismLoadError::ReadDir)?;
         serde_json::from_str::<GuestManifest>(&json).map_err(|e| {
             ExtismLoadError::ManifestParse {

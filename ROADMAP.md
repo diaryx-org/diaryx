@@ -18,11 +18,14 @@ link: '[ROADMAP](/ROADMAP.md)'
 
 ## v1.5.0 - Commercial Viability
 
-**AI plugin**
+**One-click website publishing**
 
-- [ ] Pin down Diaryx philosophy with AI, brainstorm good AI integrations
-- [ ] “AI iframe” plugin, similar to Claude’s interactive diagrams?
-
+- Onboarding screen shows only logo, tagline, and "Get Started" (plus a subtle advanced menu)
+- "Get Started" creates an anonymous user in the database. Gives them access to free tier functionality.
+- Sets up workspace with default bundle. Automatically publishes their workspace as a website. Workspace contains 2-3 audience demo.
+- Overhaul audience filtering UI.
+  - First, overhaul LeftSidebar filetree to make one-click audience filtering for files easy. Files should show their audience status somehow, perhaps with colors or icons
+  - Second, introduce a "audience highlighting" UX for inline audience filtering. Click along the left side for paragraph filtering, highlight text for inline filtering. Could be stored in markdown as pandoc-style selectors:
 **Publish plugin**
 
 - [ ] Phone number/SMS support
@@ -55,6 +58,11 @@ link: '[ROADMAP](/ROADMAP.md)'
   - UI animations packs
   - Themes can adjust size/padding of UI components
 - Either trademark "Diaryx" so I can name my app that (taken on App Store) or take suggestions for different names. (Some have suggested "Diary-X" or "Diary X")
+
+**AI plugin**
+
+- [ ] Pin down Diaryx philosophy with AI, brainstorm good AI integrations
+- [ ] “AI iframe” plugin, similar to Claude’s interactive diagrams?
 
 ## Dreams (long term, high priority)
 

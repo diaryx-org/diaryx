@@ -1351,6 +1351,17 @@ pub async fn install_user_plugin<R: Runtime>(
         })?;
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
+    // Remove stale manifest.json cache so that the next plugin load re-reads
+    // the manifest from the updated WASM binary instead of the old cache.
+    let cached_manifest = plugins_dir.join("manifest.json");
+    if cached_manifest.exists() {
+        log::info!(
+            "[install_user_plugin] Removing stale manifest cache at {}",
+            cached_manifest.display()
+        );
+        let _ = std::fs::remove_file(&cached_manifest);
+    }
+
     if let Some(requested) = requested_permissions.as_ref()
         && has_requested_permission_defaults(&requested.defaults)
     {

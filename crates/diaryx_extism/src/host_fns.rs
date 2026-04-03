@@ -1702,6 +1702,7 @@ fn host_proxy_request(
     // Build request
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(120)))
+        .http_status_as_error(false)
         .build()
         .into();
 
@@ -1823,6 +1824,7 @@ fn host_http_request(
         .map(std::time::Duration::from_millis);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(timeout)
+        .http_status_as_error(false)
         .build()
         .into();
 
@@ -1860,6 +1862,19 @@ fn host_http_request(
     };
 
     let status = response.status().as_u16();
+    if status >= 400 {
+        log::warn!(
+            "host_http_request: {} {} → {} (plugin={})",
+            parsed.method,
+            parsed.url,
+            status,
+            {
+                let ctx = user_data.get().ok();
+                ctx.and_then(|c| c.lock().ok().map(|g| g.plugin_id.clone()))
+                    .unwrap_or_default()
+            },
+        );
+    }
     let mut resp_headers = std::collections::HashMap::new();
     for (name, value) in response.headers() {
         if let Ok(value) = value.to_str() {

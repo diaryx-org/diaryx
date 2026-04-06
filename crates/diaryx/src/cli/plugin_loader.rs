@@ -6,13 +6,17 @@ use std::sync::Arc;
 use diaryx_core::auth::{AuthCredentials, NativeFileAuthStorage};
 use diaryx_core::config::Config;
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::plugin::permissions::PermissionType;
 use diaryx_core::plugin::{Plugin, PluginContext, PluginManifest};
 use diaryx_extism::protocol::GuestManifest;
 use diaryx_extism::{
     EventEmitter, ExtismPluginAdapter, FrontmatterPermissionChecker, HostContext,
-    TokioWebSocketBridge, load_plugin_from_wasm,
+    PermissionChecker, TokioWebSocketBridge, load_plugin_from_wasm,
 };
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
+use std::io::Write;
+use std::sync::Mutex;
 
 use super::plugin_storage::CliPluginStorage;
 
@@ -96,13 +100,153 @@ fn build_runtime_context_from_sources(
     })
 }
 
+// ============================================================================
+// CLI permission checker — interactive prompts for unconfigured permissions
+// ============================================================================
+
+/// Wraps `FrontmatterPermissionChecker` and prompts the user on stderr/stdin
+/// when a permission is not configured in the workspace root frontmatter.
+///
+/// Matches the browser's behavior:
+/// - `plugin_storage` is auto-allowed (sandboxed per-plugin, not user data).
+/// - Explicit frontmatter allow/deny is always respected.
+/// - Unconfigured permissions trigger a one-time interactive prompt.
+/// - Decisions are cached for the process lifetime.
+pub struct CliPermissionChecker {
+    inner: FrontmatterPermissionChecker,
+    /// Session cache: (plugin_id, perm_key) → allowed.
+    /// Keyed by permission type only (not target) so one "allow read_files"
+    /// covers all paths for the rest of the process.
+    cache: Mutex<HashMap<(String, String), bool>>,
+}
+
+impl CliPermissionChecker {
+    pub fn new(workspace_root: Option<PathBuf>) -> Self {
+        Self {
+            inner: FrontmatterPermissionChecker::from_workspace_root(workspace_root),
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Prompt the user on a TTY, or deny silently if stdin is not interactive.
+    fn prompt(plugin_id: &str, permission_type: PermissionType) -> bool {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            return false;
+        }
+
+        eprint!(
+            "Plugin \x1b[1m{}\x1b[0m requests \x1b[1m{}\x1b[0m permission. Allow? [Y/n] ",
+            plugin_id,
+            permission_type.key(),
+        );
+        let _ = std::io::stderr().flush();
+
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() {
+            return false;
+        }
+        let trimmed = input.trim().to_lowercase();
+        trimmed.is_empty() || trimmed == "y" || trimmed == "yes"
+    }
+}
+
+impl PermissionChecker for CliPermissionChecker {
+    fn check_permission(
+        &self,
+        plugin_id: &str,
+        permission_type: PermissionType,
+        target: &str,
+    ) -> Result<(), String> {
+        // Frontmatter config takes priority — explicit allow/deny is final.
+        match self
+            .inner
+            .check_permission(plugin_id, permission_type, target)
+        {
+            Ok(()) => return Ok(()),
+            Err(msg) if msg.contains("not configured") || msg.contains("not available") => {
+                // Fall through to interactive prompt below.
+            }
+            Err(msg) => return Err(msg), // Explicit deny.
+        }
+
+        // Plugin storage is sandboxed per-plugin — always allow (same as browser).
+        if permission_type == PermissionType::PluginStorage {
+            return Ok(());
+        }
+
+        // Check session cache.
+        let cache_key = (plugin_id.to_string(), permission_type.key().to_string());
+        {
+            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(&allowed) = cache.get(&cache_key) {
+                return if allowed {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "Permission denied (session) for plugin '{}': {}",
+                        plugin_id,
+                        permission_type.key()
+                    ))
+                };
+            }
+        }
+
+        // Interactive prompt.
+        let allowed = Self::prompt(plugin_id, permission_type);
+        {
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.insert(cache_key, allowed);
+        }
+
+        if allowed {
+            Ok(())
+        } else {
+            Err(format!(
+                "Permission denied by user for plugin '{}': {}",
+                plugin_id,
+                permission_type.key()
+            ))
+        }
+    }
+}
+
 /// CLI event emitter — logs plugin events to stderr.
 pub struct CliEventEmitter;
 
 impl EventEmitter for CliEventEmitter {
     fn emit(&self, event_json: &str) {
-        // Parse event to extract type for logging
+        // Parse event to extract type for logging.
+        //
+        // The sync plugin emits events with a top-level `"type"` field
+        // (e.g. "SyncProgress", "SyncStatusChanged") while legacy plugins
+        // use `"event_type"` with a `"payload"` wrapper.  Handle both.
         if let Ok(event) = serde_json::from_str::<JsonValue>(event_json) {
+            // ── Modern plugin events (top-level "type" field) ────────
+            if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                match event_type {
+                    "SyncProgress" => {
+                        let message = event.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                        let percent = event.get("percent").and_then(|v| v.as_u64()).unwrap_or(0);
+                        eprint!("\r\x1b[K  [{:>3}%] {}", percent, message);
+                    }
+                    "SyncStatusChanged" => {
+                        let status = event
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        if let Some(error) = event.get("error").and_then(|v| v.as_str()) {
+                            eprintln!("\r\x1b[K  Sync error: {}", error);
+                        } else {
+                            eprintln!("\r\x1b[K  Sync status: {}", status);
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+
+            // ── Legacy plugin events ("event_type" + "payload") ──────
             let event_type = event
                 .get("event_type")
                 .and_then(|v| v.as_str())
@@ -381,9 +525,9 @@ fn create_host_context(
         event_emitter,
         plugin_id: plugin_id.to_string(),
         plugin_id_locked: false,
-        permission_checker: Some(Arc::new(FrontmatterPermissionChecker::from_workspace_root(
-            Some(workspace_root.to_path_buf()),
-        ))),
+        permission_checker: Some(Arc::new(CliPermissionChecker::new(Some(
+            workspace_root.to_path_buf(),
+        )))),
         file_provider: Arc::new(diaryx_extism::NoopFileProvider),
         ws_bridge,
         plugin_command_bridge: Arc::new(diaryx_extism::NoopPluginCommandBridge),

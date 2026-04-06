@@ -63,6 +63,8 @@ function makeCtx(overrides?: Partial<CommandRegistryContext> & { editor?: MockEd
     onImportMarkdownFile: vi.fn(),
     pluginBlockCommands: [],
     pluginBlockPickerItems: [],
+    pluginCommandPaletteItems: [],
+    dispatchPluginCommand: vi.fn().mockResolvedValue({ success: true }),
     ...overrides,
   };
   return { ctx, editor: editor as MockEditor };

@@ -13,14 +13,18 @@
   import BlockStylePicker from "./BlockStylePicker.svelte";
   import MoreStylesPicker from "./MoreStylesPicker.svelte";
   import LinkInsertPopover from "./LinkInsertPopover.svelte";
+  import VisibilityPicker from "./VisibilityPicker.svelte";
   import type { Api } from "$lib/backend/api";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import { getVisibilityBlockForSelection } from "$lib/extensions/VisibilityBlock";
 
   interface Props {
     editor: Editor | null;
     element?: HTMLDivElement;
     /** Current entry path for resolving local links */
     entryPath?: string;
+    /** Root workspace path for loading available audiences */
+    rootPath?: string;
     /** API instance for link formatting */
     api?: Api | null;
     linkPopoverOpen?: boolean;
@@ -36,6 +40,7 @@
     editor,
     element = $bindable(),
     entryPath = "",
+    rootPath = "",
     api = null,
     linkPopoverOpen = $bindable(false),
   }: Props = $props();
@@ -44,6 +49,7 @@
   let isBoldActive = $state(false);
   let isItalicActive = $state(false);
   let isLinkActive = $state(false);
+  let isVisActive = $state(false);
   let isInCodeBlock = $state(false);
   let isInTable = $state(false);
 
@@ -71,6 +77,9 @@
       }
     }
     isLinkActive = editor.isActive("link");
+    isVisActive =
+      editor.isActive("visibilityMark") ||
+      getVisibilityBlockForSelection(editor.state) !== null;
     isInCodeBlock = editor.isActive("codeBlock");
     isInTable = editor.isActive("table");
   }
@@ -115,11 +124,13 @@
   // Dropdown mutual exclusion: only one open at a time
   let blockStyleOpen = $state(false);
   let moreStylesOpen = $state(false);
+  let visPickerOpen = $state(false);
 
   function closeAllDropdowns() {
     blockStyleOpen = false;
     linkPopoverOpen = false;
     moreStylesOpen = false;
+    visPickerOpen = false;
     for (const key of Object.keys(markPickerOpen)) {
       markPickerOpen[key] = false;
     }
@@ -282,6 +293,15 @@
         onOpen={() => { closeAllDropdowns(); markPickerOpen[entry.extensionId] = true; }}
       />
     {/each}
+
+    <VisibilityPicker
+      {editor}
+      {api}
+      {rootPath}
+      isActive={isVisActive}
+      bind:open={visPickerOpen}
+      onOpen={() => { closeAllDropdowns(); }}
+    />
 
     <div class="link-button-wrapper">
       <button

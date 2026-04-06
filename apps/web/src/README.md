@@ -50,8 +50,10 @@ generic host without importing duplicate app modules through Vite.
 `App.svelte` treats title-driven renames as a path transition:
 
 - Saves unsaved body edits before rename
+- Treats unchanged title submissions as a no-op instead of reissuing a rename
 - Updates `entryStore` with the new path/frontmatter
 - Remaps active collaboration path tracking to the renamed file
+- Clears title-conflict UI through `entryStore`, so switching entries drops stale rename errors
 
 ## Desktop Window Chrome
 

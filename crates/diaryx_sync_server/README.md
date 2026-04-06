@@ -2,9 +2,6 @@
 title: diaryx_sync_server
 description: Sync server used by frontends
 author: adammharris
-audience:
-- public
-- developers
 part_of: '[README](/crates/README.md)'
 contents:
 - '[README](/crates/diaryx_sync_server/src/README.md)'

@@ -27,7 +27,7 @@ vi.mock("$lib/backend/interface", () => ({
   isTauri: () => false,
 }));
 
-import { runManualSyncNow, startSyncScheduler, stopSyncScheduler } from "./syncScheduler";
+import { runManualSyncNow, startSyncScheduler, stopSyncScheduler } from "./syncScheduler.svelte";
 
 function setVisibilityState(state: DocumentVisibilityState): void {
   Object.defineProperty(document, "visibilityState", {
@@ -115,6 +115,8 @@ describe("syncScheduler", () => {
 
   it("manual sync runs immediately and cancels any pending debounce", async () => {
     startSyncScheduler();
+    // Wait for the startup sync to fully complete (sets syncing=true then false)
+    await flushMicrotasks();
     await flushMicrotasks();
     vi.clearAllMocks();
 

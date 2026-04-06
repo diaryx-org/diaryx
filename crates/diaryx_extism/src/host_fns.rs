@@ -856,44 +856,58 @@ fn host_workspace_file_set(
     outputs: &mut [Val],
     user_data: UserData<HostContext>,
 ) -> Result<(), ExtismError> {
-    let ctx = user_data.get()?;
-    let ctx = ctx
-        .lock()
-        .map_err(|e| ExtismError::msg(format!("host_workspace_file_set: lock: {e}")))?;
-    let runtime = ctx.runtime_context_provider.get_context(&ctx.plugin_id);
-    let workspace_path = runtime
-        .get("current_workspace")
-        .and_then(|value| value.as_object())
-        .and_then(|workspace| workspace.get("path"))
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            ExtismError::msg("host_workspace_file_set: missing current_workspace.path")
-        })?;
+    // Inner function returns Result so we can use `?` for control flow, then
+    // the outer function converts errors to output strings instead of WASM
+    // traps so the guest can handle them gracefully.
+    fn inner(user_data: &UserData<HostContext>) -> Result<Vec<String>, String> {
+        let ctx = user_data
+            .get()
+            .map_err(|e| format!("host_workspace_file_set: user_data: {e}"))?;
+        let ctx = ctx
+            .lock()
+            .map_err(|e| format!("host_workspace_file_set: lock: {e}"))?;
+        let runtime = ctx.runtime_context_provider.get_context(&ctx.plugin_id);
+        let workspace_path = runtime
+            .get("current_workspace")
+            .and_then(|value| value.as_object())
+            .and_then(|workspace| workspace.get("path"))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("host_workspace_file_set: missing current_workspace.path")?;
 
-    ctx.check_perm(PermissionType::ReadFiles, workspace_path)?;
+        ctx.check_perm(PermissionType::ReadFiles, workspace_path)
+            .map_err(|e| e.to_string())?;
 
-    let workspace = diaryx_core::workspace::Workspace::new(ctx.fs.as_ref());
-    let workspace_path = Path::new(workspace_path);
-    let root_index = if workspace_path
-        .extension()
-        .is_some_and(|extension| extension == "md")
-    {
-        workspace_path.to_path_buf()
-    } else {
-        futures_lite::future::block_on(workspace.find_root_index_in_dir(workspace_path))
-            .map_err(|e| ExtismError::msg(format!("host_workspace_file_set: {e}")))?
-            .ok_or_else(|| {
-                ExtismError::msg("host_workspace_file_set: workspace root index not found")
-            })?
-    };
+        let workspace = diaryx_core::workspace::Workspace::new(ctx.fs.as_ref());
+        let workspace_path = Path::new(workspace_path);
+        let root_index = if workspace_path
+            .extension()
+            .is_some_and(|extension| extension == "md")
+        {
+            workspace_path.to_path_buf()
+        } else {
+            futures_lite::future::block_on(workspace.find_root_index_in_dir(workspace_path))
+                .map_err(|e| format!("host_workspace_file_set: {e}"))?
+                .ok_or("host_workspace_file_set: workspace root index not found")?
+        };
 
-    let files = futures_lite::future::block_on(workspace.collect_workspace_file_set(&root_index))
-        .map_err(|e| ExtismError::msg(format!("host_workspace_file_set: {e}")))?;
-    let json = serde_json::to_string(&files)
-        .map_err(|e| ExtismError::msg(format!("host_workspace_file_set: serialize: {e}")))?;
+        futures_lite::future::block_on(workspace.collect_workspace_file_set(&root_index))
+            .map_err(|e| format!("host_workspace_file_set: {e}"))
+    }
 
-    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+    match inner(&user_data) {
+        Ok(files) => {
+            let json = serde_json::to_string(&files).map_err(|e| {
+                ExtismError::msg(format!("host_workspace_file_set: serialize: {e}"))
+            })?;
+            plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+        }
+        Err(msg) => {
+            // Return the error as the output string. The guest SDK will fail
+            // to parse it as JSON and surface it as Result::Err.
+            plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
+        }
+    }
     Ok(())
 }
 
@@ -951,11 +965,25 @@ fn host_file_metadata(
         .map_err(|e| ExtismError::msg(format!("host_file_metadata: invalid input: {e}")))?;
     let validated_path = HostContext::validate_file_path(&parsed.path)?;
 
+    let not_found = serde_json::json!({
+        "exists": false,
+        "size_bytes": serde_json::Value::Null,
+        "modified_at_ms": serde_json::Value::Null,
+    })
+    .to_string();
+
     let ctx = user_data.get()?;
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_file_metadata: lock: {e}")))?;
-    ctx.check_perm(PermissionType::ReadFiles, &validated_path)?;
+    // Permission or filesystem errors return "not found" rather than trapping.
+    if ctx
+        .check_perm(PermissionType::ReadFiles, &validated_path)
+        .is_err()
+    {
+        plugin.memory_set_val(&mut outputs[0], not_found.as_str())?;
+        return Ok(());
+    }
     let path = Path::new(&validated_path);
     let exists = futures_lite::future::block_on(ctx.fs.exists(path));
     let json = if exists {
@@ -968,12 +996,7 @@ fn host_file_metadata(
         })
         .to_string()
     } else {
-        serde_json::json!({
-            "exists": false,
-            "size_bytes": serde_json::Value::Null,
-            "modified_at_ms": serde_json::Value::Null,
-        })
-        .to_string()
+        not_found
     };
 
     plugin.memory_set_val(&mut outputs[0], json.as_str())?;
@@ -1012,16 +1035,27 @@ fn host_write_file(
         PermissionType::CreateFiles
     };
     ctx.check_perm(perm, &path)?;
-    futures_lite::future::block_on(ctx.fs.write_file(Path::new(&path), &parsed.content))
-        .map_err(|e| ExtismError::msg(format!("host_write_file: {e}")))?;
+    // Return filesystem errors as a string rather than propagating them as
+    // ExtismError.  An ExtismError causes a WASM trap that aborts the entire
+    // guest call — the guest code never gets a chance to handle it.  By
+    // returning the error message in the output the guest SDK can surface it
+    // as a normal `Result::Err` that callers can recover from.
+    if let Err(e) =
+        futures_lite::future::block_on(ctx.fs.write_file(Path::new(&path), &parsed.content))
+    {
+        let msg = format!("host_write_file: {e}");
+        plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
+        return Ok(());
+    }
 
     plugin.memory_set_val(&mut outputs[0], "")?;
     Ok(())
 }
 
-/// Host function: `host_delete_file(input: {path}) -> ""`
+/// Host function: `host_delete_file(input: {path}) -> "" | error`
 ///
 /// Deletes a file from the workspace.
+/// Returns an empty string on success, or an error message on failure.
 fn host_delete_file(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],
@@ -1044,16 +1078,22 @@ fn host_delete_file(
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_delete_file: lock: {e}")))?;
     ctx.check_perm(PermissionType::DeleteFiles, &path)?;
-    futures_lite::future::block_on(ctx.fs.delete_file(Path::new(&path)))
-        .map_err(|e| ExtismError::msg(format!("host_delete_file: {e}")))?;
+    // Return filesystem errors as a recoverable string — see host_write_file
+    // comment for rationale.
+    if let Err(e) = futures_lite::future::block_on(ctx.fs.delete_file(Path::new(&path))) {
+        let msg = format!("host_delete_file: {e}");
+        plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
+        return Ok(());
+    }
 
     plugin.memory_set_val(&mut outputs[0], "")?;
     Ok(())
 }
 
-/// Host function: `host_write_binary(input: {path, content}) -> ""`
+/// Host function: `host_write_binary(input: {path, content}) -> "" | error`
 ///
 /// Writes binary content (base64-encoded) to a file.
+/// Returns an empty string on success, or an error message on failure.
 fn host_write_binary(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],
@@ -1090,8 +1130,13 @@ fn host_write_binary(
         PermissionType::CreateFiles
     };
     ctx.check_perm(perm, &path)?;
-    futures_lite::future::block_on(ctx.fs.write_binary(Path::new(&path), &bytes))
-        .map_err(|e| ExtismError::msg(format!("host_write_binary: {e}")))?;
+    // Return filesystem errors as a recoverable string — see host_write_file
+    // comment for rationale.
+    if let Err(e) = futures_lite::future::block_on(ctx.fs.write_binary(Path::new(&path), &bytes)) {
+        let msg = format!("host_write_binary: {e}");
+        plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
+        return Ok(());
+    }
 
     plugin.memory_set_val(&mut outputs[0], "")?;
     Ok(())
@@ -1143,7 +1188,14 @@ fn host_storage_get(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_storage_get: lock: {e}")))?;
-    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    // Permission errors return empty (key not found) rather than trapping.
+    if ctx
+        .check_perm(PermissionType::PluginStorage, &parsed.key)
+        .is_err()
+    {
+        plugin.memory_set_val(&mut outputs[0], "")?;
+        return Ok(());
+    }
     let storage_key = ctx.storage_key(&parsed.key);
 
     let result = match ctx.storage.get(&storage_key) {
@@ -1188,13 +1240,20 @@ fn host_storage_set(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_storage_set: lock: {e}")))?;
-    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    // Permission errors return an error string rather than trapping.
+    if let Err(e) = ctx.check_perm(PermissionType::PluginStorage, &parsed.key) {
+        let msg = format!("host_storage_set: {e}");
+        plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
+        return Ok(());
+    }
     if ctx.storage_quota_bytes > 0 && bytes.len() as u64 > ctx.storage_quota_bytes {
-        return Err(ExtismError::msg(format!(
+        let msg = format!(
             "host_storage_set: data size ({} bytes) exceeds plugin storage quota ({} bytes)",
             bytes.len(),
             ctx.storage_quota_bytes
-        )));
+        );
+        plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
+        return Ok(());
     }
     let storage_key = ctx.storage_key(&parsed.key);
     ctx.storage.set(&storage_key, &bytes);
@@ -1606,7 +1665,11 @@ fn host_hash_file(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_hash_file: lock: {e}")))?;
-    ctx.check_perm(PermissionType::ReadFiles, &path)?;
+    // Permission errors return empty (same as file-not-found) rather than trapping.
+    if ctx.check_perm(PermissionType::ReadFiles, &path).is_err() {
+        plugin.memory_set_val(&mut outputs[0], "")?;
+        return Ok(());
+    }
 
     let hash = match futures_lite::future::block_on(ctx.fs.hash_file(Path::new(&path))) {
         Ok(hash) => hash,

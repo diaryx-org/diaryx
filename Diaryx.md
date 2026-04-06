@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.4.0
-updated: 2026-03-30T22:04:56-06:00
+updated: 2026-04-04T12:02:12-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -14,6 +14,7 @@ contents:
 - '[README](/crates/README.md)'
 - '[ROADMAP](/ROADMAP.md)'
 - '[Scripts](/scripts/scripts.md)'
+- '[TESTING](/TESTING.md)'
 - '[Terms of Service](/terms.md)'
 audience:
 - public
@@ -31,6 +32,7 @@ exclude:
 - deploy
 - flake.nix
 - '**/*.sh'
+- '**/*.pkg'
 workspace_config:
   link_format: markdown_root
   audience_colors:

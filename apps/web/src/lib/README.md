@@ -158,6 +158,9 @@ can be tested directly without relying on full TipTap child-component wiring.
 - Status-bar plugin items are host-rendered with `components/PluginStatusItems.svelte`, which only displays plugin-reported status and leaves plugin-specific actions to the plugin itself.
 - `RightSidebar.svelte` resets collapse-button tooltip state when collapsing to
   prevent stale tooltip visibility when reopening the panel.
+- `RightSidebar.svelte` commits title edits through the blur path only; pressing
+  Enter now blurs the field without firing a second duplicate title-change
+  request first.
 - `RightSidebar.svelte` keeps `datetime-local` frontmatter editors on local wall
   time and writes RFC3339 values with the current local offset instead of
   round-tripping through UTC, so `updated` and similar fields display the same
@@ -207,6 +210,10 @@ can be tested directly without relying on full TipTap child-component wiring.
   reveal the selected entry in Finder/Explorer/the system file manager via the
   backend's opener-backed `revealInFileManager()` helper. The action is hidden
   on mobile because Tauri does not support reveal flows there.
+- `WorkspaceSelector.svelte` can now attach an existing local Tauri folder to a
+  listed remote workspace. The remote picker keeps `download` for
+  remote-wins restore and adds `link` for local-folder attach, with explicit
+  `Already in sync` vs `Upload local` policies before the workspace is linked.
 - `windowDrag.ts` centralizes Tauri desktop window dragging for shared chrome
   surfaces. Sidebar/header/footer drag handlers use it and automatically skip
   interactive descendants such as buttons, links, inputs, and elements marked

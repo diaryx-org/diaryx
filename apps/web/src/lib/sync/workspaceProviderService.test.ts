@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   setPluginMetadata: vi.fn(),
   createLocalWorkspace: vi.fn(),
   getLocalWorkspace: vi.fn(),
+  getLocalWorkspaces: vi.fn(),
   getWorkspaceStorageType: vi.fn(),
   captureProviderPluginForTransfer: vi.fn(),
   installCapturedProviderPlugin: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock("$lib/storage/localWorkspaceRegistry.svelte", () => ({
   setPluginMetadata: mocks.setPluginMetadata,
   createLocalWorkspace: mocks.createLocalWorkspace,
   getLocalWorkspace: mocks.getLocalWorkspace,
+  getLocalWorkspaces: mocks.getLocalWorkspaces,
   getWorkspaceStorageType: mocks.getWorkspaceStorageType,
 }));
 
@@ -51,14 +53,17 @@ vi.mock("$lib/plugins/browserPluginManager.svelte", () => ({
 vi.mock("$lib/auth", () => ({
   getServerUrl: vi.fn(() => null),
   getToken: vi.fn(() => null),
+  listUserWorkspaceNamespaces: vi.fn(),
 }));
 
 import {
+  attachExistingLocalWorkspaceToRemote,
   downloadWorkspace,
   linkWorkspace,
   listUnlinkedRemoteWorkspaces,
   uploadWorkspaceSnapshot,
 } from "./workspaceProviderService";
+import { listUserWorkspaceNamespaces } from "$lib/auth";
 
 describe("workspaceProviderService", () => {
   let downloadedWorkspaceApi: any;
@@ -73,6 +78,7 @@ describe("workspaceProviderService", () => {
     });
     mocks.resolveStorageType.mockResolvedValue("memory");
     mocks.createLocalWorkspace.mockReturnValue({ id: "local-1" });
+    mocks.getLocalWorkspaces.mockReturnValue([]);
     mocks.getWorkspaceStorageType.mockReturnValue("memory");
     mocks.captureProviderPluginForTransfer.mockResolvedValue(new Uint8Array([1, 2, 3]));
     mocks.installCapturedProviderPlugin.mockResolvedValue(undefined);
@@ -107,12 +113,42 @@ describe("workspaceProviderService", () => {
     } as any;
 
     const result = await listUnlinkedRemoteWorkspaces(
-      "diaryx.sync",
+      "test.provider",
       new Set(["remote-1"]),
       api,
     );
 
     expect(result).toEqual([{ id: "remote-2", name: "Archive" }]);
+  });
+
+  it("derives diaryx.sync remote workspaces from filtered account namespaces", async () => {
+    vi.mocked(listUserWorkspaceNamespaces).mockResolvedValue([
+      {
+        id: "remote-1",
+        owner_user_id: "u1",
+        created_at: 1000,
+        metadata: { type: "workspace", provider: "diaryx.sync", name: "Journal" },
+      },
+      {
+        id: "remote-2",
+        owner_user_id: "u1",
+        created_at: 2000,
+        metadata: { type: "workspace", name: "Fallback Provider" },
+      },
+      {
+        id: "remote-3",
+        owner_user_id: "u1",
+        created_at: 3000,
+        metadata: { type: "workspace", provider: "builtin.icloud", name: "Wrong Provider" },
+      },
+    ] as any);
+
+    const result = await listUnlinkedRemoteWorkspaces(
+      "diaryx.sync",
+      new Set(["remote-1"]),
+    );
+
+    expect(result).toEqual([{ id: "remote-2", name: "Fallback Provider" }]);
   });
 
   it("links a workspace and persists sync metadata", async () => {
@@ -238,6 +274,118 @@ describe("workspaceProviderService", () => {
     );
     expect(result).toEqual({
       filesUploaded: 12,
+      snapshotUploaded: true,
+    });
+  });
+
+  it("attaches an existing local workspace with metadata only", async () => {
+    mocks.getLocalWorkspaces.mockReturnValue([
+      {
+        id: "local-9",
+        name: "CLI Journal",
+        path: "/tmp/cli-journal",
+      },
+    ]);
+
+    const result = await attachExistingLocalWorkspaceToRemote(
+      "diaryx.sync",
+      {
+        remoteId: "remote-9",
+        remoteName: "Journal",
+        localPath: "/tmp/cli-journal",
+        policy: "link_only",
+      },
+    );
+
+    expect(mocks.createLocalWorkspace).not.toHaveBeenCalled();
+    expect(mocks.addLocalWorkspace).toHaveBeenCalledWith({
+      id: "local-9",
+      name: "CLI Journal",
+      path: "/tmp/cli-journal",
+    });
+    expect(mocks.setPluginMetadata).toHaveBeenCalledWith("local-9", "diaryx.sync", {
+      remoteWorkspaceId: "remote-9",
+      serverId: "remote-9",
+      syncEnabled: true,
+    });
+    expect(result).toEqual({
+      localId: "local-9",
+      localName: "CLI Journal",
+      remoteId: "remote-9",
+      snapshotUploaded: false,
+    });
+  });
+
+  it("creates a local registry entry and uploads when linkWorkspace skips snapshot upload", async () => {
+    const api = {
+      executePluginCommand: vi
+        .fn()
+        .mockResolvedValueOnce({
+          remote_id: "remote-11",
+          created_remote: false,
+          snapshot_uploaded: false,
+        })
+        .mockResolvedValueOnce({
+          files_uploaded: 4,
+          snapshot_uploaded: true,
+        }),
+    } as any;
+    mocks.getLocalWorkspaces.mockReturnValue([]);
+    mocks.createLocalWorkspace.mockReturnValue({
+      id: "local-11",
+      name: "Journal",
+      path: "/tmp/linked-journal",
+    });
+    mocks.getLocalWorkspace.mockReturnValue({
+      id: "local-11",
+      name: "Journal",
+      path: "/tmp/linked-journal",
+    });
+
+    const result = await attachExistingLocalWorkspaceToRemote(
+      "diaryx.sync",
+      {
+        remoteId: "remote-11",
+        remoteName: "Journal",
+        localPath: "/tmp/linked-journal",
+        policy: "upload_local",
+      },
+      undefined,
+      api,
+    );
+
+    expect(mocks.createLocalWorkspace).toHaveBeenCalledWith(
+      "Journal",
+      undefined,
+      "/tmp/linked-journal",
+    );
+    expect(api.executePluginCommand).toHaveBeenNthCalledWith(
+      1,
+      "diaryx.sync",
+      "LinkWorkspace",
+      {
+        provider_id: "diaryx.sync",
+        local_workspace_id: "local-11",
+        name: "Journal",
+        remote_id: "remote-11",
+        workspace_root: "/tmp/linked-journal",
+      },
+    );
+    expect(api.executePluginCommand).toHaveBeenNthCalledWith(
+      2,
+      "diaryx.sync",
+      "UploadWorkspaceSnapshot",
+      {
+        provider_id: "diaryx.sync",
+        remote_id: "remote-11",
+        mode: "replace",
+        include_attachments: true,
+      },
+    );
+    expect(result).toEqual({
+      localId: "local-11",
+      localName: "Journal",
+      remoteId: "remote-11",
       snapshotUploaded: true,
     });
   });

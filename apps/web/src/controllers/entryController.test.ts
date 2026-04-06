@@ -653,6 +653,21 @@ describe('handlePropertyChange', () => {
     expect(updatedEntry.frontmatter.title).toBe('New Title');
   });
 
+  it('treats unchanged title values as a no-op', async () => {
+    const entry = makeEntry({ path: 'entry.md', frontmatter: { title: 'Same Title' } });
+    const api = makeApi({
+      setFrontmatterProperty: vi.fn(),
+    });
+    const onRefreshTree = vi.fn();
+
+    const result = await handlePropertyChange(api, entry, 'title', 'Same Title', new Set(), onRefreshTree);
+
+    expect(result).toEqual({ success: true });
+    expect(api.setFrontmatterProperty).not.toHaveBeenCalled();
+    expect(setTitleError).toHaveBeenCalledWith(null);
+    expect(onRefreshTree).not.toHaveBeenCalled();
+  });
+
   it('sets title error for "already exists" rename failure', async () => {
     const entry = makeEntry();
     const api = makeApi({

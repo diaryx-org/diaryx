@@ -3,8 +3,6 @@ title: Command-line module
 description: The main CLI command implementation module
 part_of: '[README](/crates/diaryx/src/README.md)'
 author: adammharris
-audience:
-- public
 contents:
 - '[README](/crates/diaryx/src/cli/nav/README.md)'
 exclude:

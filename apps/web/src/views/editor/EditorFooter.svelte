@@ -12,21 +12,20 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import * as Popover from "$lib/components/ui/popover";
   import type { Api } from "$lib/backend/api";
-  import PluginStatusItems from "$lib/components/PluginStatusItems.svelte";
+  // PluginStatusItems removed — sync indicator moved to LeftSidebar
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { maybeStartWindowDrag } from "$lib/windowDrag";
   import {
     Check,
     Circle,
     Loader2,
+    PanelLeft,
+    PanelRight,
     Search,
     ChevronUp,
-    Sparkles,
-    Plug,
     Save,
     Ellipsis,
   } from "@lucide/svelte";
-  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
   import { getAudienceColor } from "$lib/utils/audienceDotColor";
   import { getFavoritesStore } from "$lib/stores/favoritesStore.svelte";
@@ -48,8 +47,6 @@
     onRevealMobileFocusChrome?: () => void;
     /** API wrapper for plugin status bar commands */
     api?: Api | null;
-    /** Plugin toolbar button clicked */
-    onPluginToolbarAction?: (pluginId: string, command: string) => void;
     /** Resolved effective audience tags for the current entry */
     audienceTags?: string[];
     onOpenAudienceManager?: () => void;
@@ -59,6 +56,18 @@
     commandRegistry?: Map<string, CommandDefinition>;
     /** Whether the editor is loaded (insert commands need it) */
     hasEditor?: boolean;
+    /** Whether to show the account button (when sidebar is collapsed) */
+    showAccountButton?: boolean;
+    /** Whether the user is authenticated */
+    isAuthenticated?: boolean;
+    /** Whether the server is offline */
+    serverOffline?: boolean;
+    /** Callback when account button is clicked */
+    onOpenAccount?: () => void;
+    /** Callback to open the left sidebar */
+    onOpenLeftSidebar?: () => void;
+    /** Callback to open the right sidebar */
+    onOpenRightSidebar?: () => void;
   }
 
   let {
@@ -73,16 +82,20 @@
     onSave,
     onOpenCommandPalette,
     onRevealMobileFocusChrome,
-    api = null,
-    onPluginToolbarAction,
+    api: _api = null,
     audienceTags = [],
     onOpenAudienceManager,
     onFabMount,
     commandRegistry,
     hasEditor = false,
+    showAccountButton: _showAccountButton = false,
+    isAuthenticated: _isAuthenticated = false,
+    serverOffline: _serverOffline = false,
+    onOpenAccount: _onOpenAccount,
+    onOpenLeftSidebar,
+    onOpenRightSidebar,
   }: Props = $props();
 
-  const pluginStore = getPluginStore();
   const colorStore = getAudienceColorStore();
   const favoritesStore = getFavoritesStore();
 
@@ -105,11 +118,6 @@
   );
 
   let overflowOpen = $state(false);
-
-  const iconMap: Record<string, typeof Sparkles> = {
-    sparkles: Sparkles,
-    plug: Plug,
-  };
 
   let bothSidebarsClosed = $derived(!leftSidebarOpen && !rightSidebarOpen);
   let shouldFade = $derived(focusMode && bothSidebarsClosed);
@@ -141,15 +149,6 @@
   function handleSaveClick(event: MouseEvent): void {
     blurEventTarget(event.currentTarget);
     onSave();
-  }
-
-  function handlePluginToolbarClick(
-    event: MouseEvent,
-    pluginId: string,
-    command: string,
-  ): void {
-    blurEventTarget(event.currentTarget);
-    onPluginToolbarAction?.(pluginId, command);
   }
 
   function handleOpenCommandPaletteClick(): void {
@@ -266,19 +265,6 @@
             <Search class="size-5 text-muted-foreground" />
             <span class="text-base">Search Commands</span>
           </button>
-
-          <!-- Plugin toolbar buttons -->
-          {#each pluginStore.toolbarButtons as btn}
-            {@const BtnIcon = iconMap[btn.contribution.icon ?? ""] ?? Plug}
-            <button
-              type="button"
-              class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left"
-              onclick={() => handleDrawerAction(() => onPluginToolbarAction?.(btn.pluginId as unknown as string, btn.contribution.plugin_command))}
-            >
-              <BtnIcon class="size-5 text-muted-foreground" />
-              <span class="text-base">{btn.contribution.label}</span>
-            </button>
-          {/each}
         </div>
       </div>
     </Drawer.Content>
@@ -296,7 +282,9 @@
     ></div>
   {/if}
   <footer
-    class="flex items-center justify-between px-4 md:px-6 py-2 border-t border-sidebar-border bg-sidebar-accent select-none
+    class="flex items-center justify-between py-1.5 border-t border-sidebar-border bg-sidebar-accent select-none
+      {!leftSidebarOpen ? 'pl-2' : 'pl-4 md:pl-6'}
+      {!rightSidebarOpen ? 'pr-2' : 'pr-4 md:pr-6'}
       transition-[opacity,transform] duration-300 ease-in-out
       {desktopShouldFade ? 'absolute inset-x-0 bottom-0 z-20' : 'relative shrink-0'}
       {footerVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}
@@ -307,8 +295,23 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="flex items-center justify-between w-full" onmousedown={maybeStartWindowDrag}>
-      <!-- Left side: audience dots -->
+      <!-- Left side: open sidebar button + audience dots -->
       <div class="flex items-center gap-2 min-w-0 flex-1">
+        {#if !leftSidebarOpen && onOpenLeftSidebar}
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                class="p-1 rounded hover:bg-accent transition-colors shrink-0"
+                onclick={onOpenLeftSidebar}
+                aria-label="Open sidebar"
+              >
+                <PanelLeft class="size-4 text-muted-foreground" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>Open sidebar</Tooltip.Content>
+          </Tooltip.Root>
+        {/if}
         {#if audienceTags.length > 0 && onOpenAudienceManager}
           <Tooltip.Root>
             <Tooltip.Trigger>
@@ -333,10 +336,6 @@
 
       <!-- Right side: actions -->
       <div class="flex items-center gap-2 ml-2 shrink-0">
-        {#if api}
-          <PluginStatusItems {api} />
-        {/if}
-
         {#if readonly}
           <span
             class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
@@ -438,32 +437,6 @@
           </Popover.Root>
         {/if}
 
-        <!-- Plugin toolbar buttons -->
-        {#each pluginStore.toolbarButtons as btn}
-          {@const BtnIcon = iconMap[btn.contribution.icon ?? ""] ?? Plug}
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              <Button
-                variant="ghost"
-                size="icon"
-                onclick={(event) =>
-                  handlePluginToolbarClick(
-                    event,
-                    btn.pluginId as unknown as string,
-                    btn.contribution.plugin_command
-                  )}
-                class="size-8"
-                aria-label={btn.contribution.label}
-              >
-                <BtnIcon class="size-4" />
-              </Button>
-            </Tooltip.Trigger>
-            <Tooltip.Content>
-              {btn.contribution.label}
-            </Tooltip.Content>
-          </Tooltip.Root>
-        {/each}
-
         <!-- Command palette button -->
         <Tooltip.Root>
           <Tooltip.Trigger>
@@ -491,6 +464,23 @@
             </Tooltip.Content>
           {/if}
         </Tooltip.Root>
+
+        {#if !rightSidebarOpen && onOpenRightSidebar}
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <Button
+                variant="ghost"
+                size="icon"
+                onclick={onOpenRightSidebar}
+                class="size-8"
+                aria-label="Open panel"
+              >
+                <PanelRight class="size-4" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>Open panel</Tooltip.Content>
+          </Tooltip.Root>
+        {/if}
       </div>
     </div>
   </footer>

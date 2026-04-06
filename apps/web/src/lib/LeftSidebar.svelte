@@ -10,6 +10,7 @@
   import { toast } from "svelte-sonner";
 
   import * as ContextMenu from "$lib/components/ui/context-menu";
+  import * as Dialog from "$lib/components/ui/dialog";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Popover from "$lib/components/ui/popover";
   import SignInPopover from "./SignInPopover.svelte";
@@ -19,7 +20,6 @@
   import { workspaceStore } from "../models/stores/workspaceStore.svelte";
   import {
     ChevronRight,
-    ChevronDown,
     FileText,
     Folder,
     FolderClosed,
@@ -46,8 +46,11 @@
     Copy,
     CircleHelp,
   } from "@lucide/svelte";
+  import { Cloud, CloudOff, Loader2 as CloudSpinner } from "@lucide/svelte";
   import { getAuthState } from "./auth";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
+  import SyncDialog from "./components/SyncDialog.svelte";
+  import { getSyncState } from "$lib/sync/syncScheduler.svelte";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import AudienceFilter from "./components/AudienceFilter.svelte";
   import PluginSidebarPanel from "./components/PluginSidebarPanel.svelte";
@@ -113,6 +116,11 @@
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
     onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
+    syncEnabled?: boolean;
+    onSync?: () => Promise<void>;
+    onSyncPull?: () => Promise<void>;
+    onSyncPush?: () => Promise<void>;
+    onSyncRefreshStatus?: () => Promise<void>;
   }
 
   let {
@@ -161,13 +169,30 @@
     onWorkspaceSwitchComplete,
     onWorkspaceMissing,
     onInitializeWorkspace,
-    onShowWelcome,
+    onShowWelcome: _onShowWelcome,
     onSetAudience,
     onOpenAudienceManager,
     requestedTab = null,
     onRequestedTabConsumed,
     onPluginHostAction,
+    syncEnabled = false,
+    onSync,
+    onSyncPull,
+    onSyncPush,
+    onSyncRefreshStatus,
   }: Props = $props();
+
+  let showSyncDialog = $state(false);
+  const syncState = getSyncState();
+
+  const syncIndicatorColor = $derived.by(() => {
+    const s = collaborationStore.effectiveSyncStatus;
+    if (s === "synced") return "text-green-600 dark:text-green-400";
+    if (s === "syncing" || s === "connecting")
+      return "text-amber-600 dark:text-amber-400";
+    if (s === "error") return "text-destructive";
+    return "text-muted-foreground";
+  });
 
   // Platform detection for keyboard shortcut display
   const isMac =
@@ -614,7 +639,7 @@
   // =========================================================================
 
   let profilePopoverOpen = $state(false);
-  let problemsPanelOpen = $state(true);
+  let problemsDialogOpen = $state(false);
   let isFixingAll = $state(false);
 
   // Parent picker state
@@ -1385,51 +1410,11 @@
     : `width: ${collapsed ? 0 : sidebarWidth}px; ${resizing ? '' : 'transition: width 0.3s ease-in-out, opacity 0.3s ease-in-out;'}`
   }"
 >
-  <!-- Header -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="relative flex items-center justify-between px-2 md:px-4 py-1.5 md:py-4 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))] md:pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+1rem)] bg-sidebar-accent"
-    onmousedown={maybeStartWindowDrag}
-  >
-    <button
-      type="button"
-      onclick={onShowWelcome}
-      data-window-drag-exclude
-      class="text-xl font-semibold text-sidebar-foreground hover:text-sidebar-foreground/80 transition-colors flex items-baseline gap-1.5 pl-2 md:pl-0"
-    >
-      Diaryx
-      <span class="text-xs font-normal text-sidebar-foreground/50">v{__APP_VERSION__}</span>
-    </button>
-    <Tooltip.Root>
-      <Tooltip.Trigger>
-        <Button
-          variant="ghost"
-          size="icon"
-          onclick={onToggleCollapse}
-          data-window-drag-exclude
-          class="size-10 md:size-8"
-          aria-label="Collapse sidebar"
-        >
-          <PanelLeftClose class="size-5 md:size-4" />
-        </Button>
-      </Tooltip.Trigger>
-      {#if !mobileState.isMobile && !collapsed}
-        <Tooltip.Content>
-          <div class="flex items-center gap-2">
-            Collapse sidebar
-            <Kbd.Group>
-              <Kbd.Root>{modKey}</Kbd.Root>
-              <span>+</span>
-              <Kbd.Root>[</Kbd.Root>
-            </Kbd.Group>
-          </div>
-        </Tooltip.Content>
-      {/if}
-    </Tooltip.Root>
-  </div>
-
   <!-- Content Area -->
-  <div class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''}" bind:this={scrollContainer}>
+  <div
+    class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''} pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]"
+    bind:this={scrollContainer}
+  >
     {#if leftTab === "files"}
       {#if workspaceMissing}
         <!-- Workspace Missing State -->
@@ -1504,154 +1489,6 @@
     {/if}
   </div>
 
-  <!-- Problems Panel -->
-  {#if totalProblems > 0}
-    <div class="border-t border-sidebar-border shrink-0">
-      <button
-        type="button"
-        class="w-full flex items-center justify-between px-4 py-2 hover:bg-sidebar-accent active:bg-sidebar-accent transition-colors"
-        onclick={() => problemsPanelOpen = !problemsPanelOpen}
-      >
-        <div class="flex items-center gap-2">
-          {#if problemsPanelOpen}
-            <ChevronDown class="size-4 text-muted-foreground" />
-          {:else}
-            <ChevronRight class="size-4 text-muted-foreground" />
-          {/if}
-          <span class="text-sm font-medium">Problems</span>
-          <span class="text-xs px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400">
-            {totalProblems}
-          </span>
-        </div>
-      </button>
-      {#if problemsPanelOpen}
-        <div class="px-3 pb-3 max-h-64 overflow-y-auto space-y-2">
-          <!-- Errors -->
-          {#if validationResult && validationResult.errors.length > 0}
-            <div class="space-y-1">
-              <p class="text-xs font-medium text-destructive px-1">
-                Errors ({validationResult.errors.length})
-              </p>
-              {#each validationResult.errors as error}
-                <div class="text-xs p-2 bg-destructive/10 rounded flex items-start justify-between gap-2">
-                  <div class="min-w-0 flex-1">
-                    <span class="font-mono truncate block" title={getErrorFilePath(error) ?? ''}>
-                      {getFileName(getErrorFilePath(error) ?? '')}
-                    </span>
-                    <span class="text-muted-foreground">
-                      {getErrorDescription(error)}
-                    </span>
-                  </div>
-                  <div class="flex gap-0.5 shrink-0">
-                    {#if isErrorViewable(error)}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="h-6 px-1.5"
-                        title="View file"
-                        onclick={() => handleViewError(error)}
-                      >
-                        <Eye class="size-3" />
-                      </Button>
-                    {/if}
-                    {#if api}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="h-6 px-1.5"
-                        title="Fix issue"
-                        onclick={() => handleFixError(error)}
-                      >
-                        <Wrench class="size-3" />
-                      </Button>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-
-          <!-- Warnings -->
-          {#if validationResult && validationResult.warnings.length > 0}
-            <div class="space-y-1">
-              <p class="text-xs font-medium text-amber-600 dark:text-amber-400 px-1">
-                Warnings ({validationResult.warnings.length})
-              </p>
-              {#each validationResult.warnings as warning}
-                {@const filePath = getWarningFilePath(warning)}
-                <div class="text-xs p-2 bg-amber-500/10 rounded flex items-start justify-between gap-2">
-                  <div class="min-w-0 flex-1">
-                    <span class="font-mono truncate block" title={filePath ?? ''}>
-                      {filePath ? getFileName(filePath) : 'Unknown'}
-                    </span>
-                    <span class="text-muted-foreground">
-                      {getWarningDescription(warning)}
-                    </span>
-                  </div>
-                  <div class="flex gap-0.5 shrink-0">
-                    {#if isWarningViewable(warning)}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="h-6 px-1.5"
-                        title="View file"
-                        onclick={() => handleViewWarning(warning)}
-                      >
-                        <Eye class="size-3" />
-                      </Button>
-                    {/if}
-                    {#if isWarningFixable(warning) && api}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="h-6 px-1.5"
-                        title="Fix issue"
-                        onclick={() => handleFixWarning(warning)}
-                      >
-                        <Wrench class="size-3" />
-                      </Button>
-                    {/if}
-                    {#if supportsParentPicker(warning) && api}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="h-6 px-1.5"
-                        title="Choose parent..."
-                        onclick={() => handleChooseParent(warning)}
-                        disabled={isLoadingParents}
-                      >
-                        <FolderPlus class="size-3" />
-                      </Button>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-
-          <!-- Fix All Button -->
-          {#if fixableCount > 0 && api}
-            <Button
-              variant="outline"
-              size="sm"
-              class="w-full gap-1.5 mt-2"
-              onclick={handleFixAll}
-              disabled={isFixingAll}
-            >
-              {#if isFixingAll}
-                <Loader2 class="size-3 animate-spin" />
-                Fixing...
-              {:else}
-                <Wrench class="size-3" />
-                Fix All ({fixableCount})
-              {/if}
-            </Button>
-          {/if}
-        </div>
-      {/if}
-    </div>
-  {/if}
-
   <!-- Tab Bar (hidden when only one tab) -->
   {#if leftTabs.length > 1}
   <div class="px-3 pt-1 pb-1 shrink-0">
@@ -1686,25 +1523,101 @@
   {/if}
 
   <!-- Workspace Selector -->
-  <div class="px-3 pt-1 pb-1 shrink-0">
-    <WorkspaceSelector
-      onSwitchStart={onWorkspaceSwitchStart}
-      onSwitchComplete={onWorkspaceSwitchComplete}
-      onAddWorkspace={onAddWorkspace}
-      {onWorkspaceMissing}
-    />
+  <div class="flex items-center gap-1 px-3 pt-1 pb-1 shrink-0">
+    {#if syncEnabled}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={() => { showSyncDialog = true; }}
+            class="size-8 shrink-0"
+            aria-label="Sync"
+          >
+            {#if syncState.syncing}
+              <CloudSpinner class="size-4 animate-spin text-amber-500" />
+            {:else if collaborationStore.serverOffline}
+              <CloudOff class={`size-4 ${syncIndicatorColor}`} />
+            {:else}
+              <Cloud class={`size-4 ${syncIndicatorColor}`} />
+            {/if}
+          </Button>
+        </Tooltip.Trigger>
+        {#if !mobileState.isMobile && !collapsed && !showSyncDialog}
+          <Tooltip.Content>Sync</Tooltip.Content>
+        {/if}
+      </Tooltip.Root>
+    {/if}
+    <div class="flex-1 min-w-0">
+      <WorkspaceSelector
+        onSwitchStart={onWorkspaceSwitchStart}
+        onSwitchComplete={onWorkspaceSwitchComplete}
+        onAddWorkspace={onAddWorkspace}
+        {onWorkspaceMissing}
+      />
+    </div>
+    {#if totalProblems > 0}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <button
+            type="button"
+            class="relative size-8 flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors shrink-0"
+            aria-label="Workspace problems ({totalProblems})"
+            onclick={() => { problemsDialogOpen = true; }}
+          >
+            {#if validationResult && validationResult.errors.length > 0}
+              <AlertCircle class="size-4 text-destructive" />
+            {:else}
+              <AlertTriangle class="size-4 text-amber-600 dark:text-amber-400" />
+            {/if}
+            <span class="absolute -top-0.5 -right-0.5 size-4 text-[9px] font-bold leading-none flex items-center justify-center rounded-full bg-amber-500 text-white">
+              {totalProblems > 99 ? '99+' : totalProblems}
+            </span>
+          </button>
+        </Tooltip.Trigger>
+        {#if !mobileState.isMobile && !collapsed}
+          <Tooltip.Content>{totalProblems} problem{totalProblems !== 1 ? 's' : ''}</Tooltip.Content>
+        {/if}
+      </Tooltip.Root>
+    {/if}
+    <Tooltip.Root>
+      <Tooltip.Trigger>
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={onToggleCollapse}
+          data-window-drag-exclude
+          class="size-8 shrink-0"
+          aria-label="Collapse sidebar"
+        >
+          <PanelLeftClose class="size-4" />
+        </Button>
+      </Tooltip.Trigger>
+      {#if !mobileState.isMobile && !collapsed}
+        <Tooltip.Content>
+          <div class="flex items-center gap-2">
+            Collapse sidebar
+            <Kbd.Group>
+              <Kbd.Root>{modKey}</Kbd.Root>
+              <span>+</span>
+              <Kbd.Root>[</Kbd.Root>
+            </Kbd.Group>
+          </div>
+        </Tooltip.Content>
+      {/if}
+    </Tooltip.Root>
   </div>
 
   <!-- Profile Footer -->
   <div class="border-t border-sidebar-border shrink-0 pb-[env(safe-area-inset-bottom)] bg-sidebar-accent">
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="relative flex items-center gap-1 px-4 py-2"
+      class="relative flex items-center gap-1 px-3 py-1.5"
       onmousedown={maybeStartWindowDrag}
     >
       <Popover.Root bind:open={profilePopoverOpen}>
         <Popover.Trigger
-          class="flex items-center gap-2.5 flex-1 min-w-0 py-1 hover:bg-sidebar-accent active:bg-sidebar-accent rounded-md px-2 transition-colors text-left"
+          class="flex items-center gap-2.5 flex-1 min-w-0 py-1 hover:bg-sidebar-accent active:bg-sidebar-accent rounded-md px-1.5 transition-colors text-left"
           aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
           data-window-drag-exclude
         >
@@ -1784,6 +1697,16 @@
   </div>
 </aside>
 
+{#if syncEnabled && onSync && onSyncPull && onSyncPush}
+  <SyncDialog
+    bind:open={showSyncDialog}
+    onSync={onSync}
+    onPull={onSyncPull}
+    onPush={onSyncPush}
+    onRefreshStatus={onSyncRefreshStatus ?? (async () => {})}
+  />
+{/if}
+
 <!-- Mobile Action Sheet for context menu -->
 <MobileActionSheet
   open={contextMenuState.bottomSheetOpen}
@@ -1841,6 +1764,149 @@
     </div>
   </div>
 {/if}
+
+<!-- Problems Dialog -->
+<Dialog.Root bind:open={problemsDialogOpen}>
+  <Dialog.Content class="sm:max-w-[500px] max-h-[70vh] overflow-hidden flex flex-col">
+    <Dialog.Header>
+      <Dialog.Title class="flex items-center gap-2">
+        <AlertTriangle class="size-5 text-amber-600 dark:text-amber-400" />
+        Problems
+        <span class="text-xs px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400">
+          {totalProblems}
+        </span>
+      </Dialog.Title>
+      <Dialog.Description>
+        Validation issues found in this workspace.
+      </Dialog.Description>
+    </Dialog.Header>
+    <div class="flex-1 min-h-0 overflow-y-auto space-y-3 py-4">
+      <!-- Errors -->
+      {#if validationResult && validationResult.errors.length > 0}
+        <div class="space-y-1.5">
+          <p class="text-xs font-medium text-destructive px-1">
+            Errors ({validationResult.errors.length})
+          </p>
+          {#each validationResult.errors as error}
+            <div class="text-xs p-2 bg-destructive/10 rounded flex items-start justify-between gap-2">
+              <div class="min-w-0 flex-1">
+                <span class="font-mono truncate block" title={getErrorFilePath(error) ?? ''}>
+                  {getFileName(getErrorFilePath(error) ?? '')}
+                </span>
+                <span class="text-muted-foreground">
+                  {getErrorDescription(error)}
+                </span>
+              </div>
+              <div class="flex gap-0.5 shrink-0">
+                {#if isErrorViewable(error)}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-1.5"
+                    title="View file"
+                    onclick={() => handleViewError(error)}
+                  >
+                    <Eye class="size-3" />
+                  </Button>
+                {/if}
+                {#if api}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-1.5"
+                    title="Fix issue"
+                    onclick={() => handleFixError(error)}
+                  >
+                    <Wrench class="size-3" />
+                  </Button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <!-- Warnings -->
+      {#if validationResult && validationResult.warnings.length > 0}
+        <div class="space-y-1.5">
+          <p class="text-xs font-medium text-amber-600 dark:text-amber-400 px-1">
+            Warnings ({validationResult.warnings.length})
+          </p>
+          {#each validationResult.warnings as warning}
+            {@const filePath = getWarningFilePath(warning)}
+            <div class="text-xs p-2 bg-amber-500/10 rounded flex items-start justify-between gap-2">
+              <div class="min-w-0 flex-1">
+                <span class="font-mono truncate block" title={filePath ?? ''}>
+                  {filePath ? getFileName(filePath) : 'Unknown'}
+                </span>
+                <span class="text-muted-foreground">
+                  {getWarningDescription(warning)}
+                </span>
+              </div>
+              <div class="flex gap-0.5 shrink-0">
+                {#if isWarningViewable(warning)}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-1.5"
+                    title="View file"
+                    onclick={() => handleViewWarning(warning)}
+                  >
+                    <Eye class="size-3" />
+                  </Button>
+                {/if}
+                {#if isWarningFixable(warning) && api}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-1.5"
+                    title="Fix issue"
+                    onclick={() => handleFixWarning(warning)}
+                  >
+                    <Wrench class="size-3" />
+                  </Button>
+                {/if}
+                {#if supportsParentPicker(warning) && api}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-1.5"
+                    title="Choose parent..."
+                    onclick={() => handleChooseParent(warning)}
+                    disabled={isLoadingParents}
+                  >
+                    <FolderPlus class="size-3" />
+                  </Button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <!-- Fix All Button -->
+    {#if fixableCount > 0 && api}
+      <div class="border-t pt-3 shrink-0">
+        <Button
+          variant="outline"
+          size="sm"
+          class="w-full gap-1.5"
+          onclick={handleFixAll}
+          disabled={isFixingAll}
+        >
+          {#if isFixingAll}
+            <Loader2 class="size-3 animate-spin" />
+            Fixing...
+          {:else}
+            <Wrench class="size-3" />
+            Fix All ({fixableCount})
+          {/if}
+        </Button>
+      </div>
+    {/if}
+  </Dialog.Content>
+</Dialog.Root>
 
 <!-- Parent Picker Dialog (for validation fixes) -->
 {#if showParentPicker}

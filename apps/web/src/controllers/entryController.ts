@@ -364,12 +364,23 @@ export async function handlePropertyChange(
   value: unknown,
   expandedNodes: Set<string>,
   onRefreshTree?: () => Promise<void>,
-  options?: { rootIndexPath?: string }
+  options?: { rootIndexPath?: string; onRootIndexRenamed?: (newTitle: string) => void }
 ): Promise<{ success: boolean; newPath?: string }> {
   try {
     const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
 
     if (key === 'title' && typeof value === 'string' && value.trim()) {
+      const nextTitle = value.trim();
+      const currentTitle =
+        typeof normalizedFrontmatter.title === 'string'
+          ? normalizedFrontmatter.title
+          : '';
+
+      if (nextTitle === currentTitle) {
+        entryStore.setTitleError(null);
+        return { success: true };
+      }
+
       try {
         // Backend handles: workspace config read, filename style, rename, title set, H1 sync
         // Returns new path string if rename occurred, null otherwise
@@ -395,6 +406,16 @@ export async function handlePropertyChange(
             ...currentEntry,
             frontmatter: { ...normalizedFrontmatter, [key]: value },
           });
+        }
+
+        // If this entry is the root index, notify caller to sync workspace name
+        if (
+          options?.onRootIndexRenamed &&
+          options?.rootIndexPath &&
+          (currentEntry.path === options.rootIndexPath ||
+            (newPath ?? currentEntry.path) === options.rootIndexPath)
+        ) {
+          options.onRootIndexRenamed(nextTitle);
         }
 
         entryStore.setTitleError(null);

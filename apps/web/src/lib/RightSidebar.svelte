@@ -923,48 +923,8 @@
   }"
   data-spotlight="properties-panel"
 >
-  <!-- Header with collapse button -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="relative flex items-center justify-between px-2 md:px-4 py-1.5 md:py-3 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))] md:pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.75rem)] bg-sidebar-accent"
-    onmousedown={maybeStartWindowDrag}
-  >
-    <Tooltip.Root bind:open={collapseTooltipOpen}>
-      <Tooltip.Trigger>
-        <Button
-          variant="ghost"
-          size="icon"
-          onclick={handleCollapseClick}
-          data-window-drag-exclude
-          class="size-10 md:size-8"
-          aria-label="Collapse panel"
-        >
-          <PanelRightClose class="size-5 md:size-4" />
-        </Button>
-      </Tooltip.Trigger>
-      {#if !mobileState.isMobile && !collapsed}
-        <Tooltip.Content>
-          <div class="flex items-center gap-2">
-            Collapse panel
-            <Kbd.Group>
-              <Kbd.Root>{modKey}</Kbd.Root>
-              <span>+</span>
-              <Kbd.Root>]</Kbd.Root>
-            </Kbd.Group>
-          </div>
-        </Tooltip.Content>
-      {/if}
-    </Tooltip.Root>
-
-    {#if entry}
-      <p class="text-xs text-muted-foreground truncate flex-1 min-w-0" title={entry.path}>
-        {entry.path}
-      </p>
-    {/if}
-  </div>
-
   <!-- Content -->
-  <div class="flex-1 overflow-y-auto overflow-x-hidden">
+  <div class="flex-1 overflow-y-auto overflow-x-hidden pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]">
     {#if activeTab === "properties"}
       <!-- Properties Tab -->
       {#if entry}
@@ -1438,7 +1398,7 @@
                       }}
                       onkeydown={(e) => {
                         if (e.key === "Enter") {
-                          handleStringChange(key, e);
+                          e.preventDefault();
                           (e.target as HTMLInputElement).blur();
                         }
                       }}
@@ -1689,39 +1649,79 @@
     <div class="shrink-0 pb-[env(safe-area-inset-bottom)] md:hidden border-t border-sidebar-border bg-sidebar-accent"></div>
   {/if}
 
-  <!-- Tab Toggle (hidden when only one tab) -->
-  {#if historyTabId || nonHistoryPluginTabs.length > 0}
+  <!-- Footer -->
   <div class="shrink-0 border-t border-sidebar-border pb-[env(safe-area-inset-bottom)] bg-sidebar-accent">
-    <div class="flex items-center px-3 py-2">
-    <div class="flex-1 flex items-center gap-1 bg-muted rounded-md min-h-8 py-1 px-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      <button
-        type="button"
-        class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => activeTab = "properties"}
-      >
-        Props
-      </button>
-      {#if historyTabId}
+    <!-- Tab Toggle (hidden when only one tab) -->
+    {#if historyTabId || nonHistoryPluginTabs.length > 0}
+    <div class="flex items-center px-3 py-1">
+      <div class="flex-1 flex items-center gap-1 bg-muted rounded-md min-h-8 py-1 px-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           type="button"
-          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          onclick={() => activeTab = historyTabId}
+          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = "properties"}
         >
-          {historyTabLabel}
+          Props
         </button>
-      {/if}
-      {#each nonHistoryPluginTabs as tab}
-        <button
-          type="button"
-          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          onclick={() => activeTab = tab.contribution.id}
-        >
-          {tab.contribution.label}
-        </button>
-      {/each}
+        {#if historyTabId}
+          <button
+            type="button"
+            class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => activeTab = historyTabId}
+          >
+            {historyTabLabel}
+          </button>
+        {/if}
+        {#each nonHistoryPluginTabs as tab}
+          <button
+            type="button"
+            class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => activeTab = tab.contribution.id}
+          >
+            {tab.contribution.label}
+          </button>
+        {/each}
+      </div>
     </div>
+    {/if}
+
+    <!-- Collapse + path -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="flex items-center gap-1 px-3 py-1.5"
+      onmousedown={maybeStartWindowDrag}
+    >
+      <Tooltip.Root bind:open={collapseTooltipOpen}>
+        <Tooltip.Trigger>
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={handleCollapseClick}
+            data-window-drag-exclude
+            class="size-8 shrink-0"
+            aria-label="Collapse panel"
+          >
+            <PanelRightClose class="size-4" />
+          </Button>
+        </Tooltip.Trigger>
+        {#if !mobileState.isMobile && !collapsed}
+          <Tooltip.Content>
+            <div class="flex items-center gap-2">
+              Collapse panel
+              <Kbd.Group>
+                <Kbd.Root>{modKey}</Kbd.Root>
+                <span>+</span>
+                <Kbd.Root>]</Kbd.Root>
+              </Kbd.Group>
+            </div>
+          </Tooltip.Content>
+        {/if}
+      </Tooltip.Root>
+      {#if entry}
+        <p class="text-xs text-muted-foreground truncate flex-1 min-w-0 text-right" title={entry.path}>
+          {entry.path}
+        </p>
+      {/if}
     </div>
   </div>
-  {/if}
 
 </aside>

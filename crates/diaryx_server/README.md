@@ -2,9 +2,6 @@
 title: diaryx_server
 description: Platform-agnostic server core for Diaryx cloud adapters
 author: adammharris
-audience:
-- public
-- developers
 part_of: '[README](/crates/README.md)'
 contents:
 - '[README](/crates/diaryx_server/src/README.md)'

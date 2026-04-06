@@ -3,7 +3,7 @@
   import type { Api } from "$lib/backend/api";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import { getWorkspaceStore } from "@/models/stores/workspaceStore.svelte";
-  import { runManualSyncNow } from "$lib/sync/syncScheduler";
+  import { runManualSyncNow } from "$lib/sync/syncScheduler.svelte";
 
   interface Props {
     api: Api | null;

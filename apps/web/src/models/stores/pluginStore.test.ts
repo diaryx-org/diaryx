@@ -618,23 +618,6 @@ describe("pluginStore", () => {
       expect(store.rightSidebarTabs).toHaveLength(1);
     });
 
-    it("returns toolbar buttons", async () => {
-      const manifest = makeManifest({
-        id: "toolbar.plugin",
-        ui: [
-          {
-            slot: "ToolbarButton",
-            label: "My Button",
-            icon: "zap",
-          },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      expect(store.toolbarButtons).toHaveLength(1);
-    });
-
     it("returns status bar items", async () => {
       const manifest = makeManifest({
         id: "status.plugin",
@@ -742,7 +725,6 @@ describe("pluginStore", () => {
         id: "disabled.ui.plugin",
         ui: [
           { slot: "SettingsTab", label: "Hidden", icon: "x" },
-          { slot: "ToolbarButton", label: "Hidden", icon: "x" },
         ] as any,
       });
       const api = makeMockApi([manifest]);
@@ -750,7 +732,6 @@ describe("pluginStore", () => {
       store.setPluginEnabled("disabled.ui.plugin", false);
 
       expect(store.settingsTabs).toHaveLength(0);
-      expect(store.toolbarButtons).toHaveLength(0);
     });
 
     it("returns empty arrays when no plugins have contributions", async () => {
@@ -762,7 +743,6 @@ describe("pluginStore", () => {
       expect(store.leftSidebarTabs).toHaveLength(0);
       expect(store.rightSidebarTabs).toHaveLength(0);
       expect(store.commandPaletteItems).toHaveLength(0);
-      expect(store.toolbarButtons).toHaveLength(0);
       expect(store.statusBarItems).toHaveLength(0);
     });
 
@@ -771,7 +751,6 @@ describe("pluginStore", () => {
         id: "mixed.plugin",
         ui: [
           { slot: "SettingsTab", label: "Settings", icon: "s" },
-          { slot: "ToolbarButton", label: "Toolbar", icon: "t" },
           { slot: "StatusBarItem", label: "Status" },
           { slot: "CommandPaletteItem", label: "Cmd" },
           { slot: "SidebarTab", side: "Left", label: "Left", icon: "l" },
@@ -782,7 +761,6 @@ describe("pluginStore", () => {
       await store.init(api);
 
       expect(store.settingsTabs).toHaveLength(1);
-      expect(store.toolbarButtons).toHaveLength(1);
       expect(store.statusBarItems).toHaveLength(1);
       expect(store.commandPaletteItems).toHaveLength(1);
       expect(store.leftSidebarTabs).toHaveLength(1);
@@ -1836,7 +1814,6 @@ describe("pluginStore", () => {
       expect(s).toHaveProperty("commandPaletteItems");
       expect(s).toHaveProperty("commandPaletteOwner");
       expect(s).toHaveProperty("leftSidebarContextMenuOwner");
-      expect(s).toHaveProperty("toolbarButtons");
       expect(s).toHaveProperty("statusBarItems");
       expect(s).toHaveProperty("workspaceProviders");
       expect(s).toHaveProperty("storageProviders");

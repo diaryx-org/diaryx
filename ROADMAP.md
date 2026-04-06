@@ -3,7 +3,7 @@ title: ROADMAP
 description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
-updated: 2026-04-01T15:19:04-06:00
+updated: 2026-04-04T12:48:20-06:00
 audience:
 - public
 - agents
@@ -11,6 +11,7 @@ audience:
 part_of: '[Diaryx](/Diaryx.md)'
 link_of:
 - '[Diaryx](/Diaryx.md)'
+- '[Diaryx](/diaryx.md)'
 attachments: []
 link: '[ROADMAP](/ROADMAP.md)'
 ---
@@ -23,9 +24,12 @@ link: '[ROADMAP](/ROADMAP.md)'
 - Onboarding screen shows only logo, tagline, and "Get Started" (plus a subtle advanced menu)
 - "Get Started" creates an anonymous user in the database. Gives them access to free tier functionality.
 - Sets up workspace with default bundle. Automatically publishes their workspace as a website. Workspace contains 2-3 audience demo.
-- Overhaul audience filtering UI.
-  - First, overhaul LeftSidebar filetree to make one-click audience filtering for files easy. Files should show their audience status somehow, perhaps with colors or icons
-  - Second, introduce a "audience highlighting" UX for inline audience filtering. Click along the left side for paragraph filtering, highlight text for inline filtering. Could be stored in markdown as pandoc-style selectors:
+
+Overhaul audience filtering UI.
+
+- First, overhaul LeftSidebar filetree to make one-click audience filtering for files easy. Files should show their audience status somehow, perhaps with colors or icons
+- Second, introduce a "audience highlighting" UX for inline audience filtering. Click along the left side for paragraph filtering, highlight text for inline filtering. Could be stored in markdown as pandoc-style selectors:
+
 **Publish plugin**
 
 - [ ] Phone number/SMS support
@@ -41,7 +45,7 @@ link: '[ROADMAP](/ROADMAP.md)'
 
 ## v1.6.0 - Real world usability
 
-- Pages format---either use premium TipTap plugin, or make a bespoke one.
+- Pages format—either use premium TipTap plugin, or make a bespoke one.
 - Support for arbitrary rich/CSS styling via custom markdown syntax
 - Quick notes! A key command similar to CMD+Space on Mac, or a similar "launchpad" shortcut, to record a note quickly. Needs thought for giving it a spot/attaching an audience quickly. Simplest method: pre-configured space for quick notes. Should Extism plugins be able to also be a Tauri plugin?
 - AI agents sort notes for you?

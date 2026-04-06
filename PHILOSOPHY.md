@@ -1,13 +1,14 @@
 ---
 title: PHILOSOPHY
 part_of: '[Diaryx](/Diaryx.md)'
-updated: 2026-03-29T19:58:13-06:00
+updated: 2026-04-04T10:06:44-06:00
 audience:
 - public
 - agents
 - developers
 link_of:
 - '[Diaryx](/Diaryx.md)'
+- '[Diaryx](/diaryx.md)'
 link: '[PHILOSOPHY](/PHILOSOPHY.md)'
 ---
 # PHILOSOPHY
@@ -53,9 +54,9 @@ The recognized properties in Diaryx are carefully considered and given useful fu
 
 Diaryx now supports a singular `link` property that declares the canonical way to link to a file. By default, this should be a Markdown workspace-root-relative link, such as `[My File](</link/to/My File.md>)`, and it should resolve back to the file itself.
 
-Diaryx also supports explicit frontmatter-declared `links` and `link_of` properties for non-structural file-to-file relationships. `links` declares outbound links, and `link_of` declares backlinks. Validation checks that outbound links resolve, warns when backlinks are missing or stale, and can self-heal those backlink lists on a best-effort basis.
+Diaryx also supports explicit frontmatter-declared `links` and `link_of` properties for non-structural file-to-file relationships. `links` declares outbound links, and `link_of` declares backlinks. Validation checks that outbound links resolve, warns when backlinks are missing or stale, and can self-heal those backlink lists on a best-effort basis!
 
-What remains unimplemented is treating all body-content links as part of that same declared graph automatically. The canonical metadata model is now in place, but body-link extraction and reconciliation are still follow-up work.
+What remains unimplemented is treating all body-content links as part of that same declared graph automatically. The canonical metadata model is now in place, but body-link extraction and reconciliation are still follow-up work!
 
 ### Attachments
 

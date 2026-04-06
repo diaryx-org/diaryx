@@ -40,7 +40,7 @@
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
-  import { PanelLeft, PanelRight, Menu, Loader2 } from "@lucide/svelte";
+  import { PanelRight, Menu, Loader2, Settings, Store, Cloud, CloudOff, Eye, CircleUser } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import {
     handleStandardPluginHostUiAction,
@@ -68,7 +68,7 @@
   import { buildCommandRegistry } from "$lib/commandRegistry";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
   import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
-  import { startSyncScheduler, stopSyncScheduler, runManualSyncNow } from "$lib/sync/syncScheduler";
+  import { startSyncScheduler, stopSyncScheduler, runManualSyncNow, getSyncState } from "$lib/sync/syncScheduler.svelte";
   import { createLatestOnlyRunner } from "$lib/latestOnlyRunner";
   import {
     registerE2EBridge,
@@ -91,9 +91,35 @@
     getWorkspaceProviderLink,
     isWorkspaceSyncEnabled as isWorkspaceProviderSyncEnabled,
     setPluginMetadata,
+    renameLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import { getProviderDisplayLabel } from "$lib/sync/builtinProviders";
   import { linkWorkspace, unlinkWorkspace } from "$lib/sync/workspaceProviderService";
+
+  /** Dispatch a sync sub-command (SyncPull, SyncPush, SyncStatus) to the primary linked provider. */
+  async function dispatchPluginSyncCommand(
+    command: string,
+  ): Promise<{ success: boolean; data?: unknown; error?: string }> {
+    const wsId = getCurrentWorkspaceId();
+    if (!wsId) return { success: false, error: "No workspace" };
+    const link = getPrimaryWorkspaceProviderLink(wsId);
+    if (!link) return { success: false, error: "No sync provider linked" };
+    if (isTauri()) {
+      try {
+        const backend = workspaceStore.backend ?? await getBackend();
+        const a = createApi(backend);
+        const data = await a.executePluginCommand(link.pluginId, command, {
+          provider_id: link.pluginId,
+        });
+        return { success: true, data };
+      } catch (e) {
+        return { success: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    return await browserPlugins.dispatchCommand(link.pluginId, command, {
+      provider_id: link.pluginId,
+    });
+  }
 
   // Initialize theme store immediately
   const themeStore = getThemeStore();
@@ -512,7 +538,6 @@
 
   // Edge hover state for sidebar open buttons (focus mode reveal)
   let leftEdgeHovered = $state(false);
-  let rightEdgeHovered = $state(false);
   // Mobile focus-mode chrome tap-to-reveal state
   let mobileFocusChromeRevealed = $state(false);
   let mobileFocusChromeRevealTimer: ReturnType<typeof setTimeout> | undefined;
@@ -555,6 +580,18 @@
   // Collaboration state - proxied from collaborationStore
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
   let authState = $derived(getAuthState());
+  const syncState = getSyncState();
+  let collapsedBarSyncEnabled = $derived.by(() => {
+    const wsId = getCurrentWorkspaceId();
+    return !!wsId && isWorkspaceProviderSyncEnabled(wsId);
+  });
+  let collapsedBarSyncColor = $derived.by(() => {
+    const s = collaborationStore.effectiveSyncStatus;
+    if (s === "synced") return "text-green-600 dark:text-green-400";
+    if (s === "syncing" || s === "connecting") return "text-amber-500";
+    if (s === "error") return "text-red-500";
+    return "text-muted-foreground";
+  });
   let pluginManifestCount = $derived(getPluginStore().allManifests.length);
   let activeLocalWorkspaceId = $derived(
     authState.activeWorkspaceId ?? getCurrentWorkspaceId(),
@@ -1514,24 +1551,7 @@
 
   function toggleRightSidebar() {
     uiStore.toggleRightSidebar();
-    rightEdgeHovered = false;
 
-  }
-
-  /** Handle plugin toolbar button clicks — open the right sidebar to the plugin's tab. */
-  function handlePluginToolbarAction(pluginId: string, _command: string) {
-    // Look for a matching sidebar tab from this plugin
-    const pluginStoreRef = getPluginStore();
-    const tab = pluginStoreRef.rightSidebarTabs.find(
-      (t) => (t.pluginId as unknown as string) === pluginId,
-    );
-    if (tab) {
-      // Open the right sidebar and switch to the plugin tab
-      if (rightSidebarCollapsed) {
-        uiStore.toggleRightSidebar();
-      }
-      requestedSidebarTab = tab.contribution.id;
-    }
   }
 
   // Keyboard shortcuts
@@ -2529,6 +2549,23 @@
         const wsId = getCurrentWorkspaceId();
         return !!wsId && isWorkspaceProviderSyncEnabled(wsId);
       },
+      pluginCommandPaletteItems: getPluginStore().commandPaletteItems as Array<{
+        pluginId: string;
+        contribution: { id: string; label: string; group: string | null; plugin_command: string };
+      }>,
+      dispatchPluginCommand: async (pluginId: string, command: string, params?: unknown) => {
+        if (isTauri()) {
+          try {
+            const backend = workspaceStore.backend ?? await getBackend();
+            const tauriApi = createApi(backend);
+            const data = await tauriApi.executePluginCommand(pluginId, command, params ?? {});
+            return { success: true, data };
+          } catch (e) {
+            return { success: false, error: e instanceof Error ? e.message : String(e) };
+          }
+        }
+        return await browserPlugins.dispatchCommand(pluginId, command, params ?? {});
+      },
       pluginBlockCommands,
       pluginBlockPickerItems,
     }),
@@ -2823,6 +2860,17 @@
       const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
 
       if (key === "title" && typeof value === "string" && value.trim()) {
+        const nextTitle = value.trim();
+        const currentTitle =
+          typeof normalizedFrontmatter.title === "string"
+            ? normalizedFrontmatter.title
+            : "";
+
+        if (nextTitle === currentTitle) {
+          entryStore.setTitleError(null);
+          return;
+        }
+
         // Flush pending editor saves before title change (backend may rename the file)
         if (isDirty && editorRef) {
           await saveEntryWithSync(api, currentEntry, editorRef, tree?.path);
@@ -2863,7 +2911,15 @@
             entryStore.setCurrentEntry(updatedEntry);
           }
 
-          titleError = null;
+          // If this entry is the root index, sync workspace name in registry
+          if (path === tree?.path || effectivePath === tree?.path) {
+            const wsId = getCurrentWorkspaceId();
+            if (wsId) {
+              renameLocalWorkspace(wsId, nextTitle);
+            }
+          }
+
+          entryStore.setTitleError(null);
           await refreshTree();
         } catch (renameError) {
           // Rename failed (e.g., target exists), show user-friendly error
@@ -2875,9 +2931,11 @@
             errorMsg.includes("already exists") ||
             errorMsg.includes("Destination")
           ) {
-            titleError = `A file with that name already exists. Choose a different title.`;
+            entryStore.setTitleError(
+              "A file with that name already exists. Choose a different title."
+            );
           } else {
-            titleError = `Could not rename: ${errorMsg}`;
+            entryStore.setTitleError(`Could not rename: ${errorMsg}`);
           }
         }
       } else {
@@ -3442,6 +3500,41 @@
     requestedTab={requestedLeftTab}
     onRequestedTabConsumed={() => (requestedLeftTab = null)}
     onPluginHostAction={handlePluginHostAction}
+    syncEnabled={(() => {
+      const wsId = getCurrentWorkspaceId();
+      return !!wsId && isWorkspaceProviderSyncEnabled(wsId);
+    })()}
+    onSync={runManualSyncNow}
+    onSyncPull={async () => {
+      const result = await dispatchPluginSyncCommand("SyncPull");
+      if (!result.success) console.warn("[App] SyncPull:", result.error);
+    }}
+    onSyncPush={async () => {
+      const result = await dispatchPluginSyncCommand("SyncPush");
+      if (!result.success) console.warn("[App] SyncPush:", result.error);
+    }}
+    onSyncRefreshStatus={async () => {
+      const result = await dispatchPluginSyncCommand("SyncStatus");
+      if (!result.success) {
+        console.warn("[App] SyncStatus:", result.error);
+        return;
+      }
+      // Update the collaboration store from the plugin's status response
+      // so the UI reflects the current state without waiting for events.
+      if (result.data && typeof result.data === "object") {
+        const d = result.data as Record<string, unknown>;
+        const state = typeof d.state === "string" ? d.state : null;
+        if (state === "synced" || state === "dirty") {
+          collaborationStore.setSyncStatus("synced");
+          collaborationStore.setSyncProgress(null);
+        } else if (state === "error") {
+          collaborationStore.setSyncStatus("error");
+        }
+        if (typeof d.dirty_count === "number" && d.dirty_count > 0) {
+          collaborationStore.setSyncStatus("syncing");
+        }
+      }
+    }}
   />
 
   <!-- Left sidebar resize handle -->
@@ -3472,37 +3565,104 @@
     {#if leftSidebarCollapsed}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-        class="absolute top-0 left-0 z-20 w-8 h-full hidden md:flex items-start group"
+        class="absolute bottom-[calc(env(safe-area-inset-bottom)+2.25rem)] left-0 z-20 w-10 hidden md:flex flex-col items-center group"
         onmouseenter={() => leftEdgeHovered = true}
         onmouseleave={() => leftEdgeHovered = false}
       >
-        <button
-          type="button"
-          class="mt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.5rem)] ml-2 p-2 transition-opacity duration-200
-            {focusMode && leftSidebarCollapsed && rightSidebarCollapsed && !leftEdgeHovered ? 'opacity-0' : 'opacity-100'}"
-          onclick={toggleLeftSidebar}
-          aria-label="Open navigation sidebar"
-        >
-          <PanelLeft class="size-4 text-muted-foreground" />
-        </button>
-      </div>
-    {/if}
-    {#if rightSidebarCollapsed}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="absolute top-0 right-0 z-20 w-8 h-full hidden md:flex items-start justify-end group"
-        onmouseenter={() => rightEdgeHovered = true}
-        onmouseleave={() => rightEdgeHovered = false}
-      >
-        <button
-          type="button"
-          class="mt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.5rem)] mr-2 p-2 transition-opacity duration-200
-            {focusMode && leftSidebarCollapsed && rightSidebarCollapsed && !rightEdgeHovered ? 'opacity-0' : 'opacity-100'}"
-          onclick={toggleRightSidebar}
-          aria-label="Open properties panel"
-        >
-          <PanelRight class="size-4 text-muted-foreground" />
-        </button>
+        <!-- Collapsed sidebar quick-access icons -->
+        <div class="flex flex-col items-center gap-0.5 pb-1 transition-opacity duration-200
+          {focusMode && leftSidebarCollapsed && rightSidebarCollapsed && !leftEdgeHovered ? 'opacity-0' : 'opacity-100'}">
+          <!-- Audience/Eye -->
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                class="p-2 rounded-md hover:bg-accent transition-colors"
+                onclick={() => { showAudienceManager = true; }}
+                aria-label="Audience filter"
+              >
+                <Eye class="size-4 text-muted-foreground" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Content side="right">Audience</Tooltip.Content>
+          </Tooltip.Root>
+
+          <!-- Cloud/Sync -->
+          {#if collapsedBarSyncEnabled}
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                <button
+                  type="button"
+                  class="p-2 rounded-md hover:bg-accent transition-colors"
+                  onclick={runManualSyncNow}
+                  aria-label="Sync"
+                >
+                  {#if syncState.syncing}
+                    <Loader2 class="size-4 animate-spin text-amber-500" />
+                  {:else if collaborationStore.serverOffline}
+                    <CloudOff class={`size-4 ${collapsedBarSyncColor}`} />
+                  {:else}
+                    <Cloud class={`size-4 ${collapsedBarSyncColor}`} />
+                  {/if}
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Content side="right">Sync</Tooltip.Content>
+            </Tooltip.Root>
+          {/if}
+
+          <!-- Marketplace -->
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                class="p-2 rounded-md hover:bg-accent transition-colors"
+                onclick={() => { showMarketplaceDialog = true; }}
+                aria-label="Open marketplace"
+              >
+                <Store class="size-4 text-muted-foreground" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Content side="right">Marketplace</Tooltip.Content>
+          </Tooltip.Root>
+
+          <!-- Settings -->
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                class="p-2 rounded-md hover:bg-accent transition-colors"
+                onclick={() => { settingsInitialTab = undefined; showSettingsDialog = true; }}
+                aria-label="Open settings"
+              >
+                <Settings class="size-4 text-muted-foreground" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Content side="right">Settings</Tooltip.Content>
+          </Tooltip.Root>
+
+          <!-- Account -->
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                class="p-2 rounded-md hover:bg-accent transition-colors"
+                onclick={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
+                aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
+              >
+                <span class="relative inline-flex">
+                  <CircleUser class="size-4 text-muted-foreground" />
+                  {#if authState.isAuthenticated}
+                    <span
+                      class="absolute -bottom-0.5 -right-0.5 size-2 rounded-full ring-1 ring-background {collaborationStore.serverOffline ? 'bg-amber-500' : 'bg-emerald-500'}"
+                    ></span>
+                  {/if}
+                </span>
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Content side="right">{authState.isAuthenticated ? 'Account' : 'Sign in'}</Tooltip.Content>
+          </Tooltip.Root>
+
+        </div>
       </div>
     {/if}
     {#if currentEntry}
@@ -3610,12 +3770,17 @@
         onOpenCommandPalette={uiStore.openCommandPalette}
         onRevealMobileFocusChrome={revealMobileFocusChromeTemporarily}
         {api}
-        onPluginToolbarAction={handlePluginToolbarAction}
         audienceTags={effectiveAudienceTags}
         onOpenAudienceManager={() => { showAudienceManager = true; }}
         onFabMount={(el) => { mobileGestures.editorFabElement = el; }}
         {commandRegistry}
         hasEditor={!!editorRef}
+        showAccountButton={leftSidebarCollapsed}
+        isAuthenticated={authState.isAuthenticated}
+        serverOffline={collaborationStore.serverOffline}
+        onOpenAccount={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
+        onOpenLeftSidebar={toggleLeftSidebar}
+        onOpenRightSidebar={toggleRightSidebar}
       />
     {:else}
       <EditorEmptyState
@@ -3663,7 +3828,7 @@
     onPropertyRemove={handlePropertyRemove}
     onPropertyAdd={handlePropertyAdd}
     {titleError}
-    onTitleErrorClear={() => (titleError = null)}
+    onTitleErrorClear={() => entryStore.setTitleError(null)}
     onDeleteAttachment={handleDeleteAttachment}
     onPreviewAttachment={handlePreviewAttachment}
     {attachmentError}

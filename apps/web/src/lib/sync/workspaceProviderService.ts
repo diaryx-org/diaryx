@@ -32,6 +32,7 @@ import {
   captureProviderPluginForTransfer,
   installCapturedProviderPlugin,
 } from "$lib/sync/browserProviderBootstrap";
+import { listUserWorkspaceNamespaces } from "$lib/auth";
 
 // ============================================================================
 // Types
@@ -46,6 +47,8 @@ export interface RemoteWorkspace {
   id: string;
   name: string;
 }
+
+export type ExistingWorkspaceLinkPolicy = "link_only" | "upload_local";
 
 export type ProgressCallback = (progress: {
   percent: number;
@@ -189,6 +192,20 @@ export async function listRemoteWorkspaces(
   pluginId: string,
   api?: Api | null,
 ): Promise<RemoteWorkspace[]> {
+  if (pluginId === "diaryx.sync") {
+    const namespaces = await listUserWorkspaceNamespaces();
+    return (namespaces ?? [])
+      .filter((entry) => (entry.metadata?.provider ?? "diaryx.sync") === pluginId)
+      .map((entry) => ({
+        id: entry.id,
+        name:
+          typeof entry.metadata?.name === "string" &&
+          entry.metadata.name.trim().length > 0
+            ? entry.metadata.name
+            : entry.id,
+      }));
+  }
+
   const client = await resolveApi(api);
   const result = await executeProviderPluginCommand<ListRemoteWorkspacesResponse>({
     api: client,
@@ -277,6 +294,91 @@ export async function uploadWorkspaceSnapshot(
   return {
     filesUploaded: Number(response?.files_uploaded ?? 0),
     snapshotUploaded: !!response?.snapshot_uploaded,
+  };
+}
+
+export async function attachExistingLocalWorkspaceToRemote(
+  pluginId: string,
+  params: {
+    remoteId: string;
+    remoteName: string;
+    localPath: string;
+    localId?: string;
+    policy: ExistingWorkspaceLinkPolicy;
+  },
+  onProgress?: ProgressCallback,
+  api?: Api | null,
+): Promise<{
+  localId: string;
+  localName: string;
+  remoteId: string;
+  snapshotUploaded: boolean;
+}> {
+  const normalizedPath = params.localPath.trim();
+  if (!normalizedPath) {
+    throw new Error("Local workspace path is required.");
+  }
+
+  const existingWorkspace = params.localId
+    ? getLocalWorkspace(params.localId)
+    : getLocalWorkspaces().find((workspace) => workspace.path === normalizedPath);
+  const localWorkspace = existingWorkspace ?? createLocalWorkspace(
+    params.remoteName,
+    undefined,
+    normalizedPath,
+  );
+  const localName = existingWorkspace?.name ?? params.remoteName;
+
+  addLocalWorkspace({
+    id: localWorkspace.id,
+    name: localName,
+    path: normalizedPath,
+  });
+
+  if (params.policy === "link_only") {
+    onProgress?.({ percent: 20, message: `Linking "${localName}"...` });
+    setPluginMetadata(localWorkspace.id, pluginId, {
+      remoteWorkspaceId: params.remoteId,
+      serverId: params.remoteId,
+      syncEnabled: true,
+    });
+    onProgress?.({ percent: 100, message: "Workspace linked." });
+
+    return {
+      localId: localWorkspace.id,
+      localName,
+      remoteId: params.remoteId,
+      snapshotUploaded: false,
+    };
+  }
+
+  const linkResult = await linkWorkspace(
+    pluginId,
+    {
+      localId: localWorkspace.id,
+      name: localName,
+      remoteId: params.remoteId,
+    },
+    onProgress,
+    api,
+  );
+
+  let snapshotUploaded = linkResult.snapshotUploaded;
+  if (!snapshotUploaded) {
+    onProgress?.({ percent: 72, message: `Uploading "${localName}"...` });
+    const uploadResult = await uploadWorkspaceSnapshot(
+      pluginId,
+      { remoteId: linkResult.remoteId },
+      api,
+    );
+    snapshotUploaded = uploadResult.snapshotUploaded;
+  }
+
+  return {
+    localId: localWorkspace.id,
+    localName,
+    remoteId: linkResult.remoteId,
+    snapshotUploaded,
   };
 }
 

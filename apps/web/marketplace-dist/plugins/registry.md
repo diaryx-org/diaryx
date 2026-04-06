@@ -26,9 +26,6 @@ plugins:
     size: 447416
     published_at: '2026-03-16T18:44:25Z'
   ui:
-  - slot: ToolbarButton
-    id: ai-chat-toggle
-    label: AI Assistant
   - slot: SidebarTab
     id: ai-chat
     label: AI

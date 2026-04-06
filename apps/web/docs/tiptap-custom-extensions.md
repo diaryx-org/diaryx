@@ -2,8 +2,6 @@
 title: TipTap Custom Extensions
 description: Guide to creating custom TipTap extensions with markdown support
 author: adammharris
-audience:
-- developers
 part_of: '[README](/apps/web/README.md)'
 ---
 

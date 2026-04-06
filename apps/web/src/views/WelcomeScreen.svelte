@@ -184,6 +184,7 @@
       owner_user_id: "builtin",
       created_at: Date.now(),
       metadata: {
+        type: "workspace",
         kind: "workspace",
         provider: providerId,
         name: remote.name,

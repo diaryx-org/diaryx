@@ -335,6 +335,24 @@ describe("RightSidebar", () => {
     expect(onPropertyChange).toHaveBeenCalledWith("title", "New Title");
   });
 
+  it("submits title changes only once when Enter is pressed", async () => {
+    const onPropertyChange = vi.fn();
+    const entry = createMockEntry({
+      frontmatter: {
+        title: "Test Entry",
+      },
+    });
+    renderSidebar({ entry, onPropertyChange });
+
+    const titleInput = screen.getByDisplayValue("Test Entry");
+    await fireEvent.input(titleInput, { target: { value: "Renamed Entry" } });
+    await fireEvent.keyDown(titleInput, { key: "Enter" });
+    await fireEvent.blur(titleInput);
+
+    expect(onPropertyChange).toHaveBeenCalledTimes(1);
+    expect(onPropertyChange).toHaveBeenCalledWith("title", "Renamed Entry");
+  });
+
   it("preserves local wall time for datetime frontmatter fields", async () => {
     const onPropertyChange = vi.fn();
     const initialDate = new Date(2026, 2, 29, 19, 0, 0);

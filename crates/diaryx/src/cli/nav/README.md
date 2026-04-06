@@ -3,8 +3,6 @@ title: Navigation TUI module
 description: Interactive TUI for navigating workspace hierarchy
 part_of: '[README](/crates/diaryx/src/cli/README.md)'
 author: adammharris
-audience:
-- public
 ---
 # Navigation TUI Module
 

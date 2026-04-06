@@ -25,6 +25,7 @@ import {
   type CompleteAttachmentUploadRequest,
   type CompleteAttachmentUploadResponse,
   type DownloadAttachmentResponse,
+  isWorkspaceNamespace,
 } from "./authService";
 import {
   prepareCreationOptions,
@@ -613,11 +614,12 @@ export async function listUserNamespaces(): Promise<NamespaceEntry[]> {
 }
 
 /**
- * List namespaces that have workspace metadata (kind === "workspace").
+ * List namespaces that have workspace metadata (`type === "workspace"` with
+ * legacy `kind === "workspace"` fallback).
  */
 export async function listUserWorkspaceNamespaces(): Promise<NamespaceEntry[]> {
   const all = await listUserNamespaces();
-  return all.filter((ns) => ns.metadata?.kind === "workspace");
+  return all.filter(isWorkspaceNamespace);
 }
 
 /**

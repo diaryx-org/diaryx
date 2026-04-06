@@ -54,7 +54,7 @@
 
           diaryx-cli = rustPlatform.buildRustPackage {
             pname = "diaryx";
-            version = "1.4.0";
+            version = "1.4.1";
             inherit src;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildFlags = [ "-p" "diaryx" ];
@@ -70,7 +70,7 @@
 
           diaryx-sync-server = rustPlatform.buildRustPackage {
             pname = "diaryx-sync-server";
-            version = "1.4.0";
+            version = "1.4.1";
             inherit src;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildFlags = [ "-p" "diaryx_sync_server" ];
@@ -86,7 +86,7 @@
 
           ts-bindings = rustPlatform.buildRustPackage {
             pname = "ts-bindings";
-            version = "1.4.0";
+            version = "1.4.1";
             inherit src;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildFlags = [ "-p" "diaryx_core" ];
@@ -124,7 +124,7 @@
           wasm-bindgen-cli = pkgs.buildWasmBindgenCli rec {
             src = pkgs.fetchCrate {
               pname = "wasm-bindgen-cli";
-              version = "0.2.114";
+              version = "1.4.1";
               hash = "sha256-xrCym+rFY6EUQFWyWl6OPA+LtftpUAE5pIaElAIVqW0=";
             };
             cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
@@ -136,7 +136,7 @@
 
           wasm-package = wasmRustPlatform.buildRustPackage {
             pname = "wasm-package";
-            version = "1.4.0";
+            version = "1.4.1";
             inherit src;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildFlags = [ "-p" "diaryx_wasm" "--target" "wasm32-unknown-unknown" ];

@@ -38,6 +38,9 @@ pub mod search;
 /// Frontmatter parsing and manipulation utilities
 pub mod frontmatter;
 
+/// Audience visibility directive filtering for markdown bodies
+pub mod visibility;
+
 /// Metadata-to-frontmatter conversion and file writing utilities
 pub mod metadata_writer;
 

@@ -1553,6 +1553,27 @@ function buildHostFunctions(
           );
         }
       },
+      async host_namespace_get_object(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { ns_id: string; key: string }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+          const resp = await namespaceFetch(
+            "GET",
+            `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeKeyPath(input.key)}`,
+          );
+          const bytes = new Uint8Array(await resp.arrayBuffer());
+          let binary = "";
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const data = btoa(binary);
+          return cp.store(JSON.stringify({ data }));
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
       async host_namespace_put_object(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as

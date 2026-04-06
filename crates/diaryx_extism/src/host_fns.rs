@@ -89,6 +89,7 @@ pub trait NamespaceProvider: Send + Sync {
         mime_type: &str,
         audience: &str,
     ) -> Result<(), String>;
+    fn get_object(&self, ns_id: &str, key: &str) -> Result<Vec<u8>, String>;
     fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String>;
     fn list_objects(&self, ns_id: &str) -> Result<Vec<NamespaceObjectMeta>, String>;
     fn sync_audience(&self, ns_id: &str, audience: &str, access: &str) -> Result<(), String>;
@@ -298,6 +299,9 @@ impl NamespaceProvider for NoopNamespaceProvider {
         _mime_type: &str,
         _audience: &str,
     ) -> Result<(), String> {
+        Err("Namespace operations are not available".to_string())
+    }
+    fn get_object(&self, _ns_id: &str, _key: &str) -> Result<Vec<u8>, String> {
         Err("Namespace operations are not available".to_string())
     }
     fn delete_object(&self, _ns_id: &str, _key: &str) -> Result<(), String> {
@@ -647,6 +651,13 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_namespace_delete_object,
+        )
+        .with_function(
+            "host_namespace_get_object",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_get_object,
         )
         .with_function(
             "host_namespace_list_objects",
@@ -2040,6 +2051,45 @@ fn host_namespace_put_object(
 
     let json = match result {
         Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_get_object(input: {ns_id, key}) -> {data: "<base64>"} or {error}`
+fn host_namespace_get_object(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    use base64::Engine as _;
+
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+        key: String,
+    }
+
+    let parsed: Input = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_namespace_get_object: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_get_object: lock: {e}")))?;
+    let result = ctx
+        .namespace_provider
+        .get_object(&parsed.ns_id, &parsed.key);
+
+    let json = match result {
+        Ok(bytes) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            serde_json::json!({ "data": encoded })
+        }
         Err(e) => serde_json::json!({ "error": e }),
     };
     plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;

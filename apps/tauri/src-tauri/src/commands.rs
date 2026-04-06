@@ -968,6 +968,40 @@ impl<R: Runtime> TauriNamespaceProvider<R> {
             .join("/")
     }
 
+    fn request_bytes(&self, url: String) -> Result<Vec<u8>, String> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(120)))
+            .build()
+            .into();
+
+        let mut request_builder = ureq::http::Request::builder()
+            .method("GET")
+            .uri(url.as_str());
+        if let Some(token) = self.auth_token() {
+            request_builder = request_builder.header("Authorization", format!("Bearer {token}"));
+        }
+
+        let request = request_builder
+            .body(())
+            .map_err(|e| format!("Failed to build namespace request: {e}"))?;
+        let response = agent
+            .run(request)
+            .map_err(|e| format!("Namespace request failed: {e}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.into_body().read_to_string().unwrap_or_default();
+            return Err(if text.is_empty() {
+                format!("Namespace request failed with status {status}")
+            } else {
+                text
+            });
+        }
+        response
+            .into_body()
+            .read_to_vec()
+            .map_err(|e| format!("Failed to read namespace response: {e}"))
+    }
+
     fn request_json<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
@@ -1059,6 +1093,17 @@ impl<R: Runtime> diaryx_extism::NamespaceProvider for TauriNamespaceProvider<R> 
             Some(audience),
         )?;
         Ok(())
+    }
+
+    fn get_object(&self, ns_id: &str, key: &str) -> Result<Vec<u8>, String> {
+        let base = self.server_url()?;
+        let url = format!(
+            "{}/namespaces/{}/objects/{}",
+            base,
+            Self::encode_component(ns_id),
+            Self::encode_key(key)
+        );
+        self.request_bytes(url)
     }
 
     fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String> {

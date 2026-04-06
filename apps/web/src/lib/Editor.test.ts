@@ -47,7 +47,8 @@ const { editorState, mockEditorInstance } = vi.hoisted(() => {
 });
 
 // ── Mock TipTap core ────────────────────────────────────────────────
-vi.mock("@tiptap/core", () => {
+vi.mock("@tiptap/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tiptap/core")>();
   // Must use a regular function (not arrow) so it works with `new Editor(...)`.
   function MockEditor(this: any, config: any) {
     editorState.createConfig = config;
@@ -57,6 +58,7 @@ vi.mock("@tiptap/core", () => {
     Object.assign(this, mockEditorInstance);
   }
   return {
+    ...actual,
     Editor: MockEditor,
     Extension: { create: vi.fn(() => ({})) },
   };
@@ -138,9 +140,13 @@ vi.mock("@tiptap/extension-bubble-menu", () => {
   o.configure.mockReturnValue(o); o.extend.mockReturnValue(o);
   return { default: o };
 });
-vi.mock("@tiptap/pm/state", () => ({
-  Plugin: vi.fn(),
-}));
+vi.mock("@tiptap/pm/state", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tiptap/pm/state")>();
+  return {
+    ...actual,
+    Plugin: vi.fn(),
+  };
+});
 
 // ── Mock local modules ──────────────────────────────────────────────
 vi.mock("../models/services/attachmentService", () => ({

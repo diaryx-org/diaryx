@@ -229,9 +229,10 @@ describe("LeftSidebar", () => {
     vi.clearAllMocks();
   });
 
-  it('renders "Diaryx" header text', () => {
+  it("renders sidebar global controls", () => {
     render(LeftSidebar, defaultProps());
-    expect(screen.getByText("Diaryx")).toBeInTheDocument();
+    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+    expect(screen.getByLabelText("Open marketplace")).toBeInTheDocument();
   });
 
   it("renders loading state when isLoading is true and tree is null", () => {
@@ -375,7 +376,7 @@ describe("LeftSidebar", () => {
     };
 
     render(LeftSidebar, defaultProps({ validationResult }));
-    expect(screen.getByText("Problems")).toBeInTheDocument();
-    expect(screen.getByText("1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Workspace problems (1)")).toBeInTheDocument();
+    expect(screen.getByText("1 problem")).toBeInTheDocument();
   });
 });

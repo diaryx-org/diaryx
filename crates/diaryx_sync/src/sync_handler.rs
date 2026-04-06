@@ -720,7 +720,7 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         let fm = &parsed.frontmatter;
 
         // Helper to parse the frontmatter "updated" value into a timestamp (ms)
-        fn parse_updated_value(value: &serde_yaml::Value) -> Option<i64> {
+        fn parse_updated_value(value: &diaryx_core::YamlValue) -> Option<i64> {
             if let Some(num) = value.as_i64() {
                 return Some(num);
             }

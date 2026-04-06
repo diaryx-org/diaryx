@@ -234,7 +234,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     async fn detect_link_format_hint(
         &self,
         path: &Path,
-        current_frontmatter: Option<&indexmap::IndexMap<String, serde_yaml::Value>>,
+        current_frontmatter: Option<&indexmap::IndexMap<String, diaryx_core::YamlValue>>,
     ) -> Option<link_parser::LinkFormat> {
         if let Some(frontmatter) = current_frontmatter
             && let Some(raw) = frontmatter.get("link_format").and_then(|v| v.as_str())
@@ -446,7 +446,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// Convert frontmatter to FileMetadata.
     fn frontmatter_to_metadata(
         &self,
-        fm: &indexmap::IndexMap<String, serde_yaml::Value>,
+        fm: &indexmap::IndexMap<String, diaryx_core::YamlValue>,
     ) -> FileMetadata {
         FileMetadata::from_frontmatter(fm)
     }

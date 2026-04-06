@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_yaml::Value;
+
+use crate::yaml_value::YamlValue;
 
 use crate::link_parser::{self, LinkFormat};
 use crate::plugin::permissions::PluginConfig;
@@ -53,24 +54,25 @@ fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<String>,
 where
     D: Deserializer<'de>,
 {
-    let value: Option<Value> = Option::deserialize(deserializer)?;
+    let value: Option<YamlValue> = Option::deserialize(deserializer)?;
     match value {
         None => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s)),
-        Some(Value::Number(n)) => Ok(Some(n.to_string())),
-        Some(Value::Bool(b)) => Ok(Some(b.to_string())),
-        Some(Value::Null) => Ok(None),
-        Some(Value::Sequence(seq)) => {
+        Some(YamlValue::String(s)) => Ok(Some(s)),
+        Some(YamlValue::Int(n)) => Ok(Some(n.to_string())),
+        Some(YamlValue::Float(f)) => Ok(Some(f.to_string())),
+        Some(YamlValue::Bool(b)) => Ok(Some(b.to_string())),
+        Some(YamlValue::Null) => Ok(None),
+        Some(YamlValue::Sequence(seq)) => {
             // Take the first string element from the array
             for item in seq {
-                if let Value::String(s) = item {
+                if let YamlValue::String(s) = item {
                     return Ok(Some(s));
                 }
             }
             Ok(None)
         }
-        Some(Value::Mapping(_)) => Ok(None), // Can't convert a mapping to string
-        Some(Value::Tagged(_)) => Ok(None),  // Tagged YAML values are rare, skip them
+        Some(YamlValue::Mapping(_)) => Ok(None), // Can't convert a mapping to string
+                                                 // No Tagged variant in YamlValue; catch-all below handles unknown shapes
     }
 }
 
@@ -82,24 +84,26 @@ fn deserialize_vec_string_lenient<'de, D>(deserializer: D) -> Result<Option<Vec<
 where
     D: Deserializer<'de>,
 {
-    let value: Option<Value> = Option::deserialize(deserializer)?;
+    let value: Option<YamlValue> = Option::deserialize(deserializer)?;
     match value {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(vec![s])),
-        Some(Value::Sequence(seq)) => {
+        None | Some(YamlValue::Null) => Ok(None),
+        Some(YamlValue::String(s)) => Ok(Some(vec![s])),
+        Some(YamlValue::Sequence(seq)) => {
             let strings = seq
                 .into_iter()
                 .filter_map(|v| match v {
-                    Value::String(s) => Some(s),
-                    Value::Number(n) => Some(n.to_string()),
-                    Value::Bool(b) => Some(b.to_string()),
+                    YamlValue::String(s) => Some(s),
+                    YamlValue::Int(n) => Some(n.to_string()),
+                    YamlValue::Float(f) => Some(f.to_string()),
+                    YamlValue::Bool(b) => Some(b.to_string()),
                     _ => None,
                 })
                 .collect();
             Ok(Some(strings))
         }
-        Some(Value::Number(n)) => Ok(Some(vec![n.to_string()])),
-        Some(Value::Bool(b)) => Ok(Some(vec![b.to_string()])),
+        Some(YamlValue::Int(n)) => Ok(Some(vec![n.to_string()])),
+        Some(YamlValue::Float(f)) => Ok(Some(vec![f.to_string()])),
+        Some(YamlValue::Bool(b)) => Ok(Some(vec![b.to_string()])),
         _ => Ok(None),
     }
 }
@@ -192,7 +196,7 @@ pub struct IndexFrontmatter {
 
     /// Additional frontmatter properties
     #[serde(flatten)]
-    pub extra: HashMap<String, Value>,
+    pub extra: HashMap<String, YamlValue>,
 }
 
 impl IndexFrontmatter {

@@ -5,9 +5,9 @@
 
 use std::path::Path;
 
+use crate::yaml_value::YamlValue;
 use indexmap::IndexMap;
 use mailparse::{MailHeaderMap, ParsedMail, parse_mail};
-use serde_yaml::Value;
 
 use super::{ImportedAttachment, ImportedEntry};
 
@@ -29,13 +29,13 @@ pub fn parse_eml(bytes: &[u8]) -> Result<ImportedEntry, String> {
 
     let mut metadata = IndexMap::new();
     if let Some(from) = parsed.headers.get_first_value("From") {
-        metadata.insert("from".to_string(), Value::String(from));
+        metadata.insert("from".to_string(), YamlValue::String(from));
     }
     if let Some(to) = parsed.headers.get_first_value("To") {
-        metadata.insert("to".to_string(), Value::String(to));
+        metadata.insert("to".to_string(), YamlValue::String(to));
     }
     if let Some(cc) = parsed.headers.get_first_value("Cc") {
-        metadata.insert("cc".to_string(), Value::String(cc));
+        metadata.insert("cc".to_string(), YamlValue::String(cc));
     }
 
     let (body_text, attachments) = extract_body_and_attachments(&parsed)?;
@@ -219,11 +219,11 @@ mod tests {
         assert_eq!(entry.title, "Hello World");
         assert_eq!(
             entry.metadata.get("from").unwrap(),
-            &Value::String("alice@example.com".to_string())
+            &YamlValue::String("alice@example.com".to_string())
         );
         assert_eq!(
             entry.metadata.get("to").unwrap(),
-            &Value::String("bob@example.com".to_string())
+            &YamlValue::String("bob@example.com".to_string())
         );
         assert!(entry.body.contains("This is the body."));
         assert!(entry.attachments.is_empty());

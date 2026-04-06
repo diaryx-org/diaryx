@@ -73,6 +73,10 @@ pub mod import;
 /// Plugin architecture for modular feature composition
 pub mod plugin;
 
+/// Minimal YAML value type for dynamic frontmatter manipulation
+pub mod yaml_value;
+pub use yaml_value::YamlValue;
+
 // Re-exports for backwards compatibility
 pub use utils::date;
 pub use utils::path as path_utils;

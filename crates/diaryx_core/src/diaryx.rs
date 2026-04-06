@@ -24,7 +24,6 @@
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
-use serde_yaml::Value;
 
 use crate::date;
 use crate::error::{DiaryxError, Result};
@@ -32,72 +31,20 @@ use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
 use crate::plugin::PluginRegistry;
+use crate::yaml_value::YamlValue;
 
 // ============================================================================
 // Value Conversion Helpers
 // ============================================================================
 
-/// Convert a serde_yaml::Value to serde_json::Value
-pub(crate) fn yaml_to_json(yaml: Value) -> serde_json::Value {
-    match yaml {
-        Value::Null => serde_json::Value::Null,
-        Value::Bool(b) => serde_json::Value::Bool(b),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                serde_json::Value::Number(i.into())
-            } else if let Some(u) = n.as_u64() {
-                serde_json::Value::Number(u.into())
-            } else if let Some(f) = n.as_f64() {
-                serde_json::Number::from_f64(f)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
-            } else {
-                serde_json::Value::Null
-            }
-        }
-        Value::String(s) => serde_json::Value::String(s),
-        Value::Sequence(arr) => {
-            serde_json::Value::Array(arr.into_iter().map(yaml_to_json).collect())
-        }
-        Value::Mapping(map) => {
-            let obj: serde_json::Map<String, serde_json::Value> = map
-                .into_iter()
-                .filter_map(|(k, v)| k.as_str().map(|s| (s.to_string(), yaml_to_json(v))))
-                .collect();
-            serde_json::Value::Object(obj)
-        }
-        Value::Tagged(tagged) => yaml_to_json(tagged.value),
-    }
+/// Convert a YamlValue to serde_json::Value
+pub(crate) fn yaml_to_json(yaml: YamlValue) -> serde_json::Value {
+    yaml.into()
 }
 
-/// Convert a serde_json::Value to serde_yaml::Value
-pub(crate) fn json_to_yaml(json: serde_json::Value) -> Value {
-    match json {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(b) => Value::Bool(b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Number(i.into())
-            } else if let Some(u) = n.as_u64() {
-                Value::Number(u.into())
-            } else if let Some(f) = n.as_f64() {
-                Value::Number(serde_yaml::Number::from(f))
-            } else {
-                Value::Null
-            }
-        }
-        serde_json::Value::String(s) => Value::String(s),
-        serde_json::Value::Array(arr) => {
-            Value::Sequence(arr.into_iter().map(json_to_yaml).collect())
-        }
-        serde_json::Value::Object(map) => {
-            let yaml_map: serde_yaml::Mapping = map
-                .into_iter()
-                .map(|(k, v)| (Value::String(k), json_to_yaml(v)))
-                .collect();
-            Value::Mapping(yaml_map)
-        }
-    }
+/// Convert a serde_json::Value to YamlValue
+pub(crate) fn json_to_yaml(json: serde_json::Value) -> YamlValue {
+    json.into()
 }
 
 /// The main Diaryx instance.
@@ -251,7 +198,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     /// Get all frontmatter properties for a file.
     ///
     /// Returns an empty map if no frontmatter exists.
-    pub async fn get_frontmatter(&self, path: &str) -> Result<IndexMap<String, Value>> {
+    pub async fn get_frontmatter(&self, path: &str) -> Result<IndexMap<String, YamlValue>> {
         let content = self.read_raw(path).await?;
         match frontmatter::parse(&content) {
             Ok(parsed) => Ok(parsed.frontmatter),
@@ -263,7 +210,11 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     /// Get a specific frontmatter property.
     ///
     /// Returns `Ok(None)` if the property doesn't exist or no frontmatter.
-    pub async fn get_frontmatter_property(&self, path: &str, key: &str) -> Result<Option<Value>> {
+    pub async fn get_frontmatter_property(
+        &self,
+        path: &str,
+        key: &str,
+    ) -> Result<Option<YamlValue>> {
         let frontmatter = self.get_frontmatter(path).await?;
         Ok(frontmatter.get(key).cloned())
     }
@@ -275,7 +226,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         &self,
         path: &str,
         key: &str,
-        value: Value,
+        value: YamlValue,
     ) -> Result<()> {
         let content = self.read_raw_or_empty(path).await?;
         let mut parsed = frontmatter::parse_or_empty(&content)?;
@@ -356,15 +307,9 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         // Prepare target frontmatter
         let target_fm = match &section_value {
-            Value::Mapping(map) => {
+            YamlValue::Mapping(map) => {
                 // Nested section: write nested keys as top-level frontmatter in target
-                let mut fm = IndexMap::new();
-                for (k, v) in map {
-                    if let Value::String(key_str) = k {
-                        fm.insert(key_str.clone(), v.clone());
-                    }
-                }
-                fm
+                map.clone()
             }
             other => {
                 // Flat config key: write as a single frontmatter property
@@ -415,7 +360,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         let link = format!("[{}]({})", title, target_path);
         source_parsed
             .frontmatter
-            .insert(section_key.to_string(), Value::String(link));
+            .insert(section_key.to_string(), YamlValue::String(link));
 
         self.write_parsed(source_path, &source_parsed).await
     }
@@ -463,7 +408,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     /// Update the 'updated' timestamp to the current time.
     pub async fn touch_updated(&self, path: &str) -> Result<()> {
         let timestamp = date::current_local_timestamp_rfc3339();
-        self.set_frontmatter_property(path, "updated", Value::String(timestamp))
+        self.set_frontmatter_property(path, "updated", YamlValue::String(timestamp))
             .await
     }
 
@@ -543,11 +488,11 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         let attachments = parsed
             .frontmatter
             .entry("attachments".to_string())
-            .or_insert(Value::Sequence(vec![]));
+            .or_insert(YamlValue::Sequence(vec![]));
 
-        if let Value::Sequence(list) = attachments {
+        if let YamlValue::Sequence(list) = attachments {
             let exists = list.iter().any(|item| {
-                if let Value::String(existing) = item {
+                if let YamlValue::String(existing) = item {
                     let parsed_existing = link_parser::parse_link(existing);
                     return link_parser::to_canonical(&parsed_existing, Path::new(path))
                         == target_canonical;
@@ -555,7 +500,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
                 false
             });
             if !exists {
-                list.push(Value::String(attachment_path.to_string()));
+                list.push(YamlValue::String(attachment_path.to_string()));
             }
         }
 
@@ -577,9 +522,9 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
             Err(e) => return Err(e),
         };
 
-        if let Some(Value::Sequence(list)) = parsed.frontmatter.get_mut("attachments") {
+        if let Some(YamlValue::Sequence(list)) = parsed.frontmatter.get_mut("attachments") {
             list.retain(|item| {
-                if let Value::String(s) = item {
+                if let YamlValue::String(s) = item {
                     let parsed_existing = link_parser::parse_link(s);
                     link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
                 } else {
@@ -831,7 +776,7 @@ mod tests {
         crate::fs::block_on_test(diaryx.entry().set_frontmatter_property(
             "test.md",
             "title",
-            Value::String("Updated".to_string()),
+            YamlValue::String("Updated".to_string()),
         ))
         .unwrap();
 

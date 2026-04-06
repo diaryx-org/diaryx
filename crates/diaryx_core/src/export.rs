@@ -439,10 +439,12 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         let body = &rest[end_idx + 5..];
 
         // Parse as YAML
-        let mut frontmatter: serde_yaml::Value = serde_yaml::from_str(frontmatter_str)?;
+        let mut frontmatter: crate::yaml_value::YamlValue = serde_yaml::from_str(frontmatter_str)?;
 
         // Filter contents array
-        if let Some(contents) = frontmatter.get_mut("contents")
+        if let Some(contents) = frontmatter
+            .as_mapping_mut()
+            .and_then(|m| m.get_mut("contents"))
             && let Some(arr) = contents.as_sequence_mut()
         {
             arr.retain(|item| {
@@ -458,7 +460,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         if !options.keep_audience
             && let Some(map) = frontmatter.as_mapping_mut()
         {
-            map.remove(serde_yaml::Value::String("audience".to_string()));
+            map.shift_remove("audience");
         }
 
         // Reconstruct file
@@ -487,13 +489,11 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         let body = &rest[end_idx + 5..];
 
         // Parse as YAML
-        let mut frontmatter: serde_yaml::Value = serde_yaml::from_str(frontmatter_str)?;
+        let mut frontmatter: crate::yaml_value::YamlValue = serde_yaml::from_str(frontmatter_str)?;
 
         // Remove audience property
         if let Some(map) = frontmatter.as_mapping_mut() {
-            let had_audience = map
-                .remove(serde_yaml::Value::String("audience".to_string()))
-                .is_some();
+            let had_audience = map.shift_remove("audience").is_some();
 
             if !had_audience {
                 // No audience property, return original

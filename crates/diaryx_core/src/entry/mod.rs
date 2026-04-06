@@ -34,8 +34,8 @@ use crate::date;
 use crate::error::{DiaryxError, Result};
 use crate::fs::{AsyncFileSystem, FileSystem};
 use crate::link_parser;
+use crate::yaml_value::YamlValue;
 use indexmap::IndexMap;
-use serde_yaml::Value;
 use std::path::{Path, PathBuf};
 
 /// Async-first Diaryx entry operations.
@@ -79,7 +79,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
 
     /// Parses a markdown file and extracts frontmatter and body.
     /// Returns an error if no frontmatter is found.
-    async fn parse_file(&self, path: &str) -> Result<(IndexMap<String, Value>, String)> {
+    async fn parse_file(&self, path: &str) -> Result<(IndexMap<String, YamlValue>, String)> {
         let path_buf = PathBuf::from(path);
         let content = self
             .fs
@@ -106,7 +106,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         let body = &rest[end_idx + 5..]; // Skip "\n---\n"
 
         // Parse YAML frontmatter into IndexMap to preserve order
-        let frontmatter: IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
+        let frontmatter: IndexMap<String, YamlValue> = serde_yaml::from_str(frontmatter_str)?;
 
         Ok((frontmatter, body.to_string()))
     }
@@ -117,7 +117,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     async fn parse_file_or_create_frontmatter(
         &self,
         path: &str,
-    ) -> Result<(IndexMap<String, Value>, String)> {
+    ) -> Result<(IndexMap<String, YamlValue>, String)> {
         let path_buf = PathBuf::from(path);
 
         // Try to read the file, if it doesn't exist, return empty frontmatter and body
@@ -152,7 +152,8 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
                 let body = &rest[idx + 5..]; // Skip "\n---\n"
 
                 // Parse YAML frontmatter into IndexMap to preserve order
-                let frontmatter: IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
+                let frontmatter: IndexMap<String, YamlValue> =
+                    serde_yaml::from_str(frontmatter_str)?;
 
                 Ok((frontmatter, body.to_string()))
             }
@@ -167,7 +168,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     async fn reconstruct_file(
         &self,
         path: &str,
-        frontmatter: &IndexMap<String, Value>,
+        frontmatter: &IndexMap<String, YamlValue>,
         body: &str,
     ) -> Result<()> {
         let yaml_str = serde_yaml::to_string(frontmatter)?;
@@ -190,7 +191,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         &self,
         path: &str,
         key: &str,
-        value: Value,
+        value: YamlValue,
     ) -> Result<()> {
         let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path).await?;
         frontmatter.insert(key.to_string(), value);
@@ -229,7 +230,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         }
 
         // Rebuild the map, replacing old_key with new_key at the same position
-        let mut result: IndexMap<String, Value> = IndexMap::new();
+        let mut result: IndexMap<String, YamlValue> = IndexMap::new();
         for (k, v) in frontmatter {
             if k == old_key {
                 result.insert(new_key.to_string(), v);
@@ -244,7 +245,11 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
 
     /// Gets a frontmatter property value.
     /// Returns Ok(None) if no frontmatter exists or key is not found.
-    pub async fn get_frontmatter_property(&self, path: &str, key: &str) -> Result<Option<Value>> {
+    pub async fn get_frontmatter_property(
+        &self,
+        path: &str,
+        key: &str,
+    ) -> Result<Option<YamlValue>> {
         match self.parse_file(path).await {
             Ok((frontmatter, _)) => Ok(frontmatter.get(key).cloned()),
             Err(DiaryxError::NoFrontmatter(_)) => Ok(None), // No frontmatter, key not found
@@ -254,7 +259,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
 
     /// Gets all frontmatter properties.
     /// Returns empty map if no frontmatter exists.
-    pub async fn get_all_frontmatter(&self, path: &str) -> Result<IndexMap<String, Value>> {
+    pub async fn get_all_frontmatter(&self, path: &str) -> Result<IndexMap<String, YamlValue>> {
         match self.parse_file(path).await {
             Ok((frontmatter, _)) => Ok(frontmatter),
             Err(DiaryxError::NoFrontmatter(_)) => Ok(IndexMap::new()), // No frontmatter, return empty
@@ -286,7 +291,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     /// Creates frontmatter if none exists.
     pub async fn touch_updated(&self, path: &str) -> Result<()> {
         let timestamp = date::current_local_timestamp_rfc3339();
-        self.set_frontmatter_property(path, "updated", Value::String(timestamp))
+        self.set_frontmatter_property(path, "updated", YamlValue::String(timestamp))
             .await
     }
 
@@ -347,11 +352,11 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
 
         let attachments = frontmatter
             .entry("attachments".to_string())
-            .or_insert(Value::Sequence(vec![]));
+            .or_insert(YamlValue::Sequence(vec![]));
 
-        if let Value::Sequence(list) = attachments {
+        if let YamlValue::Sequence(list) = attachments {
             let exists = list.iter().any(|item| {
-                if let Value::String(existing) = item {
+                if let YamlValue::String(existing) = item {
                     let parsed_existing = link_parser::parse_link(existing);
                     return link_parser::to_canonical(&parsed_existing, Path::new(path))
                         == target_canonical;
@@ -360,7 +365,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
             });
 
             if !exists {
-                list.push(Value::String(attachment_path.to_string()));
+                list.push(YamlValue::String(attachment_path.to_string()));
             }
         }
 
@@ -378,9 +383,9 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         let parsed_target = link_parser::parse_link(attachment_path);
         let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
-        if let Some(Value::Sequence(list)) = frontmatter.get_mut("attachments") {
+        if let Some(YamlValue::Sequence(list)) = frontmatter.get_mut("attachments") {
             list.retain(|item| {
-                if let Value::String(s) = item {
+                if let YamlValue::String(s) = item {
                     let parsed_existing = link_parser::parse_link(s);
                     link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
                 } else {
@@ -406,10 +411,10 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         };
 
         match frontmatter.get("attachments") {
-            Some(Value::Sequence(list)) => Ok(list
+            Some(YamlValue::Sequence(list)) => Ok(list
                 .iter()
                 .filter_map(|v| {
-                    if let Value::String(s) = v {
+                    if let YamlValue::String(s) = v {
                         Some(s.clone())
                     } else {
                         None
@@ -441,7 +446,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
     /// Parses a markdown file and extracts frontmatter and body
     /// Returns an error if no frontmatter is found
-    fn parse_file(&self, path: &str) -> Result<(IndexMap<String, Value>, String)> {
+    fn parse_file(&self, path: &str) -> Result<(IndexMap<String, YamlValue>, String)> {
         let path_buf = PathBuf::from(path);
         let content = self
             .fs
@@ -467,7 +472,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         let body = &rest[end_idx + 5..]; // Skip "\n---\n"
 
         // Parse YAML frontmatter into IndexMap to preserve order
-        let frontmatter: IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
+        let frontmatter: IndexMap<String, YamlValue> = serde_yaml::from_str(frontmatter_str)?;
 
         Ok((frontmatter, body.to_string()))
     }
@@ -478,7 +483,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     fn parse_file_or_create_frontmatter(
         &self,
         path: &str,
-    ) -> Result<(IndexMap<String, Value>, String)> {
+    ) -> Result<(IndexMap<String, YamlValue>, String)> {
         let path_buf = PathBuf::from(path);
 
         // Try to read the file, if it doesn't exist, return empty frontmatter and body
@@ -513,7 +518,8 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
                 let body = &rest[idx + 5..]; // Skip "\n---\n"
 
                 // Parse YAML frontmatter into IndexMap to preserve order
-                let frontmatter: IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
+                let frontmatter: IndexMap<String, YamlValue> =
+                    serde_yaml::from_str(frontmatter_str)?;
 
                 Ok((frontmatter, body.to_string()))
             }
@@ -528,7 +534,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     fn reconstruct_file(
         &self,
         path: &str,
-        frontmatter: &IndexMap<String, Value>,
+        frontmatter: &IndexMap<String, YamlValue>,
         body: &str,
     ) -> Result<()> {
         let yaml_str = serde_yaml::to_string(frontmatter)?;
@@ -544,7 +550,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
     /// Adds or updates a frontmatter property.
     /// Creates frontmatter if none exists.
-    pub fn set_frontmatter_property(&self, path: &str, key: &str, value: Value) -> Result<()> {
+    pub fn set_frontmatter_property(&self, path: &str, key: &str, value: YamlValue) -> Result<()> {
         let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
         frontmatter.insert(key.to_string(), value);
         self.reconstruct_file(path, &frontmatter, &body)
@@ -582,7 +588,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         }
 
         // Rebuild the map, replacing old_key with new_key at the same position
-        let mut result: IndexMap<String, Value> = IndexMap::new();
+        let mut result: IndexMap<String, YamlValue> = IndexMap::new();
         for (k, v) in frontmatter {
             if k == old_key {
                 result.insert(new_key.to_string(), v);
@@ -645,7 +651,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
     /// Gets a frontmatter property value.
     /// Returns Ok(None) if no frontmatter exists or key is not found.
-    pub fn get_frontmatter_property(&self, path: &str, key: &str) -> Result<Option<Value>> {
+    pub fn get_frontmatter_property(&self, path: &str, key: &str) -> Result<Option<YamlValue>> {
         match self.parse_file(path) {
             Ok((frontmatter, _)) => Ok(frontmatter.get(key).cloned()),
             Err(DiaryxError::NoFrontmatter(_)) => Ok(None), // No frontmatter, key not found
@@ -655,7 +661,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
     /// Gets all frontmatter properties.
     /// Returns empty map if no frontmatter exists.
-    pub fn get_all_frontmatter(&self, path: &str) -> Result<IndexMap<String, Value>> {
+    pub fn get_all_frontmatter(&self, path: &str) -> Result<IndexMap<String, YamlValue>> {
         match self.parse_file(path) {
             Ok((frontmatter, _)) => Ok(frontmatter),
             Err(DiaryxError::NoFrontmatter(_)) => Ok(IndexMap::new()), // No frontmatter, return empty
@@ -674,11 +680,11 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
         let attachments = frontmatter
             .entry("attachments".to_string())
-            .or_insert(Value::Sequence(vec![]));
+            .or_insert(YamlValue::Sequence(vec![]));
 
-        if let Value::Sequence(list) = attachments {
+        if let YamlValue::Sequence(list) = attachments {
             let exists = list.iter().any(|item| {
-                if let Value::String(existing) = item {
+                if let YamlValue::String(existing) = item {
                     let parsed_existing = link_parser::parse_link(existing);
                     return link_parser::to_canonical(&parsed_existing, Path::new(path))
                         == target_canonical;
@@ -687,7 +693,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
             });
 
             if !exists {
-                list.push(Value::String(attachment_path.to_string()));
+                list.push(YamlValue::String(attachment_path.to_string()));
             }
         }
 
@@ -705,9 +711,9 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         let parsed_target = link_parser::parse_link(attachment_path);
         let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
-        if let Some(Value::Sequence(list)) = frontmatter.get_mut("attachments") {
+        if let Some(YamlValue::Sequence(list)) = frontmatter.get_mut("attachments") {
             list.retain(|item| {
-                if let Value::String(s) = item {
+                if let YamlValue::String(s) = item {
                     let parsed_existing = link_parser::parse_link(s);
                     link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
                 } else {
@@ -733,10 +739,10 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         };
 
         match frontmatter.get("attachments") {
-            Some(Value::Sequence(list)) => Ok(list
+            Some(YamlValue::Sequence(list)) => Ok(list
                 .iter()
                 .filter_map(|v| {
-                    if let Value::String(s) = v {
+                    if let YamlValue::String(s) = v {
                         Some(s.clone())
                     } else {
                         None
@@ -837,7 +843,10 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         self.reconstruct_file(path, &sorted, &body)
     }
 
-    fn sort_alphabetically(&self, frontmatter: IndexMap<String, Value>) -> IndexMap<String, Value> {
+    fn sort_alphabetically(
+        &self,
+        frontmatter: IndexMap<String, YamlValue>,
+    ) -> IndexMap<String, YamlValue> {
         let mut pairs: Vec<_> = frontmatter.into_iter().collect();
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
         pairs.into_iter().collect()
@@ -845,13 +854,13 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
     fn sort_by_pattern(
         &self,
-        frontmatter: IndexMap<String, Value>,
+        frontmatter: IndexMap<String, YamlValue>,
         pattern: &str,
-    ) -> IndexMap<String, Value> {
+    ) -> IndexMap<String, YamlValue> {
         let priority_keys: Vec<&str> = pattern.split(',').map(|s| s.trim()).collect();
 
         let mut result = IndexMap::new();
-        let mut remaining: IndexMap<String, Value> = frontmatter;
+        let mut remaining: IndexMap<String, YamlValue> = frontmatter;
 
         for key in &priority_keys {
             if *key == "*" {

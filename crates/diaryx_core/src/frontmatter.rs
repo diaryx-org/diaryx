@@ -4,8 +4,9 @@
 //! in markdown files. It extracts common parsing logic used across the codebase.
 
 use indexmap::IndexMap;
-use serde_yaml::Value;
 use std::path::PathBuf;
+
+use crate::yaml_value::YamlValue;
 
 use crate::error::{DiaryxError, Result};
 
@@ -13,7 +14,7 @@ use crate::error::{DiaryxError, Result};
 #[derive(Debug, Clone)]
 pub struct ParsedFile {
     /// The parsed frontmatter as an ordered map.
-    pub frontmatter: IndexMap<String, Value>,
+    pub frontmatter: IndexMap<String, YamlValue>,
     /// The body content after the frontmatter.
     pub body: String,
 }
@@ -39,7 +40,7 @@ pub fn parse(content: &str) -> Result<ParsedFile> {
     let body = &rest[end_idx + 5..]; // Skip "\n---\n"
 
     // Parse YAML frontmatter into IndexMap to preserve order
-    let frontmatter: IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
+    let frontmatter: IndexMap<String, YamlValue> = serde_yaml::from_str(frontmatter_str)?;
 
     Ok(ParsedFile {
         frontmatter,
@@ -71,7 +72,7 @@ pub fn parse_or_empty(content: &str) -> Result<ParsedFile> {
             let body = &rest[idx + 5..]; // Skip "\n---\n"
 
             // Parse YAML frontmatter into IndexMap to preserve order
-            let frontmatter: IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
+            let frontmatter: IndexMap<String, YamlValue> = serde_yaml::from_str(frontmatter_str)?;
 
             Ok(ParsedFile {
                 frontmatter,
@@ -89,7 +90,7 @@ pub fn parse_or_empty(content: &str) -> Result<ParsedFile> {
 }
 
 /// Serialize frontmatter and body back to markdown content.
-pub fn serialize(frontmatter: &IndexMap<String, Value>, body: &str) -> Result<String> {
+pub fn serialize(frontmatter: &IndexMap<String, YamlValue>, body: &str) -> Result<String> {
     let yaml_str = serde_yaml::to_string(frontmatter)?;
     Ok(format!("---\n{}---\n{}", yaml_str, body))
 }
@@ -149,29 +150,35 @@ pub fn extract_body(content: &str) -> &str {
 }
 
 /// Get a property from frontmatter.
-pub fn get_property<'a>(frontmatter: &'a IndexMap<String, Value>, key: &str) -> Option<&'a Value> {
+pub fn get_property<'a>(
+    frontmatter: &'a IndexMap<String, YamlValue>,
+    key: &str,
+) -> Option<&'a YamlValue> {
     frontmatter.get(key)
 }
 
 /// Set a property in frontmatter (in place).
-pub fn set_property(frontmatter: &mut IndexMap<String, Value>, key: &str, value: Value) {
+pub fn set_property(frontmatter: &mut IndexMap<String, YamlValue>, key: &str, value: YamlValue) {
     frontmatter.insert(key.to_string(), value);
 }
 
 /// Remove a property from frontmatter (in place).
-pub fn remove_property(frontmatter: &mut IndexMap<String, Value>, key: &str) -> Option<Value> {
+pub fn remove_property(
+    frontmatter: &mut IndexMap<String, YamlValue>,
+    key: &str,
+) -> Option<YamlValue> {
     frontmatter.shift_remove(key)
 }
 
 /// Get a string property value.
-pub fn get_string<'a>(frontmatter: &'a IndexMap<String, Value>, key: &str) -> Option<&'a str> {
+pub fn get_string<'a>(frontmatter: &'a IndexMap<String, YamlValue>, key: &str) -> Option<&'a str> {
     frontmatter.get(key).and_then(|v| v.as_str())
 }
 
 /// Get an array property as a Vec of strings.
-pub fn get_string_array(frontmatter: &IndexMap<String, Value>, key: &str) -> Vec<String> {
+pub fn get_string_array(frontmatter: &IndexMap<String, YamlValue>, key: &str) -> Vec<String> {
     match frontmatter.get(key) {
-        Some(Value::Sequence(seq)) => seq
+        Some(YamlValue::Sequence(seq)) => seq
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect(),
@@ -208,7 +215,9 @@ pub fn replace_body(content: &str, new_body: &str) -> String {
 }
 
 /// Sort frontmatter keys alphabetically.
-pub fn sort_alphabetically(frontmatter: IndexMap<String, Value>) -> IndexMap<String, Value> {
+pub fn sort_alphabetically(
+    frontmatter: IndexMap<String, YamlValue>,
+) -> IndexMap<String, YamlValue> {
     let mut pairs: Vec<_> = frontmatter.into_iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     pairs.into_iter().collect()
@@ -219,9 +228,9 @@ pub fn sort_alphabetically(frontmatter: IndexMap<String, Value>) -> IndexMap<Str
 /// Pattern is comma-separated keys, with "*" meaning "rest alphabetically".
 /// Example: "title,description,*" puts title first, description second, rest alphabetically
 pub fn sort_by_pattern(
-    frontmatter: IndexMap<String, Value>,
+    frontmatter: IndexMap<String, YamlValue>,
     pattern: &str,
-) -> IndexMap<String, Value> {
+) -> IndexMap<String, YamlValue> {
     let priority_keys: Vec<&str> = pattern.split(',').map(|s| s.trim()).collect();
 
     let mut result = IndexMap::new();
@@ -286,7 +295,7 @@ mod tests {
     #[test]
     fn test_serialize() {
         let mut fm = IndexMap::new();
-        fm.insert("title".to_string(), Value::String("Test".to_string()));
+        fm.insert("title".to_string(), YamlValue::String("Test".to_string()));
         let result = serialize(&fm, "\nBody").unwrap();
         assert!(result.starts_with("---\n"));
         assert!(result.contains("title: Test"));
@@ -308,9 +317,9 @@ mod tests {
     #[test]
     fn test_sort_alphabetically() {
         let mut fm = IndexMap::new();
-        fm.insert("zebra".to_string(), Value::Null);
-        fm.insert("apple".to_string(), Value::Null);
-        fm.insert("banana".to_string(), Value::Null);
+        fm.insert("zebra".to_string(), YamlValue::Null);
+        fm.insert("apple".to_string(), YamlValue::Null);
+        fm.insert("banana".to_string(), YamlValue::Null);
 
         let sorted = sort_alphabetically(fm);
         let keys: Vec<_> = sorted.keys().collect();
@@ -364,9 +373,9 @@ mod tests {
     #[test]
     fn test_sort_by_pattern() {
         let mut fm = IndexMap::new();
-        fm.insert("zebra".to_string(), Value::Null);
-        fm.insert("title".to_string(), Value::Null);
-        fm.insert("apple".to_string(), Value::Null);
+        fm.insert("zebra".to_string(), YamlValue::Null);
+        fm.insert("title".to_string(), YamlValue::Null);
+        fm.insert("apple".to_string(), YamlValue::Null);
 
         let sorted = sort_by_pattern(fm, "title,*");
         let keys: Vec<_> = sorted.keys().collect();

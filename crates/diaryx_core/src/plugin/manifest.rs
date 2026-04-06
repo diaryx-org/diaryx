@@ -825,15 +825,9 @@ pub struct PluginWorkspaceMetadata {
     pub body: String,
 }
 
-/// Convert a `serde_yaml::Value` to a `serde_json::Value`.
-fn yaml_to_json(yaml: &serde_yaml::Value) -> Result<serde_json::Value, DiaryxError> {
-    let json_str = serde_json::to_string(
-        &serde_yaml::from_value::<serde_json::Value>(yaml.clone())
-            .map_err(|e| DiaryxError::Validation(format!("YAML→JSON conversion failed: {e}")))?,
-    )
-    .map_err(|e| DiaryxError::Validation(format!("JSON serialization failed: {e}")))?;
-    serde_json::from_str(&json_str)
-        .map_err(|e| DiaryxError::Validation(format!("JSON round-trip failed: {e}")))
+/// Convert a `YamlValue` to a `serde_json::Value`.
+fn yaml_to_json(yaml: &crate::yaml_value::YamlValue) -> Result<serde_json::Value, DiaryxError> {
+    Ok(serde_json::Value::from(yaml.clone()))
 }
 
 impl MarketplaceRegistry {
@@ -998,9 +992,9 @@ impl PluginWorkspaceMetadata {
 }
 
 /// Extract a string array from an optional YAML value.
-fn yaml_string_array(value: Option<&serde_yaml::Value>) -> Vec<String> {
+fn yaml_string_array(value: Option<&crate::yaml_value::YamlValue>) -> Vec<String> {
     match value {
-        Some(serde_yaml::Value::Sequence(seq)) => seq
+        Some(crate::yaml_value::YamlValue::Sequence(seq)) => seq
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect(),

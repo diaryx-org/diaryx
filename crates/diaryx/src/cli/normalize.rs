@@ -1,6 +1,6 @@
 //! Normalize filename command - renames files to match their title property
 
-use serde_yaml::Value;
+use diaryx_core::YamlValue;
 use std::path::PathBuf;
 
 use crate::cli::util::{
@@ -86,7 +86,7 @@ pub fn handle_normalize_filename(
         } else {
             // Read title from frontmatter
             match app.get_frontmatter_property(&path_str, "title") {
-                Ok(Some(Value::String(t))) => (t, false),
+                Ok(Some(YamlValue::String(t))) => (t, false),
                 Ok(Some(_)) => {
                     eprintln!(
                         "✗ Title property is not a string in '{}'",
@@ -186,7 +186,7 @@ pub fn handle_normalize_filename(
         // Set the title if needed (new title provided or derived from filename)
         if needs_title_set {
             if let Err(e) =
-                app.set_frontmatter_property(&path_str, "title", Value::String(title.clone()))
+                app.set_frontmatter_property(&path_str, "title", YamlValue::String(title.clone()))
             {
                 eprintln!("✗ Error setting title in '{}': {}", file_path.display(), e);
                 continue;

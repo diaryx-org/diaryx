@@ -1,12 +1,12 @@
 //! Workspace command handlers
 
+use diaryx_core::YamlValue;
 use diaryx_core::config::Config;
 use diaryx_core::entry::{DiaryxAppSync, prettify_filename, slugify};
 use diaryx_core::fs::{FileSystem, RealFileSystem, SyncToAsyncFs};
 use diaryx_core::link_parser::LinkFormat;
 use diaryx_core::validate::ValidationFixer;
 use diaryx_core::workspace::Workspace;
-use serde_yaml::Value;
 use std::path::{Path, PathBuf};
 
 use crate::cli::args::WorkspaceCommands;
@@ -1684,18 +1684,15 @@ fn set_new_index_as_parent(
             .join(" ");
 
         // Create the index with title and empty contents
-        if let Err(e) =
-            app.set_frontmatter_property(&index_str, "title", serde_yaml::Value::String(title))
+        if let Err(e) = app.set_frontmatter_property(&index_str, "title", YamlValue::String(title))
         {
             eprintln!("✗ Error creating index file: {}", e);
             return;
         }
 
-        if let Err(e) = app.set_frontmatter_property(
-            &index_str,
-            "contents",
-            serde_yaml::Value::Sequence(vec![]),
-        ) {
+        if let Err(e) =
+            app.set_frontmatter_property(&index_str, "contents", YamlValue::Sequence(vec![]))
+        {
             eprintln!("✗ Error setting contents in index: {}", e);
             return;
         }
@@ -1708,7 +1705,7 @@ fn set_new_index_as_parent(
                 if let Err(e) = app.set_frontmatter_property(
                     &index_str,
                     "part_of",
-                    serde_yaml::Value::String(relative_parent),
+                    YamlValue::String(relative_parent),
                 ) {
                     eprintln!("⚠ Error setting part_of in new index: {}", e);
                 }
@@ -1717,14 +1714,14 @@ fn set_new_index_as_parent(
                 let parent_str = parent_index.to_string_lossy();
                 let relative_index = format_workspace_link(ws, &parent_index, &index_path, None);
 
-                if let Ok(Some(serde_yaml::Value::Sequence(mut items))) =
+                if let Ok(Some(YamlValue::Sequence(mut items))) =
                     app.get_frontmatter_property(&parent_str, "contents")
                 {
-                    items.push(serde_yaml::Value::String(relative_index.clone()));
+                    items.push(YamlValue::String(relative_index.clone()));
                     if let Err(e) = app.set_frontmatter_property(
                         &parent_str,
                         "contents",
-                        serde_yaml::Value::Sequence(items),
+                        YamlValue::Sequence(items),
                     ) {
                         eprintln!("⚠ Error updating parent contents: {}", e);
                     } else {
@@ -1744,15 +1741,13 @@ fn set_new_index_as_parent(
     // Add file to index's contents
     let relative_file = format_workspace_link(ws, &index_path, file_path, None);
     match app.get_frontmatter_property(&index_str, "contents") {
-        Ok(Some(serde_yaml::Value::Sequence(mut items))) => {
-            let file_value = serde_yaml::Value::String(relative_file.clone());
+        Ok(Some(YamlValue::Sequence(mut items))) => {
+            let file_value = YamlValue::String(relative_file.clone());
             if !items.contains(&file_value) {
                 items.push(file_value);
-                if let Err(e) = app.set_frontmatter_property(
-                    &index_str,
-                    "contents",
-                    serde_yaml::Value::Sequence(items),
-                ) {
+                if let Err(e) =
+                    app.set_frontmatter_property(&index_str, "contents", YamlValue::Sequence(items))
+                {
                     eprintln!("✗ Error updating index contents: {}", e);
                     return;
                 }
@@ -1764,12 +1759,10 @@ fn set_new_index_as_parent(
             }
         }
         Ok(None) => {
-            let items = vec![serde_yaml::Value::String(relative_file.clone())];
-            if let Err(e) = app.set_frontmatter_property(
-                &index_str,
-                "contents",
-                serde_yaml::Value::Sequence(items),
-            ) {
+            let items = vec![YamlValue::String(relative_file.clone())];
+            if let Err(e) =
+                app.set_frontmatter_property(&index_str, "contents", YamlValue::Sequence(items))
+            {
                 eprintln!("✗ Error creating index contents: {}", e);
                 return;
             }
@@ -1788,11 +1781,9 @@ fn set_new_index_as_parent(
     // Set part_of in the moved file
     let file_str = file_path.to_string_lossy();
     let relative_index = format_workspace_link(ws, file_path, &index_path, None);
-    if let Err(e) = app.set_frontmatter_property(
-        &file_str,
-        "part_of",
-        serde_yaml::Value::String(relative_index),
-    ) {
+    if let Err(e) =
+        app.set_frontmatter_property(&file_str, "part_of", YamlValue::String(relative_index))
+    {
         eprintln!("✗ Error setting part_of in moved file: {}", e);
     } else {
         println!("✓ Set part_of in '{}'", file_path.display());
@@ -2211,8 +2202,8 @@ fn handle_add_recursive(
                 format_workspace_link(ws, &parent_index, &root_plan.index_path, None);
 
             let already_linked = match app.get_frontmatter_property(&parent_str, "contents") {
-                Ok(Some(serde_yaml::Value::Sequence(items))) => items.iter().any(|item| {
-                    if let serde_yaml::Value::String(s) = item {
+                Ok(Some(YamlValue::Sequence(items))) => items.iter().any(|item| {
+                    if let YamlValue::String(s) = item {
                         s == &relative_root
                     } else {
                         false
@@ -2224,12 +2215,12 @@ fn handle_add_recursive(
             if !already_linked {
                 // Add to parent's contents
                 match app.get_frontmatter_property(&parent_str, "contents") {
-                    Ok(Some(serde_yaml::Value::Sequence(mut items))) => {
-                        items.push(serde_yaml::Value::String(relative_root.clone()));
+                    Ok(Some(YamlValue::Sequence(mut items))) => {
+                        items.push(YamlValue::String(relative_root.clone()));
                         if let Err(e) = app.set_frontmatter_property(
                             &parent_str,
                             "contents",
-                            serde_yaml::Value::Sequence(items),
+                            YamlValue::Sequence(items),
                         ) {
                             eprintln!("⚠ Error updating parent contents: {}", e);
                         } else {
@@ -2241,11 +2232,11 @@ fn handle_add_recursive(
                         }
                     }
                     Ok(None) | Ok(Some(_)) => {
-                        let items = vec![serde_yaml::Value::String(relative_root.clone())];
+                        let items = vec![YamlValue::String(relative_root.clone())];
                         if let Err(e) = app.set_frontmatter_property(
                             &parent_str,
                             "contents",
-                            serde_yaml::Value::Sequence(items),
+                            YamlValue::Sequence(items),
                         ) {
                             eprintln!("⚠ Error creating parent contents: {}", e);
                         } else {
@@ -2268,7 +2259,7 @@ fn handle_add_recursive(
                 if let Err(e) = app.set_frontmatter_property(
                     &root_str,
                     "part_of",
-                    serde_yaml::Value::String(relative_parent),
+                    YamlValue::String(relative_parent),
                 ) {
                     eprintln!("⚠ Error setting part_of in root index: {}", e);
                 }
@@ -2388,11 +2379,9 @@ fn execute_dir_plan(
             .join(" ");
 
         // Create with title
-        if let Err(e) = app.set_frontmatter_property(
-            &index_str,
-            "title",
-            serde_yaml::Value::String(title.clone()),
-        ) {
+        if let Err(e) =
+            app.set_frontmatter_property(&index_str, "title", YamlValue::String(title.clone()))
+        {
             eprintln!(
                 "✗ Error creating index '{}': {}",
                 dir_plan.index_path.display(),
@@ -2410,11 +2399,11 @@ fn execute_dir_plan(
 
     // Get existing contents if index existed
     if dir_plan.index_exists
-        && let Ok(Some(serde_yaml::Value::Sequence(items))) =
+        && let Ok(Some(YamlValue::Sequence(items))) =
             app.get_frontmatter_property(&index_str, "contents")
     {
         for item in items {
-            if let serde_yaml::Value::String(s) = item {
+            if let YamlValue::String(s) = item {
                 contents.push(s);
             }
         }
@@ -2432,7 +2421,7 @@ fn execute_dir_plan(
             if let Err(e) = app.set_frontmatter_property(
                 &file_str,
                 "part_of",
-                serde_yaml::Value::String(relative_to_index),
+                YamlValue::String(relative_to_index),
             ) {
                 eprintln!("⚠ Error setting part_of in '{}': {}", file.display(), e);
             }
@@ -2454,7 +2443,7 @@ fn execute_dir_plan(
                 if let Err(e) = app.set_frontmatter_property(
                     &subdir_str,
                     "part_of",
-                    serde_yaml::Value::String(relative_to_parent),
+                    YamlValue::String(relative_to_parent),
                 ) {
                     eprintln!(
                         "⚠ Error setting part_of in '{}': {}",
@@ -2483,7 +2472,7 @@ fn execute_dir_plan(
                     if let Err(e) = app.set_frontmatter_property(
                         &subdir_str,
                         "part_of",
-                        serde_yaml::Value::String(relative_to_parent),
+                        YamlValue::String(relative_to_parent),
                     ) {
                         eprintln!(
                             "⚠ Error setting part_of in '{}': {}",
@@ -2497,16 +2486,14 @@ fn execute_dir_plan(
     }
 
     // Update contents in index
-    let contents_yaml: Vec<serde_yaml::Value> = contents
+    let contents_yaml: Vec<YamlValue> = contents
         .iter()
-        .map(|s| serde_yaml::Value::String(s.clone()))
+        .map(|s| YamlValue::String(s.clone()))
         .collect();
 
-    if let Err(e) = app.set_frontmatter_property(
-        &index_str,
-        "contents",
-        serde_yaml::Value::Sequence(contents_yaml),
-    ) {
+    if let Err(e) =
+        app.set_frontmatter_property(&index_str, "contents", YamlValue::Sequence(contents_yaml))
+    {
         eprintln!(
             "✗ Error setting contents in '{}': {}",
             dir_plan.index_path.display(),
@@ -2644,30 +2631,26 @@ fn handle_add_with_new_index(
         .map(|f| format_workspace_link(ws, &index_path, f, None))
         .collect();
 
-    let contents_yaml: Vec<serde_yaml::Value> = contents
+    let contents_yaml: Vec<YamlValue> = contents
         .iter()
-        .map(|s| serde_yaml::Value::String(s.clone()))
+        .map(|s| YamlValue::String(s.clone()))
         .collect();
 
     // Create the index file
     let index_str = index_path.to_string_lossy();
 
     // First create with title
-    if let Err(e) = app.set_frontmatter_property(
-        &index_str,
-        "title",
-        serde_yaml::Value::String(title.clone()),
-    ) {
+    if let Err(e) =
+        app.set_frontmatter_property(&index_str, "title", YamlValue::String(title.clone()))
+    {
         eprintln!("✗ Error creating index file: {}", e);
         return;
     }
 
     // Add contents
-    if let Err(e) = app.set_frontmatter_property(
-        &index_str,
-        "contents",
-        serde_yaml::Value::Sequence(contents_yaml),
-    ) {
+    if let Err(e) =
+        app.set_frontmatter_property(&index_str, "contents", YamlValue::Sequence(contents_yaml))
+    {
         eprintln!("✗ Error setting contents: {}", e);
         return;
     }
@@ -2680,7 +2663,7 @@ fn handle_add_with_new_index(
         if let Err(e) = app.set_frontmatter_property(
             &index_str,
             "part_of",
-            serde_yaml::Value::String(relative_parent.clone()),
+            YamlValue::String(relative_parent.clone()),
         ) {
             eprintln!("⚠ Error setting part_of in new index: {}", e);
         }
@@ -2690,12 +2673,12 @@ fn handle_add_with_new_index(
         let relative_index = format_workspace_link(ws, parent, &index_path, None);
 
         match app.get_frontmatter_property(&parent_str, "contents") {
-            Ok(Some(serde_yaml::Value::Sequence(mut items))) => {
-                items.push(serde_yaml::Value::String(relative_index.clone()));
+            Ok(Some(YamlValue::Sequence(mut items))) => {
+                items.push(YamlValue::String(relative_index.clone()));
                 if let Err(e) = app.set_frontmatter_property(
                     &parent_str,
                     "contents",
-                    serde_yaml::Value::Sequence(items),
+                    YamlValue::Sequence(items),
                 ) {
                     eprintln!("⚠ Error updating parent contents: {}", e);
                 } else {
@@ -2707,11 +2690,11 @@ fn handle_add_with_new_index(
                 }
             }
             Ok(None) => {
-                let items = vec![serde_yaml::Value::String(relative_index.clone())];
+                let items = vec![YamlValue::String(relative_index.clone())];
                 if let Err(e) = app.set_frontmatter_property(
                     &parent_str,
                     "contents",
-                    serde_yaml::Value::Sequence(items),
+                    YamlValue::Sequence(items),
                 ) {
                     eprintln!("⚠ Error creating parent contents: {}", e);
                 } else {
@@ -2731,11 +2714,9 @@ fn handle_add_with_new_index(
         let file_str = file_path.to_string_lossy();
         let relative_to_index = format_workspace_link(ws, file_path, &index_path, None);
 
-        if let Err(e) = app.set_frontmatter_property(
-            &file_str,
-            "part_of",
-            serde_yaml::Value::String(relative_to_index),
-        ) {
+        if let Err(e) =
+            app.set_frontmatter_property(&file_str, "part_of", YamlValue::String(relative_to_index))
+        {
             eprintln!(
                 "⚠ Error setting part_of in '{}': {}",
                 file_path.display(),
@@ -2872,9 +2853,9 @@ fn add_single_child(
 
     // Update parent's contents
     match app.get_frontmatter_property(&parent_str, "contents") {
-        Ok(Some(Value::Sequence(mut items))) => {
+        Ok(Some(YamlValue::Sequence(mut items))) => {
             // Check if already present
-            let child_value = Value::String(relative_child.to_string());
+            let child_value = YamlValue::String(relative_child.to_string());
             if items.contains(&child_value) {
                 println!(
                     "⚠ '{}' is already in contents of '{}'",
@@ -2884,9 +2865,11 @@ fn add_single_child(
                 return;
             } else {
                 items.push(child_value);
-                if let Err(e) =
-                    app.set_frontmatter_property(&parent_str, "contents", Value::Sequence(items))
-                {
+                if let Err(e) = app.set_frontmatter_property(
+                    &parent_str,
+                    "contents",
+                    YamlValue::Sequence(items),
+                ) {
                     eprintln!("✗ Error updating parent contents: {}", e);
                     return;
                 }
@@ -2903,9 +2886,9 @@ fn add_single_child(
         }
         Ok(None) => {
             // Create contents with just this child
-            let items = vec![Value::String(relative_child.to_string())];
+            let items = vec![YamlValue::String(relative_child.to_string())];
             if let Err(e) =
-                app.set_frontmatter_property(&parent_str, "contents", Value::Sequence(items))
+                app.set_frontmatter_property(&parent_str, "contents", YamlValue::Sequence(items))
             {
                 eprintln!("✗ Error creating parent contents: {}", e);
                 return;
@@ -2926,7 +2909,7 @@ fn add_single_child(
     if let Err(e) = app.set_frontmatter_property(
         &child_str,
         "part_of",
-        Value::String(relative_parent.to_string()),
+        YamlValue::String(relative_parent.to_string()),
     ) {
         eprintln!("✗ Error updating child part_of: {}", e);
         return;
@@ -3070,10 +3053,10 @@ fn handle_create(
     // Update parent's contents
     let parent_str = parent_path.to_string_lossy();
     match app.get_frontmatter_property(&parent_str, "contents") {
-        Ok(Some(Value::Sequence(mut items))) => {
-            items.push(Value::String(relative_child.clone()));
+        Ok(Some(YamlValue::Sequence(mut items))) => {
+            items.push(YamlValue::String(relative_child.clone()));
             if let Err(e) =
-                app.set_frontmatter_property(&parent_str, "contents", Value::Sequence(items))
+                app.set_frontmatter_property(&parent_str, "contents", YamlValue::Sequence(items))
             {
                 eprintln!("✗ Error updating parent contents: {}", e);
                 return;
@@ -3089,9 +3072,9 @@ fn handle_create(
         }
         Ok(None) => {
             // Create contents with just this child
-            let items = vec![Value::String(relative_child.clone())];
+            let items = vec![YamlValue::String(relative_child.clone())];
             if let Err(e) =
-                app.set_frontmatter_property(&parent_str, "contents", Value::Sequence(items))
+                app.set_frontmatter_property(&parent_str, "contents", YamlValue::Sequence(items))
             {
                 eprintln!("✗ Error creating parent contents: {}", e);
                 return;
@@ -3174,8 +3157,8 @@ fn handle_remove(
 
     // Update parent's contents
     match app.get_frontmatter_property(&parent_str, "contents") {
-        Ok(Some(Value::Sequence(mut items))) => {
-            let child_value = Value::String(relative_child.clone());
+        Ok(Some(YamlValue::Sequence(mut items))) => {
+            let child_value = YamlValue::String(relative_child.clone());
             let original_len = items.len();
             items.retain(|item| item != &child_value);
 
@@ -3186,9 +3169,11 @@ fn handle_remove(
                     parent_path.display()
                 );
             } else {
-                if let Err(e) =
-                    app.set_frontmatter_property(&parent_str, "contents", Value::Sequence(items))
-                {
+                if let Err(e) = app.set_frontmatter_property(
+                    &parent_str,
+                    "contents",
+                    YamlValue::Sequence(items),
+                ) {
                     eprintln!("✗ Error updating parent contents: {}", e);
                     return;
                 }
@@ -3243,12 +3228,15 @@ fn create_new_index(app: &CliDiaryxAppSync, dir: &Path) -> Option<PathBuf> {
     let path_str = index_path.to_string_lossy();
 
     // Create title
-    if let Err(e) = app.set_frontmatter_property(&path_str, "title", Value::String(title.clone())) {
+    if let Err(e) =
+        app.set_frontmatter_property(&path_str, "title", YamlValue::String(title.clone()))
+    {
         eprintln!("Error creating index: {}", e);
         return None;
     }
     // Create contents
-    if let Err(e) = app.set_frontmatter_property(&path_str, "contents", Value::Sequence(vec![])) {
+    if let Err(e) = app.set_frontmatter_property(&path_str, "contents", YamlValue::Sequence(vec![]))
+    {
         eprintln!("Error initializing index contents: {}", e);
         return None;
     }
@@ -3625,7 +3613,7 @@ fn convert_file_links(
             );
             if converted != part_of_str {
                 track_source_format(&mut result.source_formats, part_of_str);
-                fm.insert("part_of".to_string(), Value::String(converted));
+                fm.insert("part_of".to_string(), YamlValue::String(converted));
                 result.links_converted += 1;
                 result.was_modified = true;
             }
@@ -3648,14 +3636,14 @@ fn convert_file_links(
                         part_of_changed = true;
                         result.links_converted += 1;
                     }
-                    new_part_of.push(Value::String(converted));
+                    new_part_of.push(YamlValue::String(converted));
                 } else {
                     new_part_of.push(item.clone());
                 }
             }
 
             if part_of_changed {
-                fm.insert("part_of".to_string(), Value::Sequence(new_part_of));
+                fm.insert("part_of".to_string(), YamlValue::Sequence(new_part_of));
                 result.was_modified = true;
             }
         }
@@ -3682,14 +3670,14 @@ fn convert_file_links(
                     contents_changed = true;
                     result.links_converted += 1;
                 }
-                new_contents.push(Value::String(converted));
+                new_contents.push(YamlValue::String(converted));
             } else {
                 new_contents.push(item.clone());
             }
         }
 
         if contents_changed {
-            fm.insert("contents".to_string(), Value::Sequence(new_contents));
+            fm.insert("contents".to_string(), YamlValue::Sequence(new_contents));
             result.was_modified = true;
         }
     }
@@ -3723,14 +3711,17 @@ fn convert_file_links(
                     attachments_changed = true;
                     result.links_converted += 1;
                 }
-                new_attachments.push(Value::String(converted));
+                new_attachments.push(YamlValue::String(converted));
             } else {
                 new_attachments.push(item.clone());
             }
         }
 
         if attachments_changed {
-            fm.insert("attachments".to_string(), Value::Sequence(new_attachments));
+            fm.insert(
+                "attachments".to_string(),
+                YamlValue::Sequence(new_attachments),
+            );
             result.was_modified = true;
         }
     }

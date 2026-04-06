@@ -76,8 +76,10 @@ impl FrontmatterPermissionChecker {
             None => return Ok(HashMap::new()),
         };
 
-        serde_yaml::from_value::<HashMap<String, PluginConfig>>(plugins_value)
-            .map_err(|e| format!("Invalid root frontmatter plugins config: {e}"))
+        serde_json::from_value::<HashMap<String, PluginConfig>>(serde_json::Value::from(
+            plugins_value,
+        ))
+        .map_err(|e| format!("Invalid root frontmatter plugins config: {e}"))
     }
 
     fn normalize_target(&self, permission_type: PermissionType, target: &str) -> String {

@@ -11,9 +11,9 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
+use crate::yaml_value::YamlValue;
 use indexmap::IndexMap;
 use serde::Deserialize;
-use serde_yaml::Value;
 
 use super::{ImportedAttachment, ImportedEntry};
 
@@ -294,33 +294,34 @@ where
 
     // UUID for deduplication/provenance
     if let Some(ref uuid) = entry.uuid {
-        metadata.insert("uuid".to_string(), Value::String(uuid.clone()));
+        metadata.insert("uuid".to_string(), YamlValue::String(uuid.clone()));
     }
 
     // Tags (only if non-empty)
     if let Some(ref tags) = entry.tags {
         if !tags.is_empty() {
-            let tag_values: Vec<Value> = tags.iter().map(|t| Value::String(t.clone())).collect();
-            metadata.insert("tags".to_string(), Value::Sequence(tag_values));
+            let tag_values: Vec<YamlValue> =
+                tags.iter().map(|t| YamlValue::String(t.clone())).collect();
+            metadata.insert("tags".to_string(), YamlValue::Sequence(tag_values));
         }
     }
 
     // Starred
     if entry.starred == Some(true) {
-        metadata.insert("starred".to_string(), Value::Bool(true));
+        metadata.insert("starred".to_string(), YamlValue::Bool(true));
     }
 
     // Location
     if let Some(ref loc) = entry.location {
         if let Some(loc_str) = format_location(loc) {
-            metadata.insert("location".to_string(), Value::String(loc_str));
+            metadata.insert("location".to_string(), YamlValue::String(loc_str));
         }
     }
 
     // Weather
     if let Some(ref weather) = entry.weather {
         if let Some(weather_str) = format_weather(weather) {
-            metadata.insert("weather".to_string(), Value::String(weather_str));
+            metadata.insert("weather".to_string(), YamlValue::String(weather_str));
         }
     }
 
@@ -759,7 +760,7 @@ mod tests {
         assert!(entry.date.is_some());
         assert_eq!(
             entry.metadata.get("uuid").unwrap(),
-            &Value::String("ABC123".to_string())
+            &YamlValue::String("ABC123".to_string())
         );
     }
 
@@ -789,10 +790,13 @@ mod tests {
         let entry = result.entries.into_iter().next().unwrap().unwrap();
 
         assert_eq!(entry.title, "Tagged Entry");
-        assert_eq!(entry.metadata.get("starred").unwrap(), &Value::Bool(true));
+        assert_eq!(
+            entry.metadata.get("starred").unwrap(),
+            &YamlValue::Bool(true)
+        );
 
         let tags = entry.metadata.get("tags").unwrap();
-        if let Value::Sequence(seq) = tags {
+        if let YamlValue::Sequence(seq) = tags {
             assert_eq!(seq.len(), 2);
         } else {
             panic!("tags should be a sequence");
@@ -800,11 +804,11 @@ mod tests {
 
         assert_eq!(
             entry.metadata.get("location").unwrap(),
-            &Value::String("Austin, TX, United States".to_string())
+            &YamlValue::String("Austin, TX, United States".to_string())
         );
         assert_eq!(
             entry.metadata.get("weather").unwrap(),
-            &Value::String("Sunny, 30°C".to_string())
+            &YamlValue::String("Sunny, 30°C".to_string())
         );
     }
 

@@ -1629,7 +1629,7 @@ mod tests {
     #[test]
     fn test_full_file_conversion_workflow() {
         use crate::frontmatter;
-        use serde_yaml::Value;
+        use crate::yaml_value::YamlValue;
 
         // Simulate a file at "Projects/index.md" with various link formats
         let original_content = r#"---
@@ -1656,7 +1656,7 @@ This is the projects index.
             let converted =
                 convert_link(part_of_str, LinkFormat::PlainRelative, current_file, None);
             assert_eq!(converted, "../README.md");
-            fm.insert("part_of".to_string(), Value::String(converted));
+            fm.insert("part_of".to_string(), YamlValue::String(converted));
         }
 
         // Convert contents to PlainRelative
@@ -1668,10 +1668,10 @@ This is the projects index.
                 if let Some(item_str) = item.as_str() {
                     let converted =
                         convert_link(item_str, LinkFormat::PlainRelative, current_file, None);
-                    new_contents.push(Value::String(converted));
+                    new_contents.push(YamlValue::String(converted));
                 }
             }
-            fm.insert("contents".to_string(), Value::Sequence(new_contents));
+            fm.insert("contents".to_string(), YamlValue::Sequence(new_contents));
         }
 
         // Serialize back
@@ -1691,7 +1691,7 @@ This is the projects index.
         {
             let converted = convert_link(part_of_str, LinkFormat::MarkdownRoot, current_file, None);
             assert_eq!(converted, "[README](/README.md)");
-            fm2.insert("part_of".to_string(), Value::String(converted));
+            fm2.insert("part_of".to_string(), YamlValue::String(converted));
         }
 
         if let Some(contents_value) = fm2.get("contents")
@@ -1702,10 +1702,10 @@ This is the projects index.
                 if let Some(item_str) = item.as_str() {
                     let converted =
                         convert_link(item_str, LinkFormat::MarkdownRoot, current_file, None);
-                    new_contents.push(Value::String(converted));
+                    new_contents.push(YamlValue::String(converted));
                 }
             }
-            fm2.insert("contents".to_string(), Value::Sequence(new_contents));
+            fm2.insert("contents".to_string(), YamlValue::Sequence(new_contents));
         }
 
         let final_content = frontmatter::serialize(&fm2, &parsed2.body).unwrap();

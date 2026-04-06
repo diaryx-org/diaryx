@@ -1,6 +1,6 @@
 //! Property command handlers
 
-use serde_yaml::Value;
+use diaryx_core::YamlValue;
 
 use crate::cli::CliDiaryxAppSync;
 use crate::cli::args::PropertyCommands;
@@ -109,12 +109,12 @@ fn handle_get_command(
 
         match app.get_frontmatter_property(&path_str, key) {
             Ok(Some(value)) => match &value {
-                Value::Sequence(items) => {
+                YamlValue::Sequence(items) => {
                     for item in items {
                         println!("{}{}", prefix, format_value(item));
                     }
                 }
-                Value::String(s) => {
+                YamlValue::String(s) => {
                     println!("{}{}", prefix, s);
                 }
                 _ => {
@@ -160,7 +160,7 @@ fn handle_set_command(
     let mut skip_confirm = yes || !multiple_files;
     let mut had_error = false;
 
-    let yaml_value = match serde_yaml::from_str::<Value>(value) {
+    let yaml_value = match serde_yaml::from_str::<YamlValue>(value) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("✗ Invalid YAML value: {}", e);
@@ -401,7 +401,7 @@ fn handle_show_command(
         };
 
         match app.get_frontmatter_property(&path_str, key) {
-            Ok(Some(Value::Sequence(items))) => {
+            Ok(Some(YamlValue::Sequence(items))) => {
                 if multiple_files {
                     println!("{}:", file_path.display());
                 }
@@ -453,7 +453,7 @@ fn handle_list_append_command(
         yes,
         dry_run,
         &format!("Append '{}' to '{}'", value, key),
-        |items| match serde_yaml::from_str::<Value>(value) {
+        |items| match serde_yaml::from_str::<YamlValue>(value) {
             Ok(yaml_value) => {
                 items.push(yaml_value);
                 Ok(format!("✓ Appended to '{}'", key))
@@ -482,7 +482,7 @@ fn handle_list_prepend_command(
         yes,
         dry_run,
         &format!("Prepend '{}' to '{}'", value, key),
-        |items| match serde_yaml::from_str::<Value>(value) {
+        |items| match serde_yaml::from_str::<YamlValue>(value) {
             Ok(yaml_value) => {
                 items.insert(0, yaml_value);
                 Ok(format!("✓ Prepended to '{}'", key))
@@ -574,7 +574,7 @@ fn handle_list_set_at_command(
                 ));
             }
 
-            match serde_yaml::from_str::<Value>(value) {
+            match serde_yaml::from_str::<YamlValue>(value) {
                 Ok(yaml_value) => {
                     items[index] = yaml_value;
                     Ok(format!("✓ Set [{}] in '{}'", index, key))
@@ -604,7 +604,7 @@ fn handle_list_remove_value_command(
         yes,
         dry_run,
         &format!("Remove '{}' from '{}'", value, key),
-        |items| match serde_yaml::from_str::<Value>(value) {
+        |items| match serde_yaml::from_str::<YamlValue>(value) {
             Ok(yaml_value) => {
                 let original_len = items.len();
                 items.retain(|item| item != &yaml_value);
@@ -637,7 +637,7 @@ fn handle_list_operation<F>(
     operation: F,
 ) -> bool
 where
-    F: Fn(&mut Vec<Value>) -> Result<String, String> + Clone,
+    F: Fn(&mut Vec<YamlValue>) -> Result<String, String> + Clone,
 {
     let paths = resolve_paths(path, config, app);
     if paths.is_empty() {
@@ -684,7 +684,7 @@ where
 
         // Convert to list or create empty list
         let mut items = match current {
-            Some(Value::Sequence(items)) => items,
+            Some(YamlValue::Sequence(items)) => items,
             Some(_) => {
                 eprintln!("{}✗ Property '{}' is not a list", prefix, key);
                 had_error = true;
@@ -697,7 +697,7 @@ where
         match operation.clone()(&mut items) {
             Ok(msg) => {
                 // Save updated list
-                match app.set_frontmatter_property(&path_str, key, Value::Sequence(items)) {
+                match app.set_frontmatter_property(&path_str, key, YamlValue::Sequence(items)) {
                     Ok(_) => println!("{}{}", prefix, msg),
                     Err(e) => {
                         eprintln!("{}✗ Error saving property: {}", prefix, e);

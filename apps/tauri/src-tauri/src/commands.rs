@@ -586,15 +586,17 @@ fn persist_requested_permission_defaults(
     })?;
 
     let mut plugins_config = match parsed.frontmatter.get("plugins") {
-        Some(value) => serde_yaml::from_value::<HashMap<String, PluginConfig>>(value.clone())
-            .map_err(|e| SerializableError {
-                kind: "ValidationError".to_string(),
-                message: format!(
-                    "Invalid plugin permissions in '{}': {e}",
-                    root_index_path.display()
-                ),
-                path: Some(root_index_path.clone()),
-            })?,
+        Some(value) => serde_json::from_value::<HashMap<String, PluginConfig>>(
+            serde_json::Value::from(value.clone()),
+        )
+        .map_err(|e| SerializableError {
+            kind: "ValidationError".to_string(),
+            message: format!(
+                "Invalid plugin permissions in '{}': {e}",
+                root_index_path.display()
+            ),
+            path: Some(root_index_path.clone()),
+        })?,
         None => HashMap::new(),
     };
 
@@ -611,11 +613,14 @@ fn persist_requested_permission_defaults(
         return Ok(());
     }
 
-    let plugins_value = serde_yaml::to_value(&plugins_config).map_err(|e| SerializableError {
-        kind: "SerializationError".to_string(),
-        message: format!("Failed to serialize plugin permissions: {e}"),
-        path: Some(root_index_path.clone()),
-    })?;
+    let plugins_value = {
+        let json_val = serde_json::to_value(&plugins_config).map_err(|e| SerializableError {
+            kind: "SerializationError".to_string(),
+            message: format!("Failed to serialize plugin permissions: {e}"),
+            path: Some(root_index_path.clone()),
+        })?;
+        diaryx_core::YamlValue::from(json_val)
+    };
 
     futures_lite::future::block_on(workspace.set_frontmatter_property(
         &root_index_path,

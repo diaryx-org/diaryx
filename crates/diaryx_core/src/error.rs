@@ -75,7 +75,7 @@ pub enum DiaryxError {
 
     /// An error that occured while serializing or deserializing YAML data from the frontmatter.
     ///
-    /// Inherited from `serde_yaml::Error`
+    /// Inherited from `serde_yaml::Error` (deserialization)
     #[error("YAML parsing error: {0}")]
     Yaml(#[from] serde_yaml::Error),
 

@@ -110,9 +110,9 @@ impl FileMetadata {
     ///
     /// Tries a fast JSON round-trip first, then falls back to manual field extraction.
     /// Unknown frontmatter keys are preserved in `extra`.
-    pub fn from_frontmatter(fm: &indexmap::IndexMap<String, serde_yaml::Value>) -> Self {
+    pub fn from_frontmatter(fm: &indexmap::IndexMap<String, diaryx_core::YamlValue>) -> Self {
         /// Parse the frontmatter "updated" value into a timestamp (ms).
-        fn parse_updated_value(value: &serde_yaml::Value) -> Option<i64> {
+        fn parse_updated_value(value: &diaryx_core::YamlValue) -> Option<i64> {
             if let Some(num) = value.as_i64() {
                 return Some(num);
             }
@@ -228,7 +228,7 @@ impl FileMetadata {
             metadata.attachments = seq
                 .iter()
                 .filter_map(|value| match value {
-                    serde_yaml::Value::String(path) => Some(BinaryRef {
+                    diaryx_core::YamlValue::String(path) => Some(BinaryRef {
                         path: path.clone(),
                         source: "local".to_string(),
                         hash: String::new(),
@@ -237,22 +237,21 @@ impl FileMetadata {
                         uploaded_at: None,
                         deleted: false,
                     }),
-                    serde_yaml::Value::Mapping(map) => {
-                        let key = |name: &str| serde_yaml::Value::String(name.to_string());
-                        let path = map.get(key("path")).and_then(|v| v.as_str())?;
+                    diaryx_core::YamlValue::Mapping(map) => {
+                        let path = map.get("path").and_then(|v| v.as_str())?;
                         let source = map
-                            .get(key("source"))
+                            .get("source")
                             .and_then(|v| v.as_str())
                             .unwrap_or("local");
-                        let hash = map.get(key("hash")).and_then(|v| v.as_str()).unwrap_or("");
+                        let hash = map.get("hash").and_then(|v| v.as_str()).unwrap_or("");
                         let mime_type = map
-                            .get(key("mime_type"))
+                            .get("mime_type")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        let size = map.get(key("size")).and_then(|v| v.as_u64()).unwrap_or(0);
-                        let uploaded_at = map.get(key("uploaded_at")).and_then(|v| v.as_i64());
+                        let size = map.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let uploaded_at = map.get("uploaded_at").and_then(|v| v.as_i64());
                         let deleted = map
-                            .get(key("deleted"))
+                            .get("deleted")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
 

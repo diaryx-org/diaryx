@@ -269,7 +269,7 @@ pub fn parse_snapshot_markdown(
     });
 
     let audience = fm.get("audience").and_then(|v| match v {
-        serde_yaml::Value::String(s) => {
+        diaryx_core::YamlValue::String(s) => {
             let trimmed = s.trim();
             if trimmed.is_empty() {
                 None
@@ -277,7 +277,7 @@ pub fn parse_snapshot_markdown(
                 Some(vec![trimmed.to_string()])
             }
         }
-        serde_yaml::Value::Sequence(seq) => Some(
+        diaryx_core::YamlValue::Sequence(seq) => Some(
             seq.iter()
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect::<Vec<String>>(),
@@ -374,7 +374,7 @@ pub fn parse_snapshot_markdown(
     Ok((metadata, body))
 }
 
-fn parse_updated_value(value: &serde_yaml::Value) -> Option<i64> {
+fn parse_updated_value(value: &diaryx_core::YamlValue) -> Option<i64> {
     if let Some(num) = value.as_i64() {
         return Some(num);
     }

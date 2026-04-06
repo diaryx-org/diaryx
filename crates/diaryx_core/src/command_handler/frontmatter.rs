@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use serde_yaml::Value;
+use crate::yaml_value::YamlValue;
 
 use crate::command::Response;
 use crate::diaryx::{Diaryx, json_to_yaml, yaml_to_json};
@@ -126,7 +126,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .get_frontmatter_property(file_path, key)
             .await?;
         let mut items = match existing {
-            Some(Value::Sequence(items)) => items,
+            Some(YamlValue::Sequence(items)) => items,
             Some(_) => Vec::new(),
             None => Vec::new(),
         };
@@ -141,9 +141,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
 
         let formatted = self.format_link_for_file(target_canonical, &file_canonical);
-        items.push(Value::String(formatted));
+        items.push(YamlValue::String(formatted));
         self.entry()
-            .set_frontmatter_property(file_path, key, Value::Sequence(items))
+            .set_frontmatter_property(file_path, key, YamlValue::Sequence(items))
             .await?;
         Ok(true)
     }
@@ -159,12 +159,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .entry()
             .get_frontmatter_property(file_path, key)
             .await?;
-        let Some(Value::Sequence(items)) = existing else {
+        let Some(YamlValue::Sequence(items)) = existing else {
             return Ok(false);
         };
         let original_len = items.len();
 
-        let filtered: Vec<Value> = items
+        let filtered: Vec<YamlValue> = items
             .into_iter()
             .filter(|item| {
                 !item.as_str().is_some_and(|s| {
@@ -184,7 +184,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 .await?;
         } else {
             self.entry()
-                .set_frontmatter_property(file_path, key, Value::Sequence(filtered))
+                .set_frontmatter_property(file_path, key, YamlValue::Sequence(filtered))
                 .await?;
         }
         Ok(true)
@@ -197,7 +197,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .get_frontmatter_property(file_path, "link")
             .await?
         {
-            Some(Value::String(existing))
+            Some(YamlValue::String(existing))
                 if self.resolve_frontmatter_link_target(&existing, &canonical_path)
                     == canonical_path =>
             {
@@ -207,7 +207,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             None => {
                 let formatted = self.format_link_for_file(&canonical_path, &canonical_path);
                 self.entry()
-                    .set_frontmatter_property(file_path, "link", Value::String(formatted))
+                    .set_frontmatter_property(file_path, "link", YamlValue::String(formatted))
                     .await?;
                 Ok(true)
             }
@@ -245,7 +245,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 if let serde_json::Value::String(ref s) = value {
                     let canonical_target = self.resolve_frontmatter_link_target(s, &canonical_path);
                     let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
-                    let yaml_value = Value::String(formatted);
+                    let yaml_value = YamlValue::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
@@ -266,7 +266,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     );
                     let formatted =
                         self.format_attachment_link_for_file(&canonical_target, &canonical_path);
-                    let yaml_value = Value::String(formatted);
+                    let yaml_value = YamlValue::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
@@ -287,7 +287,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
 
                     // Write formatted link to file - CrdtFs extracts metadata automatically
-                    let yaml_value = Value::String(formatted);
+                    let yaml_value = YamlValue::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
@@ -308,7 +308,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             {
                 // Handle contents array - format each item as markdown link
                 if let serde_json::Value::Array(ref arr) = value {
-                    let mut formatted_links: Vec<Value> = Vec::new();
+                    let mut formatted_links: Vec<YamlValue> = Vec::new();
 
                     for item in arr {
                         if let serde_json::Value::String(s) = item {
@@ -319,12 +319,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             );
                             let formatted =
                                 self.format_link_for_file(&canonical_target, &canonical_path);
-                            formatted_links.push(Value::String(formatted));
+                            formatted_links.push(YamlValue::String(formatted));
                         }
                     }
 
                     // Write formatted links to file - CrdtFs extracts metadata automatically
-                    let yaml_value = Value::Sequence(formatted_links);
+                    let yaml_value = YamlValue::Sequence(formatted_links);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
@@ -341,7 +341,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             } else if key == "attachments" {
                 // Attachments now point to attachment notes, not binary assets.
                 if let serde_json::Value::Array(ref arr) = value {
-                    let mut formatted_links: Vec<Value> = Vec::new();
+                    let mut formatted_links: Vec<YamlValue> = Vec::new();
 
                     for item in arr {
                         if let serde_json::Value::String(s) = item {
@@ -349,11 +349,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                 self.resolve_frontmatter_link_target(s, &canonical_path);
                             let formatted =
                                 self.format_link_for_file(&canonical_target, &canonical_path);
-                            formatted_links.push(Value::String(formatted));
+                            formatted_links.push(YamlValue::String(formatted));
                         }
                     }
 
-                    let yaml_value = Value::Sequence(formatted_links);
+                    let yaml_value = YamlValue::Sequence(formatted_links);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
@@ -372,7 +372,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         Some(self.link_format()),
                     );
                     let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
-                    let yaml_value = Value::String(formatted);
+                    let yaml_value = YamlValue::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;

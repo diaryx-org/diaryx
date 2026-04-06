@@ -26,7 +26,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_yaml::Value;
+
+use crate::yaml_value::YamlValue;
 
 use crate::config::Config;
 use crate::error::{DiaryxError, Result};
@@ -297,7 +298,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     ) -> Option<PathBuf> {
         use crate::path_utils::normalize_path;
 
-        if let Ok(Some(Value::String(part_of))) =
+        if let Ok(Some(YamlValue::String(part_of))) =
             self.get_frontmatter_property(file_path, "part_of").await
         {
             let dir = resolve_dir.unwrap_or_else(|| Path::new(""));
@@ -988,7 +989,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 self.set_frontmatter_property(
                     &absolute_child_path,
                     "part_of",
-                    Value::String(part_of_link),
+                    YamlValue::String(part_of_link),
                 )
                 .await?;
 
@@ -1086,27 +1087,25 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     async fn resolve_config_source(
         &self,
         root_index_path: &Path,
-    ) -> Result<(std::collections::HashMap<String, Value>, Option<PathBuf>)> {
+    ) -> Result<(
+        std::collections::HashMap<String, YamlValue>,
+        Option<PathBuf>,
+    )> {
         let index = self.parse_index(root_index_path).await?;
         let extra = &index.frontmatter.extra;
 
         match extra.get("workspace_config") {
             // File link: workspace_config points to an external file
-            Some(Value::String(link_str)) => {
+            Some(YamlValue::String(link_str)) => {
                 let config_path = index.resolve_path(link_str);
                 let config_index = self.parse_index(&config_path).await?;
                 Ok((config_index.frontmatter.extra, Some(config_path)))
             }
             // Inline nested section: workspace_config is a YAML mapping
-            Some(Value::Mapping(map)) => {
-                // Convert serde_yaml::Mapping to HashMap for uniform access
-                let mut config: std::collections::HashMap<String, Value> =
-                    std::collections::HashMap::new();
-                for (k, v) in map {
-                    if let Some(key) = k.as_str() {
-                        config.insert(key.to_string(), v.clone());
-                    }
-                }
+            Some(YamlValue::Mapping(map)) => {
+                // YamlMapping already uses String keys, convert to HashMap
+                let config: std::collections::HashMap<String, YamlValue> =
+                    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 Ok((config, None))
             }
             // No workspace_config key, or unexpected type → legacy flat format
@@ -1130,8 +1129,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // config_get with nested=None since config_extra IS the resolved source.
         // We look in config_extra first, then fall back to root_extra.
-        let get =
-            |key: &str| -> Option<&Value> { config_extra.get(key).or_else(|| root_extra.get(key)) };
+        let get = |key: &str| -> Option<&YamlValue> {
+            config_extra.get(key).or_else(|| root_extra.get(key))
+        };
 
         let link_format = get("link_format")
             .and_then(|v| v.as_str())
@@ -1198,7 +1198,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             .and_then(|v| v.as_mapping())
             .map(|m| {
                 m.iter()
-                    .filter_map(|(k, v)| Some((k.as_str()?.to_string(), v.as_str()?.to_string())))
+                    .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
                     .collect()
             });
 
@@ -1230,21 +1230,19 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     }
 
     /// Convert a string value to a YAML Value, handling booleans and JSON.
-    fn parse_config_value(value: &str) -> Value {
+    fn parse_config_value(value: &str) -> YamlValue {
         match value {
-            "true" => Value::Bool(true),
-            "false" => Value::Bool(false),
+            "true" => YamlValue::Bool(true),
+            "false" => YamlValue::Bool(false),
             _ => {
                 // Try parsing as JSON for scalars and complex types.
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(value) {
                     match &json {
-                        serde_json::Value::String(_) => Value::String(value.to_string()),
-                        _ => {
-                            serde_yaml::to_value(&json).unwrap_or(Value::String(value.to_string()))
-                        }
+                        serde_json::Value::String(_) => YamlValue::String(value.to_string()),
+                        _ => YamlValue::from(json),
                     }
                 } else {
-                    Value::String(value.to_string())
+                    YamlValue::String(value.to_string())
                 }
             }
         }
@@ -1270,7 +1268,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // Check if workspace_config is a file link
         let index = self.parse_index(root_index_path).await?;
-        if let Some(Value::String(link_str)) = index.frontmatter.extra.get("workspace_config") {
+        if let Some(YamlValue::String(link_str)) = index.frontmatter.extra.get("workspace_config") {
             // Resolve the link to a file path and write the field there
             let config_path = index.resolve_path(link_str);
             return self
@@ -1288,25 +1286,25 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     source: e,
                 })?;
 
-        let (mut frontmatter, body) = if content.starts_with("---\n")
-            || content.starts_with("---\r\n")
-        {
-            let rest = &content[4..];
-            if let Some(idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
-                let frontmatter_str = &rest[..idx];
-                let body = &rest[idx + 5..];
-                let fm: indexmap::IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
-                (fm, body.to_string())
+        let (mut frontmatter, body) =
+            if content.starts_with("---\n") || content.starts_with("---\r\n") {
+                let rest = &content[4..];
+                if let Some(idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
+                    let frontmatter_str = &rest[..idx];
+                    let body = &rest[idx + 5..];
+                    let fm: indexmap::IndexMap<String, YamlValue> =
+                        serde_yaml::from_str(frontmatter_str)?;
+                    (fm, body.to_string())
+                } else {
+                    (indexmap::IndexMap::new(), content)
+                }
             } else {
                 (indexmap::IndexMap::new(), content)
-            }
-        } else {
-            (indexmap::IndexMap::new(), content)
-        };
+            };
 
         // Opportunistic migration: collect top-level config fields and their
         // values so we can move them into the nested workspace_config section.
-        let migrated: Vec<(String, Value)> = frontmatter
+        let migrated: Vec<(String, YamlValue)> = frontmatter
             .iter()
             .filter(|(k, _)| {
                 *k != "workspace_config" && Self::WORKSPACE_CONFIG_FIELDS.contains(&k.as_str())
@@ -1322,26 +1320,25 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         // Get or create the workspace_config sub-map
         let config_section = frontmatter
             .entry("workspace_config".to_string())
-            .or_insert_with(|| Value::Mapping(serde_yaml::Mapping::new()));
+            .or_insert_with(|| YamlValue::Mapping(indexmap::IndexMap::new()));
 
         let config_map = match config_section {
-            Value::Mapping(m) => m,
+            YamlValue::Mapping(m) => m,
             _ => {
-                *config_section = Value::Mapping(serde_yaml::Mapping::new());
+                *config_section = YamlValue::Mapping(indexmap::IndexMap::new());
                 config_section.as_mapping_mut().unwrap()
             }
         };
 
         // Insert migrated values (only if not already present in nested section)
         for (key, val) in migrated {
-            let yaml_key = Value::String(key);
-            if !config_map.contains_key(&yaml_key) {
-                config_map.insert(yaml_key, val);
+            if !config_map.contains_key(&key) {
+                config_map.insert(key, val);
             }
         }
 
         // Set the new field value
-        config_map.insert(Value::String(field.to_string()), yaml_value);
+        config_map.insert(field.to_string(), yaml_value);
 
         let yaml_str = serde_yaml::to_string(&frontmatter)?;
         let new_content = format!("---\n{}---\n{}", yaml_str, body);
@@ -2086,17 +2083,19 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
                 // Frontmatter properties
                 _ => match self.get_frontmatter_property(path, name).await {
-                    Ok(Some(Value::String(s))) => Some(s),
-                    Ok(Some(Value::Number(n))) => Some(n.to_string()),
-                    Ok(Some(Value::Bool(b))) => Some(b.to_string()),
-                    Ok(Some(Value::Sequence(seq))) => {
+                    Ok(Some(YamlValue::String(s))) => Some(s),
+                    Ok(Some(YamlValue::Int(n))) => Some(n.to_string()),
+                    Ok(Some(YamlValue::Float(f))) => Some(f.to_string()),
+                    Ok(Some(YamlValue::Bool(b))) => Some(b.to_string()),
+                    Ok(Some(YamlValue::Sequence(seq))) => {
                         // Join sequence values with ", "
                         let strings: Vec<String> = seq
                             .iter()
                             .filter_map(|v| match v {
-                                Value::String(s) => Some(s.clone()),
-                                Value::Number(n) => Some(n.to_string()),
-                                Value::Bool(b) => Some(b.to_string()),
+                                YamlValue::String(s) => Some(s.clone()),
+                                YamlValue::Int(n) => Some(n.to_string()),
+                                YamlValue::Float(f) => Some(f.to_string()),
+                                YamlValue::Bool(b) => Some(b.to_string()),
                                 _ => None,
                             })
                             .collect();
@@ -2122,7 +2121,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     // These are internal helpers for manipulating frontmatter in workspace operations
 
     /// Get a frontmatter property from a file
-    async fn get_frontmatter_property(&self, path: &Path, key: &str) -> Result<Option<Value>> {
+    async fn get_frontmatter_property(&self, path: &Path, key: &str) -> Result<Option<YamlValue>> {
         let content = match self.fs.read_to_string(path).await {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -2143,7 +2142,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         if let Some(idx) = end_idx {
             let frontmatter_str = &rest[..idx];
-            let frontmatter: indexmap::IndexMap<String, Value> =
+            let frontmatter: indexmap::IndexMap<String, YamlValue> =
                 serde_yaml::from_str(frontmatter_str)?;
             Ok(frontmatter.get(key).cloned())
         } else {
@@ -2156,7 +2155,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         &self,
         path: &Path,
         key: &str,
-        value: Value,
+        value: YamlValue,
     ) -> Result<()> {
         let content = match self.fs.read_to_string(path).await {
             Ok(c) => c,
@@ -2181,21 +2180,21 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             }
         };
 
-        let (mut frontmatter, body) = if content.starts_with("---\n")
-            || content.starts_with("---\r\n")
-        {
-            let rest = &content[4..];
-            if let Some(idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
-                let frontmatter_str = &rest[..idx];
-                let body = &rest[idx + 5..];
-                let fm: indexmap::IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
-                (fm, body.to_string())
+        let (mut frontmatter, body) =
+            if content.starts_with("---\n") || content.starts_with("---\r\n") {
+                let rest = &content[4..];
+                if let Some(idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
+                    let frontmatter_str = &rest[..idx];
+                    let body = &rest[idx + 5..];
+                    let fm: indexmap::IndexMap<String, YamlValue> =
+                        serde_yaml::from_str(frontmatter_str)?;
+                    (fm, body.to_string())
+                } else {
+                    (indexmap::IndexMap::new(), content)
+                }
             } else {
                 (indexmap::IndexMap::new(), content)
-            }
-        } else {
-            (indexmap::IndexMap::new(), content)
-        };
+            };
 
         frontmatter.insert(key.to_string(), value);
         let yaml_str = serde_yaml::to_string(&frontmatter)?;
@@ -2230,7 +2229,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let frontmatter_str = &rest[..end_idx];
         let body = &rest[end_idx + 5..];
 
-        let mut frontmatter: indexmap::IndexMap<String, Value> =
+        let mut frontmatter: indexmap::IndexMap<String, YamlValue> =
             serde_yaml::from_str(frontmatter_str)?;
         frontmatter.shift_remove(key);
 
@@ -2263,7 +2262,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let entry_canonical = link_parser::to_canonical(&parsed_entry, Path::new(&index_canonical));
 
         match self.get_frontmatter_property(index_path, "contents").await {
-            Ok(Some(Value::Sequence(mut items))) => {
+            Ok(Some(YamlValue::Sequence(mut items))) => {
                 // Check if entry already exists (comparing canonical paths)
                 let already_exists = items.iter().any(|item| {
                     if let Some(s) = item.as_str() {
@@ -2277,23 +2276,27 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 });
 
                 if !already_exists {
-                    items.push(Value::String(normalized_entry.to_string()));
+                    items.push(YamlValue::String(normalized_entry.to_string()));
                     // Sort contents for consistent ordering
                     items.sort_by(|a, b| {
                         let a_str = a.as_str().unwrap_or("");
                         let b_str = b.as_str().unwrap_or("");
                         a_str.cmp(b_str)
                     });
-                    self.set_frontmatter_property(index_path, "contents", Value::Sequence(items))
-                        .await?;
+                    self.set_frontmatter_property(
+                        index_path,
+                        "contents",
+                        YamlValue::Sequence(items),
+                    )
+                    .await?;
                     return Ok(true);
                 }
                 Ok(false)
             }
             Ok(None) => {
                 // Create contents with just this entry (normalized)
-                let items = vec![Value::String(normalized_entry.to_string())];
-                self.set_frontmatter_property(index_path, "contents", Value::Sequence(items))
+                let items = vec![YamlValue::String(normalized_entry.to_string())];
+                self.set_frontmatter_property(index_path, "contents", YamlValue::Sequence(items))
                     .await?;
                 Ok(true)
             }
@@ -2326,7 +2329,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let entry_for_comparison = entry_canonical;
 
         match self.get_frontmatter_property(index_path, "contents").await {
-            Ok(Some(Value::Sequence(mut items))) => {
+            Ok(Some(YamlValue::Sequence(mut items))) => {
                 // Check if entry already exists (comparing canonical paths)
                 let already_exists = items.iter().any(|item| {
                     if let Some(s) = item.as_str() {
@@ -2341,23 +2344,27 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 });
 
                 if !already_exists {
-                    items.push(Value::String(formatted_entry));
+                    items.push(YamlValue::String(formatted_entry));
                     // Sort contents for consistent ordering
                     items.sort_by(|a, b| {
                         let a_str = a.as_str().unwrap_or("");
                         let b_str = b.as_str().unwrap_or("");
                         a_str.cmp(b_str)
                     });
-                    self.set_frontmatter_property(index_path, "contents", Value::Sequence(items))
-                        .await?;
+                    self.set_frontmatter_property(
+                        index_path,
+                        "contents",
+                        YamlValue::Sequence(items),
+                    )
+                    .await?;
                     return Ok(true);
                 }
                 Ok(false)
             }
             Ok(None) => {
                 // Create contents with just this entry
-                let items = vec![Value::String(formatted_entry)];
-                self.set_frontmatter_property(index_path, "contents", Value::Sequence(items))
+                let items = vec![YamlValue::String(formatted_entry)];
+                self.set_frontmatter_property(index_path, "contents", YamlValue::Sequence(items))
                     .await?;
                 Ok(true)
             }
@@ -2411,7 +2418,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         entry_canonical: &str,
     ) -> Result<bool> {
         match self.get_frontmatter_property(index_path, "contents").await {
-            Ok(Some(Value::Sequence(mut items))) => {
+            Ok(Some(YamlValue::Sequence(mut items))) => {
                 let before_len = items.len();
                 // Remove entries that match when comparing canonical paths
                 items.retain(|item| {
@@ -2433,8 +2440,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                         let b_str = b.as_str().unwrap_or("");
                         a_str.cmp(b_str)
                     });
-                    self.set_frontmatter_property(index_path, "contents", Value::Sequence(items))
-                        .await?;
+                    self.set_frontmatter_property(
+                        index_path,
+                        "contents",
+                        YamlValue::Sequence(items),
+                    )
+                    .await?;
                     return Ok(true);
                 }
                 Ok(false)
@@ -2519,7 +2530,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         } else {
             relative_path_from_file_to_target(entry_path, parent_index_path)
         };
-        self.set_frontmatter_property(entry_path, "part_of", Value::String(part_of))
+        self.set_frontmatter_property(entry_path, "part_of", YamlValue::String(part_of))
             .await?;
 
         Ok(())
@@ -2620,7 +2631,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             } else {
                 relative_path_from_file_to_target(new_path, new_index_path)
             };
-            self.set_frontmatter_property(new_path, "part_of", Value::String(part_of_value))
+            self.set_frontmatter_property(new_path, "part_of", YamlValue::String(part_of_value))
                 .await?;
         } else {
             // No reachable parent index in the destination path. Remove stale
@@ -2689,7 +2700,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         } else {
             relative_path_from_file_to_target(path, &parent_index)
         };
-        self.set_frontmatter_property(path, "part_of", Value::String(part_of))
+        self.set_frontmatter_property(path, "part_of", YamlValue::String(part_of))
             .await?;
 
         Ok(())
@@ -2756,7 +2767,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         // Remove from parent's contents by following the part_of link.
         // This correctly handles both leaf files (parent index in same dir)
         // and index files (parent index in grandparent dir).
-        if let Ok(Some(Value::String(part_of))) =
+        if let Ok(Some(YamlValue::String(part_of))) =
             self.get_frontmatter_property(path, "part_of").await
         {
             use crate::path_utils::normalize_path;
@@ -3043,7 +3054,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     relative_path_from_file_to_target(child_path, &new_path)
                 };
                 if let Err(e) = self
-                    .set_frontmatter_property(child_path, "part_of", Value::String(part_of_value))
+                    .set_frontmatter_property(
+                        child_path,
+                        "part_of",
+                        YamlValue::String(part_of_value),
+                    )
                     .await
                 {
                     log::warn!(
@@ -3144,7 +3159,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     .set_frontmatter_property(
                         &rewritten_child_path,
                         "part_of",
-                        Value::String(part_of_value),
+                        YamlValue::String(part_of_value),
                     )
                     .await
                 {
@@ -3354,7 +3369,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                             .set_frontmatter_property(
                                 &new_path,
                                 "part_of",
-                                Value::String(new_part_of),
+                                YamlValue::String(new_part_of),
                             )
                             .await;
                     }
@@ -3369,7 +3384,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     .set_frontmatter_property(
                         &new_index_path,
                         "part_of",
-                        Value::String(new_part_of),
+                        YamlValue::String(new_part_of),
                     )
                     .await;
 
@@ -3426,7 +3441,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 // Update part_of to point to parent
                 let new_part_of = relative_path_from_file_to_target(&new_path, &parent_index);
                 let _ = self
-                    .set_frontmatter_property(&new_path, "part_of", Value::String(new_part_of))
+                    .set_frontmatter_property(&new_path, "part_of", YamlValue::String(new_part_of))
                     .await;
 
                 // Add to parent's contents
@@ -3513,11 +3528,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         self.fs.move_file(path, &new_path).await?;
 
         // Add contents property
-        self.set_frontmatter_property(&new_path, "contents", Value::Sequence(vec![]))
+        self.set_frontmatter_property(&new_path, "contents", YamlValue::Sequence(vec![]))
             .await?;
 
         // Update part_of path since file moved one level deeper
-        if let Ok(Some(Value::String(old_part_of))) =
+        if let Ok(Some(YamlValue::String(old_part_of))) =
             self.get_frontmatter_property(&new_path, "part_of").await
         {
             use crate::path_utils::{normalize_path, relative_path_from_file_to_target};
@@ -3555,7 +3570,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             };
 
             let _ = self
-                .set_frontmatter_property(&new_path, "part_of", Value::String(new_part_of))
+                .set_frontmatter_property(&new_path, "part_of", YamlValue::String(new_part_of))
                 .await;
         }
 
@@ -3642,7 +3657,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             .await;
 
         // Update part_of path since file moved one level up
-        if let Ok(Some(Value::String(old_part_of))) =
+        if let Ok(Some(YamlValue::String(old_part_of))) =
             self.get_frontmatter_property(&new_path, "part_of").await
         {
             use crate::path_utils::{normalize_path, relative_path_from_file_to_target};
@@ -3680,7 +3695,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             };
 
             let _ = self
-                .set_frontmatter_property(&new_path, "part_of", Value::String(new_part_of))
+                .set_frontmatter_property(&new_path, "part_of", YamlValue::String(new_part_of))
                 .await;
         }
 
@@ -4089,7 +4104,7 @@ mod tests {
         let contents =
             block_on_test(ws.get_frontmatter_property(Path::new("README.md"), "contents")).unwrap();
         let entries = match contents {
-            Some(Value::Sequence(items)) => items
+            Some(YamlValue::Sequence(items)) => items
                 .into_iter()
                 .filter_map(|item| item.as_str().map(ToString::to_string))
                 .collect::<Vec<_>>(),
@@ -4138,7 +4153,7 @@ mod tests {
         )
         .unwrap();
         let entries = match contents {
-            Some(Value::Sequence(items)) => items
+            Some(YamlValue::Sequence(items)) => items
                 .into_iter()
                 .filter_map(|item| item.as_str().map(ToString::to_string))
                 .collect::<Vec<_>>(),
@@ -4310,7 +4325,7 @@ mod tests {
         let contents =
             block_on_test(ws.get_frontmatter_property(Path::new("README.md"), "contents")).unwrap();
         let contents = match contents {
-            Some(Value::Sequence(items)) => items
+            Some(YamlValue::Sequence(items)) => items
                 .into_iter()
                 .filter_map(|item| item.as_str().map(ToString::to_string))
                 .collect::<Vec<_>>(),
@@ -4359,7 +4374,7 @@ mod tests {
         let contents =
             block_on_test(ws.get_frontmatter_property(Path::new("README.md"), "contents")).unwrap();
         let contents = match contents {
-            Some(Value::Sequence(items)) => items
+            Some(YamlValue::Sequence(items)) => items
                 .into_iter()
                 .filter_map(|item| item.as_str().map(ToString::to_string))
                 .collect::<Vec<_>>(),
@@ -4418,7 +4433,7 @@ mod tests {
             block_on_test(ws.get_frontmatter_property(Path::new("section/index.md"), "contents"))
                 .unwrap();
         let contents = match contents {
-            Some(Value::Sequence(items)) => items
+            Some(YamlValue::Sequence(items)) => items
                 .into_iter()
                 .filter_map(|item| item.as_str().map(ToString::to_string))
                 .collect::<Vec<_>>(),
@@ -4465,7 +4480,7 @@ mod tests {
         let contents =
             block_on_test(ws.get_frontmatter_property(Path::new("README.md"), "contents")).unwrap();
         let contents = match contents {
-            Some(Value::Sequence(items)) => items
+            Some(YamlValue::Sequence(items)) => items
                 .into_iter()
                 .filter_map(|item| item.as_str().map(ToString::to_string))
                 .collect::<Vec<_>>(),
@@ -4490,7 +4505,7 @@ mod tests {
     ) -> Vec<String> {
         let val = block_on_test(ws.get_frontmatter_property(Path::new(index), "contents")).unwrap();
         match val {
-            Some(Value::Sequence(items)) => items
+            Some(YamlValue::Sequence(items)) => items
                 .into_iter()
                 .filter_map(|v| v.as_str().map(ToString::to_string))
                 .collect(),

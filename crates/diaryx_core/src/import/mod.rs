@@ -34,7 +34,7 @@ pub struct ImportedEntry {
     /// Markdown body content.
     pub body: String,
     /// Extra frontmatter fields (from, to, cc, etc.).
-    pub metadata: IndexMap<String, serde_yaml::Value>,
+    pub metadata: IndexMap<String, crate::yaml_value::YamlValue>,
     /// Binary attachments extracted from the source.
     pub attachments: Vec<ImportedAttachment>,
 }

@@ -14,6 +14,11 @@ fi
 
 echo "Syncing version: $VERSION"
 
+update_flake_package_version() {
+    local pname="$1"
+    perl -0pi.bak -e 's/(pname = "'"$pname"'";\n\s+version = ")[^"]+(")/${1}'"$VERSION"'${2}/' "$REPO_ROOT/flake.nix"
+}
+
 # Update root Cargo.toml workspace version
 sed -i.bak -E 's/^(version = ")[^"]+(")/\1'"$VERSION"'\2/' "$REPO_ROOT/Cargo.toml"
 rm -f "$REPO_ROOT/Cargo.toml.bak"
@@ -34,8 +39,11 @@ rm -f "$REPO_ROOT/apps/tauri/src-tauri/tauri.conf.json.bak"
 sed -i.bak -E 's/("version": ")[^"]+(")/\1'"$VERSION"'\2/' "$REPO_ROOT/apps/web/package.json"
 rm -f "$REPO_ROOT/apps/web/package.json.bak"
 
-# Update flake.nix
-sed -i.bak -E 's/(version = ")[^"]+(")/\1'"$VERSION"'\2/' "$REPO_ROOT/flake.nix"
+# Update flake.nix package versions without touching dependency/tool versions.
+update_flake_package_version "diaryx"
+update_flake_package_version "diaryx-sync-server"
+update_flake_package_version "ts-bindings"
+update_flake_package_version "wasm-package"
 rm -f "$REPO_ROOT/flake.nix.bak"
 
 echo "Version synced to $VERSION in all files"

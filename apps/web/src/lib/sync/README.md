@@ -27,10 +27,16 @@ artifact at all. The current Apple/Tauri iCloud path uses a native host probe +
 restore command so onboarding can attach to an existing iCloud workspace
 without first migrating the current local workspace into that container.
 Authenticated iCloud onboarding also creates workspace namespace metadata with
-`provider: "builtin.icloud"` so other clients can discover that the workspace
-exists even when they cannot open the Apple-local storage backing.
+`type: "workspace"` and `provider: "builtin.icloud"` so other clients can
+discover that the workspace exists even when they cannot open the Apple-local
+storage backing.
 The onboarding restore UI therefore keeps those namespaces visible and marks
 them unavailable on unsupported clients instead of filtering them out.
+
+For the built-in sync provider ID `diaryx.sync`, host-side remote workspace
+listing is derived from filtered account namespace metadata instead of blindly
+trusting the provider's raw namespace list. That prevents unrelated namespaces
+such as publish-only sites from appearing in workspace restore/picker UIs.
 
 Provider command dispatch adds `provider_id` for both plugin-backed and
 built-in providers. Provider guests resolve `server_url`, `auth_token`, and
@@ -76,6 +82,14 @@ tombstoned, late body packets are ignored instead of recreating it on disk.
 Those mutation-triggered provider commands are routed through the normal
 backend/plugin-command path so the guest sees the current workspace runtime
 context and linked remote workspace ID.
+
+Tauri workspace selection can also attach an existing local folder to a remote
+workspace already listed by a provider. That flow is intentionally explicit
+about conflict policy: `Already in sync` stores only provider-link metadata in
+the local registry, while `Upload local` links the workspace and then pushes a
+replace-mode snapshot if the provider did not already upload one during
+`LinkWorkspace`. Remote-wins restore still goes through the normal download
+bootstrap flow.
 
 ## Files
 

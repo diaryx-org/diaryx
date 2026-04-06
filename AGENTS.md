@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-31T05:20:38Z
+updated: 2026-04-06T15:34:02Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -82,6 +82,7 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   └── crates/diaryx_extism/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 ├── Scripts - scripts/scripts.md
+├── TESTING - TESTING.md
 └── Terms of Service - Terms of Service for Diaryx - terms.md
 ```
 

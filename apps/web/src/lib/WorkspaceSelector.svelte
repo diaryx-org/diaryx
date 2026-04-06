@@ -10,6 +10,7 @@
     Loader2,
     HardDrive,
     Cloud,
+    Link2,
     Ellipsis,
     Pencil,
     Trash2,
@@ -20,6 +21,7 @@
     getWorkspaceStorageType,
     getCurrentWorkspaceId,
     getWorkspaceProviderLinks,
+    getWorkspaceProviderLink,
     renameLocalWorkspace,
     removeLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
@@ -36,11 +38,14 @@
   import {
     getProviderStatus,
     listUnlinkedRemoteWorkspaces,
+    attachExistingLocalWorkspaceToRemote,
     downloadWorkspace,
     type RemoteWorkspace,
   } from "$lib/sync/workspaceProviderService";
   import { deleteLocalWorkspaceData } from "$lib/settings/clearData";
   import { BackendError } from "$lib/backend/interface";
+  import { getBackend, isTauri } from "$lib/backend";
+  import { pickAuthorizedWorkspaceFolder } from "$lib/backend/workspaceAccess";
   import {
     getProviderDisplayLabel,
     getProviderUnavailableReason,
@@ -73,6 +78,17 @@
   // RemoteWorkspacePicker state
   let pickerProvider = $state<{ pluginId: string; label: string; workspaces: RemoteWorkspace[] } | null>(null);
   let downloading = $state<string | null>(null);
+  let linking = $state<string | null>(null);
+  let supportsFolderLinking = $state(false);
+  let linkTarget = $state<{
+    pluginId: string;
+    providerLabel: string;
+    remoteId: string;
+    remoteName: string;
+    localPath: string;
+    existingLocalId: string | null;
+    existingLocalName: string | null;
+  } | null>(null);
 
   // Local workspace list with sync indicator
   type LocalWorkspaceEntry = { id: string; name: string; synced: boolean };
@@ -114,6 +130,22 @@
   // Current workspace ID (reactive via auth state + local registry state)
   let authState = $derived(getAuthState());
   let currentWsId = $derived(authState.activeWorkspaceId ?? getCurrentWorkspaceId());
+
+  $effect(() => {
+    if (!isTauri()) {
+      supportsFolderLinking = false;
+      return;
+    }
+
+    void (async () => {
+      try {
+        const backend = await getBackend();
+        supportsFolderLinking = backend.getAppPaths?.()?.is_mobile !== true;
+      } catch {
+        supportsFolderLinking = true;
+      }
+    })();
+  });
 
   // Display name
   let displayName = $derived.by(() => {
@@ -184,6 +216,7 @@
       renamingId = null;
       confirmDeleteId = null;
       unavailableRemoteNamespaces = [];
+      linkTarget = null;
     }
   });
 
@@ -265,6 +298,98 @@
       toast.error("Failed to download workspace");
     } finally {
       downloading = null;
+    }
+  }
+
+  function providerSupportsFolderLinking(pluginId: string): boolean {
+    if (!supportsFolderLinking) return false;
+    const provider = workspaceProviders.find((entry) => entry.contribution.id === pluginId);
+    return !!provider && provider.source !== "builtin";
+  }
+
+  async function handleStartLinkRemote(remoteId: string, name: string) {
+    if (!pickerProvider || !providerSupportsFolderLinking(pickerProvider.pluginId)) return;
+    const { pluginId, label } = pickerProvider;
+
+    try {
+      const folder = await pickAuthorizedWorkspaceFolder(`Link "${name}" to local folder`);
+      if (!folder) return;
+
+      const existingWorkspace = allLocalWorkspaces.find((workspace) => workspace.path === folder) ?? null;
+      if (existingWorkspace) {
+        const conflictingLink = getWorkspaceProviderLinks(existingWorkspace.id).find((link) =>
+          link.pluginId !== pluginId || link.remoteWorkspaceId !== remoteId
+        );
+        if (conflictingLink) {
+          const providerLabel = getProviderDisplayLabel(conflictingLink.pluginId) ?? conflictingLink.pluginId;
+          toast.error(
+            `"${existingWorkspace.name}" is already linked via ${providerLabel}. Use workspace settings to move it first.`,
+          );
+          return;
+        }
+
+        const exactLink = getWorkspaceProviderLink(existingWorkspace.id, pluginId);
+        if (exactLink?.remoteWorkspaceId === remoteId) {
+          pickerProvider = null;
+          open = false;
+          await doSwitch(existingWorkspace.id, existingWorkspace.name);
+          toast.message(`"${existingWorkspace.name}" is already linked to "${name}".`);
+          return;
+        }
+      }
+
+      linkTarget = {
+        pluginId,
+        providerLabel: label,
+        remoteId,
+        remoteName: name,
+        localPath: folder,
+        existingLocalId: existingWorkspace?.id ?? null,
+        existingLocalName: existingWorkspace?.name ?? null,
+      };
+    } catch (e) {
+      console.error("[WorkspaceSelector] Link-folder pick failed:", e);
+      toast.error("Failed to open the folder picker");
+    }
+  }
+
+  async function handleConfirmLink(policy: "link_only" | "upload_local") {
+    if (!linkTarget) return;
+
+    linking = `${linkTarget.remoteId}:${policy}`;
+    try {
+      const result = await attachExistingLocalWorkspaceToRemote(
+        linkTarget.pluginId,
+        {
+          remoteId: linkTarget.remoteId,
+          remoteName: linkTarget.remoteName,
+          localPath: linkTarget.localPath,
+          ...(linkTarget.existingLocalId ? { localId: linkTarget.existingLocalId } : {}),
+          policy,
+        },
+      );
+
+      const shouldSwitch = currentWsId !== result.localId;
+      pickerProvider = null;
+      linkTarget = null;
+      open = false;
+
+      if (shouldSwitch) {
+        await doSwitch(result.localId, result.localName);
+      }
+
+      toast.success(
+        policy === "upload_local"
+          ? `Linked "${result.localName}" and uploaded local content.`
+          : `Linked "${result.localName}" without uploading files.`,
+      );
+    } catch (e) {
+      console.error("[WorkspaceSelector] Link remote failed:", e);
+      toast.error(
+        e instanceof Error ? e.message : "Failed to link workspace",
+      );
+    } finally {
+      linking = null;
     }
   }
 
@@ -368,7 +493,65 @@
       </button>
     </Popover.Trigger>
     <Popover.Content class="w-64 p-0" align="start" side="bottom">
-      {#if pickerProvider}
+      {#if linkTarget}
+        <div class="p-2">
+          <p class="px-2 py-1 text-xs font-medium text-muted-foreground">
+            Link Existing Folder
+          </p>
+        </div>
+        <div class="px-4 pb-3 space-y-3">
+          <div class="rounded-md border p-3 space-y-1">
+            <div class="text-sm font-medium truncate">{linkTarget.remoteName}</div>
+            <div class="text-[10px] text-muted-foreground">via {linkTarget.providerLabel}</div>
+            <div class="pt-2 text-[10px] text-muted-foreground break-all font-mono">
+              {linkTarget.localPath}
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <button
+              type="button"
+              class="w-full rounded-md border px-3 py-2 text-left hover:bg-accent transition-colors disabled:opacity-60"
+              onclick={() => handleConfirmLink("link_only")}
+              disabled={!!linking}
+            >
+              <span class="block text-sm font-medium">Already in sync</span>
+              <span class="block text-[10px] text-muted-foreground mt-0.5">
+                Link this folder without uploading files.
+              </span>
+            </button>
+
+            <button
+              type="button"
+              class="w-full rounded-md border px-3 py-2 text-left hover:bg-accent transition-colors disabled:opacity-60"
+              onclick={() => handleConfirmLink("upload_local")}
+              disabled={!!linking}
+            >
+              <span class="block text-sm font-medium">Upload local</span>
+              <span class="block text-[10px] text-muted-foreground mt-0.5">
+                Link this folder and push local files to the remote workspace.
+              </span>
+            </button>
+          </div>
+
+          {#if linking}
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 class="size-3.5 animate-spin" />
+              Linking workspace...
+            </div>
+          {/if}
+        </div>
+        <div class="border-t p-2">
+          <button
+            type="button"
+            class="flex items-center gap-2 w-full px-2 py-2.5 md:py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+            onclick={() => { linkTarget = null; }}
+            disabled={!!linking}
+          >
+            Back
+          </button>
+        </div>
+      {:else if pickerProvider}
         <!-- Remote Workspace Picker -->
         <div class="p-2">
           <p class="px-2 py-1 text-xs font-medium text-muted-foreground">
@@ -377,20 +560,36 @@
         </div>
         <div class="max-h-64 overflow-y-auto">
           {#each pickerProvider.workspaces as ws (ws.id)}
-            <button
-              type="button"
-              class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-accent transition-colors"
-              disabled={downloading === ws.id}
-              onclick={() => handleDownloadRemote(ws.id, ws.name)}
-            >
+            <div class="flex items-center gap-2 px-4 py-2 hover:bg-accent transition-colors">
               <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
-              <span class="truncate flex-1">{ws.name}</span>
-              {#if downloading === ws.id}
-                <Loader2 class="size-3.5 animate-spin shrink-0 text-muted-foreground" />
-              {:else}
-                <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">download</span>
-              {/if}
-            </button>
+              <span class="truncate flex-1 text-sm">{ws.name}</span>
+              <div class="flex items-center gap-1 shrink-0">
+                {#if providerSupportsFolderLinking(pickerProvider.pluginId)}
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:bg-background border transition-colors"
+                    onclick={() => handleStartLinkRemote(ws.id, ws.name)}
+                    disabled={downloading === ws.id || !!linking}
+                  >
+                    <Link2 class="size-3" />
+                    link
+                  </button>
+                {/if}
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:bg-background border transition-colors"
+                  disabled={downloading === ws.id || !!linking}
+                  onclick={() => handleDownloadRemote(ws.id, ws.name)}
+                >
+                  {#if downloading === ws.id}
+                    <Loader2 class="size-3 animate-spin" />
+                  {:else}
+                    <Cloud class="size-3" />
+                  {/if}
+                  download
+                </button>
+              </div>
+            </div>
           {/each}
         </div>
         <div class="border-t p-2">

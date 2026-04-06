@@ -21,6 +21,10 @@ Authentication services and stores for sync server login.
 Snapshot helpers support `include_attachments=true|false` (default `true`) for
 both upload and download bootstrap flows.
 
+Workspace namespace filtering now treats `metadata.type === "workspace"` as the
+canonical marker and still accepts legacy `metadata.kind === "workspace"` data
+when `type` is absent.
+
 For snapshot uploads, web uses XHR when byte-progress callbacks are requested.
 Tauri uses `proxyFetch` (native HTTP) instead of XHR to avoid WebView/CORS edge
 cases; upload calls still succeed without byte-level XHR progress events.

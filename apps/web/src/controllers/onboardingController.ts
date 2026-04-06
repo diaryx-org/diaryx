@@ -125,6 +125,7 @@ async function ensureIcloudNamespace(args: {
   const workspaceKey = getIcloudWorkspaceKeyFromRemoteId(args.remoteId) ?? generateUUID();
   const namespaceId = makeIcloudNamespaceId(workspaceKey);
   const metadata = {
+    type: "workspace",
     kind: "workspace",
     provider: BUILTIN_ICLOUD_PROVIDER_ID,
     name: args.name,
@@ -735,6 +736,7 @@ export async function handleCreateWithProvider(
         const workspaceKey = generateUUID();
         remoteId = makeIcloudNamespaceId(workspaceKey);
         await createNamespace(remoteId, {
+          type: "workspace",
           kind: "workspace",
           provider: BUILTIN_ICLOUD_PROVIDER_ID,
           name,

@@ -2,9 +2,6 @@
 title: web
 description: Svelte + Tiptap frontend for Diaryx
 author: adammharris
-audience:
-- public
-- developers
 part_of: '[README](/apps/README.md)'
 contents:
 - '[README](/apps/web/src/README.md)'

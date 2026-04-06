@@ -2,8 +2,6 @@
 title: diaryx_wasm
 description: WASM bindings for diaryx_core
 part_of: '[README](/crates/README.md)'
-audience:
-- developers
 contents: []
 exclude:
 - '*.lock'

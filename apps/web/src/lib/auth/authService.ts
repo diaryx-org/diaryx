@@ -54,11 +54,21 @@ export interface NamespaceEntry {
   owner_user_id: string;
   created_at: number;
   metadata?: {
+    type?: string;
     kind?: string;
     name?: string;
     provider?: string;
     [key: string]: unknown;
   } | null;
+}
+
+export function isWorkspaceNamespace(entry: NamespaceEntry): boolean {
+  const metadataType = entry.metadata?.type;
+  if (typeof metadataType === "string") {
+    return metadataType === "workspace";
+  }
+
+  return entry.metadata?.kind === "workspace";
 }
 
 export interface UserStorageUsageResponse {

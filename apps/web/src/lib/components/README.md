@@ -32,6 +32,7 @@ Reusable Svelte components for the editor and UI.
 | `PluginSidebarPanel.svelte` | Sidebar wrapper for plugin component refs (Builtin/Declarative/Iframe). |
 | `SpotlightOverlay.svelte` | Marketplace onboarding spotlight overlay; geometry, tooltip placement, and swipe interpretation live in `spotlightOverlay.ts` so the component shell stays thin and the interaction rules can be unit-tested directly. |
 | `UpgradeBanner.svelte` | Shared upsell surface for Plus-gated features (used for managed AI gating). |
+| `VisibilityPicker.svelte` | Audience picker used by the bubble menu; edits enclosing `:::vis` blocks when the selection is already inside one, otherwise wraps clean whole-block selections in a block directive and falls back to inline `:vis[...]` for partial-block text. |
 
 ## UI Components
 

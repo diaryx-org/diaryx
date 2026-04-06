@@ -138,10 +138,9 @@ class CollaborationStore {
     if (this.syncStatus === 'connecting') return 'connecting';
     // If either is syncing, show syncing
     if (this.syncStatus === 'syncing' || this.bodySyncStatus === 'syncing') return 'syncing';
-    // Only show synced if both metadata and body are synced
-    if (this.syncStatus === 'synced' && this.bodySyncStatus === 'synced') return 'synced';
-    // Otherwise show idle (metadata synced but body not yet synced)
-    if (this.syncStatus === 'synced' && this.bodySyncStatus === 'idle') return 'syncing';
+    // Only show synced if metadata is synced AND body is either synced or
+    // idle (not applicable — LWW file sync has no body sync phase).
+    if (this.syncStatus === 'synced' && (this.bodySyncStatus === 'synced' || this.bodySyncStatus === 'idle')) return 'synced';
     return this.syncStatus;
   });
 

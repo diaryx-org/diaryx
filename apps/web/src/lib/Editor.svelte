@@ -7,6 +7,7 @@
   import TaskList from "@tiptap/extension-task-list";
   import TaskItem from "@tiptap/extension-task-item";
   import Placeholder from "@tiptap/extension-placeholder";
+  import Code from "@tiptap/extension-code";
   import CodeBlock from "@tiptap/extension-code-block";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
@@ -48,6 +49,10 @@
   // Custom extension for markdown footnotes
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
   import { SearchHighlight } from "./extensions/SearchHighlight";
+  // Visibility directive extensions for audience filtering
+  import { VisibilityMark } from "./extensions/VisibilityMark";
+  import { VisibilityBlock } from "./extensions/VisibilityBlock";
+  import { EditorGutter } from "./extensions/EditorGutter";
   import { toast } from "svelte-sonner";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
   import { getEditorExtensions, getPluginExtensionsVersion } from "$lib/plugins/browserPluginManager.svelte";
@@ -213,8 +218,16 @@
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const extensions: any[] = [
       StarterKit.configure({
+        code: false, // We register Code explicitly below with custom excludes
         codeBlock: false, // We'll use the separate extension
         link: false, // Disable Link in StarterKit; we register Link explicitly below
+      }),
+      // Override Code's excludes so visibilityMark (and other metadata-like
+      // marks) can coexist with inline code. Without this, ProseMirror strips
+      // the vis mark from code text nodes, splitting `:vis[text with `code` in it]{a}`
+      // into three fragments on serialization.
+      Code.extend({
+        excludes: "bold italic strike",
       }),
       Markdown.configure({
         //transformPastedText: true,
@@ -819,6 +832,10 @@
       TableControls,
       // Search highlighting for find-in-file
       SearchHighlight,
+      // Visibility directive extensions for audience filtering
+      EditorGutter,
+      VisibilityMark,
+      VisibilityBlock,
       // Footnote extension
       FootnoteRef,
       // Raw HTML block extension
@@ -1518,6 +1535,7 @@
     bind:element={bubbleMenuElement}
     bind:linkPopoverOpen={bubbleMenuLinkPopoverOpen}
     {entryPath}
+    rootPath={workspaceStore.tree?.path ?? ""}
     {api}
   />
 {/if}
@@ -2101,6 +2119,298 @@
 
   :global(.conditional-marker-hidden) {
     display: none;
+  }
+
+  /* ── EditorGutter ────────────────────────────────────────────────── */
+
+  /* When any gutter indicators are present, reserve left space */
+  :global(.editor-content.editor-gutter-active) {
+    padding-left: 20px;
+    position: relative;
+  }
+
+  :global(.gutter-indicator) {
+    position: absolute;
+    left: 0;
+    pointer-events: auto;
+    z-index: 5;
+    user-select: none;
+  }
+
+  :global(.gutter-dot) {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-top: 0.55em; /* Vertically center with first line of text */
+  }
+
+  /* Multi-dot: stacked vertically when multiple audiences on one line */
+  :global(.gutter-multi-dot) {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 0.35em;
+  }
+
+  :global(.gutter-multi-dot-segment) {
+    display: block;
+    width: 6px;
+    height: 4px;
+    border-radius: 3px;
+  }
+
+  :global(.gutter-dot--filtered) {
+    opacity: 0.3;
+  }
+
+  :global(.gutter-dot--filtered .gutter-multi-dot-segment),
+  :global(.gutter-dot.gutter-dot--filtered) {
+    width: 4px;
+    height: 4px;
+    border: 1px dashed currentColor;
+    background: transparent !important;
+  }
+
+  :global(.gutter-collapse) {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 1px;
+    opacity: 0.5;
+    transform: rotate(45deg);
+    margin-top: 0.55em;
+  }
+
+  /* Eye icon for preview mode gutter */
+  :global(.gutter-eye) {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 0.3em;
+    color: var(--muted-foreground);
+    opacity: 0.4;
+    transition: opacity 0.15s ease, color 0.15s ease;
+  }
+
+  :global(.gutter-eye:hover) {
+    opacity: 0.8;
+  }
+
+  :global(.gutter-eye--active) {
+    opacity: 1;
+    color: var(--primary);
+  }
+
+  :global(.gutter-eye svg) {
+    display: block;
+  }
+
+  /* ── VisibilityMark (inline) ───────────────────────────────────── */
+
+  /* The mark's own HTML span gets no underline — it can't span code
+     gaps. The decoration-based .vis-underline handles all underlines.
+     This rule exists only to reset any inherited text-decoration. */
+  :global(.vis-mark) {
+    text-decoration: none;
+  }
+
+  /* Decoration-based underline: spans the full bridged range including
+     code gaps. Color comes from --vis-color set as inline style. */
+  :global(.vis-underline) {
+    background-image: radial-gradient(
+      circle,
+      color-mix(in oklch, var(--vis-color, var(--muted-foreground)) 30%, transparent) 1px,
+      transparent 1.2px
+    );
+    background-position: left calc(100% - 1px);
+    background-repeat: repeat-x;
+    background-size: 6px 3px;
+    transition: background-image 0.15s ease;
+  }
+
+  :global(.vis-underline--hovered) {
+    background-image: radial-gradient(
+      circle,
+      var(--vis-color, var(--muted-foreground)) 1px,
+      transparent 1.2px
+    );
+  }
+
+  /* Brighten underline when the cursor or selection overlaps */
+  :global(.vis-underline--selected) {
+    background-image: radial-gradient(
+      circle,
+      var(--vis-color, var(--muted-foreground)) 1px,
+      transparent 1.2px
+    );
+  }
+
+  /* In preview mode, keep the matching directive visible with a softer tint. */
+  :global(.vis-underline--preview) {
+    background-image: radial-gradient(
+      circle,
+      color-mix(in oklch, var(--vis-color, var(--muted-foreground)) 75%, transparent) 1px,
+      transparent 1.2px
+    );
+  }
+
+  /* Revealed highlight: persistent (from gutter click) */
+  :global(.vis-mark--revealed) {
+    background: color-mix(in oklch, var(--vis-hover-color) 18%, transparent) !important;
+    box-shadow: inset 0 -1.5px 0 0 color-mix(in oklch, var(--vis-hover-color) 65%, transparent);
+  }
+
+  :global(.vis-mark--revealed code),
+  :global(.vis-mark--revealed strong),
+  :global(.vis-mark--revealed em),
+  :global(.vis-mark--revealed a),
+  :global(.vis-mark--revealed mark) {
+    background: color-mix(in oklch, var(--vis-hover-color) 18%, transparent) !important;
+  }
+
+  /* Revealed-included: matching text highlighted in preview mode when
+     the eye icon is clicked — softer than the normal revealed style. */
+  :global(.vis-mark--revealed-included) {
+    background: color-mix(in oklch, var(--vis-hover-color) 12%, transparent) !important;
+    box-shadow: inset 0 -1.5px 0 0 color-mix(in oklch, var(--vis-hover-color) 50%, transparent);
+  }
+
+  :global(.vis-mark--revealed-included code),
+  :global(.vis-mark--revealed-included strong),
+  :global(.vis-mark--revealed-included em),
+  :global(.vis-mark--revealed-included a),
+  :global(.vis-mark--revealed-included mark) {
+    background: color-mix(in oklch, var(--vis-hover-color) 12%, transparent) !important;
+  }
+
+  /* Gutter dot active state when ranges are revealed */
+  :global(.gutter-dot--revealed),
+  :global(.gutter-multi-dot.gutter-dot--revealed) {
+    transform: scale(1.3);
+    filter: brightness(1.2);
+    transition: transform 0.1s ease, filter 0.1s ease;
+  }
+
+  /* Filter mode: hide non-matching inline content */
+  :global(.vis-mark--hidden) {
+    font-size: 0;
+    line-height: 0;
+    overflow: hidden;
+    display: inline-block;
+    width: 0;
+    height: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* Revealed-filtered: gutter click in preview mode shows hidden text
+     with strikethrough + muted styling to indicate it's excluded. */
+  :global(.vis-mark--revealed-filtered) {
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in oklch, var(--vis-hover-color) 60%, transparent);
+    text-decoration-thickness: 2px;
+    opacity: 0.5;
+    background: color-mix(in oklch, var(--vis-hover-color) 8%, transparent);
+    box-shadow: inset 0 -1.5px 0 0 color-mix(in oklch, var(--vis-hover-color) 35%, transparent);
+    transition: opacity 0.15s ease;
+  }
+
+  :global(.vis-mark--revealed-filtered code),
+  :global(.vis-mark--revealed-filtered strong),
+  :global(.vis-mark--revealed-filtered em),
+  :global(.vis-mark--revealed-filtered a),
+  :global(.vis-mark--revealed-filtered mark) {
+    text-decoration: line-through;
+    text-decoration-color: inherit;
+    background: color-mix(in oklch, var(--vis-hover-color) 8%, transparent) !important;
+  }
+
+  /* ── VisibilityBlock ───────────────────────────────────────────── */
+
+  :global(.vis-block-marker-wrapper) {
+    user-select: none;
+    margin: 2px 0;
+  }
+
+  :global(.vis-block-pill) {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    border-radius: 4px;
+    font-size: 0.75em;
+    color: var(--muted-foreground);
+    border: 1px dashed color-mix(in oklch, var(--border) 60%, transparent);
+    background: color-mix(in oklch, var(--muted) 30%, transparent);
+  }
+
+  :global(.vis-block-pill-dot) {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  :global(.vis-block-pill-label) {
+    font-family: var(--font-mono, ui-monospace, monospace);
+  }
+
+  :global(.vis-block-close-line) {
+    display: block;
+    height: 1px;
+    width: 2em;
+    background: color-mix(in oklch, var(--border) 40%, transparent);
+  }
+
+  /* Gutter bar for block content */
+  :global(.vis-block-content--active) {
+    border-left: 3px solid var(--muted-foreground);
+    padding-left: 12px !important;
+    margin-left: -15px;
+    transition: border-color 0.15s ease;
+  }
+
+  /* Filter mode: hide non-matching block content */
+  :global(.vis-block-content--hidden) {
+    display: none;
+  }
+
+  :global(.vis-block--hidden) {
+    display: none;
+  }
+
+  /* Collapse indicator shown where block content was filtered */
+  :global(.vis-block-collapse-indicator) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    margin: 2px 0;
+    font-size: 0.7em;
+    color: var(--muted-foreground);
+    opacity: 0.6;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: opacity 0.15s ease, background 0.15s ease;
+    user-select: none;
+  }
+
+  :global(.vis-block-collapse-indicator:hover) {
+    opacity: 1;
+    background: color-mix(in oklch, var(--accent) 50%, transparent);
+  }
+
+  :global(.vis-block-collapse-dot) {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  :global(.vis-block-collapse-label) {
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
 
   /* Mobile-specific styles */

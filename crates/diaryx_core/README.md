@@ -2,8 +2,6 @@
 title: diaryx_core
 description: Core library shared by Diaryx clients
 author: adammharris
-audience:
-- public
 part_of: '[README](/crates/README.md)'
 contents:
 - '[README](/crates/diaryx_core/src/README.md)'

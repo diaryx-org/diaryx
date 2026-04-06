@@ -811,7 +811,7 @@ describe("authStore", () => {
       expect(result).toEqual([]);
     });
 
-    it("filters namespaces to workspace kind", async () => {
+    it("filters namespaces to workspace metadata type", async () => {
       setServerUrl("https://sync.example.com");
       // Make the user authenticated
       mockAuthService.verifyMagicLink.mockResolvedValue(makeVerifyResponse());
@@ -823,27 +823,34 @@ describe("authStore", () => {
           id: "ns1",
           owner_user_id: "u1",
           created_at: 1000,
-          metadata: { kind: "workspace", name: "WS 1" },
+          metadata: { type: "workspace", name: "WS 1" },
         },
         {
           id: "ns2",
           owner_user_id: "u1",
           created_at: 2000,
-          metadata: { kind: "site", name: "Site 1" },
+          metadata: { type: "site", kind: "workspace", name: "Site 1" },
         },
         {
           id: "ns3",
           owner_user_id: "u1",
           created_at: 3000,
+          metadata: { kind: "workspace", name: "WS legacy" },
+        },
+        {
+          id: "ns4",
+          owner_user_id: "u1",
+          created_at: 4000,
           metadata: { kind: "workspace", name: "WS 2" },
         },
       ]);
 
       const result = await listUserWorkspaceNamespaces();
 
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(3);
       expect(result[0].id).toBe("ns1");
       expect(result[1].id).toBe("ns3");
+      expect(result[2].id).toBe("ns4");
     });
 
     it("returns empty array on error", async () => {

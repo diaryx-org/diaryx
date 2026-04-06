@@ -20,6 +20,8 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "std"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "v5", "js"] }
 rand = "0.8"
+# Pin below 2.4.0 until the upstream wasm/getrandom API mismatch is resolved.
+fastrand = "=2.3.0"
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 hmac = "0.12"

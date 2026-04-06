@@ -3,7 +3,6 @@
   import type { TreeNode } from "$lib/backend/interface";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
-  import { Checkbox } from "$lib/components/ui/checkbox";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
@@ -20,7 +19,10 @@
     ArrowLeft,
     Search,
     FileText,
-    Folder,
+    FolderOpen,
+    FolderClosed,
+    ChevronRight,
+    RotateCcw,
   } from "@lucide/svelte";
 
   interface Props {
@@ -64,19 +66,25 @@
   // Color picker
   let colorPickerOpen = $state<string | null>(null);
 
-  // ── Selected audience (for right column) ──────────────────────────────
-  let selectedAudience = $state<string | null>(null);
-  let showDetail = $state(false); // mobile drill-down
+  // ── Active brush for painting ─────────────────────────────────────────
+  let activeBrush = $state<string | null>(null);
+  let showDetail = $state(false); // mobile tree slide-over
 
   // ── Entry tree + map state ───────────────────────────────────────────
   let workspaceTree = $state<TreeNode | null>(null);
   let entryTitleMap = $state<Map<string, string>>(new Map());
-  let entryAudienceMap = $state<Map<string, string[]>>(new Map());
+  // null = no audience property (inherits), [] = explicit empty (opts out), [...] = explicit tags
+  let entryAudienceMap = $state<Map<string, string[] | null>>(new Map());
   let entriesLoading = $state(true);
   let togglingPaths = $state<Set<string>>(new Set());
 
+  // Folder collapse
+  let collapsedFolders = $state<Set<string>>(new Set());
+
   // Entry search
   let entrySearch = $state("");
+
+  // ── Helpers ───────────────────────────────────────────────────────────
 
   /** Returns the display title for a path */
   function getTitle(path: string): string {
@@ -104,27 +112,36 @@
     return map;
   });
 
-  /** Check if any ancestor has the audience tag (inheritance indicator) */
-  function ancestorHasAudience(path: string, audienceName: string): boolean {
+  /** Resolve effective audience tags for display.
+   *  Returns the entry's own explicit tags, or walks ancestors to find
+   *  the nearest explicit audience (marking those as inherited). */
+  function getEffectiveTags(path: string): { name: string; inherited: boolean }[] {
+    const rawTags = entryAudienceMap.get(path);
+    if (rawTags !== null && rawTags !== undefined) {
+      return rawTags.map((name) => ({ name, inherited: false }));
+    }
+    // Walk ancestors — stop at the first with an explicit audience property
     let cur = parentMap.get(path);
     while (cur) {
-      const tags = entryAudienceMap.get(cur) ?? [];
-      if (tags.includes(audienceName)) return true;
+      const tags = entryAudienceMap.get(cur);
+      if (tags !== null && tags !== undefined) {
+        return tags.map((name) => ({ name, inherited: true }));
+      }
       cur = parentMap.get(cur);
     }
-    return false;
+    return [];
   }
 
-  // ── Audience entry count ──────────────────────────────────────────────
+  /** Count entries that explicitly include this audience tag */
   function getEntryCount(audienceName: string): number {
     let count = 0;
     for (const tags of entryAudienceMap.values()) {
-      if (tags.includes(audienceName)) count++;
+      if (tags?.includes(audienceName)) count++;
     }
     return count;
   }
 
-  // ── Tree traversal ────────────────────────────────────────────────────
+  /** Recursively collect all paths in the tree */
   function collectPaths(node: TreeNode): string[] {
     const out: string[] = [node.path];
     for (const child of node.children) out.push(...collectPaths(child));
@@ -157,7 +174,7 @@
       const tree = await api!.getWorkspaceTree(rootPath);
       const paths = collectPaths(tree);
       const titleMap = new Map<string, string>();
-      const audMap = new Map<string, string[]>();
+      const audMap = new Map<string, string[] | null>();
 
       const results = await Promise.allSettled(
         paths.map(async (path) => {
@@ -169,7 +186,15 @@
               .pop()
               ?.replace(/\.md$/, "") ??
             path;
-          const aud = Array.isArray(fm.audience) ? (fm.audience as string[]) : [];
+          // null = no audience property (inherits from parent)
+          // []   = explicitly empty (opts out of inheritance)
+          // [..] = explicit audience tags
+          const aud =
+            fm.audience !== undefined
+              ? Array.isArray(fm.audience)
+                ? (fm.audience as string[])
+                : []
+              : null;
           return { path, title, aud };
         }),
       );
@@ -191,15 +216,20 @@
     }
   }
 
-  // ── Toggle audience on an entry ───────────────────────────────────────
-  async function toggleEntryAudience(entryPath: string, audienceName: string) {
-    if (!api || togglingPaths.has(entryPath)) return;
+  // ── Painting ──────────────────────────────────────────────────────────
 
-    const currentTags = entryAudienceMap.get(entryPath) ?? [];
-    const has = currentTags.includes(audienceName);
+  /** Paint the active brush onto an entry (toggle on/off).
+   *  For inheriting entries, this makes the audience explicit. */
+  async function paintEntry(entryPath: string) {
+    if (!api || !activeBrush || togglingPaths.has(entryPath)) return;
+
+    const rawTags = entryAudienceMap.get(entryPath) ?? null;
+    const effective = getEffectiveTags(entryPath).map((t) => t.name);
+    const has = effective.includes(activeBrush);
+
     const newTags = has
-      ? currentTags.filter((t) => t !== audienceName)
-      : [...currentTags, audienceName];
+      ? effective.filter((t) => t !== activeBrush)
+      : [...effective, activeBrush];
 
     // Optimistic update
     entryAudienceMap.set(entryPath, newTags);
@@ -207,17 +237,62 @@
 
     togglingPaths = new Set([...togglingPaths, entryPath]);
     try {
-      if (newTags.length === 0) {
-        await api.removeFrontmatterProperty(entryPath, "audience");
-      } else {
-        await api.setFrontmatterProperty(entryPath, "audience", newTags, rootPath);
-      }
+      // Always write explicitly — even [] signals opt-out from inheritance
+      await api.setFrontmatterProperty(entryPath, "audience", newTags, rootPath);
     } catch (e) {
-      // Revert on failure
-      entryAudienceMap.set(entryPath, currentTags);
+      entryAudienceMap.set(entryPath, rawTags);
       entryAudienceMap = new Map(entryAudienceMap);
       toast.error("Failed to update audience");
-      console.error("[AudienceManager] Toggle failed:", e);
+      console.error("[AudienceManager] Paint failed:", e);
+    } finally {
+      togglingPaths = new Set([...togglingPaths].filter((p) => p !== entryPath));
+    }
+  }
+
+  /** Remove a specific audience tag from an entry's explicit list */
+  async function removeAudienceFromEntry(entryPath: string, audienceName: string) {
+    if (!api || togglingPaths.has(entryPath)) return;
+
+    const rawTags = entryAudienceMap.get(entryPath) ?? null;
+    const currentTags = rawTags ?? [];
+    if (!currentTags.includes(audienceName)) return;
+
+    const newTags = currentTags.filter((t) => t !== audienceName);
+
+    entryAudienceMap.set(entryPath, newTags);
+    entryAudienceMap = new Map(entryAudienceMap);
+
+    togglingPaths = new Set([...togglingPaths, entryPath]);
+    try {
+      await api.setFrontmatterProperty(entryPath, "audience", newTags, rootPath);
+    } catch (e) {
+      entryAudienceMap.set(entryPath, rawTags);
+      entryAudienceMap = new Map(entryAudienceMap);
+      toast.error("Failed to update audience");
+      console.error("[AudienceManager] Remove tag failed:", e);
+    } finally {
+      togglingPaths = new Set([...togglingPaths].filter((p) => p !== entryPath));
+    }
+  }
+
+  /** Remove explicit audience — entry reverts to inheriting from parent */
+  async function setInherited(entryPath: string) {
+    if (!api || togglingPaths.has(entryPath)) return;
+
+    const rawTags = entryAudienceMap.get(entryPath) ?? null;
+    if (rawTags === null) return; // Already inheriting
+
+    entryAudienceMap.set(entryPath, null);
+    entryAudienceMap = new Map(entryAudienceMap);
+
+    togglingPaths = new Set([...togglingPaths, entryPath]);
+    try {
+      await api.removeFrontmatterProperty(entryPath, "audience");
+    } catch (e) {
+      entryAudienceMap.set(entryPath, rawTags);
+      entryAudienceMap = new Map(entryAudienceMap);
+      toast.error("Failed to update audience");
+      console.error("[AudienceManager] Set inherited failed:", e);
     } finally {
       togglingPaths = new Set([...togglingPaths].filter((p) => p !== entryPath));
     }
@@ -251,8 +326,8 @@
     audiences = [...audiences, name].sort();
     templateContextStore.bumpAudiencesVersion();
     cancelCreate();
-    // Auto-select the new audience
-    selectedAudience = name;
+    // Auto-select as active brush
+    activeBrush = name;
     if (mobileState.isMobile) showDetail = true;
   }
 
@@ -330,7 +405,7 @@
       audiences = audiences.map((a) => (a === oldName ? newName : a));
       // Update entryAudienceMap
       for (const [path, tags] of entryAudienceMap) {
-        if (tags.includes(oldName)) {
+        if (tags?.includes(oldName)) {
           entryAudienceMap.set(
             path,
             tags.map((t) => (t === oldName ? newName : t)),
@@ -338,7 +413,7 @@
         }
       }
       entryAudienceMap = new Map(entryAudienceMap);
-      if (selectedAudience === oldName) selectedAudience = newName;
+      if (activeBrush === oldName) activeBrush = newName;
       templateContextStore.bumpAudiencesVersion();
       toast.success(
         `Renamed "${oldName}" \u2192 "${newName}" across ${paths.length} entr${paths.length === 1 ? "y" : "ies"}`,
@@ -399,13 +474,13 @@
       audiences = audiences.filter((a) => a !== name);
       // Update entryAudienceMap
       for (const [path, tags] of entryAudienceMap) {
-        if (tags.includes(name)) {
+        if (tags?.includes(name)) {
           const remaining = tags.filter((t) => t !== name);
           entryAudienceMap.set(path, remaining);
         }
       }
       entryAudienceMap = new Map(entryAudienceMap);
-      if (selectedAudience === name) selectedAudience = null;
+      if (activeBrush === name) activeBrush = null;
       templateContextStore.bumpAudiencesVersion();
       toast.success(
         `Deleted "${name}" from ${paths.length} entr${paths.length === 1 ? "y" : "ies"}`,
@@ -429,10 +504,22 @@
     colorPickerOpen = null;
   }
 
-  // ── Select audience ───────────────────────────────────────────────────
-  function selectAudience(name: string) {
-    selectedAudience = name;
-    if (mobileState.isMobile) showDetail = true;
+  // ── Brush selection ───────────────────────────────────────────────────
+  function selectBrush(name: string) {
+    if (activeBrush === name) {
+      activeBrush = null;
+    } else {
+      activeBrush = name;
+      if (mobileState.isMobile) showDetail = true;
+    }
+  }
+
+  // ── Folder collapse/expand ────────────────────────────────────────────
+  function toggleFolder(path: string) {
+    const next = new Set(collapsedFolders);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    collapsedFolders = next;
   }
 </script>
 
@@ -450,7 +537,7 @@
         <div>
           <h2 class="text-lg font-semibold">Manage Audiences</h2>
           <p class="text-xs text-muted-foreground hidden sm:block">
-            Create, rename, delete, and assign audiences to entries.
+            Select an audience, then click entries to paint them.
           </p>
         </div>
       </div>
@@ -469,7 +556,7 @@
     <div
       class="flex-1 min-h-0 grid grid-rows-[minmax(0,1fr)] grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)]"
     >
-      <!-- Left column: Audience list -->
+      <!-- Left column: Audience palette -->
       <section
         class="min-h-0 overflow-auto {mobileState.isMobile
           ? ''
@@ -551,11 +638,11 @@
                 colorStore.audienceColors,
               )}
               {@const pickerOpen = colorPickerOpen === name}
-              {@const isSelected = selectedAudience === name}
+              {@const isActive = activeBrush === name}
               <li
                 class="flex flex-col text-sm transition-colors {isPendingDelete
                   ? 'bg-destructive/10'
-                  : isSelected && !mobileState.isMobile
+                  : isActive
                     ? 'bg-accent'
                     : 'hover:bg-muted/40'}"
               >
@@ -613,13 +700,13 @@
                       <X class="size-5 md:size-3.5" />
                     </button>
                   {:else}
-                    <!-- Clickable row to select -->
+                    <!-- Clickable row to select as brush -->
                     <button
                       type="button"
                       class="flex-1 text-left truncate min-h-[44px] md:min-h-0 flex items-center text-base md:text-sm {isPendingDelete
                         ? 'text-muted-foreground line-through'
                         : ''}"
-                      onclick={() => selectAudience(name)}
+                      onclick={() => selectBrush(name)}
                     >
                       {name}
                     </button>
@@ -670,10 +757,10 @@
                       >Color:</span
                     >
                     {#each AUDIENCE_PALETTE as swatch}
-                      {@const isActive = dotClass === swatch}
+                      {@const isActiveSwatch = dotClass === swatch}
                       <button
                         class="size-8 md:size-6 rounded-full shrink-0 flex items-center justify-center transition-transform hover:scale-110
-                          {isActive
+                          {isActiveSwatch
                           ? 'ring-2 ring-offset-1 ring-foreground/60 scale-110'
                           : ''}"
                         onclick={() => pickColor(name, swatch)}
@@ -734,26 +821,31 @@
             </div>
           </div>
         {/if}
+
+        <!-- Mobile: Browse entries button -->
+        {#if mobileState.isMobile && !audienceLoading}
+          <div class="p-3 border-t">
+            <Button
+              variant="outline"
+              class="w-full h-11 text-sm"
+              onclick={() => (showDetail = true)}
+            >
+              Browse entries
+            </Button>
+          </div>
+        {/if}
       </section>
 
-      <!-- Right column: Entry list (desktop) -->
+      <!-- Right column: Entry tree (desktop) -->
       {#if !mobileState.isMobile}
         <aside class="min-h-0 overflow-auto flex flex-col">
-          {#if selectedAudience}
-            {@render entryListContent(selectedAudience)}
-          {:else}
-            <div
-              class="flex-1 flex items-center justify-center text-sm text-muted-foreground"
-            >
-              Select an audience to manage entries.
-            </div>
-          {/if}
+          {@render treeContent()}
         </aside>
       {/if}
     </div>
 
-    <!-- Mobile slide-over detail panel -->
-    {#if mobileState.isMobile && showDetail && selectedAudience}
+    <!-- Mobile slide-over tree panel -->
+    {#if mobileState.isMobile && showDetail}
       <div
         class="fixed inset-0 z-[60] bg-background animate-detail-in flex flex-col"
       >
@@ -769,45 +861,67 @@
           >
             <ArrowLeft class="size-5" />
           </Button>
-          <div class="flex items-center gap-2 min-w-0">
-            <span
-              class="size-3 rounded-full shrink-0 {getAudienceColor(
-                selectedAudience,
-                colorStore.audienceColors,
-              )}"
-            ></span>
-            <h2 class="text-lg font-semibold truncate">
-              {selectedAudience}
-            </h2>
-          </div>
+          <h2 class="text-lg font-semibold truncate">Entries</h2>
         </header>
+        <!-- Mobile brush bar -->
+        {#if audiences.length > 0}
+          <div
+            class="flex items-center gap-2 px-4 py-2 border-b overflow-x-auto shrink-0"
+          >
+            {#each audiences as name (name)}
+              {@const dotClass = getAudienceColor(
+                name,
+                colorStore.audienceColors,
+              )}
+              {@const isActive = activeBrush === name}
+              <button
+                class="inline-flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-full border text-xs transition-colors
+                  {isActive
+                  ? 'border-primary bg-accent font-medium'
+                  : 'border-border hover:bg-muted/50'}"
+                onclick={() => {
+                  activeBrush = isActive ? null : name;
+                }}
+              >
+                <span class="size-2 rounded-full {dotClass}"></span>
+                {name}
+              </button>
+            {/each}
+          </div>
+        {/if}
         <div class="flex-1 overflow-auto flex flex-col">
-          {@render entryListContent(selectedAudience)}
+          {@render treeContent()}
         </div>
       </div>
     {/if}
   </div>
 </div>
 
-{#snippet entryListContent(audienceName: string)}
+{#snippet treeContent()}
   <div class="p-3 border-b shrink-0">
-    <div class="flex items-center gap-2">
-      <span
-        class="size-3 rounded-full shrink-0 {getAudienceColor(
-          audienceName,
-          colorStore.audienceColors,
-        )}"
-      ></span>
-      <h3 class="text-base md:text-sm font-medium">{audienceName}</h3>
-      <span class="text-xs text-muted-foreground">
-        {#if !entriesLoading}
-          {getEntryCount(audienceName)} {getEntryCount(audienceName) === 1
-            ? "entry"
-            : "entries"}
-        {/if}
-      </span>
-    </div>
-    <div class="relative mt-2">
+    {#if activeBrush && !mobileState.isMobile}
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-xs text-muted-foreground">Painting:</span>
+        <span
+          class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium"
+        >
+          <span
+            class="size-2 rounded-full {getAudienceColor(
+              activeBrush,
+              colorStore.audienceColors,
+            )}"
+          ></span>
+          {activeBrush}
+        </span>
+        <button
+          class="text-xs text-muted-foreground hover:text-foreground transition-colors underline"
+          onclick={() => (activeBrush = null)}
+        >
+          Clear
+        </button>
+      </div>
+    {/if}
+    <div class="relative">
       <Search
         class="size-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
       />
@@ -832,51 +946,127 @@
     <div
       class="flex-1 overflow-auto pb-[calc(env(safe-area-inset-bottom)+1rem)]"
     >
-      {@render entryTreeNode(workspaceTree, audienceName, 0)}
+      {@render entryTreeNode(workspaceTree, 0)}
     </div>
   {/if}
 {/snippet}
 
-{#snippet entryTreeNode(node: TreeNode, audienceName: string, depth: number)}
+{#snippet entryTreeNode(node: TreeNode, depth: number)}
   {@const q = entrySearch.trim().toLowerCase()}
   {@const matchesSearch = !q || nodeMatchesSearch(node, q)}
   {#if matchesSearch}
-    {@const tags = entryAudienceMap.get(node.path) ?? []}
-    {@const checked = tags.includes(audienceName)}
+    {@const rawTags = entryAudienceMap.get(node.path)}
+    {@const hasExplicit = rawTags !== null && rawTags !== undefined}
+    {@const effectiveTags = getEffectiveTags(node.path)}
     {@const toggling = togglingPaths.has(node.path)}
-    {@const inherited = !checked && ancestorHasAudience(node.path, audienceName)}
     {@const hasChildren = node.children.length > 0}
+    {@const isCollapsed = !q && collapsedFolders.has(node.path)}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <!-- Entry row -->
-    <label
-      class="flex items-center gap-2 pr-3 py-3 md:py-1.5 text-base md:text-sm hover:bg-muted/40 transition-colors cursor-pointer {toggling
-        ? 'opacity-60'
-        : ''}"
-      style="padding-left: {12 + depth * 16}px;"
+    <div
+      class="group/row flex items-center gap-1.5 pr-3 py-2.5 md:py-1.5 text-base md:text-sm transition-colors
+        {toggling ? 'opacity-60' : ''}
+        {activeBrush ? 'cursor-pointer hover:bg-muted/50' : 'hover:bg-muted/20'}"
+      style="padding-left: {4 + depth * 16}px;"
+      role={activeBrush ? "button" : undefined}
+      tabindex={activeBrush ? 0 : undefined}
+      onclick={() => {
+        if (activeBrush) paintEntry(node.path);
+      }}
+      onkeydown={(e) => {
+        if (activeBrush && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          paintEntry(node.path);
+        }
+      }}
     >
       {#if hasChildren}
-        <Folder class="size-4 md:size-3.5 text-muted-foreground shrink-0" />
+        <button
+          type="button"
+          class="p-1 rounded-sm hover:bg-muted transition-colors shrink-0"
+          onclick={(e) => {
+            e.stopPropagation();
+            toggleFolder(node.path);
+          }}
+          aria-label="{isCollapsed ? 'Expand' : 'Collapse'} folder"
+          tabindex={-1}
+        >
+          <ChevronRight
+            class="size-4 md:size-3.5 transition-transform duration-200 text-muted-foreground {isCollapsed
+              ? ''
+              : 'rotate-90'}"
+          />
+        </button>
       {:else}
-        <FileText class="size-4 md:size-3.5 text-muted-foreground shrink-0" />
+        <span class="w-6 shrink-0"></span>
       {/if}
-      <span class="flex-1 truncate {inherited ? 'text-muted-foreground' : ''}">
+      {#if hasChildren && !isCollapsed}
+        <FolderOpen
+          class="size-4 md:size-3.5 text-muted-foreground shrink-0"
+        />
+      {:else if hasChildren}
+        <FolderClosed
+          class="size-4 md:size-3.5 text-muted-foreground shrink-0"
+        />
+      {:else}
+        <FileText
+          class="size-4 md:size-3.5 text-muted-foreground shrink-0"
+        />
+      {/if}
+      <span class="flex-1 truncate min-w-0">
         {getTitle(node.path)}
       </span>
-      {#if inherited}
-        <span class="text-[10px] text-muted-foreground shrink-0 italic">inherited</span>
+      <!-- Audience badges -->
+      {#each effectiveTags as tag (tag.name)}
+        {@const badgeColor = getAudienceColor(
+          tag.name,
+          colorStore.audienceColors,
+        )}
+        {#if tag.inherited}
+          <span
+            class="inline-flex items-center gap-1 text-[10px] leading-tight px-1.5 py-0.5 rounded-full border border-dashed border-border/60 text-muted-foreground shrink-0"
+            title="{tag.name} (inherited)"
+          >
+            <span class="size-1.5 rounded-full shrink-0 {badgeColor}"></span>
+            <span class="max-w-16 truncate">{tag.name}</span>
+          </span>
+        {:else}
+          <button
+            class="group/badge inline-flex items-center gap-1 text-[10px] leading-tight pl-1.5 pr-1 py-0.5 rounded-full border border-border shrink-0 hover:border-destructive/50 hover:bg-destructive/10 transition-colors"
+            title="Remove {tag.name}"
+            onclick={(e) => {
+              e.stopPropagation();
+              removeAudienceFromEntry(node.path, tag.name);
+            }}
+          >
+            <span class="size-1.5 rounded-full shrink-0 {badgeColor}"></span>
+            <span class="max-w-16 truncate">{tag.name}</span>
+            <X
+              class="size-2.5 shrink-0 opacity-0 group-hover/badge:opacity-100 -mr-0.5 transition-opacity"
+            />
+          </button>
+        {/if}
+      {/each}
+      <!-- Inherit button (only for entries with explicit audience) -->
+      {#if hasExplicit}
+        <button
+          class="p-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0
+            md:opacity-0 md:group-hover/row:opacity-100 md:focus:opacity-100"
+          onclick={(e) => {
+            e.stopPropagation();
+            setInherited(node.path);
+          }}
+          title="Inherit from parent"
+          aria-label="Inherit from parent"
+        >
+          <RotateCcw class="size-3.5 md:size-3" />
+        </button>
       {/if}
-      <Checkbox
-        class="size-5 md:size-4 shrink-0"
-        {checked}
-        indeterminate={inherited}
-        disabled={toggling}
-        onCheckedChange={() =>
-          toggleEntryAudience(node.path, audienceName)}
-      />
-    </label>
+    </div>
     <!-- Children -->
-    {#if hasChildren}
+    {#if hasChildren && !isCollapsed}
       {#each node.children as child (child.path)}
-        {@render entryTreeNode(child, audienceName, depth + 1)}
+        {@render entryTreeNode(child, depth + 1)}
       {/each}
     {/if}
   {/if}

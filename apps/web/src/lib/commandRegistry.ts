@@ -35,8 +35,53 @@ import {
   ShieldCheck,
   ClipboardPaste,
   FileDown,
+  Plug,
 } from "@lucide/svelte";
+import { showInfo, showError } from "@/models/services/toastService";
 import type { PluginInsertCommand } from "@/models/stores/pluginStore.svelte";
+
+/** Format a plugin command result as a human-readable description for toasts. */
+function formatPluginResult(data: unknown): string {
+  if (data == null) return "";
+  if (typeof data === "string") return data;
+  if (typeof data !== "object") return String(data);
+  const obj = data as Record<string, unknown>;
+
+  // Sync status shape: { state, label, dirty_count, clean_count, last_sync_at, ... }
+  if ("label" in obj && "dirty_count" in obj) {
+    const parts: string[] = [];
+    if (obj.label) parts.push(String(obj.label));
+    const dirty = Number(obj.dirty_count ?? 0);
+    const clean = Number(obj.clean_count ?? 0);
+    if (dirty > 0) parts.push(`${dirty} modified`);
+    if (clean > 0) parts.push(`${clean} synced`);
+    if (obj.pending_deletes && Number(obj.pending_deletes) > 0)
+      parts.push(`${obj.pending_deletes} pending deletes`);
+    if (obj.last_sync_at) {
+      const date = new Date(Number(obj.last_sync_at));
+      parts.push(`last sync ${date.toLocaleString()}`);
+    }
+    return parts.join(" · ");
+  }
+
+  // Sync result shape: { pushed, pulled, errors, ... }
+  if ("pushed" in obj || "pulled" in obj) {
+    const parts: string[] = [];
+    if (obj.pushed) parts.push(`${obj.pushed} pushed`);
+    if (obj.pulled) parts.push(`${obj.pulled} pulled`);
+    const errors = Array.isArray(obj.errors) ? obj.errors : [];
+    if (errors.length > 0) parts.push(`${errors.length} error(s)`);
+    return parts.join(" · ") || "No changes";
+  }
+
+  // Fallback: compact JSON
+  try {
+    const json = JSON.stringify(data, null, 0);
+    return json.length > 200 ? json.slice(0, 197) + "..." : json;
+  } catch {
+    return String(data);
+  }
+}
 
 export interface CommandDefinition {
   id: string;
@@ -75,6 +120,22 @@ export interface CommandRegistryContext {
   onImportMarkdownFile: () => void | Promise<void>;
   onSyncNow?: () => void | Promise<void>;
   isSyncAvailable?: () => boolean;
+  /** Plugin-declared command palette items from manifest CommandPaletteItem contributions. */
+  pluginCommandPaletteItems: Array<{
+    pluginId: string;
+    contribution: {
+      id: string;
+      label: string;
+      group: string | null;
+      plugin_command: string;
+    };
+  }>;
+  /** Dispatch a command to a plugin by ID. Returns the plugin's response. */
+  dispatchPluginCommand: (
+    pluginId: string,
+    command: string,
+    params?: unknown,
+  ) => Promise<{ success: boolean; data?: unknown; error?: string }>;
   pluginBlockCommands: PluginInsertCommand[];
   pluginBlockPickerItems: Array<{
     pluginId: unknown;
@@ -477,6 +538,31 @@ export function buildCommandRegistry(
       icon: RefreshCw,
       available: () => ctx.isSyncAvailable?.() ?? false,
       execute: fn,
+      favoritable: true,
+    });
+  }
+
+  // Register plugin-declared command palette items generically.
+  // Any plugin can contribute CommandPaletteItem UI entries in its manifest.
+  for (const { pluginId, contribution } of ctx.pluginCommandPaletteItems) {
+    const pid = pluginId as unknown as string;
+    const cmd = contribution.plugin_command;
+    const label = contribution.label;
+    const group = (contribution.group as CommandDefinition["group"]) ?? "workspace";
+    add({
+      id: `plugin:${pid}:${contribution.id}`,
+      label,
+      group,
+      icon: Plug,
+      available: () => true,
+      execute: async () => {
+        const result = await ctx.dispatchPluginCommand(pid, cmd);
+        if (!result.success) {
+          showError(result.error ?? "Command failed", label);
+        } else if (result.data != null) {
+          showInfo(label, formatPluginResult(result.data));
+        }
+      },
       favoritable: true,
     });
   }

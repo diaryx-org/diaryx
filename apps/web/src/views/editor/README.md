@@ -16,7 +16,7 @@ Editor-related view components.
 |------|---------|
 | `EditorContent.svelte` | Main editor content area |
 | `EditorEmptyState.svelte` | Empty state when no entry selected; for empty workspaces it shows a single `Initialize workspace` action that opens the setup flow |
-| `EditorFooter.svelte` | Bottom action bar (audience, save state, plugin actions, command palette shortcut) |
+| `EditorFooter.svelte` | Bottom action bar (audience, save state, favorite commands, command palette shortcut) |
 
 ## Tooltip Behavior
 

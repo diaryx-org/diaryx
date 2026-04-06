@@ -1262,7 +1262,9 @@ function buildHostFunctions(
             abortController !== null && timeoutMs !== null
               ? globalThis.setTimeout(() => abortController.abort(), timeoutMs)
               : null;
-          let resp: Response;
+          let respStatus = 0;
+          let respHeaders: Record<string, string> = {};
+          let bytes: Uint8Array;
           try {
             // Include credentials (cookies) for same-origin and sync server
             // requests, but not for third-party CDNs (which reject credentials
@@ -1277,7 +1279,7 @@ function buildHostFunctions(
             } catch {}
             const credentials = isSameOrigin || isServerUrl ? "include" as const : "omit" as const;
 
-            resp = await proxyFetch(input.url, {
+            const resp = await proxyFetch(input.url, {
               method: input.method,
               headers: input.headers,
               body: fetchBody,
@@ -1285,16 +1287,20 @@ function buildHostFunctions(
               signal: abortController?.signal,
               timeout_ms: timeoutMs ?? undefined,
             });
+            respStatus = resp.status;
+            resp.headers.forEach((v, k) => {
+              respHeaders[k] = v;
+            });
+            // Read the full response body while still under abort timeout
+            // coverage. Previously the timeout was cleared after headers
+            // arrived, leaving arrayBuffer() with no timeout — causing sync
+            // pull to hang indefinitely when body transfer stalled.
+            bytes = new Uint8Array(await resp.arrayBuffer());
           } finally {
             if (timeoutId !== null) {
               globalThis.clearTimeout(timeoutId);
             }
           }
-          const respHeaders: Record<string, string> = {};
-          resp.headers.forEach((v, k) => {
-            respHeaders[k] = v;
-          });
-          const bytes = new Uint8Array(await resp.arrayBuffer());
           let body = "";
           try {
             body = new TextDecoder().decode(bytes);
@@ -1308,7 +1314,7 @@ function buildHostFunctions(
           const body_base64 = btoa(binary);
           return cp.store(
             JSON.stringify({
-              status: resp.status,
+              status: respStatus,
               headers: respHeaders,
               body,
               body_base64,
@@ -1711,9 +1717,11 @@ function buildHostFunctions(
               ? globalThis.setTimeout(() => abortController.abort(), 120_000)
               : null;
 
-          let resp: Response;
+          let respStatus = 0;
+          let respHeaders: Record<string, string> = {};
+          let bytes: Uint8Array;
           try {
-            resp = await fetch(fetchUrl, {
+            const resp = await fetch(fetchUrl, {
               method: input.method ?? "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -1723,17 +1731,18 @@ function buildHostFunctions(
               credentials: "include",
               signal: abortController?.signal,
             });
+            respStatus = resp.status;
+            resp.headers.forEach((v, k) => {
+              respHeaders[k] = v;
+            });
+            // Read body under timeout coverage (same fix as host_http_request)
+            bytes = new Uint8Array(await resp.arrayBuffer());
           } finally {
             if (timeoutId !== null) {
               globalThis.clearTimeout(timeoutId);
             }
           }
 
-          const respHeaders: Record<string, string> = {};
-          resp.headers.forEach((v, k) => {
-            respHeaders[k] = v;
-          });
-          const bytes = new Uint8Array(await resp.arrayBuffer());
           let body = "";
           try {
             body = new TextDecoder().decode(bytes);
@@ -1747,7 +1756,7 @@ function buildHostFunctions(
           const body_base64 = btoa(binary);
           return cp.store(
             JSON.stringify({
-              status: resp.status,
+              status: respStatus,
               headers: respHeaders,
               body,
               body_base64,

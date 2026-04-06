@@ -40,8 +40,23 @@ const TAURI_FILE_MUTATION_TYPES = new Set([
   "ContentsChanged",
 ]);
 
+// ---------------------------------------------------------------------------
+// Reactive sync state (Svelte 5 runes — module-level $state)
+// ---------------------------------------------------------------------------
+
+/** Reactive sync-in-progress flag. Use getSyncState() to read from components. */
+let syncing = $state(false);
+
+/** Accessor for the reactive sync state. */
+export function getSyncState(): { readonly syncing: boolean } {
+  return {
+    get syncing() {
+      return syncing;
+    },
+  };
+}
+
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-let syncing = false;
 let teardown: (() => void) | null = null;
 let visibilityListenerInstalled = false;
 let tauriFsEventSubId: number | undefined;

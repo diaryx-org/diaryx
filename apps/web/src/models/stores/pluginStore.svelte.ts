@@ -341,21 +341,6 @@ function getLeftSidebarContextMenuOwner(): {
   return null;
 }
 
-/** Toolbar button contributions. */
-function getToolbarButtons(): Array<{
-  pluginId: PluginId;
-  contribution: Extract<UiContribution, { slot: "ToolbarButton" }>;
-}> {
-  return manifests.flatMap((m) =>
-    m.ui
-      .filter(
-        (c): c is Extract<UiContribution, { slot: "ToolbarButton" }> =>
-          c.slot === "ToolbarButton",
-      )
-      .map((contribution) => ({ pluginId: m.id, contribution })),
-  );
-}
-
 /** Status bar item contributions. */
 function getStatusBarItems(): Array<{
   pluginId: PluginId;
@@ -690,9 +675,6 @@ export function getPluginStore() {
     },
     get leftSidebarContextMenuOwner() {
       return getLeftSidebarContextMenuOwner();
-    },
-    get toolbarButtons() {
-      return getToolbarButtons();
     },
     get statusBarItems() {
       return getStatusBarItems();

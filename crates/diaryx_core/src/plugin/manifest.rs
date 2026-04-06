@@ -139,17 +139,6 @@ pub enum UiContribution {
         /// Component reference for rendering.
         component: ComponentRef,
     },
-    /// A button in the editor toolbar.
-    ToolbarButton {
-        /// Unique identifier for this button.
-        id: String,
-        /// Button label / tooltip.
-        label: String,
-        /// Optional icon name.
-        icon: Option<String>,
-        /// Plugin command to execute on click.
-        plugin_command: String,
-    },
     /// An item in the status bar.
     StatusBarItem {
         /// Unique identifier for this item.

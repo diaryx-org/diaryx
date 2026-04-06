@@ -23,6 +23,19 @@
 </script>
 
 <div class="space-y-3">
+  <!-- Diaryx Branding -->
+  <div class="flex items-center gap-3 px-1 pb-2 border-b border-border">
+    <img
+      src={themeStore.resolvedTheme === 'dark' ? '/icon-dark.png' : '/icon.png'}
+      alt="Diaryx"
+      class="size-8 rounded"
+    />
+    <div>
+      <span class="text-sm font-semibold">Diaryx</span>
+      <span class="text-xs text-muted-foreground ml-1.5">v{__APP_VERSION__}</span>
+    </div>
+  </div>
+
   <h3 class="font-medium flex items-center gap-2">
     <Eye class="size-4" />
     Display

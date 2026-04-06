@@ -223,7 +223,10 @@ flow for browser and Tauri installs.
   sandboxed workspace picks: shared folder-picker flows call the native
   `authorize_workspace_path` command immediately after selection so TestFlight
   and App Store builds persist security-scoped bookmarks before those paths are
-  stored in the local workspace registry.
+  stored in the local workspace registry. The same helper is now reused by the
+  workspace-selector remote-link flow, so attaching a CLI-managed folder to an
+  existing remote workspace keeps the native bookmark/path pair consistent with
+  normal relocate/open-folder picks.
 - Tauri plugin install/inspect calls now also log stage-specific failures on
   both the JS and Rust sides, so mobile/TestFlight install issues show up in
   the Debug log panel with enough context to tell whether the failure happened

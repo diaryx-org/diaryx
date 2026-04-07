@@ -76,6 +76,16 @@ pub struct NamespaceObjectMeta {
     pub mime_type: Option<String>,
 }
 
+/// Entry returned by `list_namespaces` — mirrors the server's `NamespaceResponse`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NamespaceEntry {
+    pub id: String,
+    pub owner_user_id: String,
+    pub created_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
 /// Trait for namespace object operations (upload, delete, list, sync audience).
 ///
 /// Implementations talk to the sync server — via `proxyFetch` on browser,
@@ -101,6 +111,9 @@ pub trait NamespaceProvider: Send + Sync {
         subject: &str,
         reply_to: Option<&str>,
     ) -> Result<serde_json::Value, String>;
+
+    /// List all namespaces owned by the authenticated user.
+    fn list_namespaces(&self) -> Result<Vec<NamespaceEntry>, String>;
 }
 
 /// No-op implementation of [`PluginStorage`] for plugins that don't need persistence.
@@ -320,6 +333,10 @@ impl NamespaceProvider for NoopNamespaceProvider {
         _subject: &str,
         _reply_to: Option<&str>,
     ) -> Result<serde_json::Value, String> {
+        Err("Namespace operations are not available".to_string())
+    }
+
+    fn list_namespaces(&self) -> Result<Vec<NamespaceEntry>, String> {
         Err("Namespace operations are not available".to_string())
     }
 }
@@ -665,6 +682,13 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_namespace_list_objects,
+        )
+        .with_function(
+            "host_namespace_list",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_list,
         )
         .with_function(
             "host_namespace_sync_audience",
@@ -2157,6 +2181,29 @@ fn host_namespace_list_objects(
 
     let json = match result {
         Ok(objects) => serde_json::to_value(&objects).unwrap_or(serde_json::json!([])),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_list(input: {}) -> [NamespaceEntry] or {error}`
+fn host_namespace_list(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let _input: String = plugin.memory_get_val(&inputs[0])?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_list: lock: {e}")))?;
+    let result = ctx.namespace_provider.list_namespaces();
+
+    let json = match result {
+        Ok(entries) => serde_json::to_value(&entries).unwrap_or(serde_json::json!([])),
         Err(e) => serde_json::json!({ "error": e }),
     };
     plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;

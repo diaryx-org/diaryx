@@ -1155,6 +1155,14 @@ impl<R: Runtime> diaryx_extism::NamespaceProvider for TauriNamespaceProvider<R> 
         Ok(())
     }
 
+    fn list_namespaces(&self) -> Result<Vec<diaryx_extism::NamespaceEntry>, String> {
+        let base = self.server_url()?;
+        let url = format!("{}/namespaces", base);
+        Ok(self
+            .request_json::<Vec<diaryx_extism::NamespaceEntry>>("GET", url, None, None, None)?
+            .unwrap_or_default())
+    }
+
     fn send_audience_email(
         &self,
         ns_id: &str,

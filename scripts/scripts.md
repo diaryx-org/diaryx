@@ -19,6 +19,9 @@ contents: []
 - `test-sync.sh`: Opens a tmux window with the diaryx_sync_server and two web app dev servers.
 - `update-agents-index.sh`: Updates the workspace index in AGENTS.md using `diaryx workspace info`.
 
-Plugin builds, registry assembly, and CDN uploads are handled by the [plugin-registry](https://github.com/diaryx-org/plugin-registry) repo and each plugin's own CI.
+- `build-plugin.sh`: Builds a plugin WASM binary. Usage: `./scripts/build-plugin.sh <crate-name> [--release]`.
+- `release-plugin.sh`: Builds a release WASM, runs wasm-opt, and prepares a versioned artifact in `dist/plugins/` for CDN upload.
+
+Registry assembly and CDN uploads are handled by the [plugin-registry](https://github.com/diaryx-org/plugin-registry) repo.
 
 &nbsp;

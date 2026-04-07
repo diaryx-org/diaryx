@@ -1,0 +1,25 @@
+[package]
+name = "diaryx_sync_extism"
+version = "0.2.11"
+edition.workspace = true
+rust-version.workspace = true
+license-file = "LICENSE.md"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+diaryx_core = { workspace = true }
+diaryx_plugin_sdk = { workspace = true, features = ["core", "http", "secrets", "ws", "events", "plugins", "context", "wasi", "files", "namespaces", "proxy"] }
+extism-pdk = "1.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+indexmap = { workspace = true }
+log = "0.4"
+percent-encoding = "2.3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+diaryx_extism = { workspace = true, features = ["testing"] }
+tokio = { version = "1", features = ["rt", "macros", "time"] }

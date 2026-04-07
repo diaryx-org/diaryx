@@ -3760,15 +3760,12 @@
       {/if}
 
       <EditorFooter
-        {isDirty}
-        {isSaving}
         leftSidebarOpen={!leftSidebarCollapsed}
         rightSidebarOpen={!rightSidebarCollapsed}
         {focusMode}
         mobileFocusChromeVisible={mobileFocusChromeRevealed}
         readonly={editorReadonly}
         commandPaletteOpen={uiStore.showCommandPalette}
-        onSave={save}
         onOpenCommandPalette={uiStore.openCommandPalette}
         onRevealMobileFocusChrome={revealMobileFocusChromeTemporarily}
         {api}

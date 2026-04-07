@@ -16,14 +16,10 @@
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { maybeStartWindowDrag } from "$lib/windowDrag";
   import {
-    Check,
-    Circle,
-    Loader2,
     PanelLeft,
     PanelRight,
     Search,
     ChevronUp,
-    Save,
     Ellipsis,
   } from "@lucide/svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
@@ -34,15 +30,12 @@
   const mobileState = getMobileState();
 
   interface Props {
-    isDirty: boolean;
-    isSaving: boolean;
     focusMode?: boolean;
     mobileFocusChromeVisible?: boolean;
     leftSidebarOpen: boolean;
     rightSidebarOpen: boolean;
     readonly?: boolean;
     commandPaletteOpen?: boolean;
-    onSave: () => void | Promise<void>;
     onOpenCommandPalette: () => void;
     onRevealMobileFocusChrome?: () => void;
     /** API wrapper for plugin status bar commands */
@@ -71,15 +64,12 @@
   }
 
   let {
-    isDirty,
-    isSaving,
     focusMode = false,
     mobileFocusChromeVisible = false,
     leftSidebarOpen,
     rightSidebarOpen,
     readonly = false,
     commandPaletteOpen = false,
-    onSave,
     onOpenCommandPalette,
     onRevealMobileFocusChrome,
     api: _api = null,
@@ -190,19 +180,6 @@
       onclick={() => { fabDrawerOpen = true; }}
       onpointerdown={handleRevealMobileFocusChrome}
     >
-      <!-- Save state badge -->
-      {#if !readonly}
-        <span class="absolute top-0.5 right-0.5 flex items-center justify-center size-4 rounded-full
-          {isSaving ? 'bg-muted-foreground' : isDirty ? 'bg-amber-500 dark:bg-amber-400' : 'bg-emerald-500 dark:bg-emerald-400'}">
-          {#if isSaving}
-            <Loader2 class="size-2.5 animate-spin text-white" />
-          {:else if isDirty}
-            <Circle class="size-2 fill-white text-white" />
-          {:else}
-            <Check class="size-2.5 text-white" />
-          {/if}
-        </span>
-      {/if}
       <ChevronUp class="size-6" />
     </button>
   {/if}
@@ -216,28 +193,6 @@
         </Drawer.Header>
 
         <div class="flex flex-col pb-4">
-          <!-- Save -->
-          {#if !readonly}
-            <button
-              type="button"
-              class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left
-                {!isDirty && !isSaving ? 'text-muted-foreground' : ''}"
-              disabled={!isDirty && !isSaving}
-              onclick={() => handleDrawerAction(onSave)}
-            >
-              {#if isSaving}
-                <Loader2 class="size-5 animate-spin text-muted-foreground" />
-                <span class="text-base">Saving...</span>
-              {:else if isDirty}
-                <Save class="size-5 text-muted-foreground" />
-                <span class="text-base">Save</span>
-              {:else}
-                <Check class="size-5 text-muted-foreground/50" />
-                <span class="text-base">Saved</span>
-              {/if}
-            </button>
-          {/if}
-
           <!-- Favorites -->
           {#each favoriteCommands as cmd (cmd.id)}
             {@const FavIcon = cmd.icon}

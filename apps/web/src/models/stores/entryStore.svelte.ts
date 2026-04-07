@@ -20,7 +20,7 @@ let titleError = $state<string | null>(null);
 
 // Auto-save timer reference (not reactive, just for cleanup)
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
-const AUTO_SAVE_DELAY_MS = 2500;
+const AUTO_SAVE_DELAY_MS = 300;
 
 // ============================================================================
 // Store Factory

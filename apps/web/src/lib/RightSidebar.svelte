@@ -24,6 +24,7 @@
     X,
     Check,
     AlertCircle,
+    Circle,
     Paperclip,
     Trash2,
     File,
@@ -132,6 +133,10 @@
     onOpenAudienceManager?: () => void;
     onPropertyReorder?: (keys: string[]) => void;
     onEntryRefreshRequest?: () => void;
+    isDirty?: boolean;
+    isSaving?: boolean;
+    readonly?: boolean;
+    onSave?: () => void;
   }
 
   let {
@@ -160,6 +165,10 @@
     onOpenAudienceManager,
     onPropertyReorder,
     onEntryRefreshRequest,
+    isDirty = false,
+    isSaving = false,
+    readonly = false,
+    onSave,
   }: Props = $props();
 
   // Progressive swipe derived state (mobile only – desktop keeps width-based animation)
@@ -1720,6 +1729,43 @@
         <p class="text-xs text-muted-foreground truncate flex-1 min-w-0 text-right" title={entry.path}>
           {entry.path}
         </p>
+      {/if}
+      {#if !readonly && entry}
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            <button
+              type="button"
+              class="shrink-0 p-1 rounded hover:bg-accent transition-colors disabled:pointer-events-none"
+              disabled={!isDirty || isSaving}
+              onclick={() => onSave?.()}
+              aria-label={isSaving ? "Saving" : isDirty ? "Save" : "Saved"}
+            >
+              {#if isSaving}
+                <Loader2 class="size-3 animate-spin text-muted-foreground" />
+              {:else if isDirty}
+                <Circle class="size-2 fill-amber-500 text-amber-500 dark:fill-amber-400 dark:text-amber-400" />
+              {:else}
+                <Check class="size-3 text-muted-foreground/50" />
+              {/if}
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Content>
+            {#if isSaving}
+              Saving...
+            {:else if isDirty}
+              <div class="flex items-center gap-2">
+                Save
+                <Kbd.Group>
+                  <Kbd.Root>{modKey}</Kbd.Root>
+                  <span>+</span>
+                  <Kbd.Root>S</Kbd.Root>
+                </Kbd.Group>
+              </div>
+            {:else}
+              Saved
+            {/if}
+          </Tooltip.Content>
+        </Tooltip.Root>
       {/if}
     </div>
   </div>

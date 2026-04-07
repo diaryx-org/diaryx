@@ -235,6 +235,18 @@ describe("LeftSidebar", () => {
     expect(screen.getByLabelText("Open marketplace")).toBeInTheDocument();
   });
 
+  it("groups marketplace with workspace controls and collapse with footer actions", () => {
+    render(LeftSidebar, defaultProps());
+    const marketplaceButton = screen.getByLabelText("Open marketplace");
+    const signInLabel = screen.getByText("Sign in");
+    const settingsButton = screen.getByLabelText("Open settings");
+    const collapseButton = screen.getByLabelText("Collapse sidebar");
+
+    expect(marketplaceButton.compareDocumentPosition(signInLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(signInLabel.compareDocumentPosition(settingsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(settingsButton.compareDocumentPosition(collapseButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("renders loading state when isLoading is true and tree is null", () => {
     render(
       LeftSidebar,
@@ -377,6 +389,6 @@ describe("LeftSidebar", () => {
 
     render(LeftSidebar, defaultProps({ validationResult }));
     expect(screen.getByLabelText("Workspace problems (1)")).toBeInTheDocument();
-    expect(screen.getByText("1 problem")).toBeInTheDocument();
+    expect(screen.getByText(/1 problem/i)).toBeInTheDocument();
   });
 });

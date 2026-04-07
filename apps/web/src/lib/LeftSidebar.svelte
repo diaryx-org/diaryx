@@ -1585,24 +1585,18 @@
         <Button
           variant="ghost"
           size="icon"
-          onclick={onToggleCollapse}
+          onclick={handleOpenMarketplaceClick}
           data-window-drag-exclude
           class="size-8 shrink-0"
-          aria-label="Collapse sidebar"
+          aria-label="Open marketplace"
+          data-spotlight="marketplace-button"
         >
-          <PanelLeftClose class="size-4" />
+          <Store class="size-4" />
         </Button>
       </Tooltip.Trigger>
-      {#if !mobileState.isMobile && !collapsed}
+      {#if !mobileState.isMobile && !collapsed && !marketplaceDialogOpen && !marketplaceTooltipSuppressed}
         <Tooltip.Content>
-          <div class="flex items-center gap-2">
-            Collapse sidebar
-            <Kbd.Group>
-              <Kbd.Root>{modKey}</Kbd.Root>
-              <span>+</span>
-              <Kbd.Root>[</Kbd.Root>
-            </Kbd.Group>
-          </div>
+          Marketplace
         </Tooltip.Content>
       {/if}
     </Tooltip.Root>
@@ -1650,26 +1644,6 @@
             <Button
               variant="ghost"
               size="icon"
-              onclick={handleOpenMarketplaceClick}
-              data-window-drag-exclude
-              class="size-10 md:size-8"
-              aria-label="Open marketplace"
-              data-spotlight="marketplace-button"
-            >
-              <Store class="size-5 md:size-4" />
-            </Button>
-          </Tooltip.Trigger>
-          {#if !mobileState.isMobile && !collapsed && !marketplaceDialogOpen && !marketplaceTooltipSuppressed}
-            <Tooltip.Content>
-              Marketplace
-            </Tooltip.Content>
-          {/if}
-        </Tooltip.Root>
-        <Tooltip.Root>
-          <Tooltip.Trigger>
-            <Button
-              variant="ghost"
-              size="icon"
               onclick={handleOpenSettingsClick}
               data-window-drag-exclude
               class="size-10 md:size-8"
@@ -1687,6 +1661,32 @@
                     {#if i > 0}<span>+</span>{/if}
                     <Kbd.Root>{key}</Kbd.Root>
                   {/each}
+                </Kbd.Group>
+              </div>
+            </Tooltip.Content>
+          {/if}
+        </Tooltip.Root>
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            <Button
+              variant="ghost"
+              size="icon"
+              onclick={onToggleCollapse}
+              data-window-drag-exclude
+              class="size-10 md:size-8"
+              aria-label="Collapse sidebar"
+            >
+              <PanelLeftClose class="size-5 md:size-4" />
+            </Button>
+          </Tooltip.Trigger>
+          {#if !mobileState.isMobile && !collapsed}
+            <Tooltip.Content>
+              <div class="flex items-center gap-2">
+                Collapse sidebar
+                <Kbd.Group>
+                  <Kbd.Root>{modKey}</Kbd.Root>
+                  <span>+</span>
+                  <Kbd.Root>[</Kbd.Root>
                 </Kbd.Group>
               </div>
             </Tooltip.Content>

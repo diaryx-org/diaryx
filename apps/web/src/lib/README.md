@@ -147,6 +147,7 @@ can be tested directly without relying on full TipTap child-component wiring.
 ## Sidebar Layout
 
 - Left sidebar: built-in `Files` tab plus plugin-contributed tabs.
+- The left sidebar control rows keep workspace-local actions together: workspace selector, validation, and marketplace in the top row; sign-in/account, settings, and collapse in the footer row.
 - Right sidebar: built-in `Properties` tab plus plugin-contributed tabs.
 - Marketplace: opened from a dedicated modal surface
   (`MarketplaceDialog.svelte`): desktop `Dialog`, mobile `Drawer`.

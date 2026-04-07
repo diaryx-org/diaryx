@@ -252,14 +252,16 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
         // Store config under `plugins."diaryx.publish"` (dotted key, matching
         // the canonical plugin ID used by the permissions system).
         let plugins_key = "plugins".to_string();
-        let plugins_val = fm
-            .entry(plugins_key)
-            .or_insert_with(|| diaryx_core::yaml_value::YamlValue::Mapping(indexmap::IndexMap::new()));
+        let plugins_val = fm.entry(plugins_key).or_insert_with(|| {
+            diaryx_core::yaml_value::YamlValue::Mapping(indexmap::IndexMap::new())
+        });
         if let Some(plugins_map) = plugins_val.as_mapping_mut() {
             // Merge into existing "diaryx.publish" entry (preserves permissions).
             let entry = plugins_map
                 .entry("diaryx.publish".into())
-                .or_insert_with(|| diaryx_core::yaml_value::YamlValue::Mapping(indexmap::IndexMap::new()));
+                .or_insert_with(|| {
+                    diaryx_core::yaml_value::YamlValue::Mapping(indexmap::IndexMap::new())
+                });
             if let (Some(existing), Some(config_map)) =
                 (entry.as_mapping_mut(), config_yaml.as_mapping())
             {

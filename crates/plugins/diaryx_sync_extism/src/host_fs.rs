@@ -33,14 +33,12 @@ impl FileSystem for HostFs {
     }
 
     fn delete_file(&self, path: &Path) -> Result<()> {
-        host::fs::delete_file(&path.to_string_lossy())
-            .map_err(|e| Error::new(ErrorKind::Other, e))
+        host::fs::delete_file(&path.to_string_lossy()).map_err(|e| Error::new(ErrorKind::Other, e))
     }
 
     fn list_md_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let prefix = dir.to_string_lossy();
-        let files =
-            host::fs::list_files(&prefix).map_err(|e| Error::new(ErrorKind::Other, e))?;
+        let files = host::fs::list_files(&prefix).map_err(|e| Error::new(ErrorKind::Other, e))?;
         Ok(files
             .into_iter()
             .filter(|f| f.ends_with(".md"))
@@ -61,6 +59,9 @@ impl FileSystem for HostFs {
     }
 
     fn move_file(&self, _from: &Path, _to: &Path) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported, "move_file not supported in sync plugin"))
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "move_file not supported in sync plugin",
+        ))
     }
 }

@@ -1,9 +1,9 @@
 //! Namespace object operations via the host runtime.
 //!
-//! Provides functions for uploading, deleting, and listing objects in
-//! namespaces, as well as syncing audience access levels. These operations
-//! go through the host rather than direct HTTP, so plugins don't need
-//! HTTP permissions for server operations.
+//! Provides functions for listing namespaces, uploading and deleting objects
+//! in namespaces, and syncing audience access levels. These operations go
+//! through the host rather than direct HTTP, so plugins don't need HTTP
+//! permissions for server operations.
 //!
 //! Requires the `namespaces` feature.
 
@@ -21,6 +21,29 @@ pub struct ObjectMeta {
     pub audience: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+}
+
+/// Entry returned by `list_namespaces`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceEntry {
+    pub id: String,
+    pub owner_user_id: String,
+    pub created_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// List all namespaces owned by the authenticated user.
+pub fn list_namespaces() -> Result<Vec<NamespaceEntry>, String> {
+    let result = unsafe { host_namespace_list("{}".to_string()) }
+        .map_err(|e| format!("host_namespace_list failed: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse list_namespaces response: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    serde_json::from_value(parsed)
+        .map_err(|e| format!("Failed to decode list_namespaces response: {e}"))
 }
 
 /// Download an object from a namespace as raw bytes.

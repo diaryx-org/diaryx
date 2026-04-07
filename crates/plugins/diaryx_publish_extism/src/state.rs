@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use diaryx_core::yaml_value::YamlValue;
+use indexmap::IndexMap;
 
 use crate::publish::BodyRenderer;
 use crate::publish_plugin::PublishPlugin;

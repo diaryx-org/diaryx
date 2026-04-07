@@ -13,9 +13,9 @@
 //! - `on_event()` — filesystem events from the host
 //! - `get_config()` / `set_config()` — plugin configuration
 
+mod host_fs;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_extism_stubs;
-mod host_fs;
 pub mod server_api;
 pub mod state;
 pub mod sync_engine;

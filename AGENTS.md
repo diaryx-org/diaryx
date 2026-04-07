@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-04-06T15:34:02Z
+updated: 2026-04-07T19:17:30Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -80,10 +80,9 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │       └── Y-sync v2 Module - Siphonophore-based sync implementation (experimental) - crates/diaryx_sync_server/src/sync_v2/README.md
 │   ├── diaryx_sync - crates/diaryx_sync/README.md
 │   ├── crates/diaryx_extism/README.md
-│   └── plugins - Plugin guest crates
-│       ├── diaryx_plugin_sdk - SDK for building Extism WASM plugins - crates/plugins/diaryx_plugin_sdk/README.md
-│       ├── diaryx_sync_extism - Sync plugin (Extism guest WASM) - crates/plugins/diaryx_sync_extism/README.md
-│       └── diaryx_publish_extism - Publish plugin (Extism guest WASM) - crates/plugins/diaryx_publish_extism/README.md
+│   ├── crates/plugins/diaryx_plugin_sdk/README.md
+│   ├── Sync - Real-time multi-device sync across Diaryx workspaces - crates/plugins/diaryx_sync_extism/README.md
+│   └── Publish - Export and publish content with optional format conversion - crates/plugins/diaryx_publish_extism/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 ├── Scripts - scripts/scripts.md
 ├── TESTING - TESTING.md

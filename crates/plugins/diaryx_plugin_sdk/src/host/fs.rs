@@ -150,8 +150,8 @@ pub fn write_binary(path: &str, content: &[u8]) -> Result<(), String> {
 /// Delete a file from the workspace.
 pub fn delete_file(path: &str) -> Result<(), String> {
     let input = serde_json::json!({ "path": path }).to_string();
-    let result = unsafe { host_delete_file(input) }
-        .map_err(|e| format!("host_delete_file failed: {e}"))?;
+    let result =
+        unsafe { host_delete_file(input) }.map_err(|e| format!("host_delete_file failed: {e}"))?;
     if !result.is_empty() {
         return Err(result);
     }

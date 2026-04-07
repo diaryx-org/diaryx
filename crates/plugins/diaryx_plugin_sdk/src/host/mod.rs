@@ -77,6 +77,7 @@ extern "ExtismHost" {
     pub fn host_namespace_put_object(input: String) -> String;
     pub fn host_namespace_delete_object(input: String) -> String;
     pub fn host_namespace_list_objects(input: String) -> String;
+    pub fn host_namespace_list(input: String) -> String;
     pub fn host_namespace_sync_audience(input: String) -> String;
     pub fn host_namespace_send_email(input: String) -> String;
 

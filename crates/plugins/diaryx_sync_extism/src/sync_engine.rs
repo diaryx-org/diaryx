@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use crate::sync_manifest::{SyncManifest, SyncState};
 use crate::{
     auth_headers, http_error, http_request_binary_compat, http_request_compat, load_extism_config,
-    parse_http_body, parse_http_body_json, parse_http_status,
-    resolve_auth_token, resolve_server_url,
+    parse_http_body, parse_http_body_json, parse_http_status, resolve_auth_token,
+    resolve_server_url,
 };
 
 // ---------------------------------------------------------------------------
@@ -286,10 +286,7 @@ pub fn fetch_server_manifest(
         let count = items.len();
 
         for item in items {
-            let raw_key = item
-                .get("key")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
+            let raw_key = item.get("key").and_then(|v| v.as_str()).unwrap_or_default();
             // Decode percent-encoded keys so internal comparisons with
             // local filesystem paths work correctly.
             let key = decode_server_key(raw_key);

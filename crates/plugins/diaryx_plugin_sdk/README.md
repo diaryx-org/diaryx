@@ -33,8 +33,9 @@ See the module-level docs in `src/lib.rs` for a full example.
 | `plugins` | Inter-plugin command execution           |
 | `context` | Runtime context queries                  |
 | `wasi`    | WASI module execution                    |
-| `files`   | User-provided file requests              |
-| `full`    | All of the above                         |
+| `files`    | User-provided file requests              |
+| `namespaces` | Namespace object operations and namespace listing |
+| `full`     | All of the above                         |
 
 ## Building
 

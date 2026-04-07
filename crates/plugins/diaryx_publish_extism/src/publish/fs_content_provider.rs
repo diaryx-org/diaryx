@@ -91,4 +91,3 @@ async fn collect_tree_files<FS: AsyncFileSystem>(
         Box::pin(collect_tree_files(fs, workspace_dir, child, files)).await;
     }
 }
-

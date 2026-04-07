@@ -1,8 +1,9 @@
 //! Namespace-based server API helpers for the generic resource backend.
 //!
-//! These functions call the `/namespaces/…` endpoints. Session endpoints
-//! have been moved to plugin-share.
+//! Most functions call the `/namespaces/…` endpoints. Namespace listing is
+//! host-backed through `diaryx_plugin_sdk`.
 
+use diaryx_plugin_sdk::host::namespace as host_namespace;
 use serde_json::Value as JsonValue;
 
 use crate::{
@@ -42,17 +43,10 @@ pub fn create_namespace(params: &JsonValue, name: &str) -> Result<JsonValue, Str
     parse_http_body_json(&response).ok_or_else(|| "Invalid namespace response".to_string())
 }
 
-/// GET /namespaces — list namespaces owned by the authenticated user.
-pub fn list_namespaces(params: &JsonValue) -> Result<JsonValue, String> {
-    let config = load_extism_config();
-    let server = resolve_server_url(params, &config).ok_or("Missing server_url")?;
-    let headers = auth_headers(resolve_auth_token(params, &config));
-    let response = http_request_compat("GET", &format!("{server}/namespaces"), &headers, None)?;
-    let status = parse_http_status(&response);
-    if status != 200 {
-        return Err(http_error(status, &parse_http_body(&response)));
-    }
-    parse_http_body_json(&response).ok_or_else(|| "Invalid response".to_string())
+/// List namespaces owned by the authenticated user via the host runtime.
+pub fn list_namespaces(_params: &JsonValue) -> Result<JsonValue, String> {
+    let entries = host_namespace::list_namespaces()?;
+    serde_json::to_value(entries).map_err(|e| format!("Failed to serialize namespaces: {e}"))
 }
 
 // ---------------------------------------------------------------------------

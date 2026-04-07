@@ -74,6 +74,7 @@ The Sync settings tab uses Diaryx's declarative plugin UI surfaces.
 Snapshot/history panels remain iframe-backed plugin HTML.
 
 The plugin owns all CRDT state (WorkspaceCrdt, BodyDocManager) in its own WASM sandbox and is loaded on demand when sync is enabled.
+Namespace listing now comes from the host SDK's typed namespace API instead of a direct `/namespaces` HTTP fetch.
 
 ## Exports
 

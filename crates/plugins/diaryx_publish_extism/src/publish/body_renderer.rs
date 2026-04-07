@@ -6,8 +6,8 @@
 
 use std::path::Path;
 
-use indexmap::IndexMap;
 use diaryx_core::yaml_value::YamlValue;
+use indexmap::IndexMap;
 
 /// Trait for rendering body templates at publish/export time.
 pub trait BodyRenderer: Send + Sync {

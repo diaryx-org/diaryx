@@ -979,73 +979,77 @@
       }
     }
 
-    // Initialize auth state - if user was previously logged in,
-    // this will validate their token and enable collaboration automatically
-    await initAuth();
+    // Kick off independent init work in parallel:
+    // - Auth validation (HTTP call to server)
+    // - Editor component dynamic import
+    // - OPFS workspace discovery (filesystem scan)
+    const [, editorModule] = await Promise.all([
+      (async () => {
+        // Initialize auth state - if user was previously logged in,
+        // this will validate their token and enable collaboration automatically
+        await initAuth();
 
-    // Check for magic link token in URL (auto-verify without wizard)
-    // This must happen AFTER initAuth() so the auth service is initialized
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const token = params.get("token");
-      if (token) {
-        // Clear the token from URL immediately to prevent double verification
-        const url = new URL(window.location.href);
-        url.searchParams.delete("token");
-        window.history.replaceState({}, "", url.toString());
+        // Check for magic link token in URL (auto-verify without wizard)
+        // This must happen AFTER initAuth() so the auth service is initialized
+        if (typeof window !== "undefined") {
+          const params = new URLSearchParams(window.location.search);
+          const token = params.get("token");
+          if (token) {
+            // Clear the token from URL immediately to prevent double verification
+            const url = new URL(window.location.href);
+            url.searchParams.delete("token");
+            window.history.replaceState({}, "", url.toString());
 
-        // If no server URL is configured, set the default before verifying
-        // This handles the case where user clicks magic link in a new browser/tab
-        const serverUrl = localStorage.getItem("diaryx_sync_server_url");
-        if (!serverUrl) {
-          setServerUrl("https://app.diaryx.org/api");
-        }
-        // Verify automatically and wait for completion before continuing
-        await handleMagicLinkToken(token);
-      }
-    }
-
-    // Check for Stripe checkout result in URL
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const checkoutResult = params.get("checkout");
-      if (checkoutResult) {
-        const url = new URL(window.location.href);
-        url.searchParams.delete("checkout");
-        window.history.replaceState({}, "", url.toString());
-
-        if (checkoutResult === "success") {
-          // Poll for tier update — the webhook often arrives after the redirect
-          let upgraded = false;
-          for (let i = 0; i < 10; i++) {
-            await refreshUserInfo();
-            if (getAuthState().tier === "plus") {
-              upgraded = true;
-              break;
+            // If no server URL is configured, set the default before verifying
+            // This handles the case where user clicks magic link in a new browser/tab
+            const serverUrl = localStorage.getItem("diaryx_sync_server_url");
+            if (!serverUrl) {
+              setServerUrl("https://app.diaryx.org/api");
             }
-            await new Promise((r) => setTimeout(r, 1500));
-          }
-          if (upgraded) {
-            toast.success("Welcome to Diaryx Plus!", {
-              description: "Your subscription is now active.",
-            });
-          } else {
-            toast.info("Payment received!", {
-              description: "Your subscription is being activated. Please refresh in a moment.",
-            });
+            // Verify automatically and wait for completion before continuing
+            await handleMagicLinkToken(token);
           }
         }
-      }
-    }
+
+        // Check for Stripe checkout result in URL
+        if (typeof window !== "undefined") {
+          const params = new URLSearchParams(window.location.search);
+          const checkoutResult = params.get("checkout");
+          if (checkoutResult) {
+            const url = new URL(window.location.href);
+            url.searchParams.delete("checkout");
+            window.history.replaceState({}, "", url.toString());
+
+            if (checkoutResult === "success") {
+              // Poll for tier update — the webhook often arrives after the redirect
+              let upgraded = false;
+              for (let i = 0; i < 10; i++) {
+                await refreshUserInfo();
+                if (getAuthState().tier === "plus") {
+                  upgraded = true;
+                  break;
+                }
+                await new Promise((r) => setTimeout(r, 1500));
+              }
+              if (upgraded) {
+                toast.success("Welcome to Diaryx Plus!", {
+                  description: "Your subscription is now active.",
+                });
+              } else {
+                toast.info("Payment received!", {
+                  description: "Your subscription is being activated. Please refresh in a moment.",
+                });
+              }
+            }
+          }
+        }
+      })(),
+      import("./lib/Editor.svelte"),
+      discoverOpfsWorkspaces(),
+    ]);
 
     try {
-      // Dynamically import the Editor component
-      const module = await import("./lib/Editor.svelte");
-      Editor = module.default;
-
-      // Discover any OPFS workspace directories not yet in the local registry.
-      // This catches workspaces created by other tabs or previous sessions.
-      await discoverOpfsWorkspaces();
+      Editor = editorModule.default;
 
       // Check if any workspaces exist before proceeding
       let defaultWorkspace = getCurrentWorkspace();
@@ -1104,11 +1108,6 @@
 
       const apiInstance = createApi(backendInstance);
 
-      // Initialize plugin store (fetch manifests for UI extension points)
-      // Awaited so backend manifests are available before the editor is created
-      // (needed for Tauri iOS where browser Extism isn't available).
-      await getPluginStore().init(apiInstance);
-
       // Initialize filesystem event subscription for automatic UI updates
       cleanupEventSubscription = initEventSubscription(backendInstance);
 
@@ -1118,7 +1117,12 @@
       const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
       workspaceStore.setWorkspaceId(sharedWorkspaceId);
 
-      await refreshTree();
+      // Run plugin manifest fetch and tree refresh in parallel — both are
+      // independent backend calls that don't depend on each other.
+      await Promise.all([
+        getPluginStore().init(apiInstance),
+        refreshTree(),
+      ]);
 
       // Hydrate view preferences from workspace config (stored in root index
       // frontmatter) so they travel with the workspace instead of localStorage.
@@ -1238,8 +1242,8 @@
         await openEntry(tree.path);
       }
 
-      // Run initial validation
-      await runValidation();
+      // Run initial validation in the background — not needed for first render
+      runValidation();
 
     } catch (e) {
       if (e instanceof FsaGestureRequiredError) {

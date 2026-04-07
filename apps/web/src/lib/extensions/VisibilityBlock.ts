@@ -7,9 +7,10 @@
  *   :::
  *
  * Implementation follows the same open/close marker pattern as ConditionalBlock:
- * two atom nodes act as visual separators, and the content between them is
- * normal fully-editable TipTap content. A ProseMirror decoration plugin adds
- * a colored vertical bar in the gutter spanning from open to close marker.
+ * two atom nodes act as separators, and the content between them is normal
+ * fully-editable TipTap content. A ProseMirror decoration plugin adds a
+ * labeled gutter dash to each block in the range so the whole block reads as
+ * one continuous rail in the editor gutter.
  *
  * Semantics:
  * - Content between markers is visible only to the listed audiences (union).
@@ -33,8 +34,8 @@ import {
   renderBlockDirectiveOpen,
   renderBlockDirectiveClose,
   parseDirectiveAttrs,
-  serializeDirectiveAttrs,
 } from "./directiveUtils";
+// Gutter rendering now uses Decoration.node with CSS classes
 import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
 import { getAudienceColor } from "$lib/utils/audienceDotColor";
 import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
@@ -178,19 +179,31 @@ function getWrapPositions(
   if (selection.empty) return null;
 
   const firstBlock = findBlockBoundary(selection.$from);
-  const lastBlock = findBlockBoundary(selection.$to);
+  // For $to, if it sits right at a block boundary, resolve from one
+  // position back so we stay inside the last selected block.
+  const $to = selection.to > selection.from
+    ? selection.$to.doc.resolve(Math.max(selection.to - 1, selection.from))
+    : selection.$to;
+  const lastBlock = findBlockBoundary($to);
 
   if (!firstBlock || !lastBlock) return null;
-  if (firstBlock.depth !== lastBlock.depth) return null;
   if (firstBlock.parentBefore !== lastBlock.parentBefore) return null;
-  if (selection.from !== firstBlock.contentFrom) return null;
-  if (selection.to !== lastBlock.contentTo) return null;
 
+  // Single block: only use block mode if the entire block content is selected.
+  // Partial selection within one block should use inline visibility.
+  if (firstBlock.before === lastBlock.before) {
+    if (selection.from !== firstBlock.contentFrom || selection.to !== lastBlock.contentTo) {
+      return null;
+    }
+  }
+
+  // Expand to full block boundaries — the selection doesn't need to
+  // exactly match content edges, just span across blocks.
   return {
     wrapFrom: firstBlock.before,
     wrapTo: lastBlock.after,
-    selectionFrom: selection.from,
-    selectionTo: selection.to,
+    selectionFrom: firstBlock.contentFrom,
+    selectionTo: lastBlock.contentTo,
   };
 }
 
@@ -244,11 +257,18 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
         default: [],
         parseHTML: (element) => {
           const raw = element.getAttribute("data-vis-audiences") ?? "";
+          // Try JSON first (new format), fall back to directive parsing
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) return parsed;
+          } catch {
+            // Not JSON — fall back to space-separated directive format
+          }
           return parseDirectiveAttrs(raw);
         },
         renderHTML: (attributes) => {
           return {
-            "data-vis-audiences": serializeDirectiveAttrs(
+            "data-vis-audiences": JSON.stringify(
               attributes.audiences ?? [],
             ),
           };
@@ -346,10 +366,14 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
         },
       setVisibilityBlock:
         ({ audiences }) =>
-        ({ editor, state, tr, dispatch }) => {
+        ({ editor, tr, dispatch }) => {
           if (!dispatch) return true;
 
-          const existing = getVisibilityBlockForSelection(state);
+          // Use tr.doc for position lookups so we stay consistent with
+          // any prior steps in the chain (e.g. .focus()).
+          const existing = getVisibilityBlockForSelection(
+            { doc: tr.doc, selection: tr.selection } as EditorState,
+          );
           const markerType = editor.schema.nodes.visBlockMarker;
 
           if (existing) {
@@ -364,14 +388,35 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
             return true;
           }
 
-          return editor.commands.wrapVisibilityBlock({ audiences });
+          // Inline the wrap logic using the same tr to avoid
+          // mismatched-transaction errors from calling a separate command.
+          const wrap = getWrapPositions(tr.selection);
+          if (!wrap) return false;
+
+          const openMarker = markerType.create({ variant: "open", audiences });
+          const closeMarker = markerType.create({ variant: "close", audiences: [] });
+
+          tr.insert(wrap.wrapTo, closeMarker);
+          tr.insert(wrap.wrapFrom, openMarker);
+          tr.setSelection(
+            TextSelection.create(
+              tr.doc,
+              wrap.selectionFrom + openMarker.nodeSize,
+              wrap.selectionTo + openMarker.nodeSize,
+            ),
+          );
+
+          dispatch(tr);
+          return true;
         },
       unsetVisibilityBlock:
         () =>
-        ({ state, tr, dispatch }) => {
+        ({ tr, dispatch }) => {
           if (!dispatch) return true;
 
-          const existing = getVisibilityBlockForSelection(state);
+          const existing = getVisibilityBlockForSelection(
+            { doc: tr.doc, selection: tr.selection } as EditorState,
+          );
           if (!existing) return false;
 
           tr.delete(
@@ -390,46 +435,11 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
   },
 
   addNodeView() {
-    return ({ node, getPos, editor: viewEditor }) => {
+    return ({ getPos, editor: viewEditor }) => {
       const dom = document.createElement("div");
       dom.classList.add("vis-block-marker-wrapper");
+      dom.classList.add("vis-block-marker-wrapper--hidden");
       dom.setAttribute("contenteditable", "false");
-
-      const variant = node.attrs.variant as string;
-      const audiences: string[] = node.attrs.audiences ?? [];
-
-      const colorStore = getAudienceColorStore();
-      const primaryAudience = audiences[0] ?? "";
-      const bgClass = primaryAudience
-        ? getAudienceColor(primaryAudience, colorStore.audienceColors)
-        : "";
-
-      if (variant === "open" && audiences.length > 0) {
-        // Render a minimal pill showing audience name(s)
-        const pill = document.createElement("span");
-        pill.className = "vis-block-pill";
-
-        // Colored dot
-        const dot = document.createElement("span");
-        dot.className = "vis-block-pill-dot";
-        if (bgClass) {
-          dot.style.backgroundColor = tailwindBgToColor(bgClass);
-        }
-        pill.appendChild(dot);
-
-        // Audience label
-        const label = document.createElement("span");
-        label.className = "vis-block-pill-label";
-        label.textContent = audiences.join(", ");
-        pill.appendChild(label);
-
-        dom.appendChild(pill);
-      } else if (variant === "close") {
-        // Close marker: minimal visual indicator
-        const line = document.createElement("span");
-        line.className = "vis-block-close-line";
-        dom.appendChild(line);
-      }
 
       // Allow clicking the marker to select it (for deletion via backspace)
       dom.addEventListener("mousedown", (e) => {
@@ -487,6 +497,44 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
 
               const contentStart = open.pos + open.nodeSize;
               const contentEnd = close.pos;
+              const blockNodes: Array<{ pos: number; size: number }> = [];
+
+              doc.nodesBetween(contentStart, contentEnd, (node, pos) => {
+                if (
+                  pos >= contentStart &&
+                  pos < contentEnd &&
+                  node.isBlock &&
+                  !node.isAtom
+                ) {
+                  blockNodes.push({ pos, size: node.nodeSize });
+                  return false;
+                }
+                return true;
+              });
+
+              const addGutterDashDecorations = () => {
+                const tooltip = audiences.length > 0
+                  ? `Visible to: ${audiences.join(", ")}`
+                  : "Visible block";
+                for (let i = 0; i < blockNodes.length; i++) {
+                  const blockNode = blockNodes[i];
+                  const position =
+                    blockNodes.length === 1
+                      ? "only"
+                      : i === 0
+                        ? "first"
+                        : i === blockNodes.length - 1
+                          ? "last"
+                          : "middle";
+                  decorations.push(
+                    Decoration.node(blockNode.pos, blockNode.pos + blockNode.size, {
+                      class: `vis-block-gutter-node vis-block-gutter-${position}`,
+                      style: `--vis-gutter-color: ${colorValue}`,
+                      title: tooltip,
+                    }),
+                  );
+                }
+              };
 
               if (preview) {
                 const matches = audiences.some(
@@ -550,27 +598,6 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
                     ),
                   );
                 } else {
-                  // Matching audience: show content normally, but add subtle
-                  // gutter bar to indicate the block boundary
-                  doc.nodesBetween(contentStart, contentEnd, (node, pos) => {
-                    if (
-                      pos >= contentStart &&
-                      pos < contentEnd &&
-                      node.isBlock &&
-                      !node.isAtom
-                    ) {
-                      decorations.push(
-                        Decoration.node(pos, pos + node.nodeSize, {
-                          class: "vis-block-content--active",
-                          style: `border-left-color: ${colorValue};`,
-                        }),
-                      );
-                      return false;
-                    }
-                    return true;
-                  });
-
-                  // Hide markers in preview mode
                   decorations.push(
                     Decoration.node(open.pos, open.pos + open.nodeSize, {
                       class: "vis-block--hidden",
@@ -581,26 +608,10 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
                       class: "vis-block--hidden",
                     }),
                   );
+                  addGutterDashDecorations();
                 }
               } else {
-                // Normal editing mode: add gutter bar for the content range
-                doc.nodesBetween(contentStart, contentEnd, (node, pos) => {
-                  if (
-                    pos >= contentStart &&
-                    pos < contentEnd &&
-                    node.isBlock &&
-                    !node.isAtom
-                  ) {
-                    decorations.push(
-                      Decoration.node(pos, pos + node.nodeSize, {
-                        class: "vis-block-content--active",
-                        style: `border-left-color: ${colorValue};`,
-                      }),
-                    );
-                    return false;
-                  }
-                  return true;
-                });
+                addGutterDashDecorations();
               }
             }
 

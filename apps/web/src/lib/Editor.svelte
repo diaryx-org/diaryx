@@ -51,7 +51,11 @@
   import { SearchHighlight } from "./extensions/SearchHighlight";
   // Visibility directive extensions for audience filtering
   import { VisibilityMark } from "./extensions/VisibilityMark";
-  import { VisibilityBlock } from "./extensions/VisibilityBlock";
+  import {
+    VisibilityBlock,
+    canWrapSelectionInVisibilityBlock,
+    getVisibilityBlockForSelection,
+  } from "./extensions/VisibilityBlock";
   import { EditorGutter } from "./extensions/EditorGutter";
   import { toast } from "svelte-sonner";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
@@ -127,6 +131,7 @@
   // BubbleMenu element ref - must exist before editor creation
   let bubbleMenuElement: HTMLDivElement | undefined = $state();
   let bubbleMenuLinkPopoverOpen = $state(false);
+  let bubbleMenuVisPickerOpen = $state(false);
   let isUpdatingContent = false; // Flag to skip onchange during programmatic updates
 
   // Track the last content prop value applied into the editor.
@@ -960,22 +965,26 @@
         extensions.push(
           BubbleMenu.configure({
             element: bubbleMenuElement,
+            appendTo: () => document.body,
             options: {
+              strategy: "fixed",
+              placement: "top",
               offset: 10,
               // Keep BubbleMenu within viewport bounds (especially important on mobile)
               shift: {
                 padding: 8,
               },
-              // Manually control visibility to prevent flash on initial load
+              scrollTarget: getScrollParent(element),
               onShow: () => {
                 if (bubbleMenuElement) {
-                  bubbleMenuElement.style.display = "flex";
+                  bubbleMenuElement.style.pointerEvents = "auto";
                 }
               },
               onHide: () => {
                 if (bubbleMenuElement) {
-                  bubbleMenuElement.style.display = "none";
+                  bubbleMenuElement.style.pointerEvents = "none";
                 }
+                bubbleMenuVisPickerOpen = false;
               },
             },
             shouldShow: ({ editor: ed, view, state, from, to }) => {
@@ -1130,6 +1139,118 @@
         return entries;
       }
 
+      let nativeToolbarAudiences: string[] = [];
+
+      function mergeAudienceLists(available: string[], current: string[]): string[] {
+        const result: string[] = [];
+        const seen = new Set<string>();
+        for (const audience of [...available, ...current]) {
+          const trimmed = audience.trim();
+          if (!trimmed) continue;
+          const key = trimmed.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          result.push(trimmed);
+        }
+        return result;
+      }
+
+      async function loadNativeToolbarAudiences(): Promise<string[]> {
+        const rootPath = workspaceStore.tree?.path ?? "";
+        if (!api || !rootPath) {
+          nativeToolbarAudiences = [];
+          return nativeToolbarAudiences;
+        }
+
+        try {
+          nativeToolbarAudiences = await api.getAvailableAudiences(rootPath);
+        } catch {
+          nativeToolbarAudiences = [];
+        }
+        return nativeToolbarAudiences;
+      }
+
+      function readNativeBlockSelection() {
+        return editor ? getVisibilityBlockForSelection(editor.state) : null;
+      }
+
+      function readNativeInlineAudiences(): string[] {
+        if (!editor) return [];
+
+        const attrs = editor.getAttributes("visibilityMark");
+        if (attrs?.audiences?.length) return attrs.audiences as string[];
+
+        const { from, to } = editor.state.selection;
+        let found: string[] | null = null;
+        editor.state.doc.nodesBetween(from, to, (node) => {
+          if (found) return false;
+          for (const mark of node.marks) {
+            if (mark.type.name === "visibilityMark" && mark.attrs.audiences?.length) {
+              found = mark.attrs.audiences as string[];
+              return false;
+            }
+          }
+        });
+        if (found) return found;
+
+        const storedMarks = editor.state.storedMarks ?? [];
+        for (const mark of storedMarks) {
+          if (mark.type.name === "visibilityMark" && mark.attrs.audiences?.length) {
+            return mark.attrs.audiences as string[];
+          }
+        }
+
+        return [];
+      }
+
+      function shouldUseNativeVisibilityBlock(): boolean {
+        if (!editor) return false;
+        if (readNativeBlockSelection() !== null) return true;
+        if (readNativeInlineAudiences().length > 0) return false;
+        return canWrapSelectionInVisibilityBlock(editor.state);
+      }
+
+      function readNativeVisibilityAudiences(): string[] {
+        const block = readNativeBlockSelection();
+        if (block) return block.open.audiences;
+        return readNativeInlineAudiences();
+      }
+
+      function writeNativeVisibilityAudiences(audiences: string[]) {
+        if (!editor) return;
+
+        const nextAudiences = mergeAudienceLists([], audiences);
+        const useBlock = shouldUseNativeVisibilityBlock();
+        if (nextAudiences.length === 0) {
+          if (useBlock) {
+            editor.chain().focus().unsetVisibilityBlock().run();
+          } else {
+            editor.chain().focus().unsetVisibility().run();
+          }
+          return;
+        }
+
+        if (useBlock) {
+          editor.chain().focus().setVisibilityBlock({ audiences: nextAudiences }).run();
+        } else {
+          editor.chain().focus().setVisibility({ audiences: nextAudiences }).run();
+        }
+      }
+
+      function nativeVisibilityState(available = nativeToolbarAudiences) {
+        const currentAudiences = readNativeVisibilityAudiences();
+        const blockSelection = readNativeBlockSelection();
+        const shouldUseBlock = shouldUseNativeVisibilityBlock();
+        return {
+          audiences: mergeAudienceLists(available, currentAudiences),
+          currentAudiences,
+          mode: blockSelection ? "block" : shouldUseBlock ? "wrap-block" : "inline",
+          active: currentAudiences.length > 0,
+        };
+      }
+
+      void loadNativeToolbarAudiences();
+
       (globalThis as any).__diaryx_nativeToolbar = {
         triggerPreviewMedia: (mediaSrc: string) => {
           if (onPreviewMedia) onPreviewMedia(mediaSrc);
@@ -1155,6 +1276,29 @@
           } else {
             editor?.chain().focus().setLink({ href: path }).run();
           }
+        },
+        getVisibilityPickerState: () => nativeVisibilityState(),
+        getVisibilityPickerStateAsync: async () => {
+          const available = await loadNativeToolbarAudiences();
+          return nativeVisibilityState(available);
+        },
+        hasVisibility: () => readNativeVisibilityAudiences().length > 0,
+        toggleVisibilityAudience: (audience: string) => {
+          const name = audience.trim();
+          if (!name) return;
+
+          const current = readNativeVisibilityAudiences();
+          const isSelected = current.some((a) => a.toLowerCase() === name.toLowerCase());
+          const nextAudiences = isSelected
+            ? current.filter((a) => a.toLowerCase() !== name.toLowerCase())
+            : [...current, name];
+          if (!isSelected) {
+            nativeToolbarAudiences = mergeAudienceLists(nativeToolbarAudiences, [name]);
+          }
+          writeNativeVisibilityAudiences(nextAudiences);
+        },
+        removeVisibility: () => {
+          writeNativeVisibilityAudiences([]);
         },
         getPluginCommands: () => {
           const store = getPluginStore();
@@ -1534,6 +1678,7 @@
     {editor}
     bind:element={bubbleMenuElement}
     bind:linkPopoverOpen={bubbleMenuLinkPopoverOpen}
+    bind:visPickerOpen={bubbleMenuVisPickerOpen}
     {entryPath}
     rootPath={workspaceStore.tree?.path ?? ""}
     {api}
@@ -2332,43 +2477,44 @@
     margin: 2px 0;
   }
 
-  :global(.vis-block-pill) {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 1px 8px;
-    border-radius: 4px;
-    font-size: 0.75em;
-    color: var(--muted-foreground);
-    border: 1px dashed color-mix(in oklch, var(--border) 60%, transparent);
-    background: color-mix(in oklch, var(--muted) 30%, transparent);
+  :global(.vis-block-marker-wrapper--hidden) {
+    display: none;
   }
 
-  :global(.vis-block-pill-dot) {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
+  /* Visibility block gutter: colored bar via ::before on each block node */
+  :global(.vis-block-gutter-node) {
+    position: relative;
   }
 
-  :global(.vis-block-pill-label) {
-    font-family: var(--font-mono, ui-monospace, monospace);
+  :global(.vis-block-gutter-node::before) {
+    content: "";
+    position: absolute;
+    left: -17px;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--vis-gutter-color, oklch(0.554 0.022 257.417));
+    opacity: 0.85;
+    pointer-events: none;
   }
 
-  :global(.vis-block-close-line) {
-    display: block;
-    height: 1px;
-    width: 2em;
-    background: color-mix(in oklch, var(--border) 40%, transparent);
+  /* Middle/last segments extend up through the margin above them */
+  :global(.vis-block-gutter-middle::before),
+  :global(.vis-block-gutter-last::before) {
+    top: calc(-0.75em - 1px);
   }
 
-  /* Gutter bar for block content */
-  :global(.vis-block-content--active) {
-    border-left: 3px solid var(--muted-foreground);
-    padding-left: 12px !important;
-    margin-left: -15px;
-    transition: border-color 0.15s ease;
+  /* Round the caps */
+  :global(.vis-block-gutter-first::before),
+  :global(.vis-block-gutter-only::before) {
+    border-top-left-radius: 3px;
+    border-top-right-radius: 3px;
+  }
+
+  :global(.vis-block-gutter-last::before),
+  :global(.vis-block-gutter-only::before) {
+    border-bottom-left-radius: 3px;
+    border-bottom-right-radius: 3px;
   }
 
   /* Filter mode: hide non-matching block content */

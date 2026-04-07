@@ -27,6 +27,21 @@ struct CachedImageInfo {
     let timestamp: TimeInterval
 }
 
+struct VisibilityPickerState {
+    let audiences: [String]
+    let currentAudiences: [String]
+    let mode: String
+    let active: Bool
+
+    init(dict: [String: Any]) {
+        let current = dict["currentAudiences"] as? [String] ?? []
+        audiences = dict["audiences"] as? [String] ?? []
+        currentAudiences = current
+        mode = dict["mode"] as? String ?? "inline"
+        active = dict["active"] as? Bool ?? !current.isEmpty
+    }
+}
+
 class EditorToolbarPlugin: Plugin, WKScriptMessageHandler {
     private weak var webView: WKWebView?
     private var toolbar: EditorToolbar?
@@ -149,6 +164,9 @@ class EditorToolbarPlugin: Plugin, WKScriptMessageHandler {
             } else {
                 completion?(nil)
             }
+        case "visibilityStateResult":
+            let state = VisibilityPickerState(dict: body["state"] as? [String: Any] ?? [:])
+            toolbar?.handleVisibilityStateResult(state)
         default:
             break
         }
@@ -618,6 +636,14 @@ extension EditorToolbarPlugin {
             if (!editor) return;
 
             try {
+                var visibilityActive = editor.isActive('visibilityMark');
+                try {
+                    var bridge = globalThis.__diaryx_nativeToolbar;
+                    if (bridge && bridge.hasVisibility) {
+                        visibilityActive = !!bridge.hasVisibility();
+                    }
+                } catch (_) {}
+
                 var activeStates = {
                     bold: editor.isActive('bold'),
                     italic: editor.isActive('italic'),
@@ -631,7 +657,8 @@ extension EditorToolbarPlugin {
                     taskList: editor.isActive('taskList'),
                     blockquote: editor.isActive('blockquote'),
                     codeBlock: editor.isActive('codeBlock'),
-                    link: editor.isActive('link')
+                    link: editor.isActive('link'),
+                    visibility: visibilityActive
                 };
 
                 for (var i = 0; i < pluginMarkIds.length; i++) {
@@ -754,6 +781,7 @@ class EditorToolbar: UIView {
     private let scrollView = UIScrollView()
     private let stackView = UIStackView()
     private let dismissButton = UIButton(type: .system)
+    private var pendingVisibilityStateCompletion: ((VisibilityPickerState) -> Void)?
 
     // Button references for active state updates (keyed by state ID)
     private var buttonMap: [String: UIButton] = [:]
@@ -884,6 +912,7 @@ class EditorToolbar: UIView {
             makeButton(systemName: "strikethrough", action: #selector(doStrike), id: "strike"),
             makeButton(systemName: "chevron.left.forwardslash.chevron.right", action: #selector(doCode), id: "code"),
             makeButton(systemName: "link", action: #selector(doLink), id: "link"),
+            makeButton(systemName: "eye.slash", action: #selector(doVisibility), id: "visibility"),
         ])
     }
 
@@ -1067,6 +1096,14 @@ class EditorToolbar: UIView {
             case "redo":
                 button.isEnabled = canRedo
                 button.tintColor = canRedo ? activeTint : inactiveTint.withAlphaComponent(0.3)
+            case "visibility":
+                let isActive = activeStates[id] ?? false
+                let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+                button.setImage(
+                    UIImage(systemName: isActive ? "eye" : "eye.slash", withConfiguration: config),
+                    for: .normal
+                )
+                button.tintColor = isActive ? activeTint : inactiveTint
             default:
                 let isActive = activeStates[id] ?? false
                 button.tintColor = isActive ? activeTint : inactiveTint
@@ -1101,6 +1138,11 @@ class EditorToolbar: UIView {
         promptForLink()
     }
 
+    @objc private func doVisibility() {
+        haptics.impactOccurred()
+        promptForVisibility()
+    }
+
     @objc private func doUndo() {
         haptics.impactOccurred()
         execCommand("undo")
@@ -1125,6 +1167,128 @@ class EditorToolbar: UIView {
 
     private func execHeading(level: Int) {
         let js = "globalThis.__diaryx_tiptapEditor?.chain().focus().toggleHeading({level:\(level)}).run();"
+        webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    // MARK: - Visibility Picker
+
+    func handleVisibilityStateResult(_ state: VisibilityPickerState) {
+        let completion = pendingVisibilityStateCompletion
+        pendingVisibilityStateCompletion = nil
+        completion?(state)
+    }
+
+    private func requestVisibilityState(completion: @escaping (VisibilityPickerState) -> Void) {
+        guard let webView = webView else {
+            completion(VisibilityPickerState(dict: [:]))
+            return
+        }
+
+        pendingVisibilityStateCompletion = completion
+        let js = """
+        (function() {
+          var fallback = {audiences: [], currentAudiences: [], mode: 'inline', active: false};
+          try {
+            var bridge = globalThis.__diaryx_nativeToolbar;
+            if (!bridge || !bridge.getVisibilityPickerStateAsync) {
+              window.webkit.messageHandlers.editorToolbar.postMessage({type:'visibilityStateResult', state: fallback});
+              return;
+            }
+            Promise.resolve(bridge.getVisibilityPickerStateAsync()).then(function(state) {
+              window.webkit.messageHandlers.editorToolbar.postMessage({type:'visibilityStateResult', state: state || fallback});
+            }).catch(function() {
+              window.webkit.messageHandlers.editorToolbar.postMessage({type:'visibilityStateResult', state: fallback});
+            });
+          } catch (_) {
+            window.webkit.messageHandlers.editorToolbar.postMessage({type:'visibilityStateResult', state: fallback});
+          }
+        })();
+        """
+        webView.evaluateJavaScript(js) { [weak self] _, error in
+            guard error != nil else { return }
+            let completion = self?.pendingVisibilityStateCompletion
+            self?.pendingVisibilityStateCompletion = nil
+            completion?(VisibilityPickerState(dict: [:]))
+        }
+    }
+
+    private func promptForVisibility() {
+        guard let vc = findViewController() else { return }
+        requestVisibilityState { [weak self, weak vc] state in
+            guard let self = self, let vc = vc else { return }
+            self.showVisibilityActionSheet(on: vc, state: state)
+        }
+    }
+
+    private func showVisibilityActionSheet(on vc: UIViewController, state: VisibilityPickerState) {
+        let title: String
+        switch state.mode {
+        case "block":
+            title = "Block Visibility"
+        case "wrap-block":
+            title = "Wrap Block Visibility"
+        default:
+            title = "Inline Visibility"
+        }
+
+        let sheet = UIAlertController(title: title, message: nil, preferredStyle: .actionSheet)
+        let selected = Set(state.currentAudiences.map { $0.lowercased() })
+
+        if state.audiences.isEmpty {
+            let empty = UIAlertAction(title: "No audiences defined yet", style: .default)
+            empty.isEnabled = false
+            sheet.addAction(empty)
+        } else {
+            for audience in state.audiences {
+                let isSelected = selected.contains(audience.lowercased())
+                let title = isSelected ? "✓ \(audience)" : audience
+                sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                    self?.haptics.impactOccurred()
+                    self?.execVisibilityAudience(audience)
+                })
+            }
+        }
+
+        sheet.addAction(UIAlertAction(title: "New Audience...", style: .default) { [weak self, weak vc] _ in
+            guard let self = self, let vc = vc else { return }
+            self.promptForNewAudience(on: vc)
+        })
+
+        if state.active {
+            sheet.addAction(UIAlertAction(title: "Remove Visibility Filter", style: .destructive) { [weak self] _ in
+                self?.haptics.impactOccurred()
+                self?.webView?.evaluateJavaScript(
+                    "globalThis.__diaryx_nativeToolbar?.removeVisibility?.();",
+                    completionHandler: nil
+                )
+            })
+        }
+
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        sheet.popoverPresentationController?.sourceView = self
+        sheet.popoverPresentationController?.sourceRect = bounds
+        vc.present(sheet, animated: true)
+    }
+
+    private func promptForNewAudience(on vc: UIViewController) {
+        let alert = UIAlertController(title: "New Audience", message: nil, preferredStyle: .alert)
+        alert.addTextField { textField in
+            textField.placeholder = "Audience name"
+            textField.autocapitalizationType = .words
+            textField.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Apply", style: .default) { [weak self] _ in
+            guard let name = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty else { return }
+            self?.haptics.impactOccurred()
+            self?.execVisibilityAudience(name)
+        })
+        vc.present(alert, animated: true)
+    }
+
+    private func execVisibilityAudience(_ audience: String) {
+        let js = "globalThis.__diaryx_nativeToolbar?.toggleVisibilityAudience?.(\(Self.jsStringLiteral(audience)));"
         webView?.evaluateJavaScript(js, completionHandler: nil)
     }
 
@@ -1432,6 +1596,16 @@ class EditorToolbar: UIView {
             return "{}"
         }
         return str
+    }
+
+    private static func jsStringLiteral(_ value: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [value]),
+              let json = String(data: data, encoding: .utf8),
+              json.hasPrefix("["),
+              json.hasSuffix("]") else {
+            return "\"\""
+        }
+        return String(json.dropFirst().dropLast())
     }
 
     // MARK: - Lucide → SF Symbol Mapping

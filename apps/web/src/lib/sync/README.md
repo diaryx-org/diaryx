@@ -83,6 +83,14 @@ Those mutation-triggered provider commands are routed through the normal
 backend/plugin-command path so the guest sees the current workspace runtime
 context and linked remote workspace ID.
 
+Host-side automatic sync is debounced after file mutations, but mutations that
+arrive while a sync is already running queue one follow-up sync after the
+active run finishes. The scheduler also runs on startup, browser tab resume,
+manual sync requests, and browser `online` events so edits made while offline
+are retried after reconnect. Tauri filesystem-event subscriptions are tied to
+the scheduler lifecycle so workspace switches and teardown do not leave late
+native listeners behind.
+
 Tauri workspace selection can also attach an existing local folder to a remote
 workspace already listed by a provider. That flow is intentionally explicit
 about conflict policy: `Already in sync` stores only provider-link metadata in
@@ -100,4 +108,5 @@ bootstrap flow.
 | `../plugins/extismBrowserLoader.ts` | Browser Extism host functions, including sync transport bridging |
 | `providerPluginCommands.ts` | Thin provider-command wrapper that delegates through the provider router |
 | `workspaceProviderService.ts` | Provider/workspace link, snapshot upload, download bootstrap, and explicit local workspace targeting via provider plugins |
+| `syncScheduler.svelte.ts` | Debounced host sync scheduler for startup, file mutations, tab resume, browser reconnect, and manual sync |
 | `attachmentSyncService.ts` | Attachment transfer queue and metadata indexing |

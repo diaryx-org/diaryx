@@ -42,6 +42,17 @@ async function flushMicrotasks(): Promise<void> {
   }
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 describe("syncScheduler", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -105,6 +116,46 @@ describe("syncScheduler", () => {
 
     setVisibilityState("visible");
     document.dispatchEvent(new Event("visibilitychange"));
+    await flushMicrotasks();
+
+    expect(pluginMocks.dispatchCommand).toHaveBeenCalledTimes(1);
+    expect(pluginMocks.dispatchCommand).toHaveBeenCalledWith("diaryx.sync", "Sync", {
+      provider_id: "diaryx.sync",
+    });
+  });
+
+  it("queues a follow-up sync when a debounced mutation fires during an active sync", async () => {
+    const inFlightSync = deferred<{ success: boolean }>();
+    pluginMocks.dispatchCommand
+      .mockReturnValueOnce(inFlightSync.promise)
+      .mockResolvedValue({ success: true });
+
+    startSyncScheduler();
+    expect(pluginMocks.dispatchCommand).toHaveBeenCalledTimes(1);
+
+    pluginObserverHolder.observer?.({ event_type: "file_saved" });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await flushMicrotasks();
+    expect(pluginMocks.dispatchCommand).toHaveBeenCalledTimes(1);
+
+    inFlightSync.resolve({ success: true });
+    await inFlightSync.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(pluginMocks.dispatchCommand).toHaveBeenCalledTimes(2);
+    expect(pluginMocks.dispatchCommand).toHaveBeenLastCalledWith("diaryx.sync", "Sync", {
+      provider_id: "diaryx.sync",
+    });
+  });
+
+  it("runs sync when the browser comes back online", async () => {
+    startSyncScheduler();
+    await flushMicrotasks();
+    vi.clearAllMocks();
+
+    window.dispatchEvent(new Event("online"));
     await flushMicrotasks();
 
     expect(pluginMocks.dispatchCommand).toHaveBeenCalledTimes(1);

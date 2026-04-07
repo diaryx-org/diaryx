@@ -1624,7 +1624,7 @@ function buildHostFunctions(
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
         }
       },
-      async host_namespace_list(cp: CallContext, offs: bigint) {
+      async host_namespace_list(cp: CallContext, _offs: bigint) {
         try {
           const resp = await namespaceFetch("GET", `/namespaces`);
           const data = await resp.text();

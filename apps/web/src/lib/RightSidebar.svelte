@@ -1653,46 +1653,41 @@
     {/if}
   </div>
 
-  <!-- Safe area footer spacer (when no tab toggle) -->
-  {#if !(historyTabId || nonHistoryPluginTabs.length > 0)}
-    <div class="shrink-0 pb-[env(safe-area-inset-bottom)] md:hidden border-t border-sidebar-border bg-sidebar-accent"></div>
+  <!-- Tab Toggle (hidden when only one tab) -->
+  {#if historyTabId || nonHistoryPluginTabs.length > 0}
+  <div class="px-3 pt-1 pb-1 shrink-0">
+    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <button
+        type="button"
+        class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => activeTab = "properties"}
+      >
+        Props
+      </button>
+      {#if historyTabId}
+        <button
+          type="button"
+          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = historyTabId}
+        >
+          {historyTabLabel}
+        </button>
+      {/if}
+      {#each nonHistoryPluginTabs as tab}
+        <button
+          type="button"
+          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = tab.contribution.id}
+        >
+          {tab.contribution.label}
+        </button>
+      {/each}
+    </div>
+  </div>
   {/if}
 
   <!-- Footer -->
   <div class="shrink-0 border-t border-sidebar-border pb-[env(safe-area-inset-bottom)] bg-sidebar-accent">
-    <!-- Tab Toggle (hidden when only one tab) -->
-    {#if historyTabId || nonHistoryPluginTabs.length > 0}
-    <div class="flex items-center px-3 py-1">
-      <div class="flex-1 flex items-center gap-1 bg-muted rounded-md min-h-8 py-1 px-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <button
-          type="button"
-          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          onclick={() => activeTab = "properties"}
-        >
-          Props
-        </button>
-        {#if historyTabId}
-          <button
-            type="button"
-            class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-            onclick={() => activeTab = historyTabId}
-          >
-            {historyTabLabel}
-          </button>
-        {/if}
-        {#each nonHistoryPluginTabs as tab}
-          <button
-            type="button"
-            class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-            onclick={() => activeTab = tab.contribution.id}
-          >
-            {tab.contribution.label}
-          </button>
-        {/each}
-      </div>
-    </div>
-    {/if}
-
     <!-- Collapse + path -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div

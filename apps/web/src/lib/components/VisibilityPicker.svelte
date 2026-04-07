@@ -42,25 +42,68 @@
 
   let audiences = $state<string[]>([]);
   let newAudienceName = $state("");
+  // Bumped when TipTap changes selection/doc state so derived reads don't stale-cache the editor.
+  let editorVersion = $state(0);
 
-  let blockSelection = $derived.by(() =>
-    editor ? getVisibilityBlockForSelection(editor.state) : null,
-  );
-  let shouldUseBlock = $derived.by(() => {
-    if (!editor) return false;
-    return (
-      blockSelection !== null ||
-      canWrapSelectionInVisibilityBlock(editor.state)
-    );
-  });
+  function readBlockSelection() {
+    return editor ? getVisibilityBlockForSelection(editor.state) : null;
+  }
 
-  // Current audiences on the selection, preferring block visibility when
-  // the selection is already inside a block or cleanly spans full blocks.
-  let currentAudiences = $derived.by(() => {
+  function readInlineAudiences(): string[] {
     if (!editor) return [];
-    if (shouldUseBlock) return blockSelection?.open.audiences ?? [];
+
     const attrs = editor.getAttributes("visibilityMark");
-    return (attrs?.audiences as string[]) ?? [];
+    if (attrs?.audiences?.length) return attrs.audiences as string[];
+
+    const { from, to } = editor.state.selection;
+    let found: string[] | null = null;
+    editor.state.doc.nodesBetween(from, to, (node) => {
+      if (found) return false;
+      for (const mark of node.marks) {
+        if (mark.type.name === "visibilityMark" && mark.attrs.audiences?.length) {
+          found = mark.attrs.audiences as string[];
+          return false;
+        }
+      }
+    });
+    if (found) return found;
+
+    const storedMarks = editor.state.storedMarks ?? [];
+    for (const mark of storedMarks) {
+      if (mark.type.name === "visibilityMark" && mark.attrs.audiences?.length) {
+        return mark.attrs.audiences as string[];
+      }
+    }
+
+    return [];
+  }
+
+  function readShouldUseBlock() {
+    if (!editor) return false;
+    if (readBlockSelection() !== null) return true;
+    if (readInlineAudiences().length > 0) return false;
+    return canWrapSelectionInVisibilityBlock(editor.state);
+  }
+
+  function readCurrentAudiences(): string[] {
+    if (!editor) return [];
+    const block = readBlockSelection();
+    if (block) return block.open.audiences;
+    return readInlineAudiences();
+  }
+
+  // Re-read from editor whenever editorVersion bumps
+  let blockSelection = $derived.by(() => {
+    editorVersion;
+    return readBlockSelection();
+  });
+  let shouldUseBlock = $derived.by(() => {
+    editorVersion;
+    return readShouldUseBlock();
+  });
+  let currentAudiences = $derived.by(() => {
+    editorVersion;
+    return readCurrentAudiences();
   });
 
   async function loadAudiences() {
@@ -77,6 +120,28 @@
     if (open && api && rootPath) {
       loadAudiences();
     }
+  });
+
+  $effect(() => {
+    if (!editor) return;
+
+    const ed = editor;
+    let disposed = false;
+    const refreshEditorState = () => {
+      queueMicrotask(() => {
+        if (!disposed && editor === ed) editorVersion++;
+      });
+    };
+
+    ed.on("selectionUpdate", refreshEditorState);
+    ed.on("transaction", refreshEditorState);
+    refreshEditorState();
+
+    return () => {
+      disposed = true;
+      ed.off("selectionUpdate", refreshEditorState);
+      ed.off("transaction", refreshEditorState);
+    };
   });
 
   function toggleAudience(audience: string) {
@@ -115,6 +180,7 @@
         editor.chain().focus().setVisibility({ audiences: newAudiences }).run();
       }
     }
+    editorVersion++;
   }
 
   function handleCreateAudience() {
@@ -125,7 +191,10 @@
     templateContextStore.bumpAudiencesVersion();
 
     // Apply with the new audience
-    const newAudiences = [...currentAudiences, name];
+    const alreadyPresent = currentAudiences.some(
+      (a) => a.toLowerCase() === name.toLowerCase(),
+    );
+    const newAudiences = alreadyPresent ? currentAudiences : [...currentAudiences, name];
     if (shouldUseBlock) {
       editor.chain().focus().setVisibilityBlock({ audiences: newAudiences }).run();
     } else {
@@ -147,14 +216,10 @@
   }
 
   function handleButtonClick() {
-    if (isActive) {
-      // Quick toggle: remove mark
-      handleRemoveAll();
-    } else {
-      // Open picker
-      onOpen?.();
-      open = true;
-    }
+    // Always open the picker so existing block/inline audiences can be edited
+    // in place. Removal is still available from the popover itself.
+    onOpen?.();
+    open = true;
   }
 </script>
 
@@ -168,7 +233,7 @@
       e.stopPropagation();
       handleButtonClick();
     }}
-    title={isActive ? "Remove visibility filter" : "Set visibility"}
+    title={isActive ? "Edit visibility" : "Set visibility"}
     aria-pressed={isActive}
   >
     {#if isActive}

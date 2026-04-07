@@ -143,6 +143,14 @@ instead of falling through to a `localhost` browser open, while external
 Editor menu visibility rules that depend on focus handoff and explicit link
 popover state now live in `editorMenuVisibility.ts` so BubbleMenu regressions
 can be tested directly without relying on full TipTap child-component wiring.
+The visibility picker is cleared when the BubbleMenu hides instead of forcing
+the menu to stay visible after the editor selection disappears.
+BubbleMenu placement is appended to `document.body`, uses fixed positioning,
+and listens to the editor scroll parent so the first text selection in a
+scrolled entry does not mix editor-content and viewport coordinates.
+On iOS Tauri, `Editor.svelte` also exposes the native-toolbar bridge for
+audience visibility state and mutations so the Swift toolbar can offer the same
+inline/block audience picker behavior as the web BubbleMenu.
 
 ## Sidebar Layout
 

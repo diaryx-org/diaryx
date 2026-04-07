@@ -37,6 +37,7 @@ This folder contains Diaryx crates for core features and platform bindings.
 - `[diaryx_extism](/crates/diaryx_extism/README.md)`: Extism host runtime — loads WASM guest plugins at runtime
 - `tauri-plugin-icloud`: Tauri plugin for iCloud Drive workspace storage (iOS)
 - `tauri-plugin-iap`: Tauri plugin for Apple In-App Purchases via StoreKit 2
+- `tauri-plugin-editor-toolbar`: native iOS keyboard toolbar for the shared TipTap editor, including block/inline formatting, links, plugin commands, and audience visibility selection
 
 ### Plugin crates (`plugins/`)
 

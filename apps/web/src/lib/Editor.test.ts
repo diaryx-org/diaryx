@@ -458,4 +458,15 @@ describe("Editor.svelte", () => {
       }),
     ).toBe(true);
   });
+
+  it("lets the bubble menu hide when focus and editor selection context are gone", () => {
+    expect(
+      shouldKeepBubbleMenuVisible({
+        bubbleMenuElement: undefined,
+        activeElement: null,
+        editorHasFocus: false,
+        linkPopoverOpen: false,
+      }),
+    ).toBe(false);
+  });
 });

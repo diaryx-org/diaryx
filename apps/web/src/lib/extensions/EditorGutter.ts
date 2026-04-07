@@ -2,7 +2,7 @@
  * EditorGutter — Generic gutter infrastructure for the TipTap editor.
  *
  * Provides a left-side gutter column that other extensions can populate with
- * indicators (colored dots, vertical bars, collapse markers). The gutter
+ * indicators (colored dots, labeled dashes, collapse markers). The gutter
  * only appears when at least one indicator is registered, so there is no
  * layout cost when no directives are present.
  *
@@ -157,6 +157,37 @@ export function createGutterMultiDot(
     }
     container.appendChild(dot);
   }
+
+  return container;
+}
+
+/**
+ * Create a gutter dash for block-level ranges.
+ *
+ * The dash is intended to be repeated on each block line within a range so the
+ * sequence reads as one continuous gutter rail. Label is shown as a tooltip on
+ * hover rather than inline text.
+ *
+ * @param position "first" | "middle" | "last" | "only" controls cap rendering
+ */
+export function createGutterLabeledDash(
+  color: string,
+  position: "first" | "middle" | "last" | "only" = "middle",
+  tooltip?: string,
+): HTMLElement {
+  const container = document.createElement("span");
+  container.className = `gutter-indicator gutter-labeled-dash gutter-dash-${position}`;
+  container.setAttribute("aria-hidden", "true");
+  container.setAttribute("contenteditable", "false");
+
+  if (tooltip) {
+    container.title = tooltip;
+  }
+
+  const dash = document.createElement("span");
+  dash.className = "gutter-labeled-dash-line";
+  dash.style.borderColor = color;
+  container.appendChild(dash);
 
   return container;
 }

@@ -28,6 +28,7 @@
     /** API instance for link formatting */
     api?: Api | null;
     linkPopoverOpen?: boolean;
+    visPickerOpen?: boolean;
   }
 
   interface SelectedLink {
@@ -43,6 +44,7 @@
     rootPath = "",
     api = null,
     linkPopoverOpen = $bindable(false),
+    visPickerOpen = $bindable(false),
   }: Props = $props();
 
   // Track active states reactively
@@ -124,7 +126,6 @@
   // Dropdown mutual exclusion: only one open at a time
   let blockStyleOpen = $state(false);
   let moreStylesOpen = $state(false);
-  let visPickerOpen = $state(false);
 
   function closeAllDropdowns() {
     blockStyleOpen = false;
@@ -340,8 +341,11 @@
 
 <style>
   .bubble-menu {
-    /* Start hidden - controlled via onShow/onHide in Editor.svelte to prevent flash on initial load */
-    display: none;
+    /* Keep measurable for Floating UI before first show, but hidden until positioned. */
+    display: flex;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
     align-items: center;
     gap: 2px;
     padding: 4px;

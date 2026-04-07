@@ -59,7 +59,10 @@ export function getSyncState(): { readonly syncing: boolean } {
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let teardown: (() => void) | null = null;
 let visibilityListenerInstalled = false;
-let tauriFsEventSubId: number | undefined;
+let onlineListenerInstalled = false;
+let syncRequestedAfterCurrentRun = false;
+let tauriFsEventTeardown: (() => void) | null = null;
+let schedulerLifecycleToken = 0;
 
 /**
  * Dispatch a sync command to a provider plugin, using the native backend API
@@ -89,29 +92,46 @@ async function dispatchSyncCommand(
 }
 
 async function triggerSync(): Promise<void> {
-  const wsId = getCurrentWorkspaceId();
-  if (!wsId) return;
-
-  const links = getWorkspaceProviderLinks(wsId).filter((l) => l.syncEnabled);
-  if (links.length === 0) return;
-
-  syncing = true;
-  try {
-    await Promise.allSettled(
-      links.map(async (link) => {
-        try {
-          const result = await dispatchSyncCommand(link.pluginId);
-          if (!result.success) {
-            console.warn("[syncScheduler] Sync failed:", link.pluginId, result.error);
-          }
-        } catch (e) {
-          console.warn("[syncScheduler] Sync error:", link.pluginId, e);
-        }
-      }),
-    );
-  } finally {
-    syncing = false;
+  if (syncing) {
+    syncRequestedAfterCurrentRun = true;
+    return;
   }
+
+  while (true) {
+    syncRequestedAfterCurrentRun = false;
+
+    const wsId = getCurrentWorkspaceId();
+    if (!wsId) return;
+
+    const links = getWorkspaceProviderLinks(wsId).filter((l) => l.syncEnabled);
+    if (links.length === 0) return;
+
+    syncing = true;
+    try {
+      await Promise.allSettled(
+        links.map(async (link) => {
+          try {
+            const result = await dispatchSyncCommand(link.pluginId);
+            if (!result.success) {
+              console.warn("[syncScheduler] Sync failed:", link.pluginId, result.error);
+            }
+          } catch (e) {
+            console.warn("[syncScheduler] Sync error:", link.pluginId, e);
+          }
+        }),
+      );
+    } finally {
+      syncing = false;
+    }
+
+    if (!syncRequestedAfterCurrentRun) {
+      return;
+    }
+  }
+}
+
+function requestSyncNow(): void {
+  void triggerSync();
 }
 
 function scheduleSync(): void {
@@ -120,17 +140,19 @@ function scheduleSync(): void {
   }
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
-    if (!syncing) {
-      void triggerSync();
-    }
+    requestSyncNow();
   }, SYNC_DEBOUNCE_MS);
 }
 
 function handleVisibilityChange(): void {
-  if (document.visibilityState !== "visible" || syncing) {
+  if (document.visibilityState !== "visible") {
     return;
   }
-  void triggerSync();
+  requestSyncNow();
+}
+
+function handleOnline(): void {
+  requestSyncNow();
 }
 
 const observer: PluginEventObserver = (event) => {
@@ -142,6 +164,7 @@ const observer: PluginEventObserver = (event) => {
 /** Start listening for file events and scheduling sync pushes. */
 export function startSyncScheduler(): void {
   if (teardown) return; // already running
+  const lifecycleToken = ++schedulerLifecycleToken;
 
   // Browser plugin events (web/WASM)
   teardown = onPluginEventDispatched(observer);
@@ -152,12 +175,22 @@ export function startSyncScheduler(): void {
       try {
         const { getBackend } = await import("$lib/backend");
         const backend = await getBackend();
+        if (schedulerLifecycleToken !== lifecycleToken || !teardown) {
+          return;
+        }
         if (backend.onFileSystemEvent) {
-          tauriFsEventSubId = backend.onFileSystemEvent((event: { type: string }) => {
+          const subscriptionId = backend.onFileSystemEvent((event: { type: string }) => {
             if (TAURI_FILE_MUTATION_TYPES.has(event.type)) {
               scheduleSync();
             }
           });
+          if (schedulerLifecycleToken !== lifecycleToken || !teardown) {
+            backend.offFileSystemEvent?.(subscriptionId);
+            return;
+          }
+          tauriFsEventTeardown = () => {
+            backend.offFileSystemEvent?.(subscriptionId);
+          };
         }
       } catch (e) {
         console.warn("[syncScheduler] Failed to subscribe to Tauri FS events:", e);
@@ -169,11 +202,17 @@ export function startSyncScheduler(): void {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     visibilityListenerInstalled = true;
   }
-  void triggerSync();
+  if (!onlineListenerInstalled) {
+    window.addEventListener("online", handleOnline);
+    onlineListenerInstalled = true;
+  }
+  requestSyncNow();
 }
 
 /** Stop the scheduler and cancel any pending sync. */
 export function stopSyncScheduler(): void {
+  schedulerLifecycleToken += 1;
+  syncRequestedAfterCurrentRun = false;
   if (debounceTimer !== null) {
     clearTimeout(debounceTimer);
     debounceTimer = null;
@@ -181,21 +220,16 @@ export function stopSyncScheduler(): void {
   teardown?.();
   teardown = null;
 
-  // Unsubscribe from Tauri FS events
-  if (tauriFsEventSubId !== undefined) {
-    void (async () => {
-      try {
-        const { getBackend } = await import("$lib/backend");
-        const backend = await getBackend();
-        backend.offFileSystemEvent?.(tauriFsEventSubId!);
-      } catch { /* cleanup best-effort */ }
-    })();
-    tauriFsEventSubId = undefined;
-  }
+  tauriFsEventTeardown?.();
+  tauriFsEventTeardown = null;
 
   if (visibilityListenerInstalled) {
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     visibilityListenerInstalled = false;
+  }
+  if (onlineListenerInstalled) {
+    window.removeEventListener("online", handleOnline);
+    onlineListenerInstalled = false;
   }
 }
 

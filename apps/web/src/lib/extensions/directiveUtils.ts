@@ -18,27 +18,30 @@
 // ---------------------------------------------------------------------------
 
 /**
- * Parse a space-separated attribute string into an array of values.
- * Handles extra whitespace gracefully.
+ * Parse a comma-separated attribute string into an array of values.
  *
- *   "family friends"  → ["family", "friends"]
- *   " family "        → ["family"]
- *   ""                → []
+ *   "Adam Harris, friends"  → ["Adam Harris", "friends"]
+ *   "family"                → ["family"]
+ *   ""                      → []
  */
 export function parseDirectiveAttrs(raw: string): string[] {
-  return raw
-    .trim()
-    .split(/\s+/)
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return [];
+
+  return trimmed
+    .split(",")
+    .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
 
 /**
- * Serialize an array of attribute values back to a space-separated string.
+ * Serialize an array of attribute values to a comma-separated string.
  *
- *   ["family", "friends"] → "family friends"
+ *   ["family", "friends"]       → "family, friends"
+ *   ["Adam Harris", "friends"]  → "Adam Harris, friends"
  */
 export function serializeDirectiveAttrs(attrs: string[]): string {
-  return attrs.join(" ");
+  return attrs.join(", ");
 }
 
 // ---------------------------------------------------------------------------

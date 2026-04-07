@@ -32,7 +32,6 @@ import type { Node as PmNode } from "@tiptap/pm/model";
 import {
   createInlineDirectiveTokenizer,
   renderInlineDirective,
-  serializeDirectiveAttrs,
   parseDirectiveAttrs,
 } from "./directiveUtils";
 import { createGutterMultiDot, createGutterEyeIcon } from "./EditorGutter";
@@ -215,14 +214,19 @@ export const VisibilityMark = Mark.create<VisibilityMarkOptions>({
     return {
       audiences: {
         default: [],
-        // Store as space-separated string in HTML
         parseHTML: (element) => {
           const raw = element.getAttribute("data-vis") ?? "";
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) return parsed;
+          } catch {
+            // Not JSON — fall back to directive format
+          }
           return parseDirectiveAttrs(raw);
         },
         renderHTML: (attributes) => {
           return {
-            "data-vis": serializeDirectiveAttrs(attributes.audiences ?? []),
+            "data-vis": JSON.stringify(attributes.audiences ?? []),
           };
         },
       },

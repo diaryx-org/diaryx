@@ -20,8 +20,8 @@ contents: []
 - `update-agents-index.sh`: Updates the workspace index in AGENTS.md using `diaryx workspace info`.
 
 - `build-plugin.sh`: Builds a plugin WASM binary. Usage: `./scripts/build-plugin.sh <crate-name> [--release]`.
-- `release-plugin.sh`: Builds a release WASM, runs wasm-opt, and prepares a versioned artifact in `dist/plugins/` for CDN upload.
+- `release-plugin.sh`: Builds a release WASM, runs wasm-opt, and prepares a versioned artifact in `dist/plugins/` for CDN upload. With `--upload`, also creates a GitHub Release on diaryx-org/diaryx and opens a PR against plugin-registry to update the registry entry. Requires `gh` CLI with push access to plugin-registry.
 
-Registry assembly and CDN uploads are handled by the [plugin-registry](https://github.com/diaryx-org/plugin-registry) repo.
+Registry metadata lives in the [plugin-registry](https://github.com/diaryx-org/plugin-registry) repo.
 
 &nbsp;

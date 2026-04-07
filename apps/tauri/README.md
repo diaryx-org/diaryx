@@ -111,6 +111,18 @@ to a new absolute path.
 
 All IPC commands are defined in `src-tauri/src/commands.rs` and registered in `src-tauri/src/lib.rs`.
 
+## iOS Editor Toolbar
+
+The `tauri-plugin-editor-toolbar` crate provides the native iOS keyboard
+toolbar for the shared TipTap editor. It exposes block formatting, history,
+inline formatting, links, plugin-contributed toolbar commands, and audience
+visibility from Swift while delegating editor mutations through the shared
+`globalThis.__diaryx_nativeToolbar` bridge in `apps/web/src/lib/Editor.svelte`.
+The audience button mirrors the web `VisibilityPicker`: it loads available
+audiences from the web backend, marks the current inline or block visibility
+selection, can create a new audience tag, and clears visibility from the
+current selection.
+
 ### Validation Commands
 
 The validation system checks workspace link integrity and can automatically fix issues.

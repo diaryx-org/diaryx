@@ -3849,6 +3849,10 @@
     onPluginHostAction={handlePluginHostAction}
     onOpenAudienceManager={() => { showAudienceManager = true; }}
     onPropertyReorder={handlePropertyReorder}
+    {isDirty}
+    {isSaving}
+    readonly={editorReadonly}
+    onSave={() => save(true)}
     onEntryRefreshRequest={handleEntryRefreshRequest}
   />
 

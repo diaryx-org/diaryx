@@ -146,11 +146,6 @@
     }
   }
 
-  function handleSaveClick(event: MouseEvent): void {
-    blurEventTarget(event.currentTarget);
-    onSave();
-  }
-
   function handleOpenCommandPaletteClick(): void {
     commandPaletteTooltipSuppressed = true;
     onOpenCommandPalette();
@@ -342,44 +337,6 @@
           >
             View only
           </span>
-        {:else}
-          <!-- Save indicator -->
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              <Button
-                onclick={handleSaveClick}
-                disabled={!isDirty || isSaving}
-                variant="ghost"
-                size="icon"
-                class="size-8"
-                aria-label={isSaving ? "Saving" : isDirty ? "Save" : "Saved"}
-              >
-                {#if isSaving}
-                  <Loader2 class="size-4 animate-spin text-muted-foreground" />
-                {:else if isDirty}
-                  <Circle class="size-3 fill-amber-500 text-amber-500 dark:fill-amber-400 dark:text-amber-400" />
-                {:else}
-                  <Check class="size-4 text-muted-foreground/50" />
-                {/if}
-              </Button>
-            </Tooltip.Trigger>
-            <Tooltip.Content>
-              {#if isSaving}
-                Saving...
-              {:else if isDirty}
-                <div class="flex items-center gap-2">
-                  Save
-                  <Kbd.Group>
-                    <Kbd.Root>{modKey}</Kbd.Root>
-                    <span>+</span>
-                    <Kbd.Root>S</Kbd.Root>
-                  </Kbd.Group>
-                </div>
-              {:else}
-                Saved
-              {/if}
-            </Tooltip.Content>
-          </Tooltip.Root>
         {/if}
 
         <!-- Favorite command buttons -->

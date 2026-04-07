@@ -27,6 +27,7 @@ jobs:
       tauri: ${{ steps.filter.outputs.tauri }}
       web: ${{ steps.filter.outputs.web }}
       wasm: ${{ steps.filter.outputs.wasm }}
+      plugins: ${{ steps.filter.outputs.plugins }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,6 +56,10 @@ jobs:
             wasm:
               - 'crates/diaryx_core/**'
               - 'crates/diaryx_wasm/**'
+            plugins:
+              - 'crates/plugins/**'
+              - 'crates/diaryx_core/**'
+              - 'crates/diaryx_extism/**'
 
   # ── Rust lint & test (lightweight, no Nix) ───────────────────────────────
 
@@ -138,6 +143,60 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --target wasm32-unknown-unknown
         working-directory: crates/diaryx_cloudflare
+
+  # ── Plugins (SDK + guest WASM) ───────────────────────────────────────────
+
+  check-plugins:
+    name: Check Plugins
+    needs: [changes]
+    if: needs.changes.outputs.plugins == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p diaryx_plugin_sdk
+      - run: cargo check -p diaryx_sync_extism --target wasm32-unknown-unknown
+      - run: cargo check -p diaryx_publish_extism --target wasm32-unknown-unknown
+
+  build-plugins:
+    name: Build Plugin WASMs
+    needs: [check-plugins]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --target wasm32-unknown-unknown -p diaryx_sync_extism --release
+      - run: cargo build --target wasm32-unknown-unknown -p diaryx_publish_extism --release
+      - name: Upload plugin WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-wasms
+          path: |
+            target/wasm32-unknown-unknown/release/diaryx_sync_extism.wasm
+            target/wasm32-unknown-unknown/release/diaryx_publish_extism.wasm
+
+  test-plugins:
+    name: Test Plugins
+    needs: [build-plugins]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Download plugin WASMs
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-wasms
+          path: target/wasm32-unknown-unknown/release/
+      - run: cargo test -p diaryx_sync_extism --verbose
 
   # ── WASM & bindings ─────────────────────────────────────────────────────
 

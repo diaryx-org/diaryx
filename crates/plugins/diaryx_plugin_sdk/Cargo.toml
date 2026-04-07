@@ -1,0 +1,58 @@
+[package]
+name = "diaryx_plugin_sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "SDK for building Diaryx Extism WASM plugins"
+license = "MIT"
+repository = "https://github.com/diaryx-org/diaryx"
+publish = true
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = ["core"]
+
+# Core host functions: file I/O, storage, logging, timestamps.
+# Always needed — this is the baseline for any plugin.
+core = []
+
+# HTTP request support (requires `http` permission).
+http = []
+
+# Secret store for credentials (requires `secrets` permission).
+secrets = []
+
+# WebSocket bridge for real-time communication (requires `ws` permission).
+ws = []
+
+# Event emission to the host application.
+events = []
+
+# Inter-plugin command execution (requires `plugin_command` permission).
+plugins = []
+
+# Runtime context from the host.
+context = []
+
+# WASI module execution inside the plugin sandbox.
+wasi = []
+
+# User-provided file requests.
+files = []
+
+# Namespace object operations (upload, delete, list, sync audience).
+namespaces = []
+
+# Server proxy requests (AI, external APIs via managed credentials).
+proxy = ["http"]
+
+# Enable all features.
+full = ["core", "http", "secrets", "ws", "events", "plugins", "context", "wasi", "files", "namespaces", "proxy"]
+
+[dependencies]
+extism-pdk = "1.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"

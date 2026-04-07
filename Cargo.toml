@@ -9,6 +9,9 @@ members = [
     "crates/diaryx_sync",
     "crates/diaryx_sync_server",
     "crates/diaryx_extism",
+    "crates/plugins/diaryx_plugin_sdk",
+    "crates/plugins/diaryx_sync_extism",
+    "crates/plugins/diaryx_publish_extism",
     "apps/tauri/src-tauri"
 ]
 exclude = [
@@ -40,6 +43,7 @@ diaryx_core = { path = "crates/diaryx_core", version = "1.4.1" }
 diaryx_daily = { path = "crates/diaryx_daily", version = "1.3.0" }
 diaryx_sync = { path = "crates/diaryx_sync", version = "1.4.1" }
 diaryx_extism = { path = "crates/diaryx_extism", version = "1.3.0" }
+diaryx_plugin_sdk = { path = "crates/plugins/diaryx_plugin_sdk", version = "1.4.1" }
 
 # cargo-release configuration
 [workspace.metadata.release]

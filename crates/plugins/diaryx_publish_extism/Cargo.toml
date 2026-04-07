@@ -1,0 +1,29 @@
+[package]
+name = "diaryx_publish_extism"
+version = "0.2.4"
+edition.workspace = true
+rust-version.workspace = true
+license-file = "LICENSE.md"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+diaryx_core = { workspace = true }
+diaryx_plugin_sdk = { workspace = true, features = ["core", "http", "namespaces", "events", "plugins", "wasi"] }
+comrak = "0.49"
+pathdiff = "0.2"
+async-trait = "0.1"
+extism-pdk = "1.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+indexmap = { workspace = true }
+log = "0.4"
+mrml = { version = "5.1.0", default-features = false, features = ["parse", "render", "print"] }
+urlencoding = "2"
+base64 = "0.22"
+
+[dev-dependencies]
+futures-lite = "2"

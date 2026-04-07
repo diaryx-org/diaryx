@@ -11,6 +11,9 @@ contents:
 - '[README](/crates/diaryx_sync_server/README.md)'
 - '[README](/crates/diaryx_sync/README.md)'
 - '[README](/crates/diaryx_extism/README.md)'
+- '[README](/crates/plugins/diaryx_plugin_sdk/README.md)'
+- '[README](/crates/plugins/diaryx_sync_extism/README.md)'
+- '[README](/crates/plugins/diaryx_publish_extism/README.md)'
 exclude:
 - LICENSE.md
 - '**/*.rs'
@@ -35,6 +38,12 @@ This folder contains Diaryx crates for core features and platform bindings.
 - `tauri-plugin-icloud`: Tauri plugin for iCloud Drive workspace storage (iOS)
 - `tauri-plugin-iap`: Tauri plugin for Apple In-App Purchases via StoreKit 2
 
-Plugin guest crates (sync, publish, daily, AI, math, spoiler, import, templating, S3 storage, Google Drive storage) now live in standalone repos under [diaryx-org](https://github.com/diaryx-org).
+### Plugin crates (`plugins/`)
+
+- `[diaryx_plugin_sdk](/crates/plugins/diaryx_plugin_sdk/README.md)`: SDK for building Diaryx Extism WASM plugins (published to crates.io)
+- `[diaryx_sync_extism](/crates/plugins/diaryx_sync_extism/README.md)`: Sync plugin — real-time multi-device sync (Extism guest WASM)
+- `[diaryx_publish_extism](/crates/plugins/diaryx_publish_extism/README.md)`: Publish plugin — export and website publishing (Extism guest WASM)
+
+Other plugin guest crates (daily, AI, math, spoiler, import, templating, S3 storage, Google Drive storage) live in standalone repos under [diaryx-org](https://github.com/diaryx-org).
 
 Cargo also copies the LICENSE.md file here for publishing crates. It is has the same content as `../LICENSE.md`.

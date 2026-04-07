@@ -1624,6 +1624,15 @@ function buildHostFunctions(
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
         }
       },
+      async host_namespace_list(cp: CallContext, offs: bigint) {
+        try {
+          const resp = await namespaceFetch("GET", `/namespaces`);
+          const data = await resp.text();
+          return cp.store(data);
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
       async host_namespace_list_objects(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as

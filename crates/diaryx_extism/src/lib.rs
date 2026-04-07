@@ -84,7 +84,8 @@ pub mod ws_transport;
 pub use adapter::ExtismPluginAdapter;
 pub use host_fns::{
     DEFAULT_STORAGE_QUOTA_BYTES, EventEmitter, FilePluginSecretStore, FilePluginStorage,
-    FileProvider, HostContext, MapFileProvider, NamespaceObjectMeta, NamespaceProvider,
+    FileProvider, HostContext, MapFileProvider, NamespaceEntry, NamespaceObjectMeta,
+    NamespaceProvider,
     NoopEventEmitter, NoopFileProvider, NoopNamespaceProvider, NoopPluginCommandBridge,
     NoopRuntimeContextProvider, NoopSecretStore, NoopStorage, NoopWebSocketBridge,
     PermissionChecker, PluginCommandBridge, PluginSecretStore, PluginStorage,

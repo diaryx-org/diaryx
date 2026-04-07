@@ -71,4 +71,5 @@ export type { ValidationWarningWithMeta } from './ValidationWarningWithMeta';
 export type { WorkspaceConfig } from './WorkspaceConfig';
 export type { WorkspaceEntry } from './WorkspaceEntry';
 export type { WorkspaceRegistry } from './WorkspaceRegistry';
+export type { YamlValue } from './YamlValue';
 export type { JsonValue } from './serde_json/JsonValue';

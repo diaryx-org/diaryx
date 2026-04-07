@@ -5,11 +5,10 @@ use std::path::Path;
 use crate::yaml_value::YamlValue;
 
 use crate::command::Response;
-use crate::diaryx::{Diaryx, json_to_yaml, yaml_to_json};
+use crate::diaryx::Diaryx;
 use crate::error::DiaryxError;
 use crate::error::Result;
 use crate::fs::AsyncFileSystem;
-use indexmap::IndexMap;
 
 impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     fn extract_markdown_link_destinations(content: &str) -> Vec<String> {
@@ -223,16 +222,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
     pub(crate) async fn cmd_get_frontmatter(&self, path: String) -> Result<Response> {
         let fm = self.entry().get_frontmatter(&path).await?;
-        let json_fm: IndexMap<String, serde_json::Value> =
-            fm.into_iter().map(|(k, v)| (k, yaml_to_json(v))).collect();
-        Ok(Response::Frontmatter(json_fm))
+        Ok(Response::Frontmatter(fm))
     }
 
     pub(crate) async fn cmd_set_frontmatter_property(
         &self,
         path: String,
         key: String,
-        value: serde_json::Value,
+        value: YamlValue,
         root_index_path: Option<String>,
     ) -> Result<Response> {
         // Handle link/part_of/contents/attachments specially - normalize and
@@ -242,7 +239,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             let canonical_path = self.get_canonical_path(&path);
 
             if key == "link" {
-                if let serde_json::Value::String(ref s) = value {
+                if let YamlValue::String(ref s) = value {
                     let canonical_target = self.resolve_frontmatter_link_target(s, &canonical_path);
                     let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
                     let yaml_value = YamlValue::String(formatted);
@@ -258,7 +255,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     return Ok(Response::Ok);
                 }
             } else if key == "attachment" {
-                if let serde_json::Value::String(ref s) = value {
+                if let YamlValue::String(ref s) = value {
                     let canonical_target = self.resolve_attachment_link_target_with_hint(
                         s,
                         &canonical_path,
@@ -280,7 +277,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
             } else if key == "part_of" {
                 // Parse the value, convert to canonical, format as markdown link
-                if let serde_json::Value::String(ref s) = value {
+                if let YamlValue::String(ref s) = value {
                     let canonical_target = self.resolve_frontmatter_link_target(s, &canonical_path);
 
                     // Format as markdown link for file
@@ -307,11 +304,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 || key == "attachment_of"
             {
                 // Handle contents array - format each item as markdown link
-                if let serde_json::Value::Array(ref arr) = value {
+                if let YamlValue::Sequence(ref arr) = value {
                     let mut formatted_links: Vec<YamlValue> = Vec::new();
 
                     for item in arr {
-                        if let serde_json::Value::String(s) = item {
+                        if let YamlValue::String(s) = item {
                             let canonical_target = self.resolve_attachment_link_target_with_hint(
                                 s,
                                 &canonical_path,
@@ -340,11 +337,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
             } else if key == "attachments" {
                 // Attachments now point to attachment notes, not binary assets.
-                if let serde_json::Value::Array(ref arr) = value {
+                if let YamlValue::Sequence(ref arr) = value {
                     let mut formatted_links: Vec<YamlValue> = Vec::new();
 
                     for item in arr {
-                        if let serde_json::Value::String(s) = item {
+                        if let YamlValue::String(s) = item {
                             let canonical_target =
                                 self.resolve_frontmatter_link_target(s, &canonical_path);
                             let formatted =
@@ -365,7 +362,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                     self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
-                } else if let serde_json::Value::String(ref s) = value {
+                } else if let YamlValue::String(ref s) = value {
                     let canonical_target = self.resolve_attachment_link_target_with_hint(
                         s,
                         &canonical_path,
@@ -391,7 +388,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         // Auto-rename on title change + sync heading
         if key == "title"
             && let Some(ref rip) = root_index_path
-            && let serde_json::Value::String(ref new_title) = value
+            && let YamlValue::String(ref new_title) = value
             && !new_title.trim().is_empty()
         {
             use crate::entry::apply_filename_style;
@@ -408,9 +405,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             // Write the title FIRST so that rename_entry's resolve_title
             // reads the new title when formatting links in parent contents
             // and children's part_of references.
-            let yaml_value = json_to_yaml(value.clone());
             self.entry()
-                .set_frontmatter_property(&path, &key, yaml_value)
+                .set_frontmatter_property(&path, &key, value.clone())
                 .await?;
 
             // Always auto-rename file to match title
@@ -476,9 +472,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
 
         // Default: just set the property as-is (non-title keys, or title without root_index_path)
-        let yaml_value = json_to_yaml(value.clone());
         self.entry()
-            .set_frontmatter_property(&path, &key, yaml_value)
+            .set_frontmatter_property(&path, &key, value.clone())
             .await?;
 
         Ok(Response::Ok)

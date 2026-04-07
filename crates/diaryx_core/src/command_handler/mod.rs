@@ -1401,7 +1401,8 @@ mod tests {
                     value: serde_json::json!([
                         "notes/_attachments/a.png",
                         "[Doc](/notes/_attachments/report.pdf)"
-                    ]),
+                    ])
+                    .into(),
                     root_index_path: None,
                 })
                 .await
@@ -1456,7 +1457,7 @@ mod tests {
                 .execute(Command::SetFrontmatterProperty {
                     path: "notes/day.md".to_string(),
                     key: "link".to_string(),
-                    value: serde_json::json!("../notes/day.md"),
+                    value: serde_json::json!("../notes/day.md").into(),
                     root_index_path: None,
                 })
                 .await
@@ -1500,7 +1501,7 @@ mod tests {
                 .execute(Command::SetFrontmatterProperty {
                     path: "notes/day.md".to_string(),
                     key: "links".to_string(),
-                    value: serde_json::json!(["../other.md", "[Self](/notes/day.md)"]),
+                    value: serde_json::json!(["../other.md", "[Self](/notes/day.md)"]).into(),
                     root_index_path: None,
                 })
                 .await
@@ -1728,7 +1729,9 @@ mod tests {
                 .execute(Command::SetFrontmatterProperty {
                     path: "_attachments/icon.png.md".to_string(),
                     key: "attachment".to_string(),
-                    value: serde_json::Value::String("apps/web/public/icon.png".to_string()),
+                    value: crate::yaml_value::YamlValue::String(
+                        "apps/web/public/icon.png".to_string(),
+                    ),
                     root_index_path: None,
                 })
                 .await

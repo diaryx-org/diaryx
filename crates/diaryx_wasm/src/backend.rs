@@ -401,29 +401,6 @@ impl DiaryxBackend {
             .map_err(|e| JsValue::from_str(&format!("Failed to serialize response: {}", e)))
     }
 
-    /// Execute a command from a JavaScript object directly.
-    ///
-    /// This avoids JSON serialization overhead for better performance.
-    #[wasm_bindgen(js_name = "executeJs")]
-    pub async fn execute_js(&self, command: JsValue) -> std::result::Result<JsValue, JsValue> {
-        use diaryx_core::Command;
-
-        // Parse command from JS object
-        let cmd: Command = serde_wasm_bindgen::from_value(command)?;
-
-        // Execute the command using the shared Diaryx instance
-        // (callbacks were configured once during backend creation)
-        let result = self
-            .diaryx
-            .execute(cmd)
-            .await
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-        // Convert response to JsValue
-        serde_wasm_bindgen::to_value(&result)
-            .map_err(|e| JsValue::from_str(&format!("Failed to serialize response: {}", e)))
-    }
-
     // ========================================================================
     // Binary Operations (kept for efficiency - no base64 overhead)
     // ========================================================================

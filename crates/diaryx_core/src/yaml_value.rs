@@ -11,7 +11,19 @@ use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A YAML value type for frontmatter and configuration data.
+///
+/// Maps to `JsonValue` in TypeScript bindings (same representation as
+/// `serde_json::Value`).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(
+        export,
+        export_to = "bindings/",
+        type = "null | boolean | number | string | YamlValue[] | { [key: string]: YamlValue }"
+    )
+)]
 pub enum YamlValue {
     /// YAML null (`~`, `null`)
     Null,

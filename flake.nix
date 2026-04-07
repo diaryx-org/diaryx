@@ -208,6 +208,8 @@
           default = pkgs.mkShellNoCC {
             packages = with pkgs; [
               rustToolchain
+              cargo-bloat
+              twiggy
               cargo-llvm-cov
               self.packages.${system}."wasm-bindgen-cli"
               zig

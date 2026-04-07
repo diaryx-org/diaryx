@@ -33,20 +33,6 @@ use crate::link_parser;
 use crate::plugin::PluginRegistry;
 use crate::yaml_value::YamlValue;
 
-// ============================================================================
-// Value Conversion Helpers
-// ============================================================================
-
-/// Convert a YamlValue to serde_json::Value
-pub(crate) fn yaml_to_json(yaml: YamlValue) -> serde_json::Value {
-    yaml.into()
-}
-
-/// Convert a serde_json::Value to YamlValue
-pub(crate) fn json_to_yaml(json: serde_json::Value) -> YamlValue {
-    json.into()
-}
-
 /// The main Diaryx instance.
 ///
 /// This struct provides a unified API for all Diaryx operations.

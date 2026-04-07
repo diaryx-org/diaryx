@@ -2,16 +2,13 @@
 
 use std::path::PathBuf;
 
-use indexmap::IndexMap;
-
-use crate::yaml_value::YamlValue;
-
 use crate::command::{EntryData, Response};
-use crate::diaryx::{Diaryx, yaml_to_json};
+use crate::diaryx::Diaryx;
 use crate::error::Result;
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::plugin::{FileCreatedEvent, FileDeletedEvent, FileMovedEvent, FileSavedEvent};
+use crate::yaml_value::YamlValue;
 
 impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     pub(crate) async fn cmd_get_entry(&self, path: String) -> Result<Response> {
@@ -23,16 +20,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let fm: IndexMap<String, serde_json::Value> = parsed
-            .frontmatter
-            .into_iter()
-            .map(|(k, v)| (k, yaml_to_json(v)))
-            .collect();
-
         Ok(Response::Entry(EntryData {
             path: PathBuf::from(&path),
             title,
-            frontmatter: fm,
+            frontmatter: parsed.frontmatter,
             content: parsed.body,
         }))
     }

@@ -603,7 +603,7 @@
 
   // Auto-save timer (component-local, not needed in global store)
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
-  const AUTO_SAVE_DELAY_MS = 2500; // 2.5 seconds
+  const AUTO_SAVE_DELAY_MS = 300; // 300ms – near-instant local save; remote sync has its own 3s debounce
 
   // Tree refresh debounce timer (prevents rapid refreshes during sync)
   let refreshTreeTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -1521,14 +1521,12 @@
 
   // Handle content changes - triggers debounced auto-save
   // Sync propagation is handled by plugin-owned filesystem event processing.
+  // We skip markdown serialization here to avoid O(doc) work on every keystroke;
+  // the actual serialization happens once when the debounced save fires.
   function handleContentChange() {
-    const markdown = editorRef?.getMarkdown?.() ?? displayContent;
-    if (markdown === displayContent) {
-      return;
+    if (!isDirty) {
+      entryStore.markDirty();
     }
-
-    entryStore.markDirty();
-    entryStore.setDisplayContent(markdown);
     scheduleAutoSave();
   }
 

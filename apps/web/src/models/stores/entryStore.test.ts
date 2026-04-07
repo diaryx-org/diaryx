@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { getEntryStore } from './entryStore.svelte'
+import { AUTO_SAVE_DELAY_MS, getEntryStore } from './entryStore.svelte'
 
 describe('entryStore', () => {
   let store: ReturnType<typeof getEntryStore>
@@ -140,8 +140,7 @@ describe('entryStore', () => {
 
       expect(saveCallback).not.toHaveBeenCalled()
 
-      // Fast-forward past the auto-save delay (2500ms)
-      vi.advanceTimersByTime(2500)
+      vi.advanceTimersByTime(AUTO_SAVE_DELAY_MS)
 
       expect(saveCallback).toHaveBeenCalledTimes(1)
     })
@@ -151,7 +150,7 @@ describe('entryStore', () => {
       store.markClean()
       store.scheduleAutoSave(saveCallback)
 
-      vi.advanceTimersByTime(2500)
+      vi.advanceTimersByTime(AUTO_SAVE_DELAY_MS)
 
       expect(saveCallback).not.toHaveBeenCalled()
     })
@@ -176,16 +175,18 @@ describe('entryStore', () => {
       store.markDirty()
       store.scheduleAutoSave(saveCallback1)
 
+      const partialDelay = Math.floor(AUTO_SAVE_DELAY_MS / 2)
+
       // Schedule new auto-save before first one fires
-      vi.advanceTimersByTime(1000)
+      vi.advanceTimersByTime(partialDelay)
       store.scheduleAutoSave(saveCallback2)
 
       // First callback's timer is cancelled
-      vi.advanceTimersByTime(1500) // Total 2500ms from first schedule
+      vi.advanceTimersByTime(AUTO_SAVE_DELAY_MS - partialDelay)
       expect(saveCallback1).not.toHaveBeenCalled()
 
       // Second callback fires after its full delay
-      vi.advanceTimersByTime(1000) // Total 2500ms from second schedule
+      vi.advanceTimersByTime(partialDelay)
       expect(saveCallback2).toHaveBeenCalledTimes(1)
     })
   })

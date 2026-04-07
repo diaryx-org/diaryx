@@ -1,6 +1,6 @@
 /**
  * Entry Store - Manages current entry state
- * 
+ *
  * This store holds state related to the currently open entry (document),
  * including content, dirty state, and save status.
  */
@@ -20,7 +20,7 @@ let titleError = $state<string | null>(null);
 
 // Auto-save timer reference (not reactive, just for cleanup)
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
-const AUTO_SAVE_DELAY_MS = 300;
+export const AUTO_SAVE_DELAY_MS = 300;
 
 // ============================================================================
 // Store Factory
@@ -39,7 +39,7 @@ export function getEntryStore() {
     get isSaving() { return isSaving; },
     get isLoading() { return isLoading; },
     get titleError() { return titleError; },
-    
+
     // Setters
     setEntry(entry: EntryData | null) {
       currentEntry = entry;
@@ -54,27 +54,27 @@ export function getEntryStore() {
     setDisplayContent(content: string) {
       displayContent = content;
     },
-    
+
     markDirty() {
       isDirty = true;
     },
-    
+
     markClean() {
       isDirty = false;
     },
-    
+
     setSaving(saving: boolean) {
       isSaving = saving;
     },
-    
+
     setLoading(loading: boolean) {
       isLoading = loading;
     },
-    
+
     setTitleError(error: string | null) {
       titleError = error;
     },
-    
+
     // Auto-save helpers
     scheduleAutoSave(saveCallback: () => void) {
       this.cancelAutoSave();
@@ -85,7 +85,7 @@ export function getEntryStore() {
         }
       }, AUTO_SAVE_DELAY_MS);
     },
-    
+
     cancelAutoSave() {
       if (autoSaveTimer) {
         clearTimeout(autoSaveTimer);

@@ -656,6 +656,15 @@ fn preprocess_custom_syntax(markdown: &str) -> String {
             continue;
         }
 
+        // Try HTML embed: ![alt](path.html) or ![alt](path.htm)
+        if bytes[i] == b'!' && i + 1 < len && bytes[i + 1] == b'[' {
+            if let Some((html, consumed)) = try_parse_html_embed(&markdown[i..]) {
+                out.push_str(&html);
+                i += consumed;
+                continue;
+            }
+        }
+
         // Try highlight: ==text== or =={color}text==
         if i + 1 < len && bytes[i] == b'=' && bytes[i + 1] == b'=' {
             if let Some((html, consumed)) = try_parse_highlight(&markdown[i..]) {
@@ -753,6 +762,45 @@ fn try_parse_spoiler(s: &str) -> Option<(String, usize)> {
     let html = format!(
         r#"<span data-spoiler="" class="spoiler-mark spoiler-hidden">{content}</span>"#,
         content = html_escape(content),
+    );
+
+    Some((html, total_consumed))
+}
+
+/// Try to parse an HTML embed starting at `![`. Returns `(html, bytes_consumed)`.
+///
+/// Matches `![alt](path.html)` or `![alt](path.htm)` and converts to a
+/// sandboxed `<iframe>` tag. This runs before Comrak so the raw HTML is
+/// passed through unchanged (with `unsafe = true`).
+fn try_parse_html_embed(s: &str) -> Option<(String, usize)> {
+    if !s.starts_with("![") {
+        return None;
+    }
+
+    let after_bang = &s[2..];
+    let close_bracket = after_bang.find(']')?;
+    let alt = &after_bang[..close_bracket];
+
+    let after_bracket = &after_bang[close_bracket + 1..];
+    if !after_bracket.starts_with('(') {
+        return None;
+    }
+
+    let after_paren = &after_bracket[1..];
+    let close_paren = after_paren.find(')')?;
+    let path = after_paren[..close_paren].trim();
+
+    // Only match .html / .htm extensions
+    let lower = path.to_lowercase();
+    if !lower.ends_with(".html") && !lower.ends_with(".htm") {
+        return None;
+    }
+
+    let total_consumed = 2 + close_bracket + 1 + 1 + close_paren + 1;
+    let html = format!(
+        r#"<iframe src="{}" title="{}" class="diaryx-island" sandbox="allow-scripts" loading="lazy" style="width:100%;min-height:200px;border:none;"></iframe>"#,
+        html_escape(path),
+        html_escape(alt),
     );
 
     Some((html, total_consumed))

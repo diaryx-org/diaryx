@@ -267,6 +267,14 @@ export function isAudioFile(path: string): boolean {
 }
 
 /**
+ * Check if a file is an HTML file based on its extension.
+ */
+export function isHtmlFile(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() || '';
+  return ['html', 'htm'].includes(ext);
+}
+
+/**
  * Classify an attachment by preview behavior.
  *
  * MIME type, when available, wins over extension-based inference so uploads

@@ -17,6 +17,7 @@
     getBlobUrl,
     isVideoFile,
     isAudioFile,
+    isHtmlFile,
     isPreviewableAttachmentKind,
     queueResolveAttachment,
     type AttachmentMediaKind,
@@ -343,6 +344,7 @@
             const checkPath = originalPath || src;
             const isVideo = isVideoFile(checkPath);
             const isAudio = isAudioFile(checkPath);
+            const isHtmlEmbed = isHtmlFile(checkPath);
 
             // Transparent 1x1 GIF used as placeholder src for loading images.
             // Without a real src, <img> elements create "dead zones" in
@@ -360,7 +362,33 @@
 
             let mediaEl: HTMLElement;
 
-            if (isVideo) {
+            if (isHtmlEmbed) {
+              const iframe = document.createElement("iframe");
+              iframe.sandbox.add("allow-scripts");
+              iframe.className = "editor-image editor-html-island";
+              if (alt) iframe.title = alt;
+              iframe.style.width = "100%";
+              iframe.style.minHeight = "120px";
+              iframe.style.border = "1px solid var(--border-color, #e0e0e0)";
+              iframe.style.borderRadius = "6px";
+              if (isLocalPath && epApi) {
+                const cached = getBlobUrl(src);
+                if (cached) {
+                  iframe.src = cached;
+                } else {
+                  setLoading(iframe);
+                  queueResolveAttachment(epApi, ep, src).then((blobUrl) => {
+                    if (blobUrl) {
+                      iframe.src = blobUrl;
+                      clearLoading(iframe);
+                    }
+                  });
+                }
+              } else {
+                iframe.src = src;
+              }
+              mediaEl = iframe;
+            } else if (isVideo) {
               const video = document.createElement("video");
               video.controls = true;
               video.preload = "metadata";

@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #0f172a;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --panel: #f8fafc;
+    --button: #0f172a;
+    --button-fg: #ffffff;
+    --accent: #0ea5e9;
+    --danger: #dc2626;
+    --radius: 10px;
+  }
+
+  .dark {
+    --bg: #0f172a;
+    --fg: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #1e293b;
+    --panel: #111827;
+    --button: #e2e8f0;
+    --button-fg: #0f172a;
+    --accent: #38bdf8;
+    --danger: #f87171;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel {
+    flex: 1;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 260px;
+  }
+
+  /* Calendar header */
+  .cal-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .cal-header .month-label {
+    flex: 1;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .cal-header button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: var(--radius);
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .cal-header .today-btn {
+    width: auto;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  /* Weekday labels */
+  .weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    text-align: center;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    padding: 4px 0 2px;
+  }
+
+  /* Day grid */
+  .days {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+  }
+
+  .day-cell {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    font-size: 11px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    background: transparent;
+    color: var(--fg);
+    transition: background 0.1s;
+  }
+
+  .day-cell:hover {
+    background: var(--panel);
+  }
+
+  .day-cell.other-month {
+    color: var(--border);
+    cursor: default;
+  }
+  .day-cell.other-month:hover {
+    background: transparent;
+  }
+
+  .day-cell.today {
+    border-color: var(--accent);
+  }
+
+  .day-cell.selected {
+    background: var(--accent);
+    color: #fff;
+  }
+  .day-cell.selected.today {
+    border-color: transparent;
+  }
+
+  .day-cell .dot {
+    position: absolute;
+    bottom: 2px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  .day-cell.selected .dot {
+    background: rgba(255, 255, 255, 0.7);
+  }
+
+  /* Nav row */
+  .row {
+    display: flex;
+    gap: 8px;
+  }
+  .row > * { flex: 1; }
+
+  button {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--fg);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  button.ghost {
+    background: transparent;
+  }
+
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .status {
+    font-size: 12px;
+    color: var(--muted);
+    min-height: 16px;
+  }
+
+  .status.error {
+    color: var(--danger);
+  }
+
+  .path {
+    padding: 8px 10px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--muted);
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="cal-header">
+      <button id="prevMonth" title="Previous month">&#x2039;</button>
+      <span class="month-label" id="monthLabel"></span>
+      <button class="today-btn" id="todayBtn" title="Go to today">Today</button>
+      <button id="nextMonth" title="Next month">&#x203a;</button>
+    </div>
+
+    <div class="weekdays">
+      <span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span><span>Su</span>
+    </div>
+
+    <div class="days" id="calGrid"></div>
+
+    <div class="row">
+      <button id="prevBtn" class="ghost">Prev Day</button>
+      <button id="nextBtn" class="ghost">Next Day</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="path" class="path">No daily entry opened yet.</div>
+  </div>
+
+<script>
+  const MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+
+  let requestSeq = 0;
+  const pendingPlugin = new Map();
+  const pendingHost = new Map();
+
+  let currentPath = null;
+  let currentEntryPath = null;
+
+  // Calendar state
+  const now = new Date();
+  let calYear = now.getFullYear();
+  let calMonth = now.getMonth(); // 0-indexed
+  let calEntryDates = new Set();
+  let selectedDate = null; // "YYYY-MM-DD"
+
+  function setStatus(message, isError) {
+    const el = document.getElementById("status");
+    el.textContent = message || "";
+    el.className = isError ? "status error" : "status";
+  }
+
+  function setPath(path) {
+    currentPath = path || null;
+    document.getElementById("path").textContent = currentPath || "No daily entry opened yet.";
+  }
+
+  function nextRequestId() {
+    return "daily-" + (++requestSeq);
+  }
+
+  function callPlugin(command, params) {
+    return new Promise(function(resolve, reject) {
+      var requestId = nextRequestId();
+      pendingPlugin.set(requestId, { resolve: resolve, reject: reject });
+      parent.postMessage({ type: "plugin-command", command: command, params: params || {}, requestId: requestId }, "*");
+    });
+  }
+
+  function callHostAction(action) {
+    return new Promise(function(resolve, reject) {
+      var requestId = nextRequestId();
+      pendingHost.set(requestId, { resolve: resolve, reject: reject });
+      parent.postMessage({ type: "host-action", action: action, requestId: requestId }, "*");
+    });
+  }
+
+  function pad2(n) {
+    return n < 10 ? "0" + n : "" + n;
+  }
+
+  function toDateStr(y, m, d) {
+    return y + "-" + pad2(m + 1) + "-" + pad2(d);
+  }
+
+  function parseDateStr(s) {
+    if (!s) return null;
+    var parts = s.split("-");
+    if (parts.length !== 3) return null;
+    return { year: parseInt(parts[0], 10), month: parseInt(parts[1], 10) - 1, day: parseInt(parts[2], 10) };
+  }
+
+  // Render the calendar grid
+  function renderCalendar() {
+    document.getElementById("monthLabel").textContent = MONTH_NAMES[calMonth] + " " + calYear;
+
+    var grid = document.getElementById("calGrid");
+    grid.innerHTML = "";
+
+    var firstDay = new Date(calYear, calMonth, 1);
+    var startDow = (firstDay.getDay() + 6) % 7; // Monday=0
+    var daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+    var daysInPrev = new Date(calYear, calMonth, 0).getDate();
+
+    var today = new Date();
+    var todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
+
+    // Previous month trailing days
+    for (var i = startDow - 1; i >= 0; i--) {
+      var cell = document.createElement("button");
+      cell.className = "day-cell other-month";
+      cell.textContent = daysInPrev - i;
+      cell.disabled = true;
+      grid.appendChild(cell);
+    }
+
+    // Current month days
+    for (var d = 1; d <= daysInMonth; d++) {
+      var dateStr = toDateStr(calYear, calMonth, d);
+      var cell = document.createElement("button");
+      cell.className = "day-cell";
+      cell.textContent = d;
+      cell.dataset.date = dateStr;
+
+      if (dateStr === todayStr) cell.classList.add("today");
+      if (dateStr === selectedDate) cell.classList.add("selected");
+      if (calEntryDates.has(d)) {
+        var dot = document.createElement("span");
+        dot.className = "dot";
+        cell.appendChild(dot);
+      }
+
+      cell.addEventListener("click", onDayClick);
+      grid.appendChild(cell);
+    }
+
+    // Next month leading days
+    var totalCells = startDow + daysInMonth;
+    var trailing = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7);
+    for (var t = 1; t <= trailing; t++) {
+      var cell = document.createElement("button");
+      cell.className = "day-cell other-month";
+      cell.textContent = t;
+      cell.disabled = true;
+      grid.appendChild(cell);
+    }
+  }
+
+  function onDayClick(e) {
+    var btn = e.currentTarget;
+    var dateStr = btn.dataset.date;
+    if (!dateStr) return;
+    openByDate(dateStr);
+  }
+
+  async function openByDate(dateStr) {
+    try {
+      setStatus("Opening...");
+      var res = await callPlugin("EnsureDailyEntry", { date: dateStr });
+      if (!res.success) throw new Error(res.error || "Failed");
+      var data = res.data || {};
+      if (data.path) {
+        setPath(data.path);
+        selectedDate = data.date || dateStr;
+        // Optimistic: add this day to entry dates
+        var parsed = parseDateStr(selectedDate);
+        if (parsed && parsed.year === calYear && parsed.month === calMonth) {
+          calEntryDates.add(parsed.day);
+        }
+        renderCalendar();
+        await callHostAction({ type: "open-entry", payload: { path: data.path } });
+        setStatus("");
+      }
+    } catch (err) {
+      setStatus(err.message || String(err), true);
+    }
+  }
+
+  async function fetchEntryDates() {
+    try {
+      var res = await callPlugin("ListDailyEntryDates", { year: calYear, month: calMonth + 1 });
+      if (res.success && res.data && res.data.dates) {
+        calEntryDates = new Set(res.data.dates);
+      } else {
+        calEntryDates = new Set();
+      }
+    } catch (_) {
+      calEntryDates = new Set();
+    }
+    renderCalendar();
+  }
+
+  function navigateMonth(delta) {
+    calMonth += delta;
+    if (calMonth < 0) { calMonth = 11; calYear--; }
+    if (calMonth > 11) { calMonth = 0; calYear++; }
+    calEntryDates = new Set();
+    renderCalendar();
+    fetchEntryDates();
+  }
+
+  function goToToday() {
+    var now = new Date();
+    calYear = now.getFullYear();
+    calMonth = now.getMonth();
+    fetchEntryDates();
+    openByDate(toDateStr(calYear, calMonth, now.getDate()));
+  }
+
+  async function navigate(direction) {
+    try {
+      var basis = currentEntryPath || currentPath;
+      if (!basis) { setStatus("Open a daily entry first.", true); return; }
+      setStatus("Navigating...");
+      var res = await callPlugin("GetAdjacentDailyEntry", {
+        path: basis, direction: direction, ensure: true
+      });
+      if (!res.success) throw new Error(res.error || "Navigation failed");
+      var path = res.data && res.data.path;
+      if (!path) throw new Error("Plugin did not return path");
+      setPath(path);
+      var date = res.data.date;
+      if (date) {
+        selectedDate = date;
+        var parsed = parseDateStr(date);
+        if (parsed && (parsed.year !== calYear || parsed.month !== calMonth)) {
+          calYear = parsed.year;
+          calMonth = parsed.month;
+          fetchEntryDates();
+        } else {
+          if (parsed) calEntryDates.add(parsed.day);
+          renderCalendar();
+        }
+      }
+      await callHostAction({ type: "open-entry", payload: { path: path } });
+      setStatus("");
+    } catch (err) {
+      setStatus(err.message || String(err), true);
+    }
+  }
+
+  function updateSelectionFromPath(path) {
+    if (!path) return;
+    // Try to extract date from path: .../YYYY/MM/YYYY-MM-DD.md
+    var match = path.match(/(\d{4})\/(\d{2})\/(\d{4}-\d{2}-\d{2})\.md$/);
+    if (!match) return;
+    var dateStr = match[3];
+    selectedDate = dateStr;
+    var parsed = parseDateStr(dateStr);
+    if (parsed && (parsed.year !== calYear || parsed.month !== calMonth)) {
+      calYear = parsed.year;
+      calMonth = parsed.month;
+      fetchEntryDates();
+    } else {
+      if (parsed) calEntryDates.add(parsed.day);
+      renderCalendar();
+    }
+  }
+
+  function applyTheme(data) {
+    var theme = data && data.theme === "dark" ? "dark" : "light";
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    if (data && data.cssVars && typeof data.cssVars === "object") {
+      applyCssVars(data.cssVars);
+    }
+  }
+
+  function applyCssVars(vars) {
+    var root = document.documentElement.style;
+    function color(name) {
+      var v = vars[name];
+      if (!v) return null;
+      if (/^(hsl|oklch|rgb|lab|lch|color|#)/i.test(v)) return v;
+      return "hsl(" + v + ")";
+    }
+
+    var map = {
+      "--bg":        color("--background"),
+      "--fg":        color("--foreground"),
+      "--muted":     color("--muted-foreground"),
+      "--border":    color("--border"),
+      "--panel":     color("--card"),
+      "--button":    color("--primary"),
+      "--button-fg": color("--primary-foreground"),
+      "--accent":    color("--accent"),
+      "--danger":    color("--destructive"),
+    };
+
+    for (var local in map) {
+      if (map[local]) root.setProperty(local, map[local]);
+    }
+
+    if (vars["--radius"]) root.setProperty("--radius", vars["--radius"]);
+  }
+
+  window.addEventListener("message", function(event) {
+    var msg = event.data;
+    if (!msg || typeof msg !== "object") return;
+
+    if (msg.type === "plugin-response" && msg.requestId) {
+      var p = pendingPlugin.get(msg.requestId);
+      if (!p) return;
+      pendingPlugin.delete(msg.requestId);
+      p.resolve(msg.result || { success: false, error: "Missing result" });
+      return;
+    }
+
+    if (msg.type === "host-action-response" && msg.requestId) {
+      var p = pendingHost.get(msg.requestId);
+      if (!p) return;
+      pendingHost.delete(msg.requestId);
+      if (msg.success) p.resolve(msg.data);
+      else p.reject(new Error(msg.error || "Host action failed"));
+      return;
+    }
+
+    if (msg.type === "init") {
+      applyTheme(msg);
+      var entry = msg.entry;
+      currentEntryPath = entry && typeof entry.path === "string" ? entry.path : null;
+      if (currentEntryPath) {
+        setPath(currentEntryPath);
+        updateSelectionFromPath(currentEntryPath);
+      } else {
+        fetchEntryDates();
+      }
+      return;
+    }
+
+    if (msg.type === "theme-update") {
+      applyTheme(msg);
+      return;
+    }
+
+    if (msg.type === "plugin-event" && msg.event === "entry-changed") {
+      var entry = msg.data;
+      currentEntryPath = entry && typeof entry.path === "string" ? entry.path : null;
+      if (currentEntryPath) {
+        setPath(currentEntryPath);
+        updateSelectionFromPath(currentEntryPath);
+      }
+    }
+  });
+
+  document.getElementById("prevMonth").addEventListener("click", function() { navigateMonth(-1); });
+  document.getElementById("nextMonth").addEventListener("click", function() { navigateMonth(1); });
+  document.getElementById("todayBtn").addEventListener("click", goToToday);
+  document.getElementById("prevBtn").addEventListener("click", function() { navigate("prev"); });
+  document.getElementById("nextBtn").addEventListener("click", function() { navigate("next"); });
+
+  // Initial render
+  renderCalendar();
+</script>
+</body>
+</html>

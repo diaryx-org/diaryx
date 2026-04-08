@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GitHub History</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #0f172a;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --card: #f8fafc;
+    --accent: #0f766e;
+  }
+  .dark {
+    --bg: #020617;
+    --fg: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #1e293b;
+    --card: #0f172a;
+    --accent: #5eead4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 12px;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  .panel {
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 14px;
+    padding: 12px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 14px;
+  }
+  p {
+    margin: 0 0 10px;
+    color: var(--muted);
+  }
+  button {
+    appearance: none;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+  button.primary {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+  ul {
+    list-style: none;
+    padding: 0;
+    margin: 12px 0 0;
+    display: grid;
+    gap: 10px;
+  }
+  li {
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  .meta {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .empty {
+    color: var(--muted);
+    padding: 10px 0 0;
+  }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="row">
+      <h1>GitHub History</h1>
+      <div class="row" style="margin:0">
+        <button id="refresh">Refresh</button>
+        <button id="sync" class="primary">Sync</button>
+      </div>
+    </div>
+    <p id="status">Loading commit history…</p>
+    <ul id="commits"></ul>
+    <div id="empty" class="empty" hidden>No commits yet for this workspace.</div>
+  </div>
+
+<script>
+  let requestId = 0;
+  const pending = new Map();
+
+  function sendPluginCommand(command, params) {
+    return new Promise((resolve) => {
+      const id = ++requestId;
+      pending.set(id, resolve);
+      parent.postMessage({ type: "plugin-command", command, params, requestId: id }, "*");
+      setTimeout(() => {
+        if (!pending.has(id)) return;
+        pending.delete(id);
+        resolve({ success: false, error: "Request timed out" });
+      }, 20000);
+    });
+  }
+
+  function setBusy(busy) {
+    document.getElementById("refresh").disabled = busy;
+    document.getElementById("sync").disabled = busy;
+  }
+
+  function renderCommits(payload) {
+    const commits = Array.isArray(payload?.commits) ? payload.commits : [];
+    const status = document.getElementById("status");
+    const list = document.getElementById("commits");
+    const empty = document.getElementById("empty");
+    const remoteId = typeof payload?.remote_id === "string" ? payload.remote_id : "";
+    const repo = typeof payload?.repo === "string" ? payload.repo : "";
+
+    status.textContent = remoteId
+      ? `Workspace ${remoteId}${repo ? ` in ${repo}` : ""}`
+      : "No GitHub workspace linked.";
+    list.innerHTML = "";
+    empty.hidden = commits.length > 0;
+
+    for (const commit of commits) {
+      const item = document.createElement("li");
+      const title = document.createElement("div");
+      const meta = document.createElement("div");
+      title.textContent = commit.message || commit.sha || "Commit";
+      meta.className = "meta";
+      meta.textContent = [commit.date, commit.author, commit.sha].filter(Boolean).join(" • ");
+      item.appendChild(title);
+      item.appendChild(meta);
+      list.appendChild(item);
+    }
+  }
+
+  async function refreshHistory() {
+    setBusy(true);
+    const result = await sendPluginCommand("GetCommitHistory", {});
+    setBusy(false);
+    if (!result?.success) {
+      document.getElementById("status").textContent = result?.error || "Failed to load history";
+      document.getElementById("commits").innerHTML = "";
+      document.getElementById("empty").hidden = false;
+      return;
+    }
+    renderCommits(result.data || {});
+  }
+
+  async function syncWorkspace() {
+    setBusy(true);
+    const result = await sendPluginCommand("SyncWorkspace", {});
+    setBusy(false);
+    if (!result?.success) {
+      document.getElementById("status").textContent = result?.error || "Sync failed";
+      return;
+    }
+    await refreshHistory();
+  }
+
+  document.getElementById("refresh").addEventListener("click", refreshHistory);
+  document.getElementById("sync").addEventListener("click", syncWorkspace);
+
+  window.addEventListener("message", (event) => {
+    const data = event.data;
+    if (!data || typeof data !== "object") return;
+
+    if (data.type === "plugin-response" && data.requestId) {
+      const resolve = pending.get(data.requestId);
+      if (resolve) {
+        pending.delete(data.requestId);
+        resolve(data.result);
+      }
+      return;
+    }
+
+    if ((data.type === "init" || data.type === "theme-update") && data.theme === "dark") {
+      document.documentElement.classList.add("dark");
+      return;
+    }
+
+    if (data.type === "init" || data.type === "theme-update") {
+      document.documentElement.classList.remove("dark");
+    }
+
+    if (data.type === "init") {
+      refreshHistory();
+    }
+  });
+</script>
+</body>
+</html>

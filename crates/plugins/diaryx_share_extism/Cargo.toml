@@ -1,0 +1,23 @@
+[package]
+name = "diaryx_share_extism"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+diaryx_core = { workspace = true }
+diaryx_plugin_sdk = { workspace = true, features = ["full"] }
+extism-pdk = "1.4"
+yrs = "0.25"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.22"
+log = "0.4"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

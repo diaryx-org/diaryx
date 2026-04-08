@@ -67,7 +67,11 @@ permission prompt behind the launch overlay.
 Tauri-hosted provider inspection now narrows the backend's opaque
 `requestedPermissions` payload before reading plugin default permissions, so
 workspace bootstrap can reuse the same permission defaults handling as the web
-runtime without leaning on unchecked property access.
+runtime without leaning on unchecked property access. Tauri restore targets
+that have a workspace directory but no root index yet use a trusted bootstrap
+permission checker until the first downloaded root file exists, so provider
+downloads can create the root frontmatter instead of trapping on the first
+`host_write_file` call.
 
 For live sync, the host forwards only generic file events. That includes
 emitting `file_saved` after non-title frontmatter edits so the guest can

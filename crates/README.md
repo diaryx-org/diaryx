@@ -45,6 +45,6 @@ This folder contains Diaryx crates for core features and platform bindings.
 - `[diaryx_sync_extism](/crates/plugins/diaryx_sync_extism/README.md)`: Sync plugin — real-time multi-device sync (Extism guest WASM)
 - `[diaryx_publish_extism](/crates/plugins/diaryx_publish_extism/README.md)`: Publish plugin — export and website publishing (Extism guest WASM)
 
-Other plugin guest crates (daily, AI, math, spoiler, import, templating, S3 storage, Google Drive storage) live in standalone repos under [diaryx-org](https://github.com/diaryx-org).
+Other plugin guest crates (daily, AI, math, spoiler, import, templating, S3 storage, Google Drive storage, and friends) now live in `crates/plugins/` in this monorepo.
 
 Cargo also copies the LICENSE.md file here for publishing crates. It is has the same content as `../LICENSE.md`.

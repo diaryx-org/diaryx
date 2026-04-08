@@ -1,6 +1,6 @@
 ---
 schema_version: 2
-generated_at: '2026-04-02T15:36:32.372314+00:00'
+generated_at: '2026-04-06T22:54:52.411340+00:00'
 cdn_base: https://app.diaryx.org/cdn
 plugins:
 - id: diaryx.ai
@@ -26,6 +26,9 @@ plugins:
     size: 447416
     published_at: '2026-03-16T18:44:25Z'
   ui:
+  - slot: ToolbarButton
+    id: ai-chat-toggle
+    label: AI Assistant
   - slot: SidebarTab
     id: ai-chat
     label: AI
@@ -270,9 +273,29 @@ plugins:
   - slot: EditorExtension
     id: mathBlock
     label: Math Block
+- id: diaryx.pandoc
+  name: Pandoc
+  version: 0.1.1
+  description: Convert your documents to any file format
+  author: Diaryx Team
+  license: PolyForm Shield 1.0.0
+  repository: https://github.com/diaryx-org/plugin-pandoc
+  categories:
+  - export
+  tags:
+  - pandoc
+  - export
+  - conversion
+  capabilities: []
+  summary: This experimental plugin uses Pandoc for file conversion.
+  artifact:
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.pandoc/0.1.1/diaryx_pandoc_extism.wasm
+    sha256: d961594bc366beedf2c0bb7359ee0a44b3c292e9aac5fed3f0bd1b31ce2a5cbf
+    size: 843901
+    published_at: '2026-04-06T22:50:48Z'
 - id: diaryx.publish
   name: Publish
-  version: 0.2.3
+  version: 0.2.5
   description: Export and publish content with optional format conversion
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -289,10 +312,10 @@ plugins:
   - custom_commands
   summary: Export and publish workspaces.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.publish/0.2.3/diaryx_publish_extism.wasm
-    sha256: de3b728ba79da14d7e3af05ad1aff815e08298e571fd29693c28b84d3d170a19
-    size: 2802295
-    published_at: '2026-04-02T05:43:14Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.publish/0.2.5/diaryx_publish_extism.wasm
+    sha256: 6503a0591b923d2e38d0ef10537d1ee8311ffb7989041e5ff1fada90cd849bd6
+    size: 2807456
+    published_at: '2026-04-06T19:41:09Z'
   ui:
   - slot: SidebarTab
     id: publish-panel
@@ -507,7 +530,7 @@ plugins:
       plugin_storage: Persist S3 connection settings for the current workspace.
 - id: diaryx.sync
   name: Sync
-  version: 0.2.9
+  version: 0.2.11
   description: Real-time multi-device sync across Diaryx workspaces
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -528,10 +551,10 @@ plugins:
   summary: Realtime multi-device workspace sync, snapshots, history, and workspace-provider
     flows.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.2.9/diaryx_sync_extism.wasm
-    sha256: dff0b3ce2ca5355ce72707cff0964bb81c6b71c012d59b8e660c90664c67ae9a
-    size: 968019
-    published_at: '2026-04-02T15:33:57Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.2.11/diaryx_sync_extism.wasm
+    sha256: 1d67c6fbd0f880b9e36f737eed5c0d66f7b79c2e029bf77489331708dd524ebb
+    size: 987242
+    published_at: '2026-04-06T19:39:14Z'
   ui:
   - slot: SettingsTab
     id: sync-settings
@@ -580,7 +603,7 @@ plugins:
       delete_files: Delete files removed by remote sync or snapshot restore operations.
 - id: diaryx.templating
   name: Templating
-  version: 0.1.5
+  version: 0.1.6
   description: Creation-time templates and render-time body templating with Handlebars
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -597,10 +620,10 @@ plugins:
   - custom_commands
   summary: Creation-time and render-time templating.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.templating/0.1.5/diaryx_templating_extism.wasm
-    sha256: f12d0cd5abde477855e3165383bd2a0e50ef4774fa9f929cc7e90ee1a1af1d61
-    size: 1020303
-    published_at: '2026-03-16T18:37:09Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.templating/0.1.6/diaryx_templating_extism.wasm
+    sha256: d60f36a1c6b5afd1c885bbd33a031d1deddcfc2be5c86fae5d0a34b5c768bf0e
+    size: 1021019
+    published_at: '2026-04-06T22:48:25Z'
   ui:
   - slot: SettingsTab
     id: templating-settings
@@ -642,9 +665,9 @@ plugins:
 
 # Diaryx Plugin Registry
 
-Generated at 2026-04-02T15:36:32.372314+00:00
+Generated at 2026-04-06T22:54:52.411340+00:00
 
-**15** plugins available.
+**16** plugins available.
 
 ## AI Assistant
 **ID:** `diaryx.ai` | **Version:** 0.1.5
@@ -678,8 +701,12 @@ Import entries from external formats.
 **ID:** `diaryx.math` | **Version:** 0.1.6
 Render inline and block LaTeX.
 
+## Pandoc
+**ID:** `diaryx.pandoc` | **Version:** 0.1.1
+This experimental plugin uses Pandoc for file conversion.
+
 ## Publish
-**ID:** `diaryx.publish` | **Version:** 0.2.3
+**ID:** `diaryx.publish` | **Version:** 0.2.5
 Export and publish workspaces.
 
 ## Live Share
@@ -699,9 +726,9 @@ Google Drive storage backend.
 S3-compatible storage backend.
 
 ## Sync
-**ID:** `diaryx.sync` | **Version:** 0.2.9
+**ID:** `diaryx.sync` | **Version:** 0.2.11
 Realtime multi-device workspace sync, snapshots, history, and workspace-provider flows.
 
 ## Templating
-**ID:** `diaryx.templating` | **Version:** 0.1.5
+**ID:** `diaryx.templating` | **Version:** 0.1.6
 Creation-time and render-time templating.

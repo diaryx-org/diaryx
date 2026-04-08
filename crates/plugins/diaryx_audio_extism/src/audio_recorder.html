@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audio Recorder</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --background: #fff; --foreground: #0a0a0a;
+    --muted: #f5f5f5; --muted-foreground: #737373;
+    --border: #e5e5e5; --primary: #171717; --primary-foreground: #fafafa;
+    --accent: #f5f5f5; --accent-foreground: #171717;
+    --popover: #fff; --destructive: #ef4444;
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; background: var(--background); color: var(--foreground); }
+  .container { display: flex; flex-direction: column; height: 100vh; outline: none; }
+
+  /* Toolbar */
+  .toolbar {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+    background: var(--muted); border-bottom: 1px solid var(--border);
+  }
+  .toolbar-spacer { flex: 1; }
+  .toolbar-btn {
+    display: flex; align-items: center; justify-content: center; gap: 4px;
+    height: 30px; padding: 0 10px; border: none; border-radius: 6px;
+    background: transparent; color: var(--foreground); cursor: pointer;
+    font-size: 12px; font-weight: 500;
+    transition: all 0.1s ease; user-select: none; -webkit-user-select: none;
+  }
+  .toolbar-btn:hover:not(:disabled) { background: var(--accent); color: var(--accent-foreground); }
+  .toolbar-btn:active:not(:disabled) { transform: scale(0.95); }
+  .toolbar-btn:disabled { opacity: 0.3; cursor: default; }
+  .toolbar-btn.save-btn { background: var(--primary); color: var(--primary-foreground); }
+  .toolbar-btn.save-btn:hover:not(:disabled) { opacity: 0.9; }
+  .toolbar-btn.record-btn { background: #dc2626; color: white; }
+  .toolbar-btn.record-btn:hover:not(:disabled) { background: #b91c1c; }
+  .toolbar-btn.record-btn.recording { animation: pulse-record 1.2s ease-in-out infinite; }
+
+  @keyframes pulse-record {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  /* Main content area */
+  .content { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; gap: 16px; }
+
+  /* Waveform canvas */
+  .waveform-container {
+    width: 100%; max-width: 560px; height: 120px;
+    background: var(--muted); border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .waveform-container canvas { width: 100%; height: 100%; display: block; }
+
+  /* Timer */
+  .timer {
+    font-size: 32px; font-weight: 600; font-variant-numeric: tabular-nums;
+    color: var(--foreground); letter-spacing: 0.02em;
+  }
+  .timer.recording-active { color: #dc2626; }
+
+  /* Controls row */
+  .controls { display: flex; align-items: center; gap: 10px; }
+  .control-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border: none; border-radius: 50%;
+    cursor: pointer; transition: all 0.15s ease;
+  }
+  .control-btn:hover:not(:disabled) { transform: scale(1.08); }
+  .control-btn:active:not(:disabled) { transform: scale(0.95); }
+  .control-btn:disabled { opacity: 0.3; cursor: default; }
+  .record-circle {
+    background: #dc2626; color: white;
+  }
+  .record-circle.recording { background: var(--muted); color: var(--foreground); border: 2px solid var(--border); }
+  .stop-btn { background: var(--muted); color: var(--foreground); border: 2px solid var(--border); }
+  .play-btn { background: var(--primary); color: var(--primary-foreground); }
+
+  /* Audio playback */
+  .playback-row { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 560px; }
+  .playback-row audio { display: none; }
+  .progress-bar {
+    flex: 1; height: 6px; background: var(--muted); border-radius: 3px;
+    cursor: pointer; position: relative; overflow: hidden;
+  }
+  .progress-fill {
+    position: absolute; top: 0; left: 0; height: 100%; width: 0%;
+    background: var(--primary); border-radius: 3px; transition: width 0.1s linear;
+  }
+  .playback-time { font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+
+  /* Status */
+  .status { font-size: 13px; color: var(--muted-foreground); text-align: center; min-height: 20px; }
+  .status.error { color: var(--destructive); }
+
+  /* Responsive */
+  @media (max-width: 480px) {
+    .timer { font-size: 24px; }
+    .waveform-container { height: 80px; }
+    .control-btn { width: 38px; height: 38px; }
+  }
+</style>
+</head>
+<body>
+<div class="container" tabindex="-1" id="app">
+  <div class="toolbar">
+    <span style="font-size: 12px; color: var(--muted-foreground);">Audio Recorder</span>
+    <div class="toolbar-spacer"></div>
+    <button type="button" class="toolbar-btn" id="cancel-btn" title="Cancel (Esc)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      Cancel
+    </button>
+    <button type="button" class="toolbar-btn save-btn" id="save-btn" title="Save (Ctrl+Enter)" disabled>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      Save
+    </button>
+  </div>
+
+  <div class="content">
+    <div class="waveform-container">
+      <canvas id="waveform"></canvas>
+    </div>
+
+    <div class="timer" id="timer">00:00</div>
+
+    <div class="controls">
+      <button type="button" class="control-btn record-circle" id="record-btn" title="Record (Space)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg>
+      </button>
+      <button type="button" class="control-btn stop-btn" id="stop-btn" title="Stop" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+      </button>
+      <button type="button" class="control-btn play-btn" id="play-btn" title="Play/Pause" disabled>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" id="play-icon"><polygon points="6,3 20,12 6,21"/></svg>
+      </button>
+    </div>
+
+    <div class="playback-row" id="playback-row" style="display:none;">
+      <div class="progress-bar" id="progress-bar">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <span class="playback-time" id="playback-time">0:00</span>
+      <audio id="audio-el"></audio>
+    </div>
+
+    <div class="status" id="status">Press record to start</div>
+  </div>
+</div>
+
+<script>
+// =========================================================================
+// State
+// =========================================================================
+
+let state = "idle"; // idle | recording | recorded | playing
+let recordingStartTime = 0;
+let timerInterval = null;
+let audioBase64 = null;
+let audioMimeType = null;
+let audioDuration = 0;
+let existingAudio = null; // base64 of existing recording loaded for re-edit
+let saving = false;
+
+const canvas = document.getElementById("waveform");
+const ctx = canvas.getContext("2d");
+const timerEl = document.getElementById("timer");
+const statusEl = document.getElementById("status");
+const recordBtn = document.getElementById("record-btn");
+const stopBtn = document.getElementById("stop-btn");
+const playBtn = document.getElementById("play-btn");
+const saveBtn = document.getElementById("save-btn");
+const cancelBtn = document.getElementById("cancel-btn");
+const playbackRow = document.getElementById("playback-row");
+const progressBar = document.getElementById("progress-bar");
+const progressFill = document.getElementById("progress-fill");
+const playbackTime = document.getElementById("playback-time");
+const audioEl = document.getElementById("audio-el");
+const containerEl = document.getElementById("app");
+
+// =========================================================================
+// Waveform drawing
+// =========================================================================
+
+function resizeCanvas() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * window.devicePixelRatio;
+  canvas.height = rect.height * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+}
+
+function drawWaveform(data) {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const w = rect.width;
+  const h = rect.height;
+
+  // Get computed styles for theming
+  const cs = getComputedStyle(document.documentElement);
+  const bg = cs.getPropertyValue("--muted").trim() || "#f5f5f5";
+  const fg = state === "recording" ? "#dc2626" : (cs.getPropertyValue("--primary").trim() || "#171717");
+
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  if (!data || data.length === 0) {
+    // Draw flat line
+    ctx.strokeStyle = fg;
+    ctx.globalAlpha = 0.2;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  const barCount = Math.min(data.length, Math.floor(w / 3));
+  const step = Math.floor(data.length / barCount);
+  const barWidth = Math.max(2, (w / barCount) - 1);
+  const gap = (w - barWidth * barCount) / (barCount + 1);
+
+  ctx.fillStyle = fg;
+  ctx.globalAlpha = 0.8;
+
+  for (let i = 0; i < barCount; i++) {
+    // Normalize byte value (0-255) to 0-1
+    const val = (data[i * step] - 128) / 128;
+    const barHeight = Math.max(2, Math.abs(val) * h * 0.8);
+    const x = gap + i * (barWidth + gap);
+    const y = (h - barHeight) / 2;
+    ctx.fillRect(x, y, barWidth, barHeight);
+  }
+
+  ctx.globalAlpha = 1;
+}
+
+function drawIdleWaveform() {
+  drawWaveform(null);
+}
+
+resizeCanvas();
+drawIdleWaveform();
+
+window.addEventListener("resize", () => {
+  resizeCanvas();
+  drawIdleWaveform();
+});
+
+// =========================================================================
+// Timer
+// =========================================================================
+
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+}
+
+function startTimer() {
+  recordingStartTime = Date.now();
+  timerEl.classList.add("recording-active");
+  timerInterval = setInterval(() => {
+    const elapsed = (Date.now() - recordingStartTime) / 1000;
+    timerEl.textContent = formatTime(elapsed);
+  }, 250);
+}
+
+function stopTimer() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+  timerEl.classList.remove("recording-active");
+}
+
+// =========================================================================
+// Recording control (delegates to host)
+// =========================================================================
+
+function startRecording() {
+  if (state === "recording") return;
+  state = "recording";
+  audioBase64 = null;
+  audioMimeType = null;
+  audioDuration = 0;
+  existingAudio = null;
+
+  // Revoke any existing playback
+  if (audioEl.src && audioEl.src.startsWith("blob:")) {
+    URL.revokeObjectURL(audioEl.src);
+  }
+  audioEl.src = "";
+  playbackRow.style.display = "none";
+  progressFill.style.width = "0%";
+
+  parent.postMessage({ type: "start-recording" }, "*");
+  statusEl.textContent = "Requesting microphone access\u2026";
+  statusEl.className = "status";
+  updateButtons();
+}
+
+function stopRecording() {
+  if (state !== "recording") return;
+  parent.postMessage({ type: "stop-recording" }, "*");
+  statusEl.textContent = "Processing\u2026";
+  updateButtons();
+}
+
+// =========================================================================
+// Playback
+// =========================================================================
+
+function loadAudioForPlayback(base64, mimeType) {
+  try {
+    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: mimeType || "audio/webm" });
+    const url = URL.createObjectURL(blob);
+
+    if (audioEl.src && audioEl.src.startsWith("blob:")) {
+      URL.revokeObjectURL(audioEl.src);
+    }
+    audioEl.src = url;
+    playbackRow.style.display = "flex";
+    return true;
+  } catch (e) {
+    console.error("Failed to load audio:", e);
+    return false;
+  }
+}
+
+function togglePlayback() {
+  if (state === "playing") {
+    audioEl.pause();
+    state = "recorded";
+    updateButtons();
+  } else if (state === "recorded" && audioEl.src) {
+    audioEl.play().then(() => {
+      state = "playing";
+      updateButtons();
+    }).catch(() => {});
+  }
+}
+
+audioEl.addEventListener("ended", () => {
+  state = "recorded";
+  progressFill.style.width = "0%";
+  playbackTime.textContent = formatTimeShort(audioDuration);
+  updateButtons();
+});
+
+audioEl.addEventListener("timeupdate", () => {
+  if (audioDuration > 0) {
+    const pct = (audioEl.currentTime / audioDuration) * 100;
+    progressFill.style.width = pct + "%";
+    playbackTime.textContent = formatTimeShort(audioEl.currentTime);
+  }
+});
+
+progressBar.addEventListener("click", (e) => {
+  if (!audioDuration) return;
+  const rect = progressBar.getBoundingClientRect();
+  const pct = (e.clientX - rect.left) / rect.width;
+  audioEl.currentTime = pct * audioDuration;
+});
+
+function formatTimeShort(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+// =========================================================================
+// Button state management
+// =========================================================================
+
+function updateButtons() {
+  const isIdle = state === "idle";
+  const isRecording = state === "recording";
+  const hasAudio = state === "recorded" || state === "playing";
+  const isPlaying = state === "playing";
+
+  recordBtn.disabled = isRecording;
+  recordBtn.classList.toggle("recording", isRecording);
+  stopBtn.disabled = !isRecording;
+  playBtn.disabled = !hasAudio;
+  saveBtn.disabled = saving || (!hasAudio && !existingAudio);
+
+  // Update play/pause icon
+  const playIcon = playBtn.querySelector("svg");
+  if (isPlaying) {
+    playIcon.innerHTML = '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>';
+  } else {
+    playIcon.innerHTML = '<polygon points="6,3 20,12 6,21"/>';
+  }
+}
+
+// =========================================================================
+// Save / Cancel
+// =========================================================================
+
+function save() {
+  if (saving) return;
+  const b64 = audioBase64 || existingAudio;
+  if (!b64) return;
+  saving = true;
+  saveBtn.disabled = true;
+  parent.postMessage({
+    type: "save",
+    audio: b64,
+    duration: audioDuration,
+    mimeType: audioMimeType || "audio/webm",
+    alt: "",
+  }, "*");
+}
+
+function cancel() {
+  // Clean up any playback
+  if (audioEl.src && audioEl.src.startsWith("blob:")) {
+    URL.revokeObjectURL(audioEl.src);
+  }
+  parent.postMessage({ type: "cancel" }, "*");
+}
+
+// =========================================================================
+// postMessage listener
+// =========================================================================
+
+window.addEventListener("message", (e) => {
+  const msg = e.data;
+  if (!msg || typeof msg !== "object") return;
+
+  if (msg.type === "init") {
+    applyTheme(msg.cssVars);
+    const data = msg.data || {};
+    // Load existing audio for re-editing
+    if (data.audio) {
+      existingAudio = data.audio;
+      audioMimeType = data.mimeType || "audio/webm";
+      audioDuration = data.duration || 0;
+      if (loadAudioForPlayback(data.audio, audioMimeType)) {
+        state = "recorded";
+        timerEl.textContent = formatTime(audioDuration);
+        statusEl.textContent = "Existing recording loaded \u2014 play, re-record, or save";
+      }
+    }
+    resizeCanvas();
+    drawIdleWaveform();
+    updateButtons();
+  }
+
+  if (msg.type === "theme-update") {
+    applyTheme(msg.cssVars);
+  }
+
+  if (msg.type === "recording-started") {
+    statusEl.textContent = "Recording\u2026";
+    statusEl.className = "status";
+    startTimer();
+    updateButtons();
+  }
+
+  if (msg.type === "recording-error") {
+    state = "idle";
+    stopTimer();
+    timerEl.textContent = "00:00";
+    statusEl.textContent = msg.error || "Recording failed";
+    statusEl.className = "status error";
+    drawIdleWaveform();
+    updateButtons();
+  }
+
+  if (msg.type === "recording-stopped") {
+    state = "recorded";
+    stopTimer();
+    audioBase64 = msg.audio;
+    audioMimeType = msg.mimeType || "audio/webm";
+    audioDuration = msg.duration || 0;
+    timerEl.textContent = formatTime(audioDuration);
+    statusEl.textContent = "Recording complete \u2014 play back or save";
+    statusEl.className = "status";
+
+    if (msg.audio) {
+      loadAudioForPlayback(msg.audio, audioMimeType);
+    }
+    drawIdleWaveform();
+    updateButtons();
+  }
+
+  if (msg.type === "waveform-data") {
+    drawWaveform(msg.data);
+  }
+});
+
+function applyTheme(cssVars) {
+  if (!cssVars) return;
+  for (const [name, value] of Object.entries(cssVars)) {
+    document.documentElement.style.setProperty(name, value);
+  }
+}
+
+// =========================================================================
+// Keyboard shortcuts
+// =========================================================================
+
+containerEl.addEventListener("keydown", (event) => {
+  const mod = event.metaKey || event.ctrlKey;
+  if (event.key === "Escape") { event.preventDefault(); cancel(); }
+  else if (mod && event.key === "Enter") { event.preventDefault(); save(); }
+  else if (event.key === " " && !mod) {
+    event.preventDefault();
+    if (state === "idle" || state === "recorded") {
+      startRecording();
+    } else if (state === "recording") {
+      stopRecording();
+    } else if (state === "playing") {
+      togglePlayback();
+    }
+  }
+});
+
+// =========================================================================
+// Button event listeners
+// =========================================================================
+
+recordBtn.addEventListener("click", () => {
+  if (state === "recording") return;
+  startRecording();
+});
+
+stopBtn.addEventListener("click", () => {
+  stopRecording();
+});
+
+playBtn.addEventListener("click", () => {
+  togglePlayback();
+});
+
+cancelBtn.addEventListener("click", cancel);
+saveBtn.addEventListener("click", save);
+
+// =========================================================================
+// Init
+// =========================================================================
+
+updateButtons();
+containerEl.focus();
+</script>
+</body>
+</html>

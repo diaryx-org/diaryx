@@ -85,8 +85,8 @@ than forcing line coverage through large UI shells.
 
 Sync E2E tests expect a running sync server (`http://127.0.0.1:3030` by
 default). The dev-mode magic-link response (`dev_link`) is used for auth flows.
-If `DIARYX_SYNC_PLUGIN_WASM` is not set, the E2E builds the sibling
-`../plugin-sync` workspace and installs that fresh guest artifact before the
+If `DIARYX_SYNC_PLUGIN_WASM` is not set, the E2E builds the in-repo
+`crates/plugins/diaryx_sync_extism` crate and installs that fresh guest artifact before the
 browser flow starts.
 
 The Chromium sync E2E covers the browser-hosted provider flow end to end:

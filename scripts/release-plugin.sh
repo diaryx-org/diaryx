@@ -63,23 +63,28 @@ WASM_SRC="$WORKSPACE_ROOT/target/wasm32-unknown-unknown/release/${PLUGIN}.wasm"
 DIST_DIR="$WORKSPACE_ROOT/dist/plugins/$PLUGIN"
 mkdir -p "$DIST_DIR"
 
+ARTIFACT_NAME="${PLUGIN}.wasm"
+ARTIFACT_PATH="$DIST_DIR/$ARTIFACT_NAME"
+
+cp "$WASM_SRC" "$ARTIFACT_PATH"
+# Keep the host-loader filename around for local inspection and manual installs.
 cp "$WASM_SRC" "$DIST_DIR/plugin.wasm"
 
 # Generate SHA256 checksum
 if command -v sha256sum >/dev/null 2>&1; then
-    SHA=$(sha256sum "$DIST_DIR/plugin.wasm" | cut -d' ' -f1)
+    SHA=$(sha256sum "$ARTIFACT_PATH" | cut -d' ' -f1)
 elif command -v shasum >/dev/null 2>&1; then
-    SHA=$(shasum -a 256 "$DIST_DIR/plugin.wasm" | cut -d' ' -f1)
+    SHA=$(shasum -a 256 "$ARTIFACT_PATH" | cut -d' ' -f1)
 else
     echo "Warning: no sha256sum or shasum found, skipping checksum"
     SHA="unknown"
 fi
 
-SIZE=$(wc -c < "$DIST_DIR/plugin.wasm" | tr -d ' ')
+SIZE=$(wc -c < "$ARTIFACT_PATH" | tr -d ' ')
 
 echo ""
 echo "=== Release artifact ready ==="
-echo "  Path:    $DIST_DIR/plugin.wasm"
+echo "  Path:    $ARTIFACT_PATH"
 echo "  Version: $VERSION"
 echo "  Size:    $SIZE bytes"
 echo "  SHA256:  $SHA"
@@ -97,13 +102,13 @@ if [ "$UPLOAD" = true ]; then
 
     echo "Creating GitHub Release: $TAG"
     gh release create "$TAG" \
-        "$DIST_DIR/plugin.wasm#${PLUGIN}.wasm" \
+        "$ARTIFACT_PATH" \
         --repo diaryx-org/diaryx \
         --title "$RELEASE_NAME" \
         --generate-notes \
         --notes-start-tag "$(gh release list --repo diaryx-org/diaryx --json tagName -q "[.[] | select(.tagName | startswith(\"$PLUGIN_ID/\"))][1].tagName // \"\"" 2>/dev/null)"
 
-    DOWNLOAD_URL="https://github.com/diaryx-org/diaryx/releases/download/${TAG}/${PLUGIN}.wasm"
+    DOWNLOAD_URL="https://github.com/diaryx-org/diaryx/releases/download/${TAG}/${ARTIFACT_NAME}"
     NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
     echo "Release created: $DOWNLOAD_URL"

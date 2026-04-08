@@ -445,6 +445,11 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
 
     if !errors.is_empty() {
         host::log::log("warn", &format!("DownloadWorkspace errors: {:?}", errors));
+        return Err(format!(
+            "DownloadWorkspace failed while writing {} file(s): {}",
+            errors.len(),
+            errors.join("; ")
+        ));
     }
 
     // Link the workspace if requested

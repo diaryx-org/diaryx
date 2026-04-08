@@ -32,15 +32,15 @@
   function getChangeClass(changeType: ChangeType): string {
     switch (changeType) {
       case 'Added':
-        return 'change-added';
+        return 'bg-emerald-600 text-white';
       case 'Modified':
-        return 'change-modified';
+        return 'bg-amber-500 text-black';
       case 'Deleted':
-        return 'change-deleted';
+        return 'bg-red-600 text-white';
       case 'Restored':
-        return 'change-restored';
+        return 'bg-sky-500 text-white';
       default:
-        return '';
+        return 'bg-muted text-muted-foreground';
     }
   }
 
@@ -64,94 +64,24 @@
   }
 </script>
 
-<div class="version-diff">
+<div class="text-sm">
   {#if diffs.length === 0}
-    <div class="empty">No changes in this version</div>
+    <div class="px-4 py-4 text-center text-muted-foreground">No changes in this version</div>
   {:else}
-    <div class="diff-list">
+    <div class="flex flex-col gap-1">
       {#each diffs as diff}
-        <div class="diff-item {getChangeClass(diff.change_type)}">
-          <span class="change-icon">{getChangeIcon(diff.change_type)}</span>
-          <span class="file-path" title={diff.path}>
+        <div class="flex items-center gap-2 rounded-md bg-muted px-2 py-1.5">
+          <span
+            class={`flex h-[1.2rem] w-[1.2rem] shrink-0 items-center justify-center rounded-[4px] text-[0.8rem] font-semibold ${getChangeClass(diff.change_type)}`}
+          >
+            {getChangeIcon(diff.change_type)}
+          </span>
+          <span class="min-w-0 flex-1 truncate text-foreground" title={diff.path}>
             {getFileName(diff.path)}
           </span>
-          <span class="change-type">{getChangeLabel(diff.change_type)}</span>
+          <span class="shrink-0 text-xs text-muted-foreground">{getChangeLabel(diff.change_type)}</span>
         </div>
       {/each}
     </div>
   {/if}
 </div>
-
-<style>
-  .version-diff {
-    font-size: 0.85rem;
-  }
-
-  .empty {
-    color: var(--muted-foreground);
-    text-align: center;
-    padding: 1rem;
-  }
-
-  .diff-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .diff-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.35rem 0.5rem;
-    border-radius: 4px;
-    background: var(--muted);
-  }
-
-  .change-icon {
-    width: 1.2rem;
-    height: 1.2rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    font-weight: 600;
-    font-size: 0.8rem;
-    flex-shrink: 0;
-  }
-
-  .change-added .change-icon {
-    background: hsl(142, 76%, 36%);
-    color: white;
-  }
-
-  .change-modified .change-icon {
-    background: hsl(48, 96%, 53%);
-    color: black;
-  }
-
-  .change-deleted .change-icon {
-    background: hsl(0, 72%, 51%);
-    color: white;
-  }
-
-  .change-restored .change-icon {
-    background: hsl(199, 89%, 48%);
-    color: white;
-  }
-
-  .file-path {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--foreground);
-  }
-
-  .change-type {
-    font-size: 0.7rem;
-    color: var(--muted-foreground);
-    flex-shrink: 0;
-  }
-</style>

@@ -12,6 +12,21 @@ members = [
     "crates/plugins/diaryx_plugin_sdk",
     "crates/plugins/diaryx_sync_extism",
     "crates/plugins/diaryx_publish_extism",
+    "crates/plugins/diaryx_ai_extism",
+    "crates/plugins/diaryx_audio_extism",
+    "crates/plugins/diaryx_daily_extism",
+    "crates/plugins/diaryx_drawing_extism",
+    "crates/plugins/diaryx_github_extism",
+    "crates/plugins/diaryx_heic_extism",
+    "crates/plugins/diaryx_highlight_extism",
+    "crates/plugins/diaryx_import_extism",
+    "crates/plugins/diaryx_math_extism",
+    "crates/plugins/diaryx_pandoc_extism",
+    "crates/plugins/diaryx_share_extism",
+    "crates/plugins/diaryx_spoiler_extism",
+    "crates/plugins/diaryx_storage_gdrive_extism",
+    "crates/plugins/diaryx_storage_s3_extism",
+    "crates/plugins/diaryx_templating_extism",
     "apps/tauri/src-tauri"
 ]
 exclude = [
@@ -43,7 +58,7 @@ diaryx_core = { path = "crates/diaryx_core", version = "1.4.2" }
 diaryx_daily = { path = "crates/diaryx_daily", version = "1.3.0" }
 diaryx_sync = { path = "crates/diaryx_sync", version = "1.4.2" }
 diaryx_extism = { path = "crates/diaryx_extism", version = "1.3.0" }
-diaryx_plugin_sdk = { path = "crates/plugins/diaryx_plugin_sdk", version = "1.4.1" }
+diaryx_plugin_sdk = { path = "crates/plugins/diaryx_plugin_sdk", version = "1.4.1", features = ["getrandom-shim"] }
 
 # cargo-release configuration
 [workspace.metadata.release]

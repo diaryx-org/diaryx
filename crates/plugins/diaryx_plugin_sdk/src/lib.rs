@@ -86,6 +86,8 @@
 //! | `full`           | All of the above                             |
 
 pub mod config;
+#[cfg(feature = "getrandom-shim")]
+pub mod getrandom_shim;
 pub mod host;
 pub mod protocol;
 pub mod state;

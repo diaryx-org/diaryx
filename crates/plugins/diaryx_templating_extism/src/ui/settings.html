@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Template Settings</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #111827;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --card: #f9fafb;
+    --primary: #0f766e;
+    --primary-fg: #ffffff;
+    --danger: #b91c1c;
+    --danger-fg: #ffffff;
+    --success: #15803d;
+    --badge-builtin-bg: rgba(59, 130, 246, 0.1);
+    --badge-builtin-fg: #2563eb;
+    --badge-ws-bg: rgba(22, 163, 74, 0.1);
+    --badge-ws-fg: #16a34a;
+  }
+  .dark {
+    --bg: #0f172a;
+    --fg: #e5e7eb;
+    --muted: #94a3b8;
+    --border: #1f2937;
+    --card: #111827;
+    --primary: #14b8a6;
+    --primary-fg: #062b28;
+    --danger: #f87171;
+    --danger-fg: #1c1917;
+    --success: #4ade80;
+    --badge-builtin-bg: rgba(59, 130, 246, 0.15);
+    --badge-builtin-fg: #60a5fa;
+    --badge-ws-bg: rgba(22, 163, 74, 0.15);
+    --badge-ws-fg: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 0;
+    overflow: hidden;
+    height: 100vh;
+  }
+  .panel { padding: 12px; height: 100vh; overflow-y: auto; }
+
+  /* Settings panel */
+  h2 { margin: 0 0 8px; font-size: 14px; }
+  h3 { margin: 12px 0 6px; font-size: 13px; font-weight: 600; }
+  .separator { border-top: 1px solid var(--border); margin: 12px 0; }
+  label { display: block; font-size: 12px; margin: 0 0 4px; color: var(--muted); }
+  select {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 6px 8px;
+    font-size: 12px;
+    min-width: 120px;
+  }
+  .default-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .default-row span { font-size: 12px; }
+  .default-row .hint { font-size: 11px; color: var(--muted); }
+
+  /* Template list */
+  .template-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 4px;
+  }
+  .template-item:hover { background: var(--card); }
+  .template-info { display: flex; align-items: center; gap: 6px; }
+  .template-name { font-size: 13px; font-weight: 500; }
+  .badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .badge-builtin { background: var(--badge-builtin-bg); color: var(--badge-builtin-fg); }
+  .badge-workspace { background: var(--badge-ws-bg); color: var(--badge-ws-fg); }
+  .template-actions { display: flex; gap: 2px; }
+  .icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .icon-btn:hover { background: var(--card); color: var(--fg); }
+  .icon-btn.danger:hover { color: var(--danger); }
+  .header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  button {
+    border: 0;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--primary);
+    color: var(--primary-fg);
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+  }
+  .status { font-size: 12px; color: var(--muted); margin-top: 4px; min-height: 16px; }
+  .error { color: var(--danger); }
+
+  /* Editor panel */
+  .editor-panel { display: none; }
+  .editor-panel.active { display: flex; flex-direction: column; height: 100vh; padding: 12px; }
+  .editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .editor-title { font-size: 14px; font-weight: 600; }
+  .editor-body { flex: 1; display: flex; gap: 8px; min-height: 0; }
+  .editor-main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  input.name-input {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 6px 8px;
+    font-size: 12px;
+    font-family: ui-monospace, monospace;
+    margin-bottom: 6px;
+  }
+  textarea {
+    flex: 1;
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 8px;
+    font-size: 12px;
+    font-family: ui-monospace, monospace;
+    resize: none;
+  }
+  textarea:disabled, input:disabled { opacity: 0.5; }
+  .var-panel {
+    width: 150px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px;
+  }
+  .var-title { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+  .var-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--fg);
+    padding: 3px 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .var-btn:hover { background: var(--card); }
+  .var-btn:disabled { opacity: 0.5; cursor: default; }
+  .var-btn code { color: var(--primary); font-family: ui-monospace, monospace; font-size: 11px; }
+  .var-btn .var-desc { display: block; color: var(--muted); font-size: 10px; margin-top: 1px; }
+  .editor-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<!-- Settings Panel -->
+<div id="settings-panel" class="panel">
+  <h3>Default Template</h3>
+  <div class="default-row">
+    <div>
+      <span>New entries</span>
+      <div class="hint">Template used when creating a new entry.</div>
+    </div>
+    <select id="default-select"></select>
+  </div>
+
+  <div class="separator"></div>
+
+  <div class="header-row">
+    <h3 style="margin:0">Templates</h3>
+    <button id="new-btn" class="ghost">+ New</button>
+  </div>
+
+  <div id="template-list" style="margin-top:8px"></div>
+  <div id="status" class="status"></div>
+</div>
+
+<!-- Editor Panel -->
+<div id="editor-panel" class="editor-panel">
+  <div class="editor-header">
+    <span class="editor-title" id="editor-title">New Template</span>
+  </div>
+  <div class="editor-body">
+    <div class="editor-main">
+      <label for="tpl-name">Name</label>
+      <input id="tpl-name" class="name-input" placeholder="my-template" />
+      <label for="tpl-content">Content</label>
+      <textarea id="tpl-content" placeholder="---&#10;title: &quot;{{title}}&quot;&#10;created: {{timestamp}}&#10;---&#10;&#10;# {{title}}&#10;"></textarea>
+    </div>
+    <div class="var-panel">
+      <div class="var-title">Variables</div>
+      <div id="var-buttons"></div>
+    </div>
+  </div>
+  <div class="editor-footer">
+    <button id="cancel-btn" class="ghost">Cancel</button>
+    <button id="save-tpl-btn">Save</button>
+  </div>
+</div>
+
+<script>
+  const settingsPanel = document.getElementById('settings-panel');
+  const editorPanel = document.getElementById('editor-panel');
+  const defaultSelect = document.getElementById('default-select');
+  const templateList = document.getElementById('template-list');
+  const statusEl = document.getElementById('status');
+  const tplName = document.getElementById('tpl-name');
+  const tplContent = document.getElementById('tpl-content');
+  const editorTitle = document.getElementById('editor-title');
+  const varButtons = document.getElementById('var-buttons');
+
+  let templates = [];
+  let editingNew = false;
+  let editingReadOnly = false;
+  let requestId = 0;
+  const pending = new Map();
+
+  const VARIABLES = [
+    { name: '{{title}}', desc: 'Entry title' },
+    { name: '{{filename}}', desc: 'Filename' },
+    { name: '{{date}}', desc: 'Date (YYYY-MM-DD)' },
+    { name: '{{time}}', desc: 'Time (HH:MM)' },
+    { name: '{{timestamp}}', desc: 'ISO 8601' },
+    { name: '{{year}}', desc: 'Year' },
+    { name: '{{month}}', desc: 'Month (2 digits)' },
+    { name: '{{month_name}}', desc: 'Month name' },
+    { name: '{{day}}', desc: 'Day (2 digits)' },
+    { name: '{{weekday}}', desc: 'Weekday name' },
+    { name: '{{part_of}}', desc: 'Parent index ref' },
+  ];
+
+  function sendPluginCommand(command, params) {
+    return new Promise((resolve) => {
+      const id = ++requestId;
+      pending.set(id, resolve);
+      parent.postMessage({ type: 'plugin-command', command, params, requestId: id }, '*');
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          resolve({ success: false, error: 'Request timed out' });
+        }
+      }, 15000);
+    });
+  }
+
+  function setStatus(text, isError) {
+    statusEl.textContent = text || '';
+    statusEl.className = 'status' + (isError ? ' error' : '');
+  }
+
+  function showSettings() {
+    settingsPanel.style.display = 'block';
+    editorPanel.classList.remove('active');
+  }
+
+  function showEditor(title, name, content, isNew, readOnly) {
+    settingsPanel.style.display = 'none';
+    editorPanel.classList.add('active');
+    editorTitle.textContent = title;
+    tplName.value = name;
+    tplContent.value = content;
+    tplName.disabled = !isNew || readOnly;
+    tplContent.disabled = readOnly;
+    editingNew = isNew;
+    editingReadOnly = readOnly;
+    document.getElementById('save-tpl-btn').style.display = readOnly ? 'none' : '';
+    document.getElementById('cancel-btn').textContent = readOnly ? 'Close' : 'Cancel';
+    renderVarButtons(readOnly);
+  }
+
+  function renderVarButtons(disabled) {
+    varButtons.innerHTML = '';
+    for (const v of VARIABLES) {
+      const btn = document.createElement('button');
+      btn.className = 'var-btn';
+      btn.disabled = disabled;
+      btn.innerHTML = '<code>' + v.name + '</code><span class="var-desc">' + v.desc + '</span>';
+      btn.addEventListener('click', () => {
+        if (!disabled) {
+          const ta = tplContent;
+          const start = ta.selectionStart;
+          ta.value = ta.value.slice(0, start) + v.name + ta.value.slice(ta.selectionEnd);
+          ta.selectionStart = ta.selectionEnd = start + v.name.length;
+          ta.focus();
+        }
+      });
+      varButtons.appendChild(btn);
+    }
+  }
+
+  async function loadTemplates() {
+    const result = await sendPluginCommand('ListTemplates', {});
+    if (result && result.success && result.data) {
+      templates = Array.isArray(result.data) ? result.data : [];
+    } else {
+      templates = [];
+    }
+    renderTemplateList();
+    renderDefaultSelect();
+  }
+
+  async function loadDefaultTemplate() {
+    const cfg = await sendPluginCommand('get_config', {});
+    if (cfg && cfg.success && cfg.data && typeof cfg.data === 'object') {
+      const dt = cfg.data.default_template;
+      if (dt && defaultSelect.querySelector('option[value="' + dt + '"]')) {
+        defaultSelect.value = dt;
+      }
+    }
+  }
+
+  function renderDefaultSelect() {
+    const current = defaultSelect.value;
+    defaultSelect.innerHTML = '';
+    for (const t of templates) {
+      const opt = document.createElement('option');
+      opt.value = t.name;
+      opt.textContent = t.name;
+      defaultSelect.appendChild(opt);
+    }
+    if (current && defaultSelect.querySelector('option[value="' + current + '"]')) {
+      defaultSelect.value = current;
+    }
+    loadDefaultTemplate();
+  }
+
+  function renderTemplateList() {
+    templateList.innerHTML = '';
+    if (templates.length === 0) {
+      templateList.innerHTML = '<div style="font-size:12px;color:var(--muted)">No templates found.</div>';
+      return;
+    }
+    for (const t of templates) {
+      const item = document.createElement('div');
+      item.className = 'template-item';
+      const badgeClass = t.source === 'builtin' ? 'badge-builtin' : 'badge-workspace';
+      item.innerHTML =
+        '<div class="template-info">' +
+          '<span class="template-name">' + escHtml(t.name) + '</span>' +
+          '<span class="badge ' + badgeClass + '">' + escHtml(t.source) + '</span>' +
+        '</div>' +
+        '<div class="template-actions">' +
+          '<button class="icon-btn edit-btn" title="' + (t.source === 'builtin' ? 'View' : 'Edit') + '">&#9998;</button>' +
+          (t.source !== 'builtin' ? '<button class="icon-btn danger del-btn" title="Delete">&#10005;</button>' : '') +
+        '</div>';
+      item.querySelector('.edit-btn').addEventListener('click', () => openTemplate(t));
+      const delBtn = item.querySelector('.del-btn');
+      if (delBtn) delBtn.addEventListener('click', () => deleteTemplate(t));
+      templateList.appendChild(item);
+    }
+  }
+
+  async function openTemplate(t) {
+    const result = await sendPluginCommand('GetTemplate', { name: t.name });
+    if (result && result.success && typeof result.data === 'string') {
+      const readOnly = t.source === 'builtin';
+      showEditor(
+        readOnly ? 'View Template' : 'Edit Template',
+        t.name, result.data, false, readOnly
+      );
+    } else {
+      setStatus(result?.error || 'Failed to load template', true);
+    }
+  }
+
+  async function deleteTemplate(t) {
+    if (!confirm('Delete template "' + t.name + '"?')) return;
+    const result = await sendPluginCommand('DeleteTemplate', { name: t.name });
+    if (result && result.success) {
+      await loadTemplates();
+    } else {
+      setStatus(result?.error || 'Failed to delete', true);
+    }
+  }
+
+  async function saveTemplate() {
+    const name = tplName.value.trim();
+    const content = tplContent.value;
+    if (!name) { setStatus('Template name is required.', true); return; }
+    if (!content.trim()) { setStatus('Template content is required.', true); return; }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+      setStatus('Name: only letters, numbers, dashes, underscores.', true);
+      return;
+    }
+    const result = await sendPluginCommand('SaveTemplate', { name, content });
+    if (result && result.success) {
+      showSettings();
+      await loadTemplates();
+    } else {
+      setStatus(result?.error || 'Failed to save', true);
+    }
+  }
+
+  async function saveDefaultTemplate() {
+    const val = defaultSelect.value;
+    await sendPluginCommand('set_config', { default_template: val });
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Event listeners
+  document.getElementById('new-btn').addEventListener('click', () => {
+    showEditor('New Template', '', '---\ntitle: "{{title}}"\ncreated: {{timestamp}}\n---\n\n# {{title}}\n\n', true, false);
+  });
+  document.getElementById('cancel-btn').addEventListener('click', showSettings);
+  document.getElementById('save-tpl-btn').addEventListener('click', saveTemplate);
+  defaultSelect.addEventListener('change', saveDefaultTemplate);
+
+  // Message handler
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+
+    if (data.type === 'plugin-response' && data.requestId) {
+      const resolve = pending.get(data.requestId);
+      if (resolve) {
+        pending.delete(data.requestId);
+        resolve(data.result);
+      }
+    }
+
+    if (data.type === 'init') {
+      if (data.theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      loadTemplates();
+    }
+
+    if (data.type === 'theme-update') {
+      if (data.theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    }
+  });
+</script>
+</body>
+</html>

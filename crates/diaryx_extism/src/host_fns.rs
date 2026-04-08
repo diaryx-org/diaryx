@@ -1109,7 +1109,10 @@ fn host_write_file(
     } else {
         PermissionType::CreateFiles
     };
-    ctx.check_perm(perm, &path)?;
+    if let Err(e) = ctx.check_perm(perm, &path) {
+        plugin.memory_set_val(&mut outputs[0], e.to_string().as_str())?;
+        return Ok(());
+    }
     // Return filesystem errors as a string rather than propagating them as
     // ExtismError.  An ExtismError causes a WASM trap that aborts the entire
     // guest call — the guest code never gets a chance to handle it.  By
@@ -1152,7 +1155,10 @@ fn host_delete_file(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_delete_file: lock: {e}")))?;
-    ctx.check_perm(PermissionType::DeleteFiles, &path)?;
+    if let Err(e) = ctx.check_perm(PermissionType::DeleteFiles, &path) {
+        plugin.memory_set_val(&mut outputs[0], e.to_string().as_str())?;
+        return Ok(());
+    }
     // Return filesystem errors as a recoverable string — see host_write_file
     // comment for rationale.
     if let Err(e) = futures_lite::future::block_on(ctx.fs.delete_file(Path::new(&path))) {
@@ -1204,7 +1210,10 @@ fn host_write_binary(
     } else {
         PermissionType::CreateFiles
     };
-    ctx.check_perm(perm, &path)?;
+    if let Err(e) = ctx.check_perm(perm, &path) {
+        plugin.memory_set_val(&mut outputs[0], e.to_string().as_str())?;
+        return Ok(());
+    }
     // Return filesystem errors as a recoverable string — see host_write_file
     // comment for rationale.
     if let Err(e) = futures_lite::future::block_on(ctx.fs.write_binary(Path::new(&path), &bytes)) {

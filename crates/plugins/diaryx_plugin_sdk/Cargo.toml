@@ -48,11 +48,15 @@ namespaces = []
 # Server proxy requests (AI, external APIs via managed credentials).
 proxy = ["http"]
 
+# Custom getrandom implementation for WASM plugins.
+getrandom-shim = ["dep:getrandom_03"]
+
 # Enable all features.
-full = ["core", "http", "secrets", "ws", "events", "plugins", "context", "wasi", "files", "namespaces", "proxy"]
+full = ["core", "http", "secrets", "ws", "events", "plugins", "context", "wasi", "files", "namespaces", "proxy", "getrandom-shim"]
 
 [dependencies]
 extism-pdk = "1.4"
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = "0.22"
+getrandom_03 = { package = "getrandom", version = "0.3", optional = true, default-features = false }

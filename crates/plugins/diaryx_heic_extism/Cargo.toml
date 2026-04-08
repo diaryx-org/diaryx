@@ -1,0 +1,24 @@
+[package]
+name = "diaryx_heic_extism"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license-file = "LICENSE.md"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+diaryx_plugin_sdk = { workspace = true, features = ["core"] }
+extism-pdk = "1.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+jpeg-encoder = "0.6"
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

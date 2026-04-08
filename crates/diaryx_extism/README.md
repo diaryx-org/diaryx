@@ -64,9 +64,15 @@ Permissions are checked in host functions via `HostContext.permission_checker`.
 Provided checkers:
 
 - `DenyAllPermissionChecker` — denies every request
+- `AllowAllPermissionChecker` — allows trusted bootstrap/plugin-test contexts
+  where no root frontmatter exists yet
 - `FrontmatterPermissionChecker` — reads root frontmatter `plugins` config and
   normalizes workspace file targets to workspace-relative paths before
   delegating to `diaryx_core::plugin::permissions::check_permission`
+
+Workspace write/delete host functions return permission and filesystem failures
+to the guest as ordinary error strings instead of trapping the whole Extism
+call. Guests can then surface a command error or collect per-file sync errors.
 
 Storage keys are plugin-scoped in host functions (`{plugin_id}:{key}`), so one
 plugin cannot read another plugin's storage by key collision.

@@ -26,7 +26,7 @@ use diaryx_core::{
     error::{DiaryxError, SerializableError},
     frontmatter,
     fs::{FileSystem, InMemoryFileSystem, RealFileSystem, SyncToAsyncFs},
-    plugin::permissions::{PermissionRule, PluginConfig, PluginPermissions},
+    plugin::permissions::{PermissionRule, PermissionType, PluginConfig, PluginPermissions},
     workspace::Workspace,
 };
 #[cfg(feature = "extism-plugins")]
@@ -431,13 +431,63 @@ fn log_execute_error(e: &DiaryxError) {
 }
 
 #[cfg(feature = "extism-plugins")]
+fn workspace_has_root_index(root: &Path) -> bool {
+    let workspace = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
+    futures_lite::future::block_on(workspace.find_root_index_in_dir(root))
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+#[cfg(feature = "extism-plugins")]
+struct RootlessBootstrapPermissionChecker {
+    workspace_root: PathBuf,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl diaryx_extism::PermissionChecker for RootlessBootstrapPermissionChecker {
+    fn check_permission(
+        &self,
+        plugin_id: &str,
+        permission_type: PermissionType,
+        target: &str,
+    ) -> Result<(), String> {
+        if !workspace_has_root_index(&self.workspace_root) {
+            return Ok(());
+        }
+
+        let checker = diaryx_extism::FrontmatterPermissionChecker::from_workspace_root(Some(
+            self.workspace_root.clone(),
+        ));
+        diaryx_extism::PermissionChecker::check_permission(
+            &checker,
+            plugin_id,
+            permission_type,
+            target,
+        )
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
 fn make_permission_checker(
     workspace_root: Option<PathBuf>,
 ) -> Arc<dyn diaryx_extism::PermissionChecker> {
     match workspace_root {
-        Some(_) => Arc::new(
-            diaryx_extism::FrontmatterPermissionChecker::from_workspace_root(workspace_root),
-        ),
+        Some(root) => {
+            if workspace_has_root_index(&root) {
+                Arc::new(
+                    diaryx_extism::FrontmatterPermissionChecker::from_workspace_root(Some(root)),
+                )
+            } else {
+                log::info!(
+                    "Using allow-all plugin permissions while bootstrapping rootless workspace '{}'",
+                    root.display()
+                );
+                Arc::new(RootlessBootstrapPermissionChecker {
+                    workspace_root: root,
+                })
+            }
+        }
         // No workspace root (e.g. during workspace download before it exists
         // on disk). The plugin is already installed and trusted, but there's no
         // frontmatter to read restrictions from.
@@ -5413,6 +5463,41 @@ mod tests {
                 .expect("empty rule should be replaced")
                 .include,
             vec!["all".to_string()]
+        );
+    }
+
+    #[test]
+    fn make_permission_checker_allows_rootless_workspace_bootstrap() {
+        let root = std::env::temp_dir().join(format!(
+            "diaryx-rootless-bootstrap-{}",
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("test workspace directory should be created");
+
+        let checker = make_permission_checker(Some(root.clone()));
+        let result =
+            checker.check_permission("diaryx.sync", PermissionType::CreateFiles, "README.md");
+
+        assert!(
+            result.is_ok(),
+            "rootless workspace bootstrap should allow provider writes: {result:?}"
+        );
+
+        std::fs::write(
+            root.join("README.md"),
+            "---\ntitle: Restored\ncontents: []\n---\n\n# Restored\n",
+        )
+        .expect("root index should be written");
+        let after_root_index =
+            checker.check_permission("diaryx.sync", PermissionType::CreateFiles, "after-root.md");
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            after_root_index.is_err(),
+            "frontmatter permissions should apply once the root index exists"
         );
     }
 }

@@ -213,7 +213,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install wasm-bindgen-cli
-        run: cargo install wasm-bindgen-cli@0.2.114 --locked
+        run: cargo install wasm-bindgen-cli@0.2.117 --locked
 
       - name: Install binaryen
         run: |

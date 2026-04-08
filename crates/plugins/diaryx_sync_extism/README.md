@@ -37,8 +37,6 @@ requested_permissions:
   defaults:
     plugin_storage:
       include: ["all"]
-    http_requests:
-      include: ["all"]
     read_files:
       include: ["all"]
     edit_files:
@@ -49,7 +47,6 @@ requested_permissions:
       include: ["all"]
   reasons:
     plugin_storage: "Store sync configuration and CRDT state."
-    http_requests: "Communicate with the configured sync server."
     read_files: "Read workspace files for snapshotting, reconciliation, and sync."
     edit_files: "Apply remote changes to existing workspace files."
     create_files: "Create files received from remote sync or restored from snapshots."
@@ -74,7 +71,7 @@ The Sync settings tab uses Diaryx's declarative plugin UI surfaces.
 Snapshot/history panels remain iframe-backed plugin HTML.
 
 The plugin owns all CRDT state (WorkspaceCrdt, BodyDocManager) in its own WASM sandbox and is loaded on demand when sync is enabled.
-Namespace listing now comes from the host SDK's typed namespace API instead of a direct `/namespaces` HTTP fetch.
+Workspace namespace creation, listing, object upload/download/delete, and manifest listing all go through the host SDK's typed namespace API instead of direct `/namespaces` HTTP fetches.
 
 ## Exports
 
@@ -117,6 +114,12 @@ Namespace listing now comes from the host SDK's typed namespace API instead of a
 | `host_storage_set` | Persist CRDT state |
 | `host_get_timestamp` | Get current timestamp |
 | `host_ws_request` | Generic websocket transport bridge used by the guest's sync runtime |
+| `host_namespace_create` | Create a sync workspace namespace |
+| `host_namespace_list` | List user-owned namespaces |
+| `host_namespace_list_objects` | List namespace object metadata, including sync hashes and timestamps |
+| `host_namespace_get_object` | Download namespace object bytes |
+| `host_namespace_put_object` | Upload owner-only sync objects |
+| `host_namespace_delete_object` | Delete namespace objects removed locally |
 
 All host functions use the Extism string ABI (`String -> String`), so side-effect
 functions should still return an empty string (`""`) from the host.
@@ -127,9 +130,9 @@ paths for both binary hot-path handlers and JSON/lifecycle exports
 transient borrow conflicts are surfaced as warnings/errors instead of crashing
 the plugin with `RefCell` borrow panics.
 
-Namespace HTTP calls now include explicit per-request deadlines in the browser
-host path, so `DownloadWorkspace` fails with a concrete request error instead
-of hanging indefinitely on a stalled object fetch. The pull loop also logs
+Namespace host calls include explicit per-request deadlines in the browser host
+path, so `DownloadWorkspace` fails with a concrete request error instead of
+hanging indefinitely on a stalled object fetch. The pull loop also logs
 start/progress/finish messages to make restore stalls easier to distinguish
 from slow-but-active sequential downloads.
 

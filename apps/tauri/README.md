@@ -166,6 +166,10 @@ The Tauri app is a generic Extism plugin host. It provides plugin runtime
 context plus generic HTTP/WebSocket bridges, and plugins own sync/share
 protocol details on top of those host capabilities. The Tauri backend should
 not hardcode `SyncClient`-style transport logic for a specific provider.
+Namespace server work is exposed through purpose-built `host_namespace_*`
+functions, including namespace creation, object CRUD, and filtered object
+metadata listing, so provider plugins do not need generic HTTP permission for
+same-server namespace operations.
 
 The shared frontend now uses the same requested-permission review flow for
 local plugin installs on both browser and Tauri paths. Tauri provides

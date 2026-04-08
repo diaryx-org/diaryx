@@ -69,11 +69,21 @@ pub trait RuntimeContextProvider: Send + Sync {
 /// Metadata for a single object in a namespace.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NamespaceObjectMeta {
+    #[serde(default)]
+    pub namespace_id: Option<String>,
     pub key: String,
+    #[serde(default)]
+    pub r2_key: Option<String>,
     #[serde(default)]
     pub audience: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub updated_at: Option<i64>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 /// Entry returned by `list_namespaces` — mirrors the server's `NamespaceResponse`.
@@ -91,17 +101,27 @@ pub struct NamespaceEntry {
 /// Implementations talk to the sync server — via `proxyFetch` on browser,
 /// via `ureq` on native.
 pub trait NamespaceProvider: Send + Sync {
+    fn create_namespace(
+        &self,
+        metadata: Option<&serde_json::Value>,
+    ) -> Result<NamespaceEntry, String>;
     fn put_object(
         &self,
         ns_id: &str,
         key: &str,
         bytes: &[u8],
         mime_type: &str,
-        audience: &str,
+        audience: Option<&str>,
     ) -> Result<(), String>;
     fn get_object(&self, ns_id: &str, key: &str) -> Result<Vec<u8>, String>;
     fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String>;
-    fn list_objects(&self, ns_id: &str) -> Result<Vec<NamespaceObjectMeta>, String>;
+    fn list_objects(
+        &self,
+        ns_id: &str,
+        prefix: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<NamespaceObjectMeta>, String>;
     fn sync_audience(&self, ns_id: &str, audience: &str, access: &str) -> Result<(), String>;
     /// Trigger sending the email draft for an audience to all subscribers.
     fn send_audience_email(
@@ -304,13 +324,20 @@ impl RuntimeContextProvider for NoopRuntimeContextProvider {
 pub struct NoopNamespaceProvider;
 
 impl NamespaceProvider for NoopNamespaceProvider {
+    fn create_namespace(
+        &self,
+        _metadata: Option<&serde_json::Value>,
+    ) -> Result<NamespaceEntry, String> {
+        Err("Namespace operations are not available".to_string())
+    }
+
     fn put_object(
         &self,
         _ns_id: &str,
         _key: &str,
         _bytes: &[u8],
         _mime_type: &str,
-        _audience: &str,
+        _audience: Option<&str>,
     ) -> Result<(), String> {
         Err("Namespace operations are not available".to_string())
     }
@@ -320,7 +347,13 @@ impl NamespaceProvider for NoopNamespaceProvider {
     fn delete_object(&self, _ns_id: &str, _key: &str) -> Result<(), String> {
         Err("Namespace operations are not available".to_string())
     }
-    fn list_objects(&self, _ns_id: &str) -> Result<Vec<NamespaceObjectMeta>, String> {
+    fn list_objects(
+        &self,
+        _ns_id: &str,
+        _prefix: Option<&str>,
+        _limit: Option<u32>,
+        _offset: Option<u32>,
+    ) -> Result<Vec<NamespaceObjectMeta>, String> {
         Err("Namespace operations are not available".to_string())
     }
     fn sync_audience(&self, _ns_id: &str, _audience: &str, _access: &str) -> Result<(), String> {
@@ -689,6 +722,13 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_namespace_list,
+        )
+        .with_function(
+            "host_namespace_create",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_create,
         )
         .with_function(
             "host_namespace_sync_audience",
@@ -2034,7 +2074,7 @@ fn host_proxy_request(
     Ok(())
 }
 
-/// Host function: `host_namespace_put_object(input: {ns_id, key, body_base64, mime_type, audience}) -> {ok: true} or {error}`
+/// Host function: `host_namespace_put_object(input: {ns_id, key, body_base64, mime_type, audience?}) -> {ok: true} or {error}`
 fn host_namespace_put_object(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],
@@ -2051,7 +2091,8 @@ fn host_namespace_put_object(
         key: String,
         body_base64: String,
         mime_type: String,
-        audience: String,
+        #[serde(default)]
+        audience: Option<String>,
     }
 
     let parsed: Input = serde_json::from_str(&input)
@@ -2070,7 +2111,7 @@ fn host_namespace_put_object(
         &parsed.key,
         &bytes,
         &parsed.mime_type,
-        &parsed.audience,
+        parsed.audience.as_deref(),
     );
 
     let json = match result {
@@ -2155,7 +2196,7 @@ fn host_namespace_delete_object(
     Ok(())
 }
 
-/// Host function: `host_namespace_list_objects(input: {ns_id}) -> [{key, audience?, mime_type?}]`
+/// Host function: `host_namespace_list_objects(input: {ns_id, prefix?, limit?, offset?}) -> [{key, audience?, mime_type?, size_bytes?, updated_at?, content_hash?}]`
 fn host_namespace_list_objects(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],
@@ -2167,6 +2208,12 @@ fn host_namespace_list_objects(
     #[derive(serde::Deserialize)]
     struct Input {
         ns_id: String,
+        #[serde(default)]
+        prefix: Option<String>,
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        offset: Option<u32>,
     }
 
     let parsed: Input = serde_json::from_str(&input).map_err(|e| {
@@ -2177,7 +2224,12 @@ fn host_namespace_list_objects(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_namespace_list_objects: lock: {e}")))?;
-    let result = ctx.namespace_provider.list_objects(&parsed.ns_id);
+    let result = ctx.namespace_provider.list_objects(
+        &parsed.ns_id,
+        parsed.prefix.as_deref(),
+        parsed.limit,
+        parsed.offset,
+    );
 
     let json = match result {
         Ok(objects) => serde_json::to_value(&objects).unwrap_or(serde_json::json!([])),
@@ -2204,6 +2256,40 @@ fn host_namespace_list(
 
     let json = match result {
         Ok(entries) => serde_json::to_value(&entries).unwrap_or(serde_json::json!([])),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_create(input: {metadata?}) -> NamespaceEntry or {error}`
+fn host_namespace_create(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        #[serde(default)]
+        metadata: Option<serde_json::Value>,
+    }
+
+    let parsed: Input = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_namespace_create: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_create: lock: {e}")))?;
+    let result = ctx
+        .namespace_provider
+        .create_namespace(parsed.metadata.as_ref());
+
+    let json = match result {
+        Ok(entry) => serde_json::to_value(&entry).unwrap_or_else(|_| serde_json::json!({})),
         Err(e) => serde_json::json!({ "error": e }),
     };
     plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;

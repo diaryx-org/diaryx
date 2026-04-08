@@ -1,9 +1,9 @@
 //! Namespace object operations via the host runtime.
 //!
-//! Provides functions for listing namespaces, uploading and deleting objects
-//! in namespaces, and syncing audience access levels. These operations go
-//! through the host rather than direct HTTP, so plugins don't need HTTP
-//! permissions for server operations.
+//! Provides functions for creating and listing namespaces, uploading,
+//! downloading, deleting, and listing objects in namespaces, and syncing
+//! audience access levels. These operations go through the host rather than
+//! direct HTTP, so plugins don't need HTTP permissions for server operations.
 //!
 //! Requires the `namespaces` feature.
 
@@ -16,11 +16,21 @@ use super::*;
 /// Metadata for a single object in a namespace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectMeta {
+    #[serde(default)]
+    pub namespace_id: Option<String>,
     pub key: String,
+    #[serde(default)]
+    pub r2_key: Option<String>,
     #[serde(default)]
     pub audience: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub updated_at: Option<i64>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 /// Entry returned by `list_namespaces`.
@@ -31,6 +41,17 @@ pub struct NamespaceEntry {
     pub created_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+}
+
+/// Optional filters for namespace object listings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListObjectsOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
 }
 
 /// List all namespaces owned by the authenticated user.
@@ -44,6 +65,23 @@ pub fn list_namespaces() -> Result<Vec<NamespaceEntry>, String> {
     }
     serde_json::from_value(parsed)
         .map_err(|e| format!("Failed to decode list_namespaces response: {e}"))
+}
+
+/// Create a namespace through the host runtime.
+pub fn create_namespace(metadata: Option<&serde_json::Value>) -> Result<NamespaceEntry, String> {
+    let mut input = serde_json::json!({});
+    if let Some(metadata) = metadata {
+        input["metadata"] = metadata.clone();
+    }
+    let result = unsafe { host_namespace_create(input.to_string()) }
+        .map_err(|e| format!("host_namespace_create failed: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse create_namespace response: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    serde_json::from_value(parsed)
+        .map_err(|e| format!("Failed to decode create_namespace response: {e}"))
 }
 
 /// Download an object from a namespace as raw bytes.
@@ -68,21 +106,23 @@ pub fn get_object(ns_id: &str, key: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to decode get_object response: {e}"))
 }
 
-/// Upload an object to a namespace.
-pub fn put_object(
+/// Upload an object to a namespace with an optional audience tag.
+pub fn put_object_with_audience(
     ns_id: &str,
     key: &str,
     bytes: &[u8],
     mime_type: &str,
-    audience: &str,
+    audience: Option<&str>,
 ) -> Result<(), String> {
-    let input = serde_json::json!({
+    let mut input = serde_json::json!({
         "ns_id": ns_id,
         "key": key,
         "body_base64": BASE64.encode(bytes),
         "mime_type": mime_type,
-        "audience": audience,
     });
+    if let Some(audience) = audience {
+        input["audience"] = serde_json::Value::String(audience.to_string());
+    }
     let result = unsafe { host_namespace_put_object(input.to_string()) }
         .map_err(|e| format!("host_namespace_put_object failed: {e}"))?;
     let parsed: serde_json::Value = serde_json::from_str(&result)
@@ -91,6 +131,27 @@ pub fn put_object(
         return Err(err.to_string());
     }
     Ok(())
+}
+
+/// Upload an audience-scoped object to a namespace.
+pub fn put_object(
+    ns_id: &str,
+    key: &str,
+    bytes: &[u8],
+    mime_type: &str,
+    audience: &str,
+) -> Result<(), String> {
+    put_object_with_audience(ns_id, key, bytes, mime_type, Some(audience))
+}
+
+/// Upload an owner-only object to a namespace.
+pub fn put_private_object(
+    ns_id: &str,
+    key: &str,
+    bytes: &[u8],
+    mime_type: &str,
+) -> Result<(), String> {
+    put_object_with_audience(ns_id, key, bytes, mime_type, None)
 }
 
 /// Delete a single object from a namespace.
@@ -111,12 +172,26 @@ pub fn delete_object(ns_id: &str, key: &str) -> Result<(), String> {
 
 /// List all objects in a namespace.
 pub fn list_objects(ns_id: &str) -> Result<Vec<ObjectMeta>, String> {
-    let input = serde_json::json!({
-        "ns_id": ns_id,
-    });
+    list_objects_with_options(ns_id, ListObjectsOptions::default())
+}
+
+/// List objects in a namespace with optional filtering and pagination.
+pub fn list_objects_with_options(
+    ns_id: &str,
+    options: ListObjectsOptions,
+) -> Result<Vec<ObjectMeta>, String> {
+    let mut input = serde_json::to_value(options)
+        .map_err(|e| format!("Failed to serialize list_objects options: {e}"))?;
+    input["ns_id"] = serde_json::Value::String(ns_id.to_string());
     let result = unsafe { host_namespace_list_objects(input.to_string()) }
         .map_err(|e| format!("host_namespace_list_objects failed: {e}"))?;
-    serde_json::from_str(&result).map_err(|e| format!("Failed to parse list_objects response: {e}"))
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse list_objects response: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    serde_json::from_value(parsed)
+        .map_err(|e| format!("Failed to decode list_objects response: {e}"))
 }
 
 /// Trigger sending the email draft for an audience to all subscribers.

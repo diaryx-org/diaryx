@@ -47,6 +47,9 @@ the host through a JSON protocol (`protocol.rs`).
 | `host_run_wasi_module` | Execute a WASI module loaded from plugin storage (feature-gated) |
 | `host_plugin_command` | Call another loaded plugin through the host permission bridge |
 | `host_get_runtime_context` | Read generic host runtime context (server/auth/workspace/guest-mode state) |
+| `host_namespace_create` / `host_namespace_list` | Host-backed namespace creation and listing |
+| `host_namespace_put_object` / `host_namespace_get_object` / `host_namespace_delete_object` | Host-backed namespace object writes, reads, and deletes |
+| `host_namespace_list_objects` | Host-backed namespace object metadata listing with optional prefix/limit/offset |
 | `host_emit_event` / `host_ws_request` / `host_get_timestamp` / `host_get_now` | Eventing and utility functions |
 
 ## Permission enforcement

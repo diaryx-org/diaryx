@@ -34,7 +34,7 @@ See the module-level docs in `src/lib.rs` for a full example.
 | `context` | Runtime context queries                  |
 | `wasi`    | WASI module execution                    |
 | `files`    | User-provided file requests              |
-| `namespaces` | Namespace object operations and namespace listing |
+| `namespaces` | Namespace creation, object operations, filtered object metadata listing, and namespace listing |
 | `full`     | All of the above                         |
 
 ## Building

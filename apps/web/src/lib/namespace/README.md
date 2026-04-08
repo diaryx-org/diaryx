@@ -22,11 +22,12 @@ overhead for server calls.
 - **Before**: `PublishingPanel` -> plugin command -> WASM guest -> `host::http` -> sync server
 - **After**: Plugin declarative manifest -> `namespace.*` HostWidgets -> `namespaceService` -> `proxyFetch` -> sync server
 
-Object upload/delete operations (used during publish) go through
-`host::namespace::*` host functions so plugins don't need HTTP permissions.
-Those host functions now share a single same-origin fetch helper in
-`plugins/extismBrowserLoader.ts`, which centralizes URL normalization,
-credential handling, and error translation for namespace HTTP calls.
+Namespace creation and object create/read/update/delete/list operations go
+through `host::namespace::*` host functions so plugins don't need HTTP
+permissions for sync-server namespace work. Those host functions now share a
+single same-origin fetch helper in `plugins/extismBrowserLoader.ts`, which
+centralizes URL normalization, credential handling, timeout coverage, and error
+translation for namespace HTTP calls.
 On Cloudflare, those requests terminate in the app Worker at `/api/*` rather
 than a legacy Pages Functions layer.
 

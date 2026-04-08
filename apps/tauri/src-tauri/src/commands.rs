@@ -1075,13 +1075,31 @@ impl<R: Runtime> TauriNamespaceProvider<R> {
 
 #[cfg(feature = "extism-plugins")]
 impl<R: Runtime> diaryx_extism::NamespaceProvider for TauriNamespaceProvider<R> {
+    fn create_namespace(
+        &self,
+        metadata: Option<&serde_json::Value>,
+    ) -> Result<diaryx_extism::NamespaceEntry, String> {
+        let base = self.server_url()?;
+        let url = format!("{}/namespaces", base);
+        let body = serde_json::to_vec(&serde_json::json!({ "metadata": metadata }))
+            .map_err(|e| format!("Failed to serialize namespace request: {e}"))?;
+        self.request_json::<diaryx_extism::NamespaceEntry>(
+            "POST",
+            url,
+            Some(body),
+            Some("application/json"),
+            None,
+        )?
+        .ok_or_else(|| "Namespace create returned an empty response".to_string())
+    }
+
     fn put_object(
         &self,
         ns_id: &str,
         key: &str,
         bytes: &[u8],
         mime_type: &str,
-        audience: &str,
+        audience: Option<&str>,
     ) -> Result<(), String> {
         let base = self.server_url()?;
         let url = format!(
@@ -1095,7 +1113,7 @@ impl<R: Runtime> diaryx_extism::NamespaceProvider for TauriNamespaceProvider<R> 
             url,
             Some(bytes.to_vec()),
             Some(mime_type),
-            Some(audience),
+            audience,
         )?;
         Ok(())
     }
@@ -1123,13 +1141,33 @@ impl<R: Runtime> diaryx_extism::NamespaceProvider for TauriNamespaceProvider<R> 
         Ok(())
     }
 
-    fn list_objects(&self, ns_id: &str) -> Result<Vec<diaryx_extism::NamespaceObjectMeta>, String> {
+    fn list_objects(
+        &self,
+        ns_id: &str,
+        prefix: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<diaryx_extism::NamespaceObjectMeta>, String> {
         let base = self.server_url()?;
-        let url = format!(
+        let mut url = format!(
             "{}/namespaces/{}/objects",
             base,
             Self::encode_component(ns_id)
         );
+        let mut query = Vec::new();
+        if let Some(prefix) = prefix {
+            query.push(format!("prefix={}", Self::encode_component(prefix)));
+        }
+        if let Some(limit) = limit {
+            query.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = offset {
+            query.push(format!("offset={offset}"));
+        }
+        if !query.is_empty() {
+            url.push('?');
+            url.push_str(&query.join("&"));
+        }
         Ok(self
             .request_json::<Vec<diaryx_extism::NamespaceObjectMeta>>("GET", url, None, None, None)?
             .unwrap_or_default())

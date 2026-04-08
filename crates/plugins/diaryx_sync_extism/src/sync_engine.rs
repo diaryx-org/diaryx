@@ -4,56 +4,15 @@
 //! for multi-device personal sync over the namespace object store API.
 
 use diaryx_plugin_sdk::prelude::*;
-use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
+use percent_encoding::percent_decode_str;
 use serde_json::{Value as JsonValue, json};
 use std::collections::BTreeMap;
 
 use crate::sync_manifest::{SyncManifest, SyncState};
-use crate::{
-    auth_headers, http_error, http_request_binary_compat, http_request_compat, load_extism_config,
-    parse_http_body, parse_http_body_json, parse_http_status, resolve_auth_token,
-    resolve_server_url,
-};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Percent-encode set for URL path segments per RFC 3986.
-///
-/// Encodes everything EXCEPT unreserved characters: `A-Z a-z 0-9 - . _ ~`
-/// This is critical — the previous `NON_ALPHANUMERIC` set encoded `.`, `-`,
-/// `_`, and `~` which corrupted server keys and caused double-encoding 404s.
-const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'"')
-    .add(b'#')
-    .add(b'%')
-    .add(b'/')
-    .add(b'<')
-    .add(b'>')
-    .add(b'?')
-    .add(b'@')
-    .add(b'[')
-    .add(b'\\')
-    .add(b']')
-    .add(b'^')
-    .add(b'`')
-    .add(b'{')
-    .add(b'|')
-    .add(b'}');
-
-/// Build the URL for a single object in a namespace, percent-encoding each
-/// path segment so that spaces, unicode, and other reserved characters don't
-/// produce invalid URIs.
-fn object_url(server: &str, namespace_id: &str, key: &str) -> String {
-    let encoded_key: String = key
-        .split('/')
-        .map(|seg| utf8_percent_encode(seg, PATH_SEGMENT_ENCODE_SET).to_string())
-        .collect::<Vec<_>>()
-        .join("/");
-    format!("{server}/namespaces/{namespace_id}/objects/{encoded_key}")
-}
 
 /// Decode a potentially percent-encoded key from the server.
 ///
@@ -260,48 +219,34 @@ fn join_workspace_path(root: &str, relative: &str) -> String {
 
 /// Fetch object metadata from the server for the given namespace.
 pub fn fetch_server_manifest(
-    params: &JsonValue,
+    _params: &JsonValue,
     namespace_id: &str,
 ) -> Result<Vec<ServerEntry>, String> {
-    let config = load_extism_config();
-    let server = resolve_server_url(params, &config).ok_or("Missing server_url")?;
-    let headers = auth_headers(resolve_auth_token(params, &config));
-
     let mut all_entries = Vec::new();
     let mut offset = 0u32;
     let limit = 500u32;
 
     loop {
-        let url = format!(
-            "{server}/namespaces/{namespace_id}/objects?prefix=files/&limit={limit}&offset={offset}"
-        );
-        let response = http_request_compat("GET", &url, &headers, None)?;
-        let status = parse_http_status(&response);
-        if status != 200 {
-            return Err(http_error(status, &parse_http_body(&response)));
-        }
-
-        let body = parse_http_body_json(&response).unwrap_or(JsonValue::Array(Vec::new()));
-        let items = body.as_array().cloned().unwrap_or_default();
+        let items = host::namespace::list_objects_with_options(
+            namespace_id,
+            host::namespace::ListObjectsOptions {
+                prefix: Some("files/".to_string()),
+                limit: Some(limit),
+                offset: Some(offset),
+            },
+        )?;
         let count = items.len();
 
         for item in items {
-            let raw_key = item.get("key").and_then(|v| v.as_str()).unwrap_or_default();
             // Decode percent-encoded keys so internal comparisons with
             // local filesystem paths work correctly.
-            let key = decode_server_key(raw_key);
-            let content_hash = item
-                .get("content_hash")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let size_bytes = item.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
-            let updated_at = item.get("updated_at").and_then(|v| v.as_i64()).unwrap_or(0);
+            let key = decode_server_key(&item.key);
 
             all_entries.push(ServerEntry {
                 key,
-                content_hash,
-                size_bytes,
-                updated_at,
+                content_hash: item.content_hash,
+                size_bytes: item.size_bytes.unwrap_or(0),
+                updated_at: item.updated_at.unwrap_or(0),
             });
         }
 
@@ -437,7 +382,7 @@ pub fn compute_diff(
 
 /// Push local files to the server.
 pub fn execute_push(
-    params: &JsonValue,
+    _params: &JsonValue,
     namespace_id: &str,
     workspace_root: &str,
     plan: &SyncPlan,
@@ -448,12 +393,6 @@ pub fn execute_push(
     progress_offset: usize,
     progress_total: usize,
 ) -> (usize, Vec<String>) {
-    let config = load_extism_config();
-    let server = match resolve_server_url(params, &config) {
-        Some(s) => s,
-        None => return (0, vec!["Missing server_url".to_string()]),
-    };
-    let token = resolve_auth_token(params, &config);
     let root_dir = workspace_root_dir(workspace_root);
 
     let mut pushed = 0usize;
@@ -486,30 +425,18 @@ pub fn execute_push(
         };
 
         let content_type = guess_content_type(relative_path);
-        let mut headers: Vec<(String, String)> =
-            vec![("Content-Type".to_string(), content_type.to_string())];
-        if let Some(t) = &token {
-            headers.push(("Authorization".to_string(), format!("Bearer {t}")));
-        }
-
-        let url = object_url(&server, &namespace_id, key);
-        match http_request_binary_compat("PUT", &url, &headers, &bytes) {
-            Ok(response) => {
-                let status = parse_http_status(&response);
-                if status == 200 {
-                    pushed += 1;
-                    let hash = local_scan
-                        .get(key)
-                        .map(|i| i.hash.clone())
-                        .unwrap_or_default();
-                    let modified_at = local_scan
-                        .get(key)
-                        .map(|i| i.modified_at)
-                        .unwrap_or_else(|| host::time::timestamp_millis().unwrap_or(0) as u64);
-                    manifest.mark_clean(key, &hash, bytes.len() as u64, modified_at);
-                } else {
-                    errors.push(format!("push {key}: HTTP {status}"));
-                }
+        match host::namespace::put_private_object(namespace_id, key, &bytes, content_type) {
+            Ok(()) => {
+                pushed += 1;
+                let hash = local_scan
+                    .get(key)
+                    .map(|i| i.hash.clone())
+                    .unwrap_or_default();
+                let modified_at = local_scan
+                    .get(key)
+                    .map(|i| i.modified_at)
+                    .unwrap_or_else(|| host::time::timestamp_millis().unwrap_or(0) as u64);
+                manifest.mark_clean(key, &hash, bytes.len() as u64, modified_at);
             }
             Err(e) => errors.push(format!("push {key}: {e}")),
         }
@@ -531,17 +458,10 @@ pub fn execute_push(
     }
 
     // Delete remote files
-    let headers = auth_headers(token);
     for (index, key) in plan.delete_remote.iter().enumerate() {
-        let url = object_url(&server, &namespace_id, key);
         let relative_path = key.strip_prefix("files/").unwrap_or(key);
-        match http_request_compat("DELETE", &url, &headers, None) {
-            Ok(response) => {
-                let status = parse_http_status(&response);
-                if status != 204 && status != 200 {
-                    errors.push(format!("delete remote {key}: HTTP {status}"));
-                }
-            }
+        match host::namespace::delete_object(namespace_id, key) {
+            Ok(()) => {}
             Err(e) => errors.push(format!("delete remote {key}: {e}")),
         }
         let completed = progress_offset + plan.push.len() + index + 1;

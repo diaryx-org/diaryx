@@ -23,72 +23,11 @@ pub mod sync_manifest;
 
 use diaryx_plugin_sdk::prelude::*;
 
-use base64::Engine;
 use extism_pdk::*;
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
 
 use diaryx_core::plugin::{SettingsField, StatusBarPosition, UiContribution};
 use diaryx_plugin_sdk::protocol::ServerFunctionDecl;
-
-const HTTP_TIMEOUT_MS: u64 = 30_000;
-const HTTP_BINARY_TIMEOUT_MS: u64 = 120_000;
-
-// ============================================================================
-// HTTP compat helpers (adapt SDK's typed HttpResponse to old JsonValue API)
-// ============================================================================
-
-fn host_http_request_compat(
-    method: &str,
-    url: &str,
-    headers: &[(String, String)],
-    body_json: Option<JsonValue>,
-    body_base64: Option<String>,
-    timeout_ms: u64,
-) -> Result<JsonValue, String> {
-    let header_map: HashMap<String, String> = headers.iter().cloned().collect();
-    let mut input = serde_json::json!({
-        "url": url,
-        "method": method,
-        "headers": header_map,
-        "timeout_ms": timeout_ms,
-    });
-    if let Some(body) = body_json {
-        input["body"] = JsonValue::String(body.to_string());
-    }
-    if let Some(body) = body_base64 {
-        input["body_base64"] = JsonValue::String(body);
-    }
-    let result = unsafe { host::host_http_request(input.to_string()) }
-        .map_err(|e| format!("host_http_request failed: {e}"))?;
-    serde_json::from_str(&result).map_err(|e| format!("Failed to parse HTTP response: {e}"))
-}
-
-fn http_request_compat(
-    method: &str,
-    url: &str,
-    headers: &[(String, String)],
-    body_json: Option<JsonValue>,
-) -> Result<JsonValue, String> {
-    host_http_request_compat(method, url, headers, body_json, None, HTTP_TIMEOUT_MS)
-}
-
-fn http_request_binary_compat(
-    method: &str,
-    url: &str,
-    headers: &[(String, String)],
-    body: &[u8],
-) -> Result<JsonValue, String> {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(body);
-    host_http_request_compat(
-        method,
-        url,
-        headers,
-        None,
-        Some(encoded),
-        HTTP_BINARY_TIMEOUT_MS,
-    )
-}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct InitParams {
@@ -321,57 +260,6 @@ fn runtime_context_string(key: &str) -> Option<String> {
                 .map(str::to_string)
         })
         .filter(|value| !value.is_empty())
-}
-
-fn http_error(status: u64, body: &str) -> String {
-    if body.is_empty() {
-        format!("HTTP {status}")
-    } else {
-        format!("HTTP {status}: {body}")
-    }
-}
-
-fn parse_http_status(response: &JsonValue) -> u64 {
-    response.get("status").and_then(|v| v.as_u64()).unwrap_or(0)
-}
-
-fn parse_http_body(response: &JsonValue) -> String {
-    response
-        .get("body")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn parse_http_body_json(response: &JsonValue) -> Option<JsonValue> {
-    let body = parse_http_body(response);
-    if body.is_empty() {
-        return None;
-    }
-    serde_json::from_str(&body).ok()
-}
-
-fn parse_http_body_bytes(response: &JsonValue) -> Result<Vec<u8>, String> {
-    if let Some(body_b64) = response.get("body_base64").and_then(|v| v.as_str()) {
-        if body_b64.is_empty() {
-            return Ok(Vec::new());
-        }
-        use base64::Engine;
-        return base64::engine::general_purpose::STANDARD
-            .decode(body_b64)
-            .map_err(|e| format!("Invalid HTTP response body_base64: {e}"));
-    }
-    Ok(parse_http_body(response).into_bytes())
-}
-
-fn auth_headers(auth_token: Option<String>) -> Vec<(String, String)> {
-    match auth_token {
-        Some(token) if !token.trim().is_empty() => vec![
-            ("Content-Type".to_string(), "application/json".to_string()),
-            ("Authorization".to_string(), format!("Bearer {}", token)),
-        ],
-        _ => vec![("Content-Type".to_string(), "application/json".to_string())],
-    }
 }
 
 fn sync_status_from_state() -> JsonValue {
@@ -1003,7 +891,6 @@ fn build_manifest() -> GuestManifest {
     .requested_permissions(GuestRequestedPermissions {
         defaults: serde_json::json!({
             "plugin_storage": { "include": ["all"], "exclude": [] },
-            "http_requests": { "include": ["all"], "exclude": [] },
             "read_files": { "include": ["all"], "exclude": [] },
             "edit_files": { "include": ["all"], "exclude": [] },
             "create_files": { "include": ["all"], "exclude": [] },
@@ -1011,7 +898,6 @@ fn build_manifest() -> GuestManifest {
         }),
         reasons: [
             ("plugin_storage", "Store sync configuration and manifest"),
-            ("http_requests", "Communicate with the sync server"),
             ("read_files", "Read workspace files for syncing"),
             ("edit_files", "Apply remote changes to workspace files"),
             ("create_files", "Create files received from remote sync"),
@@ -1368,7 +1254,7 @@ mod tests {
             .expect("manifest should declare requested_permissions");
 
         assert!(perms.defaults.get("plugin_storage").is_some());
-        assert!(perms.defaults.get("http_requests").is_some());
+        assert!(perms.defaults.get("http_requests").is_none());
     }
 
     #[test]

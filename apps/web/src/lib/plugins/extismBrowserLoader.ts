@@ -161,6 +161,7 @@ export interface HostFunctionOptions {
 
 const MIN_HTTP_TIMEOUT_MS = 1_000;
 const MAX_HTTP_TIMEOUT_MS = 300_000;
+const NAMESPACE_REQUEST_TIMEOUT_MS = 120_000;
 const MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 const CURRENT_PROTOCOL_VERSION = 1;
 /** Maximum storage per key per plugin (1 MiB), matching native DEFAULT_STORAGE_QUOTA_BYTES. */
@@ -886,25 +887,65 @@ function buildHostFunctions(
     return serverUrl.replace(/\/$/, "");
   }
 
-  async function namespaceFetch(
+  async function namespaceFetchBytes(
     method: string,
     path: string,
     init: Omit<RequestInit, "method" | "credentials"> = {},
     okStatuses: number[] = [],
-  ): Promise<Response> {
+  ): Promise<Uint8Array> {
     const serverBase = await getNamespaceServerBase();
-    const response = await fetch(`${serverBase}${path}`, {
-      ...init,
-      method,
-      credentials: "include",
-    });
+    const abortController =
+      typeof AbortController === "function"
+        ? new AbortController()
+        : null;
+    const timeoutId =
+      abortController !== null
+        ? globalThis.setTimeout(
+            () => abortController.abort(),
+            NAMESPACE_REQUEST_TIMEOUT_MS,
+          )
+        : null;
 
-    if (!response.ok && !okStatuses.includes(response.status)) {
-      const text = await response.text();
-      throw new Error(text || `${method} returned ${response.status}`);
+    try {
+      const response = await fetch(`${serverBase}${path}`, {
+        ...init,
+        method,
+        credentials: "include",
+        signal: abortController?.signal ?? init.signal,
+      });
+      const bytes = new Uint8Array(await response.arrayBuffer());
+
+      if (!response.ok && !okStatuses.includes(response.status)) {
+        let text = "";
+        try {
+          text = new TextDecoder().decode(bytes);
+        } catch {
+          text = "";
+        }
+        throw new Error(text || `${method} returned ${response.status}`);
+      }
+
+      return bytes;
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        throw new Error(`Request timed out after ${NAMESPACE_REQUEST_TIMEOUT_MS}ms`);
+      }
+      throw e;
+    } finally {
+      if (timeoutId !== null) {
+        globalThis.clearTimeout(timeoutId);
+      }
     }
+  }
 
-    return response;
+  async function namespaceFetchText(
+    method: string,
+    path: string,
+    init: Omit<RequestInit, "method" | "credentials"> = {},
+    okStatuses: number[] = [],
+  ): Promise<string> {
+    const bytes = await namespaceFetchBytes(method, path, init, okStatuses);
+    return new TextDecoder().decode(bytes);
   }
 
   return {
@@ -1553,17 +1594,31 @@ function buildHostFunctions(
           );
         }
       },
+      async host_namespace_create(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { metadata?: unknown }
+            | undefined;
+          const body = input?.metadata === undefined ? {} : { metadata: input.metadata };
+          const data = await namespaceFetchText("POST", `/namespaces`, {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          return cp.store(data);
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
       async host_namespace_get_object(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as
             | { ns_id: string; key: string }
             | undefined;
           if (!input) return cp.store(JSON.stringify({ error: "no input" }));
-          const resp = await namespaceFetch(
+          const bytes = await namespaceFetchBytes(
             "GET",
             `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeKeyPath(input.key)}`,
           );
-          const bytes = new Uint8Array(await resp.arrayBuffer());
           let binary = "";
           for (let i = 0; i < bytes.length; i++) {
             binary += String.fromCharCode(bytes[i]);
@@ -1582,7 +1637,7 @@ function buildHostFunctions(
                 key: string;
                 body_base64: string;
                 mime_type: string;
-                audience: string;
+                audience?: string;
               }
             | undefined;
           if (!input) return cp.store(JSON.stringify({ error: "no input" }));
@@ -1591,14 +1646,18 @@ function buildHostFunctions(
           for (let i = 0; i < binary.length; i++) {
             bytes[i] = binary.charCodeAt(i);
           }
-          await namespaceFetch(
+          await namespaceFetchBytes(
             "PUT",
             `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeKeyPath(input.key)}`,
             {
-              headers: {
-                "Content-Type": input.mime_type,
-                "X-Audience": input.audience,
-              },
+              headers: input.audience
+                ? {
+                    "Content-Type": input.mime_type,
+                    "X-Audience": input.audience,
+                  }
+                : {
+                    "Content-Type": input.mime_type,
+                  },
               body: bytes,
             },
           );
@@ -1613,7 +1672,7 @@ function buildHostFunctions(
             | { ns_id: string; key: string }
             | undefined;
           if (!input) return cp.store(JSON.stringify({ error: "no input" }));
-          await namespaceFetch(
+          await namespaceFetchBytes(
             "DELETE",
             `/namespaces/${encodeURIComponent(input.ns_id)}/objects/${encodeKeyPath(input.key)}`,
             {},
@@ -1626,8 +1685,7 @@ function buildHostFunctions(
       },
       async host_namespace_list(cp: CallContext, _offs: bigint) {
         try {
-          const resp = await namespaceFetch("GET", `/namespaces`);
-          const data = await resp.text();
+          const data = await namespaceFetchText("GET", `/namespaces`);
           return cp.store(data);
         } catch (e) {
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
@@ -1636,14 +1694,18 @@ function buildHostFunctions(
       async host_namespace_list_objects(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as
-            | { ns_id: string }
+            | { ns_id: string; prefix?: string; limit?: number; offset?: number }
             | undefined;
           if (!input) return cp.store(JSON.stringify([]));
-          const resp = await namespaceFetch(
+          const query = new URLSearchParams();
+          if (input.prefix) query.set("prefix", input.prefix);
+          if (input.limit !== undefined) query.set("limit", String(input.limit));
+          if (input.offset !== undefined) query.set("offset", String(input.offset));
+          const suffix = query.toString() ? `?${query.toString()}` : "";
+          const data = await namespaceFetchText(
             "GET",
-            `/namespaces/${encodeURIComponent(input.ns_id)}/objects`,
+            `/namespaces/${encodeURIComponent(input.ns_id)}/objects${suffix}`,
           );
-          const data = await resp.text();
           return cp.store(data);
         } catch (e) {
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
@@ -1655,7 +1717,7 @@ function buildHostFunctions(
             | { ns_id: string; audience: string; access: string }
             | undefined;
           if (!input) return cp.store(JSON.stringify({ error: "no input" }));
-          await namespaceFetch(
+          await namespaceFetchBytes(
             "PUT",
             `/namespaces/${encodeURIComponent(input.ns_id)}/audiences/${encodeURIComponent(input.audience)}`,
             {
@@ -1681,7 +1743,7 @@ function buildHostFunctions(
           if (!input) return cp.store(JSON.stringify({ error: "no input" }));
           const body: Record<string, string> = { subject: input.subject };
           if (input.reply_to) body.reply_to = input.reply_to;
-          const resp = await namespaceFetch(
+          const data = await namespaceFetchText(
             "POST",
             `/namespaces/${encodeURIComponent(input.ns_id)}/audiences/${encodeURIComponent(input.audience)}/send-email`,
             {
@@ -1689,7 +1751,6 @@ function buildHostFunctions(
               body: JSON.stringify(body),
             },
           );
-          const data = await resp.text();
           return cp.store(data);
         } catch (e) {
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));

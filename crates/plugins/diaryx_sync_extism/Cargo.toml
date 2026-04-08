@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 diaryx_core = { workspace = true }
-diaryx_plugin_sdk = { workspace = true, features = ["core", "http", "secrets", "ws", "events", "plugins", "context", "wasi", "files", "namespaces", "proxy"] }
+diaryx_plugin_sdk = { workspace = true, features = ["core", "secrets", "ws", "events", "plugins", "context", "wasi", "files", "namespaces", "proxy"] }
 extism-pdk = "1.4"
 serde = { workspace = true }
 serde_json = { workspace = true }

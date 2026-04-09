@@ -16,7 +16,7 @@ Business logic services that coordinate between stores and backend.
 
 | File | Purpose |
 |------|---------|
-| `attachmentService.ts` | Attachment blob URL transform/reverse and canonicalization helpers, including the path resolution used by raw HTML preview media rewrites. |
+| `attachmentService.ts` | Attachment blob URL transform/reverse and canonicalization helpers, including the path resolution used by raw HTML preview media rewrites. Preview blob creation now preserves `text/html` for both direct HTML attachments like `_attachments/sample.html` and note-backed refs like `_attachments/sample.html.md`, stripping the wrapper `.md` suffix when needed so sandboxed iframe previews render instead of being treated as downloads. |
 | `historyService.ts` | History lookup helpers used by UI history surfaces. |
 | `toastService.ts` | Toast notification wrappers with consistent error/status formatting. |
 | `updaterService.ts` | Tauri desktop updater check/install helpers that surface release availability through toasts without affecting web or App Store builds. |

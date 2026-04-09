@@ -19,6 +19,7 @@ import {
   getMimeType,
   getAttachmentMediaKind,
   isPreviewableAttachmentKind,
+  isHtmlFile,
   type AttachmentMediaKind,
 } from '../models/services/attachmentService';
 import {
@@ -436,6 +437,7 @@ export function handleAttachmentInsert(
     path: string;
     kind: AttachmentMediaKind;
     blobUrl?: string;
+    filename?: string;
     sourceEntryPath: string;
   },
   editorRef: any,
@@ -443,7 +445,7 @@ export function handleAttachmentInsert(
 ): void {
   if (!selection || !editorRef || !currentEntry) return;
 
-  const filename = selection.path.split('/').pop() || selection.path;
+  const filename = selection.filename || selection.path.split('/').pop() || selection.path;
 
   // Calculate relative path from current entry to the attachment
   const relativePath = computeRelativeAttachmentPath(
@@ -453,11 +455,12 @@ export function handleAttachmentInsert(
   );
 
   // Always embed mode
-  if (isPreviewableAttachmentKind(selection.kind) && selection.blobUrl) {
+  const isHtml = isHtmlFile(selection.filename ?? selection.path);
+  if ((isPreviewableAttachmentKind(selection.kind) || isHtml) && selection.blobUrl) {
     // Track the blob URL for reverse transformation on save
     trackBlobUrl(relativePath, selection.blobUrl);
     editorRef.insertImage(selection.blobUrl, filename);
-  } else if (isPreviewableAttachmentKind(selection.kind)) {
+  } else if (isPreviewableAttachmentKind(selection.kind) || isHtml) {
     editorRef.insertImage(relativePath, filename);
   } else {
     // Preserve the legacy markdown-embed fallback for non-previewable files.

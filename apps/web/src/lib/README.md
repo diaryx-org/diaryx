@@ -148,9 +148,28 @@ the menu to stay visible after the editor selection disappears.
 BubbleMenu placement is appended to `document.body`, uses fixed positioning,
 and listens to the editor scroll parent so the first text selection in a
 scrolled entry does not mix editor-content and viewport coordinates.
+Attachment note refs such as `_attachments/widget.html.md` now also use the
+preserved original filename (`widget.html`) as a media-type hint in
+`Editor.svelte`, so uploaded HTML/video/audio attachments that are stored as
+note-backed links still render through the right node view instead of falling
+back to broken image handling.
+Inline HTML attachment previews now also default to a taller embedded iframe
+viewport (`420px`, with an explicit node height still taking precedence) so
+full-page documents do not appear as an empty strip when their content starts
+below the top fold.
+If an older in-memory editor state still contains a root-level inline image
+node from the previous buggy insert path, `Editor.svelte` now normalizes that
+shape back into a paragraph-wrapped image during invalid-content recovery
+before rebuilding the editor instance.
 On iOS Tauri, `Editor.svelte` also exposes the native-toolbar bridge for
 audience visibility state and mutations so the Swift toolbar can offer the same
 inline/block audience picker behavior as the web BubbleMenu.
+`Editor.test.ts` now also includes focused coverage for the prop-driven
+content-sync effect and the template-context refresh dispatch effect,
+including the guarded error path when TipTap `setContent(...)` throws during
+external entry refreshes and the guarded `templateContextChanged` metadata
+dispatch path, which now logs and shows a one-time toast instead of crashing
+when invalid editor content makes decoration refresh fail.
 
 ## Sidebar Layout
 

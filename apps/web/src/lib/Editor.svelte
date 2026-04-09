@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { Editor } from "@tiptap/core";
+  import { Editor, type JSONContent } from "@tiptap/core";
   import StarterKit from "@tiptap/starter-kit";
   import { Markdown } from "@tiptap/markdown";
   import Link from "@tiptap/extension-link";
@@ -98,6 +98,7 @@
       path: string;
       kind: AttachmentMediaKind;
       blobUrl?: string;
+      filename?: string;
       sourceEntryPath: string;
     }) => void;
     /** Called when user requests to preview a media attachment in the editor */
@@ -134,6 +135,9 @@
   let bubbleMenuLinkPopoverOpen = $state(false);
   let bubbleMenuVisPickerOpen = $state(false);
   let isUpdatingContent = false; // Flag to skip onchange during programmatic updates
+  let templateContextDispatchErrorShown = false;
+  let invalidContentRecoveryAttempted = false;
+  let recoveringInvalidContent = false;
 
   // Track the last content prop value applied into the editor.
   // We intentionally do not update this on local typing, so parent prop updates
@@ -163,6 +167,7 @@
   function destroyEditor() {
     editor?.destroy();
     editor = null;
+    templateContextDispatchErrorShown = false;
     if (typeof globalThis !== 'undefined') {
       (globalThis as any).__diaryx_tiptapEditor = null;
     }
@@ -176,11 +181,57 @@
     return getScrollParent(el.parentElement);
   }
 
-  function createEditor() {
+  function normalizeTopLevelInlineImageNodes(
+    doc: JSONContent | null | undefined,
+  ): JSONContent | null {
+    if (!doc || doc.type !== "doc" || !Array.isArray(doc.content)) {
+      return null;
+    }
+
+    const normalized: JSONContent[] = [];
+    let bufferedInlineImages: JSONContent[] = [];
+    let changed = false;
+
+    const flushInlineImages = () => {
+      if (bufferedInlineImages.length === 0) return;
+      normalized.push({
+        type: "paragraph",
+        content: bufferedInlineImages,
+      });
+      bufferedInlineImages = [];
+      changed = true;
+    };
+
+    for (const node of doc.content) {
+      if (node?.type === "image") {
+        bufferedInlineImages.push(node);
+        continue;
+      }
+
+      flushInlineImages();
+      normalized.push(node);
+    }
+
+    flushInlineImages();
+
+    if (!changed) return null;
+
+    return {
+      ...doc,
+      content: normalized,
+    };
+  }
+
+  function createEditor(overrideContent?: string | JSONContent) {
     // Update global iframe context so iframe node views read the current entry
     setEditorExtensionIframeContext({ entryPath, api: api ?? null });
 
-    const initialContent = editor ? appendFootnoteDefinitions(editor) : content;
+    const initialContent =
+      overrideContent ?? (editor ? appendFootnoteDefinitions(editor) : content);
+    const initialMarkdown =
+      typeof initialContent === "string"
+        ? initialContent
+        : (lastAppliedContentProp ?? content ?? "");
     destroyEditor();
 
     // In non-readonly mode, require FloatingMenu unless native iOS toolbar is active
@@ -342,9 +393,13 @@
             // For blob URLs, look up the original path
             const originalPath = isLocalPath ? src : getPathForBlobUrl(src);
             const checkPath = originalPath || src;
-            const isVideo = isVideoFile(checkPath);
-            const isAudio = isAudioFile(checkPath);
-            const isHtmlEmbed = isHtmlFile(checkPath);
+            const noteBackedTypeHint =
+              checkPath.endsWith(".md") && (title || alt)
+                ? (title || alt)
+                : checkPath;
+            const isVideo = isVideoFile(noteBackedTypeHint);
+            const isAudio = isAudioFile(noteBackedTypeHint);
+            const isHtmlEmbed = isHtmlFile(noteBackedTypeHint);
 
             // Transparent 1x1 GIF used as placeholder src for loading images.
             // Without a real src, <img> elements create "dead zones" in
@@ -368,7 +423,10 @@
               iframe.className = "editor-image editor-html-island";
               if (alt) iframe.title = alt;
               iframe.style.width = "100%";
-              iframe.style.minHeight = "120px";
+              iframe.style.height = node.attrs.height
+                ? `${node.attrs.height}px`
+                : "420px";
+              iframe.style.minHeight = "240px";
               iframe.style.border = "1px solid var(--border-color, #e0e0e0)";
               iframe.style.borderRadius = "6px";
               if (isLocalPath && epApi) {
@@ -1059,17 +1117,22 @@
       }
     }
 
-    function createEditor(editorContent: string) {
+    function buildEditorInstance(editorContent: string | JSONContent) {
       return new Editor({
         element,
         extensions,
-        content: preprocessFootnotes(editorContent),
-        contentType: "markdown",
+        content:
+          typeof editorContent === "string"
+            ? preprocessFootnotes(editorContent)
+            : editorContent,
+        ...(typeof editorContent === "string"
+          ? { contentType: "markdown" as const }
+          : {}),
         editable: !readonly,
         onCreate: () => {
           // Track the last external content value that has been applied so we don't
           // overwrite the editor unless the prop actually changes.
-          lastAppliedContentProp = initialContent;
+          lastAppliedContentProp = initialMarkdown;
         },
         onUpdate: () => {
           if (onchange && !isUpdatingContent) {
@@ -1135,13 +1198,15 @@
     }
 
     try {
-      editor = createEditor(initialContent);
+      editor = buildEditorInstance(initialContent);
+      invalidContentRecoveryAttempted = false;
     } catch (err) {
       console.error("[Editor] Failed to load content, recovering with empty document:", err);
       toast.error("Entry contains invalid content", {
         description: "The editor recovered by loading an empty document. Your data is safe — try re-opening the entry or removing incompatible plugins.",
       });
-      editor = createEditor("");
+      editor = buildEditorInstance("");
+      invalidContentRecoveryAttempted = false;
     }
 
     if (typeof globalThis !== 'undefined') {
@@ -1373,6 +1438,45 @@
           };
         },
       };
+    }
+  }
+
+  function recoverInvalidEditorState(): boolean {
+    if (!editor || recoveringInvalidContent || invalidContentRecoveryAttempted) {
+      return false;
+    }
+
+    invalidContentRecoveryAttempted = true;
+    recoveringInvalidContent = true;
+
+    let recoveryContent: string | JSONContent = lastAppliedContentProp ?? content ?? "";
+
+    try {
+      editor.state.doc.check();
+      recoveryContent = appendFootnoteDefinitions(editor);
+    } catch (err) {
+      try {
+        const normalizedDoc = normalizeTopLevelInlineImageNodes(editor.getJSON());
+        if (normalizedDoc) {
+          recoveryContent = normalizedDoc;
+        } else {
+          recoveryContent = appendFootnoteDefinitions(editor);
+        }
+      } catch (serializationErr) {
+        console.warn(
+          "[Editor] Failed to serialize invalid content for recovery, falling back to last applied content:",
+          serializationErr,
+        );
+        console.warn("[Editor] Original invalid-content error:", err);
+      }
+    }
+
+    try {
+      createEditor(recoveryContent);
+      invalidContentRecoveryAttempted = true;
+      return true;
+    } finally {
+      recoveringInvalidContent = false;
     }
   }
 
@@ -1636,8 +1740,21 @@
     void templateContextStore.context;
     void templateContextStore.previewAudience;
     if (editor) {
-      const tr = editor.state.tr.setMeta("templateContextChanged", true);
-      editor.view.dispatch(tr);
+      try {
+        const tr = editor.state.tr.setMeta("templateContextChanged", true);
+        editor.view.dispatch(tr);
+      } catch (err) {
+        if (recoverInvalidEditorState()) {
+          return;
+        }
+        if (!templateContextDispatchErrorShown) {
+          templateContextDispatchErrorShown = true;
+          console.error("[Editor] Failed to refresh template-context decorations:", err);
+          toast.error("Could not refresh editor decorations", {
+            description: "The entry contains invalid content, so some audience or conditional highlights may be stale until you reopen it.",
+          });
+        }
+      }
     }
   });
 </script>

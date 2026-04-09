@@ -1,4 +1,5 @@
 import { render, waitFor } from "@testing-library/svelte";
+import { flushSync } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Polyfill ResizeObserver for jsdom
@@ -11,8 +12,8 @@ if (typeof globalThis.ResizeObserver === "undefined") {
 }
 
 // vi.hoisted runs before vi.mock factories, making these variables available.
-const { editorState, mockEditorInstance } = vi.hoisted(() => {
-  const editorState = { createConfig: null as any };
+const { editorState, mockEditorInstance, toastErrorSpy } = vi.hoisted(() => {
+  const editorState = { createConfig: null as any, createConfigs: [] as any[] };
   const mockEditorInstance = {
     getHTML: vi.fn(() => "<p>test</p>"),
     getJSON: vi.fn(() => ({})),
@@ -36,14 +37,18 @@ const { editorState, mockEditorInstance } = vi.hoisted(() => {
     setEditable: vi.fn(),
     view: { dom: document.createElement("div"), dispatch: vi.fn() },
     state: {
-      doc: { content: { size: 0 } },
+      doc: { content: { size: 0 }, check: vi.fn(() => {}) },
       tr: { setMeta: vi.fn().mockReturnThis() },
     },
     storage: { markdown: { getMarkdown: vi.fn(() => "test markdown") } },
     extensionManager: { extensions: [] },
     isActive: vi.fn(() => false),
   };
-  return { editorState, mockEditorInstance };
+  return {
+    editorState,
+    mockEditorInstance,
+    toastErrorSpy: vi.fn(),
+  };
 });
 
 // ── Mock TipTap core ────────────────────────────────────────────────
@@ -52,6 +57,7 @@ vi.mock("@tiptap/core", async (importOriginal) => {
   // Must use a regular function (not arrow) so it works with `new Editor(...)`.
   function MockEditor(this: any, config: any) {
     editorState.createConfig = config;
+    editorState.createConfigs.push(config);
     if (config.element) {
       config.element.innerHTML = "<div class='ProseMirror'></div>";
     }
@@ -205,9 +211,9 @@ vi.mock("./extensions/SearchHighlight", () => {
   return { SearchHighlight: o };
 });
 
-vi.mock("./stores/templateContextStore.svelte", () => ({
-  getTemplateContextStore: vi.fn(() => ({ context: {} })),
-}));
+vi.mock("./stores/templateContextStore.svelte", async (importOriginal) => {
+  return await importOriginal<typeof import("./stores/templateContextStore.svelte")>();
+});
 
 vi.mock("$lib/plugins/browserPluginManager.svelte", () => ({
   getEditorExtensions: vi.fn(() => []),
@@ -243,6 +249,11 @@ vi.mock("@/models/stores/pluginStore.svelte", () => ({
 vi.mock("$lib/backend", () => ({
   TreeNode: vi.fn(),
 }));
+vi.mock("svelte-sonner", () => ({
+  toast: {
+    error: toastErrorSpy,
+  },
+}));
 
 // ── Import the component AFTER all mocks ────────────────────────────
 import EditorComponent from "./Editor.svelte";
@@ -250,6 +261,7 @@ import {
   bubbleMenuHasRelevantFocus,
   shouldKeepBubbleMenuVisible,
 } from "./editorMenuVisibility";
+import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
 
 // Helper: wait for the mock Editor constructor to have been called.
 // Since MockEditor is a plain function (not vi.fn), we check editorState.
@@ -264,6 +276,18 @@ describe("Editor.svelte", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     editorState.createConfig = null;
+    editorState.createConfigs = [];
+    mockEditorInstance.commands.setContent.mockReset();
+    mockEditorInstance.commands.setContent.mockImplementation(() => {});
+    mockEditorInstance.view.dispatch.mockReset();
+    mockEditorInstance.view.dispatch.mockImplementation(() => {});
+    mockEditorInstance.state.doc.check.mockReset();
+    mockEditorInstance.state.doc.check.mockImplementation(() => {});
+    mockEditorInstance.state.tr.setMeta.mockReset();
+    mockEditorInstance.state.tr.setMeta.mockReturnValue(mockEditorInstance.state.tr);
+    const templateContextStore = getTemplateContextStore();
+    templateContextStore.clear();
+    templateContextStore.setPreviewAudience(null);
   });
 
   it("renders the editor element", () => {
@@ -362,6 +386,216 @@ describe("Editor.svelte", () => {
     expect(editorState.createConfig.onBlur).toBeDefined();
     editorState.createConfig.onBlur();
     expect(onblur).toHaveBeenCalled();
+  });
+
+  it("syncs external content prop changes through the content-sync effect", async () => {
+    const { rerender } = render(EditorComponent, {
+      props: { readonly: true, content: "Initial body" },
+    });
+
+    await waitForEditorCreation();
+
+    mockEditorInstance.commands.setContent.mockClear();
+
+    await rerender({ readonly: true, content: "Updated body" });
+
+    await waitFor(() => {
+      expect(mockEditorInstance.commands.setContent).toHaveBeenCalledWith(
+        "Updated body",
+        { contentType: "markdown" },
+      );
+    });
+  });
+
+  it("catches content-sync failures and shows the load-entry toast", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockEditorInstance.commands.setContent.mockImplementation(() => {
+      throw new Error("Called contentMatchAt on a node with invalid content");
+    });
+
+    const { rerender } = render(EditorComponent, {
+      props: { readonly: true, content: "Initial body" },
+    });
+
+    await waitForEditorCreation();
+
+    mockEditorInstance.commands.setContent.mockClear();
+    toastErrorSpy.mockClear();
+
+    await rerender({ readonly: true, content: "Updated body" });
+
+    await waitFor(() => {
+      expect(toastErrorSpy).toHaveBeenCalledWith(
+        "Could not load entry content",
+        {
+          description: "The document may contain nodes from an incompatible plugin.",
+        },
+      );
+    });
+
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("dispatches templateContextChanged when the template context changes", async () => {
+    render(EditorComponent, {
+      props: { readonly: true, content: "Initial body" },
+    });
+
+    await waitForEditorCreation();
+
+    const templateContextStore = getTemplateContextStore();
+    mockEditorInstance.view.dispatch.mockClear();
+    mockEditorInstance.state.tr.setMeta.mockClear();
+
+    flushSync(() => {
+      templateContextStore.setContext({ title: "Updated title" });
+    });
+
+    expect(mockEditorInstance.state.tr.setMeta).toHaveBeenCalledWith(
+      "templateContextChanged",
+      true,
+    );
+    expect(mockEditorInstance.view.dispatch).toHaveBeenCalledWith(
+      mockEditorInstance.state.tr,
+    );
+  });
+
+  it("guards invalid-content errors from the template-context refresh effect", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(EditorComponent, {
+      props: { readonly: true, content: "Initial body" },
+    });
+
+    await waitForEditorCreation();
+
+    const templateContextStore = getTemplateContextStore();
+    mockEditorInstance.view.dispatch.mockImplementation(() => {
+      throw new Error("Called contentMatchAt on a node with invalid content");
+    });
+    mockEditorInstance.view.dispatch.mockClear();
+    toastErrorSpy.mockClear();
+
+    expect(() => {
+      flushSync(() => {
+        templateContextStore.setContext({ title: "Updated title" });
+      });
+    }).not.toThrow();
+
+    expect(toastErrorSpy).toHaveBeenCalledWith(
+      "Could not refresh editor decorations",
+      {
+        description: "The entry contains invalid content, so some audience or conditional highlights may be stale until you reopen it.",
+      },
+    );
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("shows the template-context refresh error toast only once per editor instance", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(EditorComponent, {
+      props: { readonly: true, content: "Initial body" },
+    });
+
+    await waitForEditorCreation();
+
+    const templateContextStore = getTemplateContextStore();
+    mockEditorInstance.view.dispatch.mockImplementation(() => {
+      throw new Error("Called contentMatchAt on a node with invalid content");
+    });
+    toastErrorSpy.mockClear();
+
+    flushSync(() => {
+      templateContextStore.setContext({ title: "One" });
+    });
+    flushSync(() => {
+      templateContextStore.setPreviewAudience("family");
+    });
+
+    expect(toastErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("recovers invalid top-level image content by rebuilding with normalized JSON", async () => {
+    render(EditorComponent, {
+      props: { readonly: true, content: "# New Entry\n\n" },
+    });
+
+    await waitForEditorCreation();
+
+    const templateContextStore = getTemplateContextStore();
+    mockEditorInstance.view.dispatch
+      .mockImplementationOnce(() => {
+        throw new Error("Called contentMatchAt on a node with invalid content");
+      })
+      .mockImplementation(() => {});
+    mockEditorInstance.state.doc.check.mockImplementation(() => {
+      throw new Error("Called contentMatchAt on a node with invalid content");
+    });
+    mockEditorInstance.getJSON.mockReturnValue({
+      type: "doc",
+      content: [
+        {
+          type: "heading",
+          attrs: { level: 1 },
+          content: [{ type: "text", text: "New Entry" }],
+        },
+        {
+          type: "image",
+          attrs: {
+            src: "_attachments/Sample.html.md",
+            alt: "Sample.html",
+            title: "",
+            width: null,
+            height: null,
+          },
+        },
+      ],
+    });
+    toastErrorSpy.mockClear();
+
+    flushSync(() => {
+      templateContextStore.setContext({ title: "Updated title" });
+    });
+
+    await waitFor(() => {
+      expect(editorState.createConfigs).toHaveLength(2);
+    });
+
+    expect(editorState.createConfigs[1].content).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "heading",
+          attrs: { level: 1 },
+          content: [{ type: "text", text: "New Entry" }],
+        },
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "image",
+              attrs: {
+                src: "_attachments/Sample.html.md",
+                alt: "Sample.html",
+                title: "",
+                width: null,
+                height: null,
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(toastErrorSpy).not.toHaveBeenCalledWith(
+      "Could not refresh editor decorations",
+      expect.anything(),
+    );
   });
 
   it("intercepts local editor link clicks before native navigation", async () => {

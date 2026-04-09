@@ -57,6 +57,8 @@ describe('attachmentService', () => {
 
     it('should return correct MIME type for text files', () => {
       expect(getMimeType('file.txt')).toBe('text/plain')
+      expect(getMimeType('file.html')).toBe('text/html')
+      expect(getMimeType('file.htm')).toBe('text/html')
       expect(getMimeType('file.md')).toBe('text/markdown')
       expect(getMimeType('file.csv')).toBe('text/csv')
       expect(getMimeType('file.json')).toBe('application/json')
@@ -432,6 +434,46 @@ describe('attachmentService', () => {
       )
       expect(mockApi.resolveAttachmentStoragePath).toHaveBeenCalledWith('entry.md', '_attachments/diaryx-icon.jpg')
       expect(result).toContain('blob:')
+    })
+
+    it('should use the underlying asset MIME type for note-backed HTML refs', async () => {
+      const mockData = new Uint8Array([60, 104, 49, 62])
+      const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL')
+      const mockApi = {
+        resolveAttachmentStoragePath: vi.fn().mockResolvedValue('resolved/_attachments/sample.html'),
+        readBinary: vi.fn().mockResolvedValue(mockData),
+        canonicalizeLink: vi.fn(async (path: string) => path),
+        formatLink: vi.fn(async (path: string) => path),
+      }
+
+      const content = '![Sample.html](_attachments/sample.html.md)'
+      await transformAttachmentPaths(content, 'entry.md', mockApi as any)
+
+      expect(createObjectUrlSpy).toHaveBeenCalled()
+      const blobArg = createObjectUrlSpy.mock.calls.at(-1)?.[0]
+      expect(blobArg).toBeInstanceOf(Blob)
+      expect((blobArg as Blob).type).toBe('text/html')
+      createObjectUrlSpy.mockRestore()
+    })
+
+    it('should keep direct HTML attachment refs previewable as text/html', async () => {
+      const mockData = new Uint8Array([60, 104, 49, 62])
+      const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL')
+      const mockApi = {
+        resolveAttachmentStoragePath: vi.fn().mockResolvedValue('resolved/_attachments/sample.html'),
+        readBinary: vi.fn().mockResolvedValue(mockData),
+        canonicalizeLink: vi.fn(async (path: string) => path),
+        formatLink: vi.fn(async (path: string) => path),
+      }
+
+      const content = '![sample.html](_attachments/sample.html)'
+      await transformAttachmentPaths(content, 'entry.md', mockApi as any)
+
+      expect(createObjectUrlSpy).toHaveBeenCalled()
+      const blobArg = createObjectUrlSpy.mock.calls.at(-1)?.[0]
+      expect(blobArg).toBeInstanceOf(Blob)
+      expect((blobArg as Blob).type).toBe('text/html')
+      createObjectUrlSpy.mockRestore()
     })
   })
 

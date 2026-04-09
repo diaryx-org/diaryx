@@ -30,6 +30,7 @@
       path: string;
       kind: AttachmentMediaKind;
       blobUrl?: string;
+      filename?: string;
       sourceEntryPath: string;
     }) => void;
     /** Called when user requests to preview a media attachment in the editor */

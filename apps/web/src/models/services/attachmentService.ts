@@ -212,6 +212,8 @@ const mimeTypes: Record<string, string> = {
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   // Text
   txt: 'text/plain',
+  html: 'text/html',
+  htm: 'text/html',
   md: 'text/markdown',
   csv: 'text/csv',
   json: 'application/json',
@@ -409,6 +411,21 @@ function isNestedMarkdownLinkPayload(path: string): boolean {
   return path.startsWith('[') && path.includes('](');
 }
 
+function getAttachmentAssetPathHint(path: string): string {
+  const trimmed = unwrapAngleBracketPath(path);
+  if (!trimmed.endsWith('.md')) return trimmed;
+
+  const withoutMarkdownSuffix = trimmed.slice(0, -3);
+  const filename = withoutMarkdownSuffix.split('/').pop() ?? '';
+
+  // Attachment notes preserve the original asset filename and append `.md`
+  // (for example `_attachments/sample.html.md`). Strip only that wrapping
+  // note suffix so preview blobs use the underlying asset MIME type.
+  if (!filename.includes('.')) return trimmed;
+
+  return withoutMarkdownSuffix;
+}
+
 async function resolveAttachmentFromPaths(
   api: Api,
   entryPath: string,
@@ -426,9 +443,10 @@ async function resolveAttachmentFromPaths(
    */
   async function createBlobUrlFromBytes(bytes: Uint8Array): Promise<string | null> {
     if (signal.aborted) return null;
-    const mimeType = getMimeType(canonicalPath);
+    const assetPathHint = getAttachmentAssetPathHint(canonicalPath);
+    const mimeType = getMimeType(assetPathHint);
     let blob = new Blob([bytes as unknown as BlobPart], { type: mimeType });
-    if (isHeicFile(canonicalPath)) {
+    if (isHeicFile(assetPathHint)) {
       blob = await convertHeicToJpeg(blob);
       if (signal.aborted) return null;
     }
@@ -451,13 +469,14 @@ async function resolveAttachmentFromPaths(
     try {
       const resp = await fetch(serverUrl, { signal });
       if (!resp.ok) return null;
-      const mimeType = getMimeType(canonicalPath);
+      const assetPathHint = getAttachmentAssetPathHint(canonicalPath);
+      const mimeType = getMimeType(assetPathHint);
       let blob = await resp.blob();
       if (signal.aborted) return null;
       if (blob.type !== mimeType) {
         blob = new Blob([blob], { type: mimeType });
       }
-      if (isHeicFile(canonicalPath)) {
+      if (isHeicFile(assetPathHint)) {
         blob = await convertHeicToJpeg(blob);
         if (signal.aborted) return null;
       }
@@ -525,11 +544,12 @@ async function fetchAttachmentBlobFromServer(
     const response = await fetch(serverUrl);
     if (!response.ok) return null;
     let blob = await response.blob();
-    const mimeType = getMimeType(attachmentPath);
+    const assetPathHint = getAttachmentAssetPathHint(attachmentPath);
+    const mimeType = getMimeType(assetPathHint);
     if (blob.type !== mimeType) {
       blob = new Blob([blob], { type: mimeType });
     }
-    if (isHeicFile(attachmentPath)) {
+    if (isHeicFile(assetPathHint)) {
       blob = await convertHeicToJpeg(blob);
     }
     return blob;
@@ -867,7 +887,8 @@ export async function getAttachmentThumbnailUrl(
   sourceEntryPath: string,
   attachmentPath: string,
 ): Promise<string | undefined> {
-  if (!isImageFile(attachmentPath)) return undefined;
+  const assetPathHint = getAttachmentAssetPathHint(attachmentPath);
+  if (!isImageFile(assetPathHint)) return undefined;
 
   const cacheKey = getThumbnailCacheKey(sourceEntryPath, attachmentPath);
   const cachedUrl = touchThumbnailCacheEntry(cacheKey);
@@ -882,8 +903,8 @@ export async function getAttachmentThumbnailUrl(
 
       try {
         const bytes = await readAttachmentBytes(api, sourceEntryPath, attachmentPath);
-        blob = new Blob([bytes as unknown as BlobPart], { type: getMimeType(attachmentPath) });
-        if (isHeicFile(attachmentPath)) {
+        blob = new Blob([bytes as unknown as BlobPart], { type: getMimeType(assetPathHint) });
+        if (isHeicFile(assetPathHint)) {
           blob = await convertHeicToJpeg(blob);
         }
       } catch {

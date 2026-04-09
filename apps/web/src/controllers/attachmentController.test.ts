@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getMimeType: vi.fn(() => "image/png"),
   getAttachmentMediaKind: vi.fn((_path: string) => "image" as "image" | "video" | "audio" | "file"),
   isPreviewableAttachmentKind: vi.fn(() => true),
+  isHtmlFile: vi.fn(() => false),
 
   // attachmentSyncService
   enqueueAttachmentUpload: vi.fn(() => "queue-item-1"),
@@ -47,6 +48,7 @@ vi.mock("../models/services/attachmentService", () => ({
   getMimeType: mocks.getMimeType,
   getAttachmentMediaKind: mocks.getAttachmentMediaKind,
   isPreviewableAttachmentKind: mocks.isPreviewableAttachmentKind,
+  isHtmlFile: mocks.isHtmlFile,
 }));
 
 vi.mock("$lib/sync/attachmentSyncService", () => ({
@@ -658,6 +660,93 @@ describe("attachmentController", () => {
       expect(editorRef.setContent).toHaveBeenCalledWith(
         expect.stringContaining("![data.csv](./_attachments/data.csv)")
       );
+    });
+
+    it("inserts HTML file via insertImage instead of markdown embed", () => {
+      mocks.isPreviewableAttachmentKind.mockReturnValue(false);
+      mocks.isHtmlFile.mockReturnValue(true);
+      mocks.computeRelativeAttachmentPath.mockReturnValue(
+        "./_attachments/widget.html"
+      );
+
+      const editorRef = createMockEditorRef();
+      const entry = createMockEntry();
+
+      handleAttachmentInsert(
+        {
+          path: "_attachments/widget.html",
+          kind: "file",
+          sourceEntryPath: entry.path,
+        },
+        editorRef,
+        entry
+      );
+
+      expect(editorRef.insertImage).toHaveBeenCalledWith(
+        "./_attachments/widget.html",
+        "widget.html"
+      );
+      expect(editorRef.setContent).not.toHaveBeenCalled();
+    });
+
+    it("inserts HTML file with blobUrl and tracks it", () => {
+      mocks.isPreviewableAttachmentKind.mockReturnValue(false);
+      mocks.isHtmlFile.mockReturnValue(true);
+      mocks.computeRelativeAttachmentPath.mockReturnValue(
+        "./_attachments/widget.html"
+      );
+
+      const editorRef = createMockEditorRef();
+      const entry = createMockEntry();
+
+      handleAttachmentInsert(
+        {
+          path: "_attachments/widget.html",
+          kind: "file",
+          blobUrl: "blob:html123",
+          sourceEntryPath: entry.path,
+        },
+        editorRef,
+        entry
+      );
+
+      expect(mocks.trackBlobUrl).toHaveBeenCalledWith(
+        "./_attachments/widget.html",
+        "blob:html123"
+      );
+      expect(editorRef.insertImage).toHaveBeenCalledWith(
+        "blob:html123",
+        "widget.html"
+      );
+    });
+
+    it("treats uploaded HTML attachment-note refs as HTML when filename is preserved", () => {
+      mocks.isPreviewableAttachmentKind.mockReturnValue(false);
+      mocks.isHtmlFile.mockReturnValue(true);
+      mocks.computeRelativeAttachmentPath.mockReturnValue(
+        "./_attachments/Sample.html.md"
+      );
+
+      const editorRef = createMockEditorRef();
+      const entry = createMockEntry();
+
+      handleAttachmentInsert(
+        {
+          path: "_attachments/Sample.html.md",
+          kind: "file",
+          filename: "Sample.html",
+          sourceEntryPath: entry.path,
+        },
+        editorRef,
+        entry
+      );
+
+      expect(mocks.isHtmlFile).toHaveBeenCalledWith("Sample.html");
+      expect(editorRef.insertImage).toHaveBeenCalledWith(
+        "./_attachments/Sample.html.md",
+        "Sample.html"
+      );
+      expect(editorRef.setContent).not.toHaveBeenCalled();
     });
 
     it("uses the filename from the last segment of path", () => {

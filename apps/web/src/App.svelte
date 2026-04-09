@@ -2657,6 +2657,7 @@
     path: string;
     kind: AttachmentMediaKind;
     blobUrl?: string;
+    filename?: string;
     sourceEntryPath: string;
   }) {
     attachmentInsertHandler(selection, editorRef, currentEntry);

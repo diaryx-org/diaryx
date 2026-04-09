@@ -7,6 +7,7 @@
  */
 
 import { Node, mergeAttributes } from "@tiptap/core";
+import { TextSelection } from "@tiptap/pm/state";
 import type { Api } from "$lib/backend/api";
 import AttachmentPickerNodeView from "../components/AttachmentPickerNodeView.svelte";
 import { mount, unmount } from "svelte";
@@ -19,6 +20,7 @@ export interface AttachmentPickerNodeOptions {
     path: string;
     kind: AttachmentMediaKind;
     blobUrl?: string;
+    filename?: string;
     sourceEntryPath: string;
   }) => void;
 }
@@ -90,6 +92,45 @@ export const AttachmentPickerNode = Node.create<AttachmentPickerNodeOptions>({
         }
       };
 
+      const restoreTextSelectionNear = (anchor: number) => {
+        const state = editor.state;
+        const boundedAnchor = Math.max(0, Math.min(anchor, state.doc.content.size));
+
+        try {
+          const selection = TextSelection.near(state.doc.resolve(boundedAnchor), 1);
+          editor.view.dispatch(state.tr.setSelection(selection));
+          return;
+        } catch {
+          // Fall through and create a paragraph if the document no longer has
+          // a textblock near the removed picker node.
+        }
+
+        const paragraphType = editor.schema.nodes.paragraph;
+        if (!paragraphType) return;
+
+        const insertPos = Math.max(0, Math.min(anchor, state.doc.content.size));
+        const tr = state.tr.insert(insertPos, paragraphType.create());
+        const selection = TextSelection.near(
+          tr.doc.resolve(Math.min(insertPos + 1, tr.doc.content.size)),
+          1,
+        );
+        editor.view.dispatch(tr.setSelection(selection));
+      };
+
+      const deleteNodeAndThen = (action?: () => void) => {
+        const deletedPos = getPos();
+        deleteNode();
+        if (!action) return;
+        // Defer follow-up inserts until the picker atom is gone so inline
+        // media embeds are created against the current document state.
+        queueMicrotask(() => {
+          if (typeof deletedPos === "number") {
+            restoreTextSelectionNear(deletedPos);
+          }
+          action();
+        });
+      };
+
       // Mount the Svelte component
       svelteComponent = mount(AttachmentPickerNodeView, {
         target: dom,
@@ -100,19 +141,24 @@ export const AttachmentPickerNode = Node.create<AttachmentPickerNodeOptions>({
             path: string;
             kind: AttachmentMediaKind;
             blobUrl?: string;
+            filename?: string;
             sourceEntryPath: string;
           }) => {
-            this.options.onAttachmentSelect(selection);
-            deleteNode();
+            deleteNodeAndThen(() => {
+              this.options.onAttachmentSelect(selection);
+            });
           },
           onCancel: () => {
-            deleteNode();
+            deleteNodeAndThen(() => editor.commands.focus());
           },
         },
       });
 
       return {
         dom,
+        stopEvent(event: Event) {
+          return dom.contains(event.target as globalThis.Node);
+        },
         destroy() {
           if (svelteComponent) {
             unmount(svelteComponent);

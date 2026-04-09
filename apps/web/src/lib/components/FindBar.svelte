@@ -4,6 +4,7 @@
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { ChevronUp, ChevronDown, X } from "@lucide/svelte";
   import { tick } from "svelte";
+  import { toast } from "svelte-sonner";
 
   interface Props {
     open: boolean;
@@ -21,14 +22,25 @@
   let inputEl: HTMLInputElement | null = $state(null);
   let resultCount = $state(0);
   let currentIndex = $state(-1);
+  let searchCommandErrorShown = $state(false);
+  let searchUnavailable = $state(false);
+  let previousOpen = open;
+  let lastEditorInstance: unknown = null;
 
   // Focus input when opened, clear when closed
   $effect(() => {
-    if (open) {
+    const wasOpen = previousOpen;
+    previousOpen = open;
+
+    if (open && !wasOpen) {
+      searchCommandErrorShown = false;
+      searchUnavailable = false;
       tick().then(() => inputEl?.focus());
-    } else {
+    } else if (!open && wasOpen) {
       searchTerm = "";
-      editorRef?.getEditor?.()?.commands?.clearSearch?.();
+      runSearchCommand("clear search highlights", () => {
+        editorRef?.getEditor?.()?.commands?.clearSearch?.();
+      });
       resultCount = 0;
       currentIndex = -1;
     }
@@ -38,16 +50,51 @@
     return editorRef?.getEditor?.();
   }
 
+  $effect(() => {
+    const editor = editorRef?.getEditor?.() ?? null;
+    if (editor !== lastEditorInstance) {
+      lastEditorInstance = editor;
+      searchCommandErrorShown = false;
+      searchUnavailable = false;
+    }
+  });
+
+  function runSearchCommand(action: string, callback: () => void): boolean {
+    if (searchUnavailable) return false;
+    try {
+      callback();
+      return true;
+    } catch (err) {
+      if (!searchCommandErrorShown) {
+        console.error(`[FindBar] Failed to ${action}:`, err);
+        searchCommandErrorShown = true;
+        toast.error("Could not search this entry", {
+          description: "The entry contains invalid content, so find results are unavailable until you reopen it.",
+        });
+      }
+      searchUnavailable = true;
+      resultCount = 0;
+      currentIndex = -1;
+      return false;
+    }
+  }
+
   function handleSearch() {
     const editor = getEditor();
     if (!editor || !searchTerm) {
       resultCount = 0;
       currentIndex = -1;
-      editor?.commands?.clearSearch?.();
+      runSearchCommand("clear search highlights", () => {
+        editor?.commands?.clearSearch?.();
+      });
       return;
     }
 
-    editor.commands.setSearchTerm(searchTerm);
+    if (!runSearchCommand("search the entry", () => {
+      editor.commands.setSearchTerm(searchTerm);
+    })) {
+      return;
+    }
     const storage = editor.storage.searchHighlight;
     resultCount = storage?.results?.length ?? 0;
     currentIndex = resultCount > 0 ? (storage?.currentIndex ?? 0) + 1 : 0;
@@ -56,7 +103,11 @@
   function handleNext() {
     const editor = getEditor();
     if (!editor) return;
-    editor.commands.nextSearchResult();
+    if (!runSearchCommand("jump to the next search result", () => {
+      editor.commands.nextSearchResult();
+    })) {
+      return;
+    }
     const storage = editor.storage.searchHighlight;
     currentIndex = (storage?.currentIndex ?? 0) + 1;
   }
@@ -64,7 +115,11 @@
   function handlePrevious() {
     const editor = getEditor();
     if (!editor) return;
-    editor.commands.previousSearchResult();
+    if (!runSearchCommand("jump to the previous search result", () => {
+      editor.commands.previousSearchResult();
+    })) {
+      return;
+    }
     const storage = editor.storage.searchHighlight;
     currentIndex = (storage?.currentIndex ?? 0) + 1;
   }

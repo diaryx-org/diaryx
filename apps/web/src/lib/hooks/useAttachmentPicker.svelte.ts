@@ -18,6 +18,7 @@ export interface AttachmentSelection {
   path: string;
   kind: AttachmentMediaKind;
   blobUrl?: string;
+  filename?: string;
   /** The entry path where this attachment lives (for getting data) */
   sourceEntryPath: string;
 }
@@ -243,6 +244,7 @@ export function useAttachmentPicker(options: UseAttachmentPickerOptions) {
       path: attachment.path,
       kind: attachment.kind,
       blobUrl,
+      filename: attachment.title || getFilename(attachment.path),
       sourceEntryPath,
     });
   }
@@ -293,6 +295,7 @@ export function useAttachmentPicker(options: UseAttachmentPickerOptions) {
         path: entryRelativePath,
         kind,
         blobUrl,
+        filename: file.name,
         sourceEntryPath: entryPath,
       });
     } catch (e) {

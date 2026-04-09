@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Audience Filtering Demo</title>
+    <style>
+      :root {
+        --background: 42 62% 97%;
+        --foreground: 22 36% 14%;
+        --card: 0 0% 100%;
+        --card-foreground: 22 36% 14%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 22 36% 14%;
+        --primary: 27 88% 46%;
+        --primary-foreground: 40 100% 98%;
+        --secondary: 35 54% 92%;
+        --secondary-foreground: 24 33% 18%;
+        --muted: 38 38% 92%;
+        --muted-foreground: 24 16% 38%;
+        --accent: 145 44% 45%;
+        --accent-foreground: 0 0% 100%;
+        --destructive: 0 72% 48%;
+        --border: 30 28% 82%;
+        --input: 30 28% 82%;
+        --ring: 27 88% 46%;
+        --radius: 18px;
+        --editor-font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+        --editor-font-size: 17px;
+        --editor-line-height: 1.65;
+        --public: 148 47% 42%;
+        --developers: 347 69% 56%;
+        --agents: 232 72% 63%;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: 24 24% 10%;
+          --foreground: 40 30% 94%;
+          --card: 24 23% 14%;
+          --card-foreground: 40 30% 94%;
+          --popover: 24 23% 14%;
+          --popover-foreground: 40 30% 94%;
+          --primary: 31 92% 58%;
+          --primary-foreground: 24 24% 10%;
+          --secondary: 20 17% 22%;
+          --secondary-foreground: 38 24% 88%;
+          --muted: 22 14% 18%;
+          --muted-foreground: 34 14% 70%;
+          --accent: 152 49% 48%;
+          --accent-foreground: 24 24% 10%;
+          --destructive: 0 72% 57%;
+          --border: 24 15% 26%;
+          --input: 24 15% 26%;
+          --ring: 31 92% 58%;
+          --public: 148 54% 54%;
+          --developers: 347 77% 67%;
+          --agents: 232 82% 73%;
+        }
+      }
+
+      html[data-theme="dark"] {
+        color-scheme: dark;
+      }
+
+      html[data-theme="light"] {
+        color-scheme: light;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: var(--editor-font-family);
+        font-size: var(--editor-font-size);
+        line-height: var(--editor-line-height);
+        color: hsl(var(--foreground));
+        background:
+          radial-gradient(circle at top left, hsl(var(--primary) / 0.14), transparent 38%),
+          radial-gradient(circle at top right, hsl(var(--accent) / 0.14), transparent 42%),
+          linear-gradient(180deg, hsl(var(--background)), hsl(var(--background)));
+      }
+
+      main {
+        padding: 24px;
+      }
+
+      .shell {
+        max-width: 1120px;
+        margin: 0 auto;
+        background: hsl(var(--card) / 0.74);
+        color: hsl(var(--card-foreground));
+        border: 1px solid hsl(var(--border));
+        border-radius: calc(var(--radius) + 8px);
+        box-shadow:
+          0 18px 40px hsl(20 40% 8% / 0.08),
+          inset 0 1px 0 hsl(0 0% 100% / 0.25);
+        backdrop-filter: blur(14px);
+        overflow: hidden;
+      }
+
+      .hero {
+        padding: 28px 28px 18px;
+        border-bottom: 1px solid hsl(var(--border));
+        background:
+          linear-gradient(135deg, hsl(var(--card) / 0.78), hsl(var(--secondary) / 0.68)),
+          hsl(var(--card));
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.82rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: hsl(var(--muted-foreground));
+      }
+
+      .eyebrow::before {
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)));
+        box-shadow: 0 0 0 4px hsl(var(--primary) / 0.16);
+      }
+
+      h1 {
+        margin: 14px 0 10px;
+        font-size: clamp(2rem, 4vw, 3.2rem);
+        line-height: 1.05;
+      }
+
+      .lead {
+        margin: 0;
+        max-width: 64ch;
+        color: hsl(var(--muted-foreground));
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 28px;
+        border-bottom: 1px solid hsl(var(--border));
+        background: hsl(var(--background) / 0.34);
+      }
+
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      button {
+        appearance: none;
+        border: 1px solid hsl(var(--border));
+        background: hsl(var(--secondary));
+        color: hsl(var(--secondary-foreground));
+        border-radius: 999px;
+        padding: 10px 14px;
+        font: inherit;
+        font-size: 0.95rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+          transform 140ms ease,
+          background 140ms ease,
+          border-color 140ms ease,
+          box-shadow 140ms ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+      }
+
+      button[aria-pressed="true"] {
+        background: hsl(var(--primary));
+        color: hsl(var(--primary-foreground));
+        border-color: hsl(var(--primary));
+        box-shadow: 0 8px 24px hsl(var(--primary) / 0.22);
+      }
+
+      .summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        color: hsl(var(--muted-foreground));
+        font-size: 0.95rem;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: hsl(var(--secondary));
+        color: hsl(var(--secondary-foreground));
+        border: 1px solid hsl(var(--border));
+      }
+
+      .chip-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: hsl(var(--primary));
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1.08fr 0.92fr;
+        gap: 0;
+      }
+
+      .panel {
+        padding: 24px;
+      }
+
+      .panel + .panel {
+        border-left: 1px solid hsl(var(--border));
+        background: hsl(var(--background) / 0.24);
+      }
+
+      .panel h2 {
+        margin: 0 0 6px;
+        font-size: 1.16rem;
+      }
+
+      .panel-copy {
+        margin: 0 0 18px;
+        color: hsl(var(--muted-foreground));
+        font-size: 0.95rem;
+      }
+
+      .stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      .card {
+        border: 1px solid hsl(var(--border));
+        background: hsl(var(--card));
+        border-radius: calc(var(--radius) - 2px);
+        padding: 16px 16px 15px;
+        box-shadow: 0 12px 24px hsl(20 30% 10% / 0.05);
+      }
+
+      .card-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .card-title {
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
+
+      .badge::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: currentColor;
+      }
+
+      .badge-public {
+        background: hsl(var(--public) / 0.12);
+        color: hsl(var(--public));
+      }
+
+      .badge-developers {
+        background: hsl(var(--developers) / 0.12);
+        color: hsl(var(--developers));
+      }
+
+      .badge-agents {
+        background: hsl(var(--agents) / 0.12);
+        color: hsl(var(--agents));
+      }
+
+      .card p {
+        margin: 0;
+        color: hsl(var(--card-foreground));
+      }
+
+      .meta {
+        margin-top: 12px;
+        color: hsl(var(--muted-foreground));
+        font-size: 0.85rem;
+      }
+
+      .viewer-card {
+        position: relative;
+        overflow: hidden;
+      }
+
+      .viewer-card::after {
+        content: "";
+        position: absolute;
+        inset: auto 0 0;
+        height: 3px;
+        background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)));
+      }
+
+      .empty {
+        border: 1px dashed hsl(var(--border));
+        border-radius: calc(var(--radius) - 2px);
+        padding: 18px;
+        color: hsl(var(--muted-foreground));
+        background: hsl(var(--background) / 0.45);
+      }
+
+      .footer-note {
+        padding: 0 28px 24px;
+        color: hsl(var(--muted-foreground));
+        font-size: 0.92rem;
+      }
+
+      .footer-note strong {
+        color: hsl(var(--foreground));
+      }
+
+      .hidden-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: 8px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: hsl(var(--muted));
+        color: hsl(var(--muted-foreground));
+        font-size: 0.78rem;
+      }
+
+      .hidden-pill::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: hsl(var(--muted-foreground));
+      }
+
+      @media (max-width: 860px) {
+        main {
+          padding: 14px;
+        }
+
+        .hero,
+        .toolbar,
+        .panel,
+        .footer-note {
+          padding-left: 16px;
+          padding-right: 16px;
+        }
+
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .panel + .panel {
+          border-left: 0;
+          border-top: 1px solid hsl(var(--border));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="shell">
+        <header class="hero">
+          <div class="eyebrow">Interactive attachment demo</div>
+          <h1>One note, three audiences, three different results.</h1>
+          <p class="lead">
+            This standalone HTML attachment mirrors the root workspace audiences in
+            <code>Diaryx.md</code>. The left side shows everything the author wrote.
+            The right side shows what a selected audience would actually receive.
+          </p>
+        </header>
+
+        <section class="toolbar" aria-label="Audience switcher">
+          <div class="button-row" id="audience-buttons"></div>
+          <div class="summary">
+            <span class="chip">
+              <span class="chip-dot"></span>
+              <span id="summary-text">Loading demo…</span>
+            </span>
+          </div>
+        </section>
+
+        <section class="layout">
+          <section class="panel">
+            <h2>Author view</h2>
+            <p class="panel-copy">
+              Every block keeps its own audience tag. Nothing is duplicated, and
+              nothing has to be split into separate drafts.
+            </p>
+            <div class="stack" id="author-stack"></div>
+          </section>
+
+          <section class="panel">
+            <h2>
+              Filtered result
+              <span class="hidden-pill" id="hidden-pill">0 hidden</span>
+            </h2>
+            <p class="panel-copy">
+              Change the audience above to see the same note collapse down to only
+              the content meant for that reader.
+            </p>
+            <div class="stack" id="viewer-stack"></div>
+          </section>
+        </section>
+
+        <p class="footer-note">
+          <strong>Theme-aware when embedded:</strong> if Diaryx sends host theme
+          variables into the iframe, this demo applies them live so it can match
+          the current workspace palette and typography.
+        </p>
+      </section>
+    </main>
+
+    <script>
+      const audiences = [
+        {
+          id: "public",
+          label: "Public",
+          tone: "badge-public",
+          description: "Everyone can see these blocks.",
+        },
+        {
+          id: "developers",
+          label: "Developers",
+          tone: "badge-developers",
+          description: "Public + implementation details.",
+        },
+        {
+          id: "agents",
+          label: "Agents",
+          tone: "badge-agents",
+          description: "Public + developer notes + agent-only instructions.",
+        },
+      ];
+
+      const blocks = [
+        {
+          title: "Homepage launch",
+          audience: "public",
+          visibleTo: ["public", "developers", "agents"],
+          copy:
+            "Diaryx is launching a clearer homepage that explains audience filtering in plain language and points new writers straight into the app.",
+        },
+        {
+          title: "Why this matters",
+          audience: "public",
+          visibleTo: ["public", "developers", "agents"],
+          copy:
+            "The note stays readable for everyone, but each extra layer can stay hidden until the audience actually needs it.",
+        },
+        {
+          title: "Implementation detail",
+          audience: "developers",
+          visibleTo: ["developers", "agents"],
+          copy:
+            "The editor now preserves HTML attachment MIME types correctly, so interactive demos can render inline instead of falling back to a sandboxed download prompt.",
+        },
+        {
+          title: "Theme handoff",
+          audience: "developers",
+          visibleTo: ["developers", "agents"],
+          copy:
+            "Attachment HTML iframes can listen for host theme updates and apply Diaryx CSS variables, which keeps demos visually aligned with the active workspace theme.",
+        },
+        {
+          title: "Agent instruction",
+          audience: "agents",
+          visibleTo: ["agents"],
+          copy:
+            "Before making changes, read the relevant docs, preserve user work, and update the docs afterward so future edits stay grounded in the actual behavior.",
+        },
+      ];
+
+      const state = {
+        audience: "public",
+      };
+
+      const root = document.documentElement;
+      const audienceButtons = document.getElementById("audience-buttons");
+      const authorStack = document.getElementById("author-stack");
+      const viewerStack = document.getElementById("viewer-stack");
+      const summaryText = document.getElementById("summary-text");
+      const hiddenPill = document.getElementById("hidden-pill");
+
+      function applyHostTheme(message) {
+        if (!message || typeof message !== "object") return;
+        if (message.theme === "dark" || message.theme === "light") {
+          root.setAttribute("data-theme", message.theme);
+        }
+
+        const cssVars = message.cssVars;
+        if (!cssVars || typeof cssVars !== "object") return;
+        for (const [name, value] of Object.entries(cssVars)) {
+          if (typeof value === "string" && name.startsWith("--")) {
+            root.style.setProperty(name, value);
+          }
+        }
+      }
+
+      function audienceMeta(id) {
+        return audiences.find((audience) => audience.id === id) ?? audiences[0];
+      }
+
+      function renderBadge(id, prefix) {
+        const meta = audienceMeta(id);
+        return `
+          <span class="badge ${meta.tone}">
+            ${prefix ? `${prefix}: ` : ""}${meta.label}
+          </span>
+        `;
+      }
+
+      function renderAuthorCards() {
+        authorStack.innerHTML = blocks
+          .map(
+            (block) => `
+              <article class="card">
+                <div class="card-head">
+                  <h3 class="card-title">${block.title}</h3>
+                  <div class="badge-row">
+                    ${renderBadge(block.audience, "Visible to")}
+                  </div>
+                </div>
+                <p>${block.copy}</p>
+                <div class="meta">${audienceMeta(block.audience).description}</div>
+              </article>
+            `,
+          )
+          .join("");
+      }
+
+      function visibleBlocks() {
+        return blocks.filter((block) => block.visibleTo.includes(state.audience));
+      }
+
+      function renderViewerCards() {
+        const visible = visibleBlocks();
+        const hiddenCount = blocks.length - visible.length;
+
+        summaryText.textContent = `${audienceMeta(state.audience).label} sees ${visible.length} of ${blocks.length} blocks.`;
+        hiddenPill.textContent = `${hiddenCount} hidden`;
+
+        if (visible.length === 0) {
+          viewerStack.innerHTML = `
+            <div class="empty">
+              Nothing is visible to this audience yet. Add a block tagged for
+              ${audienceMeta(state.audience).label.toLowerCase()}.
+            </div>
+          `;
+          return;
+        }
+
+        viewerStack.innerHTML = visible
+          .map(
+            (block) => `
+              <article class="card viewer-card">
+                <div class="card-head">
+                  <h3 class="card-title">${block.title}</h3>
+                  <div class="badge-row">
+                    ${renderBadge(block.audience, "")}
+                  </div>
+                </div>
+                <p>${block.copy}</p>
+              </article>
+            `,
+          )
+          .join("");
+      }
+
+      function renderButtons() {
+        audienceButtons.innerHTML = audiences
+          .map(
+            (audience) => `
+              <button
+                type="button"
+                data-audience="${audience.id}"
+                aria-pressed="${audience.id === state.audience ? "true" : "false"}"
+              >
+                ${audience.label}
+              </button>
+            `,
+          )
+          .join("");
+
+        for (const button of audienceButtons.querySelectorAll("button")) {
+          button.addEventListener("click", () => {
+            state.audience = button.getAttribute("data-audience") || "public";
+            render();
+          });
+        }
+      }
+
+      function render() {
+        renderButtons();
+        renderAuthorCards();
+        renderViewerCards();
+      }
+
+      window.addEventListener("message", (event) => {
+        const data = event.data;
+        if (!data || typeof data !== "object") return;
+        if (data.type === "init" || data.type === "theme-update") {
+          applyHostTheme(data);
+        }
+      });
+
+      render();
+    </script>
+  </body>
+</html>

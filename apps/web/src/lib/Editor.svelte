@@ -68,7 +68,9 @@
   import { isTauri } from "$lib/backend/interface";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
+  import { getThemeStore } from "@/models/stores";
   import { getLinkFormatStore } from "$lib/stores/linkFormatStore.svelte";
+  import { getAppearanceStore } from "$lib/stores/appearance.svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import type { TreeNode } from "$lib/backend";
   import { shouldKeepBubbleMenuVisible } from "./editorMenuVisibility";
@@ -77,6 +79,8 @@
   const useNativeToolbar = isTauri() && isIOS();
   const nativeLinkFormatStore = useNativeToolbar ? getLinkFormatStore() : null;
   const pluginStore = getPluginStore();
+  const themeStore = getThemeStore();
+  const appearanceStore = getAppearanceStore();
 
   interface Props {
     content?: string;
@@ -150,6 +154,24 @@
   let lastPlaceholder: string | null = null;
   let lastPluginKey: string | null = null;
 
+  const HTML_ATTACHMENT_CSS_VAR_NAMES = [
+    "--background", "--foreground",
+    "--card", "--card-foreground",
+    "--popover", "--popover-foreground",
+    "--primary", "--primary-foreground",
+    "--secondary", "--secondary-foreground",
+    "--muted", "--muted-foreground",
+    "--accent", "--accent-foreground",
+    "--destructive",
+    "--border", "--input", "--ring", "--radius",
+    "--sidebar", "--sidebar-foreground",
+    "--sidebar-primary", "--sidebar-primary-foreground",
+    "--sidebar-accent", "--sidebar-accent-foreground",
+    "--sidebar-border", "--sidebar-ring",
+    "--editor-font-family", "--editor-font-size",
+    "--editor-line-height", "--editor-content-max-width",
+  ] as const;
+
   function getPluginExtensionKey(): string {
     if (isTauri()) {
       return JSON.stringify(
@@ -170,6 +192,41 @@
     templateContextDispatchErrorShown = false;
     if (typeof globalThis !== 'undefined') {
       (globalThis as any).__diaryx_tiptapEditor = null;
+    }
+  }
+
+  function collectHtmlAttachmentCssVars(): Record<string, string> {
+    const computed = getComputedStyle(document.documentElement);
+    const vars: Record<string, string> = {};
+    for (const name of HTML_ATTACHMENT_CSS_VAR_NAMES) {
+      const value = computed.getPropertyValue(name).trim();
+      if (value) vars[name] = value;
+    }
+    return vars;
+  }
+
+  function postThemeToHtmlAttachmentIframe(
+    iframe: HTMLIFrameElement,
+    type: "init" | "theme-update",
+  ) {
+    const win = iframe.contentWindow;
+    if (!win) return;
+    win.postMessage(
+      {
+        type,
+        theme: themeStore.isDark ? "dark" : "light",
+        cssVars: collectHtmlAttachmentCssVars(),
+        entry: entryPath ? { path: entryPath } : null,
+      },
+      "*",
+    );
+  }
+
+  function postThemeToHtmlAttachmentIframes(type: "init" | "theme-update" = "theme-update") {
+    if (!element) return;
+    const iframes = element.querySelectorAll<HTMLIFrameElement>("iframe.editor-html-island");
+    for (const iframe of iframes) {
+      postThemeToHtmlAttachmentIframe(iframe, type);
     }
   }
 
@@ -421,6 +478,9 @@
               const iframe = document.createElement("iframe");
               iframe.sandbox.add("allow-scripts");
               iframe.className = "editor-image editor-html-island";
+              iframe.addEventListener("load", () => {
+                postThemeToHtmlAttachmentIframe(iframe, "init");
+              });
               if (alt) iframe.title = alt;
               iframe.style.width = "100%";
               iframe.style.height = node.attrs.height
@@ -1440,6 +1500,13 @@
       };
     }
   }
+
+  $effect(() => {
+    const isDark = themeStore.isDark;
+    void isDark;
+    void appearanceStore.appearance;
+    postThemeToHtmlAttachmentIframes("theme-update");
+  });
 
   function recoverInvalidEditorState(): boolean {
     if (!editor || recoveringInvalidContent || invalidContentRecoveryAttempted) {

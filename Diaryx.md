@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.4.2
-updated: 2026-04-04T12:02:12-06:00
+updated: 2026-04-08T21:37:31-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -97,6 +97,7 @@ links:
 attachments:
 - '[icon-dark.png](/_attachments/icon-dark.png.md)'
 - '[icon.png](/_attachments/icon.png.md)'
+- '[Audience Filtering Demo](/_attachments/audience-filter-demo.html.md)'
 ---
 <div>
   <p align="center">
@@ -123,31 +124,11 @@ Most writing tools force a choice. Either your writing is private, locked away w
 
 Diaryx gives you that middle ground. Write once, then decide which parts are for which people.
 
+![Audience Filtering Demo](Users/adamharris/Documents/diaryx-repos/diaryx/_attachments/audience-filter-demo.html)
+
 ### How it works: label a file, a folder, or a paragraph.
 
 Tag any section of your writing with an audience — just you, family, close friends, or everyone. When you share, each person sees only what's meant for them.[^1]
-
-> Public:
->
->
->
-> We're launching the redesigned homepage next week. The new layout prioritizes clarity and puts the product demo front and center.
->
->
->
-> ~~Team only:~~
->
->
->
-> ~~We're still waiting on final assets from the design contractor. If they slip past Wednesday, we'll need a fallback plan — Sara has a simplified version ready.~~
->
->
->
-> ||Private note:||
->
->
->
->  ||I'm not confident the contractor will deliver on time. Starting to think we should have hired in-house for this. Lesson for next quarter.||
 
 ### We never hold your words hostage.
 
@@ -169,4 +150,4 @@ Read more:
 - See the [Diaryx Roadmap](/ROADMAP.md)
 - Read about the [Diaryx Philosophy](/PHILOSOPHY.md)
 
-[^1]: (editor’s note: a better filtering demo is forthcoming)
+[^1]: Try the [interactive audience filtering demo](_attachments/audience-filter-demo.html).

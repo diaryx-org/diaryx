@@ -157,6 +157,10 @@ Inline HTML attachment previews now also default to a taller embedded iframe
 viewport (`420px`, with an explicit node height still taking precedence) so
 full-page documents do not appear as an empty strip when their content starts
 below the top fold.
+Those HTML attachment iframes now also receive the same host-driven `init` /
+`theme-update` message shape used by plugin iframes, including current Diaryx
+CSS variables, so standalone HTML demos can adapt to the active workspace
+theme when embedded in the editor.
 If an older in-memory editor state still contains a root-level inline image
 node from the previous buggy insert path, `Editor.svelte` now normalizes that
 shape back into a paragraph-wrapped image during invalid-content recovery

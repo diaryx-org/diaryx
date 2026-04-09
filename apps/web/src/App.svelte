@@ -96,6 +96,47 @@
   import { getProviderDisplayLabel } from "$lib/sync/builtinProviders";
   import { linkWorkspace, unlinkWorkspace } from "$lib/sync/workspaceProviderService";
 
+  type StartupPhaseMeasurement = {
+    label: string;
+    elapsedMs: number;
+  };
+
+  function getTimingNow(): number {
+    return typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+  }
+
+  function getElapsedMs(startedAt: number): number {
+    return Math.round(getTimingNow() - startedAt);
+  }
+
+  function createStartupTracer(prefix: string) {
+    const startedAt = getTimingNow();
+    const phases: StartupPhaseMeasurement[] = [];
+
+    async function measure<T>(label: string, work: () => Promise<T>): Promise<T> {
+      const phaseStartedAt = getTimingNow();
+      try {
+        return await work();
+      } finally {
+        const elapsedMs = getElapsedMs(phaseStartedAt);
+        phases.push({ label, elapsedMs });
+        console.info(`[${prefix}] ${label}`, { elapsedMs });
+      }
+    }
+
+    function logSummary(status: string, extra: Record<string, unknown> = {}): void {
+      console.info(`[${prefix}] ${status}`, {
+        totalElapsedMs: getElapsedMs(startedAt),
+        phases: [...phases].sort((a, b) => b.elapsedMs - a.elapsedMs),
+        ...extra,
+      });
+    }
+
+    return { measure, logSummary };
+  }
+
   /** Dispatch a sync sub-command (SyncPull, SyncPush, SyncStatus) to the primary linked provider. */
   async function dispatchPluginSyncCommand(
     command: string,
@@ -596,6 +637,10 @@
   let activeLocalWorkspaceId = $derived(
     authState.activeWorkspaceId ?? getCurrentWorkspaceId(),
   );
+  const PREVIEW_AUDIENCE_UNSET = Symbol("preview-audience-unset");
+  let lastPreviewAudience = $state<string | null | typeof PREVIEW_AUDIENCE_UNSET>(
+    PREVIEW_AUDIENCE_UNSET,
+  );
 
   // ========================================================================
   // Non-store state (component-specific, not shared)
@@ -890,9 +935,16 @@
 
   // Refresh the file tree when the audience preview filter changes
   $effect(() => {
-    void templateContextStore.previewAudience; // track reactive dependency
-    // Skip the initial run (before workspace is loaded)
+    const previewAudience = templateContextStore.previewAudience;
     if (!api || !backend) return;
+    if (lastPreviewAudience === PREVIEW_AUDIENCE_UNSET) {
+      lastPreviewAudience = previewAudience;
+      return;
+    }
+    if (lastPreviewAudience === previewAudience) {
+      return;
+    }
+    lastPreviewAudience = previewAudience;
     refreshTree();
   });
 
@@ -979,76 +1031,80 @@
       }
     }
 
-    // Kick off independent init work in parallel:
-    // - Auth validation (HTTP call to server)
-    // - Editor component dynamic import
-    // - OPFS workspace discovery (filesystem scan)
-    const [, editorModule] = await Promise.all([
-      (async () => {
-        // Initialize auth state - if user was previously logged in,
-        // this will validate their token and enable collaboration automatically
-        await initAuth();
-
-        // Check for magic link token in URL (auto-verify without wizard)
-        // This must happen AFTER initAuth() so the auth service is initialized
-        if (typeof window !== "undefined") {
-          const params = new URLSearchParams(window.location.search);
-          const token = params.get("token");
-          if (token) {
-            // Clear the token from URL immediately to prevent double verification
-            const url = new URL(window.location.href);
-            url.searchParams.delete("token");
-            window.history.replaceState({}, "", url.toString());
-
-            // If no server URL is configured, set the default before verifying
-            // This handles the case where user clicks magic link in a new browser/tab
-            const serverUrl = localStorage.getItem("diaryx_sync_server_url");
-            if (!serverUrl) {
-              setServerUrl("https://app.diaryx.org/api");
-            }
-            // Verify automatically and wait for completion before continuing
-            await handleMagicLinkToken(token);
-          }
-        }
-
-        // Check for Stripe checkout result in URL
-        if (typeof window !== "undefined") {
-          const params = new URLSearchParams(window.location.search);
-          const checkoutResult = params.get("checkout");
-          if (checkoutResult) {
-            const url = new URL(window.location.href);
-            url.searchParams.delete("checkout");
-            window.history.replaceState({}, "", url.toString());
-
-            if (checkoutResult === "success") {
-              // Poll for tier update — the webhook often arrives after the redirect
-              let upgraded = false;
-              for (let i = 0; i < 10; i++) {
-                await refreshUserInfo();
-                if (getAuthState().tier === "plus") {
-                  upgraded = true;
-                  break;
-                }
-                await new Promise((r) => setTimeout(r, 1500));
-              }
-              if (upgraded) {
-                toast.success("Welcome to Diaryx Plus!", {
-                  description: "Your subscription is now active.",
-                });
-              } else {
-                toast.info("Payment received!", {
-                  description: "Your subscription is being activated. Please refresh in a moment.",
-                });
-              }
-            }
-          }
-        }
-      })(),
-      import("./lib/Editor.svelte"),
-      discoverOpfsWorkspaces(),
-    ]);
+    const startupTracer = createStartupTracer("WorkspaceStartup");
+    let startupStatus = "failed";
+    let startupWorkspaceId: string | null = null;
 
     try {
+      // Kick off independent init work in parallel:
+      // - Auth validation (HTTP call to server)
+      // - Editor component dynamic import
+      // - OPFS workspace discovery (filesystem scan)
+      const [, editorModule] = await Promise.all([
+        startupTracer.measure("auth bootstrap", async () => {
+          // Initialize auth state - if user was previously logged in,
+          // this will validate their token and enable collaboration automatically
+          await initAuth();
+
+          // Check for magic link token in URL (auto-verify without wizard)
+          // This must happen AFTER initAuth() so the auth service is initialized
+          if (typeof window !== "undefined") {
+            const params = new URLSearchParams(window.location.search);
+            const token = params.get("token");
+            if (token) {
+              // Clear the token from URL immediately to prevent double verification
+              const url = new URL(window.location.href);
+              url.searchParams.delete("token");
+              window.history.replaceState({}, "", url.toString());
+
+              // If no server URL is configured, set the default before verifying
+              // This handles the case where user clicks magic link in a new browser/tab
+              const serverUrl = localStorage.getItem("diaryx_sync_server_url");
+              if (!serverUrl) {
+                setServerUrl("https://app.diaryx.org/api");
+              }
+              // Verify automatically and wait for completion before continuing
+              await handleMagicLinkToken(token);
+            }
+          }
+
+          // Check for Stripe checkout result in URL
+          if (typeof window !== "undefined") {
+            const params = new URLSearchParams(window.location.search);
+            const checkoutResult = params.get("checkout");
+            if (checkoutResult) {
+              const url = new URL(window.location.href);
+              url.searchParams.delete("checkout");
+              window.history.replaceState({}, "", url.toString());
+
+              if (checkoutResult === "success") {
+                // Poll for tier update — the webhook often arrives after the redirect
+                let upgraded = false;
+                for (let i = 0; i < 10; i++) {
+                  await refreshUserInfo();
+                  if (getAuthState().tier === "plus") {
+                    upgraded = true;
+                    break;
+                  }
+                  await new Promise((r) => setTimeout(r, 1500));
+                }
+                if (upgraded) {
+                  toast.success("Welcome to Diaryx Plus!", {
+                    description: "Your subscription is now active.",
+                  });
+                } else {
+                  toast.info("Payment received!", {
+                    description: "Your subscription is being activated. Please refresh in a moment.",
+                  });
+                }
+              }
+            }
+          }
+        }),
+        startupTracer.measure("editor import", () => import("./lib/Editor.svelte")),
+        startupTracer.measure("discover OPFS workspaces", () => discoverOpfsWorkspaces()),
+      ]);
+
       Editor = editorModule.default;
 
       // Check if any workspaces exist before proceeding
@@ -1071,13 +1127,13 @@
           } catch (e) {
             console.error("[App] E2E onboarding bypass failed:", e);
             showWelcomeScreen = true;
-            entryStore.setLoading(false);
+            startupStatus = "welcome_screen";
             return;
           }
         } else {
           // No workspaces exist — show welcome/onboarding screen
           showWelcomeScreen = true;
-          entryStore.setLoading(false);
+          startupStatus = "welcome_screen";
           return;
         }
       }
@@ -1093,7 +1149,7 @@
         const localWs = getLocalWorkspace(currentWsId ?? '');
         if (!localWs) {
           showWelcomeScreen = true;
-          entryStore.setLoading(false);
+          startupStatus = "welcome_screen";
           return;
         }
         wsId = localWs.id;
@@ -1102,7 +1158,11 @@
       // Save for FSA reconnect in case getBackend throws FsaGestureRequiredError
       fsaReconnectWsId = wsId;
       fsaReconnectWsName = wsName;
-      const backendInstance = await getBackend(wsId, wsName, wsId ? getWorkspaceStorageType(wsId) : undefined);
+      startupWorkspaceId = wsId ?? null;
+      const backendInstance = await startupTracer.measure(
+        "backend init",
+        () => getBackend(wsId, wsName, wsId ? getWorkspaceStorageType(wsId) : undefined),
+      );
       workspaceStore.setBackend(backendInstance);
       void checkForAppUpdatesInBackground(backendInstance);
 
@@ -1110,6 +1170,26 @@
 
       // Initialize filesystem event subscription for automatic UI updates
       cleanupEventSubscription = initEventSubscription(backendInstance);
+
+      // When background plugin loading completes, refresh the plugin store
+      // and re-open the current entry so plugin-dependent rendering
+      // (highlighting, spoilers) and UI contributions take effect.
+      if (backendInstance.onPluginsReady) {
+        const unsubPlugins = backendInstance.onPluginsReady(async () => {
+          console.log('[App] Plugins ready, refreshing plugin store and re-opening entry');
+          try {
+            await getPluginStore().init(apiInstance);
+          } catch (e) {
+            console.warn('[App] Failed to refresh plugin store after plugins-ready:', e);
+          }
+          if (currentEntry) {
+            await openEntry(currentEntry.path);
+          }
+        });
+        // Clean up on workspace switch
+        const prevCleanup = cleanupEventSubscription;
+        cleanupEventSubscription = () => { unsubPlugins(); prevCleanup(); };
+      }
 
       rustApi = null;
 
@@ -1120,108 +1200,128 @@
       // Run plugin manifest fetch and tree refresh in parallel — both are
       // independent backend calls that don't depend on each other.
       await Promise.all([
-        getPluginStore().init(apiInstance),
-        refreshTree(),
+        startupTracer.measure("plugin manifest init", () => getPluginStore().init(apiInstance)),
+        startupTracer.measure("initial refreshTree", () => refreshTree()),
       ]);
+
+      // Open the root entry immediately — the editor doesn't need config
+      // hydration to render. Run config hydration in parallel.
+      let openEntryPromise: Promise<void> | undefined;
+      if (tree && !currentEntry) {
+        workspaceStore.expandNode(tree.path);
+        openEntryPromise = openEntry(tree.path);
+      }
 
       // Hydrate view preferences from workspace config (stored in root index
       // frontmatter) so they travel with the workspace instead of localStorage.
-      const workspaceRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
-        tree?.path ?? null,
+      const workspaceRootIndexPath = await startupTracer.measure(
+        "resolve workspace root index",
+        () => apiInstance.resolveWorkspaceRootIndexPath(tree?.path ?? null),
       );
       if (workspaceRootIndexPath) {
         try {
-          const wsConfig = await apiInstance.getWorkspaceConfig(workspaceRootIndexPath);
-          workspaceStore.hydrateDisplaySettings(wsConfig, async (field, value) => {
-            try {
-              const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
-                tree?.path ?? null,
-              );
-              if (!nextRootIndexPath) return;
-              await apiInstance.setWorkspaceConfig(nextRootIndexPath, field, value);
-            } catch (e) {
-              console.warn('[App] Failed to persist display setting:', field, e);
-            }
-          });
-
-          // Hydrate theme mode
-          themeStore.hydrateThemeMode(wsConfig.theme_mode, async (mode) => {
-            try {
-              const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
-                tree?.path ?? null,
-              );
-              if (!nextRootIndexPath) return;
-              await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'theme_mode', mode);
-            } catch (e) {
-              console.warn('[App] Failed to persist theme_mode:', e);
-            }
-          });
-
-          appearanceStore.hydrateWorkspaceTheme(
-            {
-              presetId: wsConfig.theme_preset,
-              accentHue: wsConfig.theme_accent_hue,
-            },
-            async ({ presetId, accentHue }) => {
+          await startupTracer.measure("hydrate workspace config", async () => {
+            const wsConfig = await apiInstance.getWorkspaceConfig(workspaceRootIndexPath);
+            workspaceStore.hydrateDisplaySettings(wsConfig, async (field, value) => {
               try {
                 const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
                   tree?.path ?? null,
                 );
                 if (!nextRootIndexPath) return;
-                await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'theme_preset', presetId);
-                await apiInstance.setWorkspaceConfig(
-                  nextRootIndexPath,
-                  'theme_accent_hue',
-                  accentHue === null ? 'null' : JSON.stringify(accentHue),
-                );
+                await apiInstance.setWorkspaceConfig(nextRootIndexPath, field, value);
               } catch (e) {
-                console.warn('[App] Failed to persist workspace theme selection:', e);
+                console.warn('[App] Failed to persist display setting:', field, e);
               }
-            },
-          );
+            });
 
-          // Hydrate audience colors
-          getAudienceColorStore().hydrate(wsConfig.audience_colors as Record<string, string> | undefined, async (colors) => {
-            try {
-              const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
-                tree?.path ?? null,
+            // Hydrate theme mode
+            themeStore.hydrateThemeMode(wsConfig.theme_mode, async (mode) => {
+              try {
+                const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+                  tree?.path ?? null,
+                );
+                if (!nextRootIndexPath) return;
+                await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'theme_mode', mode);
+              } catch (e) {
+                console.warn('[App] Failed to persist theme_mode:', e);
+              }
+            });
+
+            appearanceStore.hydrateWorkspaceTheme(
+              {
+                presetId: wsConfig.theme_preset,
+                accentHue: wsConfig.theme_accent_hue,
+              },
+              async ({ presetId, accentHue }) => {
+                try {
+                  const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+                    tree?.path ?? null,
+                  );
+                  if (!nextRootIndexPath) return;
+                  await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'theme_preset', presetId);
+                  await apiInstance.setWorkspaceConfig(
+                    nextRootIndexPath,
+                    'theme_accent_hue',
+                    accentHue === null ? 'null' : JSON.stringify(accentHue),
+                  );
+                } catch (e) {
+                  console.warn('[App] Failed to persist workspace theme selection:', e);
+                }
+              },
+            );
+
+            // Hydrate audience colors
+            getAudienceColorStore().hydrate(wsConfig.audience_colors as Record<string, string> | undefined, async (colors) => {
+              try {
+                const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+                  tree?.path ?? null,
+                );
+                if (!nextRootIndexPath) return;
+                await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'audience_colors', JSON.stringify(colors));
+              } catch (e) {
+                console.warn('[App] Failed to persist audience_colors:', e);
+              }
+            });
+
+            // Hydrate disabled plugins
+            getPluginStore().hydrateDisabledPlugins(wsConfig.disabled_plugins, async (disabledIds) => {
+              try {
+                const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
+                  tree?.path ?? null,
+                );
+                if (!nextRootIndexPath) return;
+                await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'disabled_plugins', JSON.stringify(disabledIds));
+              } catch (e) {
+                console.warn('[App] Failed to persist disabled_plugins:', e);
+              }
+            });
+
+            // Re-fetch tree if view prefs changed from defaults
+            if (wsConfig.show_unlinked_files || wsConfig.show_hidden_files) {
+              await startupTracer.measure(
+                "refreshTree after workspace config hydration",
+                () => refreshTree(),
               );
-              if (!nextRootIndexPath) return;
-              await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'audience_colors', JSON.stringify(colors));
-            } catch (e) {
-              console.warn('[App] Failed to persist audience_colors:', e);
             }
           });
-
-          // Hydrate disabled plugins
-          getPluginStore().hydrateDisabledPlugins(wsConfig.disabled_plugins, async (disabledIds) => {
-            try {
-              const nextRootIndexPath = await apiInstance.resolveWorkspaceRootIndexPath(
-                tree?.path ?? null,
-              );
-              if (!nextRootIndexPath) return;
-              await apiInstance.setWorkspaceConfig(nextRootIndexPath, 'disabled_plugins', JSON.stringify(disabledIds));
-            } catch (e) {
-              console.warn('[App] Failed to persist disabled_plugins:', e);
-            }
-          });
-
-          // Re-fetch tree if view prefs changed from defaults
-          if (wsConfig.show_unlinked_files || wsConfig.show_hidden_files) {
-            await refreshTree();
-          }
         } catch (e) {
           console.warn('[App] Failed to load workspace config:', e);
         }
       }
 
-      const bootstrappedIosStarter = await maybeBootstrapIosStarterWorkspace(
-        apiInstance,
-        backendInstance,
-        wsName ?? "My Workspace",
+      const bootstrappedIosStarter = await startupTracer.measure(
+        "maybe bootstrap iOS starter workspace",
+        () => maybeBootstrapIosStarterWorkspace(
+          apiInstance,
+          backendInstance,
+          wsName ?? "My Workspace",
+        ),
       );
       if (bootstrappedIosStarter) {
-        await refreshTree();
+        await startupTracer.measure(
+          "refreshTree after iOS starter bootstrap",
+          () => refreshTree(),
+        );
       }
 
       // Configure permission persistence + provider now that we have a root tree path.
@@ -1235,20 +1335,21 @@
         await reloadWorkspaceScopedBrowserState();
       });
 
-
-      // Expand root and open it by default
-      if (tree && !currentEntry) {
-        workspaceStore.expandNode(tree.path);
-        await openEntry(tree.path);
+      // Wait for the root entry to finish loading (started above, in parallel
+      // with config hydration).
+      if (openEntryPromise) {
+        await startupTracer.measure("open root entry", () => openEntryPromise!);
       }
 
       // Run initial validation in the background — not needed for first render
       runValidation();
+      startupStatus = "completed";
 
     } catch (e) {
       if (e instanceof FsaGestureRequiredError) {
         console.warn("[App] FSA needs user gesture to reconnect:", e);
         fsaNeedsReconnect = true;
+        startupStatus = "fsa_reconnect_required";
         return;
       }
       if (e instanceof BackendError && e.kind === "WorkspaceDirectoryMissing") {
@@ -1257,11 +1358,17 @@
           id: fsaReconnectWsId ?? "",
           name: fsaReconnectWsName ?? "Unknown",
         };
+        startupStatus = "workspace_missing";
         return;
       }
       console.error("[App] Initialization error:", e);
       uiStore.setError(e instanceof Error ? e.message : String(e));
     } finally {
+      startupTracer.logSummary(startupStatus, {
+        workspaceId: startupWorkspaceId,
+        treePath: tree?.path ?? null,
+        currentEntryPath: currentEntry?.path ?? null,
+      });
       entryStore.setLoading(false);
     }
   });
@@ -2315,8 +2422,24 @@
   async function refreshTree() {
     if (!api || !backend) return;
     const audience = templateContextStore.previewAudience ?? undefined;
+    const startedAt = getTimingNow();
+    const treeRefreshStartedAt = getTimingNow();
     await refreshTreeController(api, backend, showUnlinkedFiles, showHiddenFiles, audience);
+    const treeRefreshElapsedMs = getElapsedMs(treeRefreshStartedAt);
+
+    const permissionsReloadStartedAt = getTimingNow();
     await reloadPluginPermissionsConfig();
+    const permissionsReloadElapsedMs = getElapsedMs(permissionsReloadStartedAt);
+
+    console.info("[WorkspaceRefresh] completed", {
+      audience: audience ?? null,
+      showUnlinkedFiles,
+      showHiddenFiles,
+      treePath: workspaceStore.tree?.path ?? null,
+      treeRefreshElapsedMs,
+      permissionsReloadElapsedMs,
+      totalElapsedMs: getElapsedMs(startedAt),
+    });
   }
 
   // Handle import:complete event from ImportSettings

@@ -38,7 +38,7 @@ impl FileSystem for HostFs {
 
     fn list_md_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let prefix = dir.to_string_lossy();
-        let files = host::fs::list_files(&prefix).map_err(|e| Error::new(ErrorKind::Other, e))?;
+        let files = host::fs::list_dir(&prefix).map_err(|e| Error::new(ErrorKind::Other, e))?;
         Ok(files
             .into_iter()
             .filter(|f| f.ends_with(".md"))

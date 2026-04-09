@@ -65,6 +65,16 @@ const EXPECTED_ERROR_KINDS = new Set(["FileRead", "NotFound", "FileNotFound", "I
 const TAURI_INIT_TIMEOUT_MS = 15000;
 const TAURI_INIT_RETRY_DELAYS_MS = [250, 750];
 
+function getTimingNow(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function getElapsedMs(startedAt: number): number {
+  return Math.round(getTimingNow() - startedAt);
+}
+
 async function withTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,
@@ -180,6 +190,7 @@ export class TauriBackend implements Backend {
     this.createWorkspace = value;
   }
   private extismEventUnlisteners: UnlistenFn[] = [];
+  private pluginsReadyCallbacks = new Set<() => void>();
 
   private async invokeInitWithRetry<T>(
     command: "initialize_app" | "reinitialize_workspace",
@@ -220,8 +231,10 @@ export class TauriBackend implements Backend {
     workspaceId?: string,
     _workspaceName?: string,
   ): Promise<void> {
+    const initStartedAt = getTimingNow();
     // Step 1: Dynamically import Tauri API
     console.log("[TauriBackend] Step 1: Importing Tauri API...");
+    const step1StartedAt = getTimingNow();
     let tauriCore;
     let tauriEvent;
     try {
@@ -229,7 +242,9 @@ export class TauriBackend implements Backend {
       tauriEvent = await import("@tauri-apps/api/event");
       this.invoke = tauriCore.invoke;
       this.listen = tauriEvent.listen;
-      console.log("[TauriBackend] Step 1 complete: Tauri API imported");
+      console.log("[TauriBackend] Step 1 complete: Tauri API imported", {
+        elapsedMs: getElapsedMs(step1StartedAt),
+      });
     } catch (e) {
       console.error(
         "[TauriBackend] Step 1 failed: Could not import Tauri API:",
@@ -243,6 +258,7 @@ export class TauriBackend implements Backend {
 
     // Step 2: Initialize workspace
     console.log("[TauriBackend] Step 2: Initializing workspace...");
+    const step2StartedAt = getTimingNow();
     try {
       if (workspaceId) {
         // Switching to a specific workspace — look up its filesystem path
@@ -262,6 +278,7 @@ export class TauriBackend implements Backend {
             "needs_crdt:",
             needsCrdt,
           );
+          const nativeInitStartedAt = getTimingNow();
           const result = await this.invokeInitWithRetry<AppPaths>(
             "reinitialize_workspace",
             {
@@ -270,6 +287,9 @@ export class TauriBackend implements Backend {
               ...(this.createWorkspace ? { create: true } : {}),
             },
           );
+          console.log("[TauriBackend] reinitialize_workspace completed", {
+            elapsedMs: getElapsedMs(nativeInitStartedAt),
+          });
           this.createWorkspace = false;
           this.appPaths = result;
         } else {
@@ -277,15 +297,25 @@ export class TauriBackend implements Backend {
           console.log(
             "[TauriBackend] No workspace path found, using default init",
           );
+          const nativeInitStartedAt = getTimingNow();
           const result = await this.invokeInitWithRetry<AppPaths>("initialize_app");
+          console.log("[TauriBackend] initialize_app completed", {
+            elapsedMs: getElapsedMs(nativeInitStartedAt),
+          });
           this.appPaths = result;
         }
       } else {
         // Default initialization
+        const nativeInitStartedAt = getTimingNow();
         const result = await this.invokeInitWithRetry<AppPaths>("initialize_app");
+        console.log("[TauriBackend] initialize_app completed", {
+          elapsedMs: getElapsedMs(nativeInitStartedAt),
+        });
         this.appPaths = result;
       }
-      console.log("[TauriBackend] Step 2 complete: workspace initialized");
+      console.log("[TauriBackend] Step 2 complete: workspace initialized", {
+        elapsedMs: getElapsedMs(step2StartedAt),
+      });
     } catch (e) {
       console.error("[TauriBackend] Step 2 failed: initialization error:", e);
       // Propagate workspace-missing errors with their specific kind so the
@@ -306,6 +336,7 @@ export class TauriBackend implements Backend {
 
     // Step 3: Validate the result
     console.log("[TauriBackend] Step 3: Validating result...");
+    const step3StartedAt = getTimingNow();
     if (!this.appPaths) {
       throw new BackendError(
         "initialize_app returned null/undefined",
@@ -318,7 +349,9 @@ export class TauriBackend implements Backend {
         "InvalidResult",
       );
     }
-    console.log("[TauriBackend] Step 3 complete: Result validated");
+    console.log("[TauriBackend] Step 3 complete: Result validated", {
+      elapsedMs: getElapsedMs(step3StartedAt),
+    });
     console.log("[TauriBackend] App paths:", this.appPaths);
 
     // Create config object from appPaths (no separate command needed)
@@ -327,9 +360,15 @@ export class TauriBackend implements Backend {
       default_workspace: this.appPaths.default_workspace,
     };
 
+    const eventListenerSetupStartedAt = getTimingNow();
     await this.setupExtismEventListeners();
+    console.log("[TauriBackend] Extism event listeners ready", {
+      elapsedMs: getElapsedMs(eventListenerSetupStartedAt),
+    });
     this.ready = true;
-    console.log("[TauriBackend] Initialization complete!");
+    console.log("[TauriBackend] Initialization complete!", {
+      elapsedMs: getElapsedMs(initStartedAt),
+    });
   }
 
   private formatError(e: unknown): string {
@@ -428,6 +467,19 @@ export class TauriBackend implements Backend {
       },
     );
     this.extismEventUnlisteners.push(unlistenFs);
+
+    // Listen for background plugin loading completion so the UI can re-render
+    // with plugin support (e.g. syntax highlighting, spoiler blocks).
+    const unlistenPlugins = await this.listen<void>(
+      "plugins-ready",
+      () => {
+        console.log("[TauriBackend] Plugins ready, notifying subscribers");
+        for (const callback of this.pluginsReadyCallbacks) {
+          callback();
+        }
+      },
+    );
+    this.extismEventUnlisteners.push(unlistenPlugins);
   }
 
   /**
@@ -505,6 +557,11 @@ export class TauriBackend implements Backend {
 
   offFileSystemEvent(id: number): boolean {
     return this.fsEventCallbacks.delete(id);
+  }
+
+  onPluginsReady(callback: () => void): () => void {
+    this.pluginsReadyCallbacks.add(callback);
+    return () => { this.pluginsReadyCallbacks.delete(callback); };
   }
 
   emitFileSystemEvent(event: FileSystemEvent): void {

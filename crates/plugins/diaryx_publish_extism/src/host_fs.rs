@@ -51,8 +51,7 @@ impl AsyncFileSystem for HostFs {
     fn list_md_files<'a>(&'a self, dir: &'a Path) -> BoxFuture<'a, Result<Vec<PathBuf>>> {
         Box::pin(async move {
             let prefix = dir.to_string_lossy();
-            let files =
-                host::fs::list_files(&prefix).map_err(|e| Error::new(ErrorKind::Other, e))?;
+            let files = host::fs::list_dir(&prefix).map_err(|e| Error::new(ErrorKind::Other, e))?;
             Ok(files
                 .into_iter()
                 .filter(|f| f.ends_with(".md"))

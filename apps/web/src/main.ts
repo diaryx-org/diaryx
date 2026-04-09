@@ -1,6 +1,14 @@
 import "./app.css";
 import { mount } from "svelte";
 
+// Eagerly prime the browser HTTP cache with the WASM binary so the Web Worker
+// gets a cache hit when it initialises the backend. No-op in Tauri (native backend).
+if (!("__TAURI_INTERNALS__" in window)) {
+  import("$lib/wasm/diaryx_wasm_bg.wasm?url")
+    .then((m) => { if (m.default) fetch(m.default); })
+    .catch(() => {});
+}
+
 if (import.meta.env.DEV && typeof window !== "undefined") {
   const { protocol, hostname, port, pathname, search, hash } = window.location;
   const isLocalHttp = protocol === "http:" || protocol === "https:";

@@ -70,7 +70,7 @@ describe('workspaceController.refreshTree', () => {
 
     const api = {
       findRootIndex: vi.fn().mockRejectedValue(new Error('Workspace not found at \'.\'')),
-      getWorkspaceTree: vi.fn(),
+      getWorkspaceTree: vi.fn().mockRejectedValue(new Error('Failed to read file')),
       getFilesystemTree: vi.fn().mockResolvedValue({ path: '.', name: '.', children: [] }),
     };
     const backend = { getWorkspacePath: vi.fn().mockReturnValue('.') };
@@ -93,5 +93,45 @@ describe('workspaceController.refreshTree', () => {
     await refreshTree(api as any, backend as any, false, false);
 
     expect(setTree).toHaveBeenCalledWith(fallbackTree);
+  });
+
+  it('reuses the current tree root before rediscovering the root index', async () => {
+    const workspaceTree = { path: '/workspace/README.md', name: 'Diaryx', children: [] };
+    currentTree = workspaceTree;
+
+    const api = {
+      findRootIndex: vi.fn(),
+      getWorkspaceTree: vi.fn().mockResolvedValue(workspaceTree),
+      getFilesystemTree: vi.fn(),
+    };
+    const backend = { getWorkspacePath: vi.fn().mockReturnValue('/workspace') };
+
+    await refreshTree(api as any, backend as any, false, false);
+
+    expect(api.findRootIndex).not.toHaveBeenCalled();
+    expect(api.getWorkspaceTree).toHaveBeenCalledWith('/workspace/README.md', 2, undefined);
+    expect(setTree).toHaveBeenCalledWith(workspaceTree);
+  });
+
+  it('rediscovers the root index when the remembered root path is stale', async () => {
+    currentTree = { path: '/workspace/README.md', name: 'Diaryx', children: [] };
+    const refreshedTree = { path: '/workspace/Diaryx.md', name: 'Diaryx', children: [] };
+
+    const api = {
+      findRootIndex: vi.fn().mockResolvedValue('/workspace/Diaryx.md'),
+      getWorkspaceTree: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Root index moved'))
+        .mockResolvedValueOnce(refreshedTree),
+      getFilesystemTree: vi.fn(),
+    };
+    const backend = { getWorkspacePath: vi.fn().mockReturnValue('/workspace') };
+
+    await refreshTree(api as any, backend as any, false, false);
+
+    expect(api.findRootIndex).toHaveBeenCalledWith('/workspace');
+    expect(api.getWorkspaceTree).toHaveBeenNthCalledWith(1, '/workspace/README.md', 2, undefined);
+    expect(api.getWorkspaceTree).toHaveBeenNthCalledWith(2, '/workspace/Diaryx.md', 2, undefined);
+    expect(setTree).toHaveBeenCalledWith(refreshedTree);
   });
 });

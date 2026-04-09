@@ -21,6 +21,40 @@ import { toast } from 'svelte-sonner';
 const TREE_INITIAL_DEPTH = 2;
 const TREE_REFRESH_RETRY_DELAYS_MS = [100, 200, 400, 800];
 
+function getTimingNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function getElapsedMs(startedAt: number): number {
+  return Math.round(getTimingNow() - startedAt);
+}
+
+function normalizeTreePath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\.\/+/, '');
+}
+
+function isMarkdownTreePath(path: string | null | undefined): path is string {
+  if (!path) return false;
+  const lastSegment = path.split('/').pop() ?? '';
+  return /\.(md|markdown)$/i.test(lastSegment);
+}
+
+function getKnownRootIndexPath(workspaceDir: string): string | null {
+  const currentTreePath = workspaceStore.tree?.path;
+  if (!isMarkdownTreePath(currentTreePath)) {
+    return null;
+  }
+
+  const normalizedTreePath = normalizeTreePath(currentTreePath);
+  if (getWorkspaceDirectoryPath(normalizedTreePath) !== workspaceDir) {
+    return null;
+  }
+
+  return normalizedTreePath;
+}
+
 function isTransientWorkspaceRefreshError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
@@ -67,6 +101,7 @@ export async function refreshTree(
   showHiddenFiles: boolean,
   audience?: string
 ): Promise<void> {
+  const refreshStartedAt = getTimingNow();
   try {
     // Get the workspace directory from the backend
     const workspaceDir = getWorkspaceDirectoryPath(backend.getWorkspacePath());
@@ -74,24 +109,88 @@ export async function refreshTree(
     if (showUnlinkedFiles) {
       // "Show All Files" mode - use filesystem tree with depth limit
       // (audience filtering not applicable in filesystem view)
+      const filesystemTreeStartedAt = getTimingNow();
       workspaceStore.setTree(
         await api.getFilesystemTree(workspaceDir, showHiddenFiles, TREE_INITIAL_DEPTH)
       );
+      console.info('[WorkspaceController] getFilesystemTree completed', {
+        workspaceDir,
+        showHiddenFiles,
+        elapsedMs: getElapsedMs(filesystemTreeStartedAt),
+      });
     } else {
       // Normal mode - find the actual root index and use hierarchy tree with depth limit
       try {
-        const rootIndexPath = (
-          await retryTransient(() => api.findRootIndex(workspaceDir), 'findRootIndex')
-        ).replace(/^\.\/+/, '');
-        const nextTree = await retryTransient(
-          () => api.getWorkspaceTree(rootIndexPath, TREE_INITIAL_DEPTH, audience),
-          'getWorkspaceTree'
-        );
+        let rootIndexPath = getKnownRootIndexPath(workspaceDir);
+        if (!rootIndexPath) {
+          const rootLookupStartedAt = getTimingNow();
+          rootIndexPath = normalizeTreePath(
+            await retryTransient(() => api.findRootIndex(workspaceDir), 'findRootIndex')
+          );
+          console.info('[WorkspaceController] findRootIndex completed', {
+            workspaceDir,
+            rootIndexPath,
+            elapsedMs: getElapsedMs(rootLookupStartedAt),
+          });
+        }
+        let resolvedRootIndexPath = rootIndexPath;
+
+        let nextTree: TreeNode;
+        try {
+          const workspaceTreeStartedAt = getTimingNow();
+          nextTree = await retryTransient(
+            () => api.getWorkspaceTree(resolvedRootIndexPath, TREE_INITIAL_DEPTH, audience),
+            'getWorkspaceTree'
+          );
+          console.info('[WorkspaceController] getWorkspaceTree completed', {
+            rootIndexPath: resolvedRootIndexPath,
+            audience: audience ?? null,
+            elapsedMs: getElapsedMs(workspaceTreeStartedAt),
+          });
+        } catch (error) {
+          // If the remembered root path went stale (for example after a root rename),
+          // rediscover it once before falling back to the filesystem tree.
+          if (rootIndexPath !== getKnownRootIndexPath(workspaceDir)) {
+            throw error;
+          }
+
+          const rediscoveryStartedAt = getTimingNow();
+          const rediscoveredRootIndexPath = normalizeTreePath(
+            await retryTransient(() => api.findRootIndex(workspaceDir), 'findRootIndex')
+          );
+          console.info('[WorkspaceController] findRootIndex rediscovered root', {
+            workspaceDir,
+            previousRootIndexPath: rootIndexPath,
+            rootIndexPath: rediscoveredRootIndexPath,
+            elapsedMs: getElapsedMs(rediscoveryStartedAt),
+          });
+          if (rediscoveredRootIndexPath === rootIndexPath) {
+            throw error;
+          }
+
+          resolvedRootIndexPath = rediscoveredRootIndexPath;
+          const workspaceTreeRetryStartedAt = getTimingNow();
+          nextTree = await retryTransient(
+            () => api.getWorkspaceTree(resolvedRootIndexPath, TREE_INITIAL_DEPTH, audience),
+            'getWorkspaceTree'
+          );
+          console.info('[WorkspaceController] getWorkspaceTree completed after root rediscovery', {
+            rootIndexPath: resolvedRootIndexPath,
+            audience: audience ?? null,
+            elapsedMs: getElapsedMs(workspaceTreeRetryStartedAt),
+          });
+        }
         workspaceStore.setTree(nextTree);
       } catch (e) {
         console.warn('[WorkspaceController] Could not find root index for tree:', e);
         // Fall back to filesystem tree if no root index found
+        const fallbackTreeStartedAt = getTimingNow();
         const fallbackTree = await api.getFilesystemTree(workspaceDir, showHiddenFiles, TREE_INITIAL_DEPTH);
+        console.info('[WorkspaceController] fallback getFilesystemTree completed', {
+          workspaceDir,
+          showHiddenFiles,
+          elapsedMs: getElapsedMs(fallbackTreeStartedAt),
+        });
         // Keep the existing tree when the fallback is transiently empty
         if (workspaceStore.tree && fallbackTree.children.length === 0) {
           return;
@@ -101,6 +200,14 @@ export async function refreshTree(
     }
   } catch (e) {
     console.error('[WorkspaceController] Error refreshing tree:', e);
+  } finally {
+    console.info('[WorkspaceController] refreshTree completed', {
+      mode: showUnlinkedFiles ? 'filesystem' : 'workspace',
+      audience: audience ?? null,
+      showHiddenFiles,
+      treePath: workspaceStore.tree?.path ?? null,
+      elapsedMs: getElapsedMs(refreshStartedAt),
+    });
   }
 }
 

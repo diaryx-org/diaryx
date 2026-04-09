@@ -529,6 +529,12 @@ export interface Backend {
   offFileSystemEvent?(id: number): boolean;
 
   /**
+   * Register a callback for when background plugin loading completes.
+   * Returns an unsubscribe function.
+   */
+  onPluginsReady?(callback: () => void): () => void;
+
+  /**
    * Manually emit a filesystem event.
    *
    * Primarily used for testing or manual sync scenarios.

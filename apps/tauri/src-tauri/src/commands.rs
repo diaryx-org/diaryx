@@ -574,25 +574,55 @@ fn collect_requested_permissions(plugins_dir: &Path) -> HashMap<String, GuestReq
     };
 
     for entry in entries.flatten() {
-        let wasm_path = entry.path().join("plugin.wasm");
+        let plugin_dir = entry.path();
+        let wasm_path = plugin_dir.join("plugin.wasm");
         if !wasm_path.exists() {
             continue;
         }
 
-        match diaryx_extism::inspect_plugin_wasm_manifest(&wasm_path) {
-            Ok(manifest) => {
-                if let Some(requested) = manifest.requested_permissions
-                    && has_requested_permission_defaults(&requested.defaults)
-                {
-                    requested_permissions.insert(manifest.id, requested);
+        // Try reading from the cached manifest.json first — this avoids
+        // compiling the WASM just to read the manifest, saving seconds of
+        // startup time. Fall back to WASM inspection if the cache is missing
+        // or stale (plugin.wasm newer than manifest.json).
+        let manifest_path = plugin_dir.join("manifest.json");
+        let cache_is_fresh = manifest_path.exists() && {
+            let wasm_mtime = std::fs::metadata(&wasm_path)
+                .and_then(|m| m.modified())
+                .ok();
+            let cache_mtime = std::fs::metadata(&manifest_path)
+                .and_then(|m| m.modified())
+                .ok();
+            matches!((wasm_mtime, cache_mtime), (Some(wt), Some(ct)) if ct >= wt)
+        };
+
+        let manifest = if cache_is_fresh {
+            std::fs::read_to_string(&manifest_path)
+                .ok()
+                .and_then(|json| {
+                    serde_json::from_str::<diaryx_extism::protocol::GuestManifest>(&json).ok()
+                })
+        } else {
+            None
+        };
+
+        let manifest = match manifest {
+            Some(m) => m,
+            None => match diaryx_extism::inspect_plugin_wasm_manifest(&wasm_path) {
+                Ok(m) => m,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to inspect requested permissions for '{}': {e}",
+                        wasm_path.display()
+                    );
+                    continue;
                 }
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to inspect requested permissions for '{}': {e}",
-                    wasm_path.display()
-                );
-            }
+            },
+        };
+
+        if let Some(requested) = manifest.requested_permissions
+            && has_requested_permission_defaults(&requested.defaults)
+        {
+            requested_permissions.insert(manifest.id, requested);
         }
     }
 
@@ -819,7 +849,12 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
     if !plugins_dir.exists() {
         return Vec::new();
     }
+    let t_perm = std::time::Instant::now();
     let requested_permissions = collect_requested_permissions(&plugins_dir);
+    log::info!(
+        "[register_extism] collect_requested_permissions: {:?}",
+        t_perm.elapsed()
+    );
 
     // Use a basic real filesystem for host function file access.
     let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
@@ -847,8 +882,14 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
         storage_quota_bytes: diaryx_extism::DEFAULT_STORAGE_QUOTA_BYTES,
     });
     let mut adapters = Vec::new();
+    let t_load = std::time::Instant::now();
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
         Ok(plugins) => {
+            log::info!(
+                "[register_extism] load_plugins_from_dir: {:?}",
+                t_load.elapsed()
+            );
+            let t_persist = std::time::Instant::now();
             if let Err(e) =
                 persist_requested_permission_defaults(&workspace_root, &requested_permissions)
             {
@@ -858,6 +899,10 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
                     e.message
                 );
             }
+            log::info!(
+                "[register_extism] persist_requested_permission_defaults: {:?}",
+                t_persist.elapsed()
+            );
             use diaryx_core::plugin::Plugin;
             for plugin in plugins {
                 let arc = Arc::new(plugin);
@@ -1997,39 +2042,103 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
         return Ok(cached);
     }
 
-    log::debug!("[execute] No cached Diaryx, creating new instance");
+    log::info!("[get_or_init] No cached Diaryx, creating new instance");
+    let t0 = std::time::Instant::now();
     let workspace_path = {
         let ws_guard = acquire_lock(&app_state.workspace_path)?;
         ws_guard.clone()
     };
 
+    // Phase 1: Create a basic Diaryx instance WITHOUT plugins and cache it
+    // immediately so execute() calls can proceed for core operations (tree,
+    // entries, config) while plugins compile in the background.
     let base_fs = SyncToAsyncFs::new(RealFileSystem);
-    let mut d = Diaryx::new(base_fs);
-    if let Some(ref ws_path) = workspace_path {
-        log::debug!("[execute] Setting workspace root: {:?}", ws_path);
-        d.set_workspace_root(ws_path.clone());
-    }
-    #[cfg(feature = "extism-plugins")]
-    {
-        let adapters = register_extism_plugins(app, &mut d);
-        sync_loaded_plugin_adapters(app, adapters);
-    }
-    let new_diaryx = Arc::new(d);
-
-    let init_failures = new_diaryx.init_plugins().await;
-    for (id, err) in &init_failures {
-        log::error!("Plugin {} failed to init: {}", id, err);
-    }
-
+    let basic_diaryx = {
+        let mut d = Diaryx::new(base_fs);
+        if let Some(ref ws_path) = workspace_path {
+            log::info!("[get_or_init] Setting workspace root: {:?}", ws_path);
+            d.set_workspace_root(ws_path.clone());
+        }
+        Arc::new(d)
+    };
     {
         let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
-        *diaryx_guard = Some(Arc::clone(&new_diaryx));
-        let mut loaded_guard = acquire_lock(&app_state.plugins_loaded_at)?;
-        *loaded_guard = Some(SystemTime::now());
-        log::debug!("[execute] Cached Diaryx instance for future commands");
+        *diaryx_guard = Some(Arc::clone(&basic_diaryx));
+    }
+    log::info!("[get_or_init] Basic instance cached: {:?}", t0.elapsed());
+
+    // Phase 2: Load plugins in the background and swap in a full instance
+    // when ready. Core commands work immediately; plugin commands become
+    // available once this completes.
+    #[cfg(feature = "extism-plugins")]
+    {
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let t1 = std::time::Instant::now();
+            let app_state = app_handle.state::<AppState>();
+            let workspace_path = {
+                let ws_guard = match acquire_lock(&app_state.workspace_path) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        log::error!("[get_or_init:bg] Failed to lock workspace_path: {e:?}");
+                        return;
+                    }
+                };
+                ws_guard.clone()
+            };
+
+            let base_fs = SyncToAsyncFs::new(RealFileSystem);
+            let mut d = Diaryx::new(base_fs);
+            if let Some(ref ws_path) = workspace_path {
+                d.set_workspace_root(ws_path.clone());
+            }
+
+            let adapters = register_extism_plugins(&app_handle, &mut d);
+            log::info!(
+                "[get_or_init:bg] register_extism_plugins: {:?}",
+                t1.elapsed()
+            );
+
+            sync_loaded_plugin_adapters(&app_handle, adapters);
+            let full_diaryx = Arc::new(d);
+
+            let init_failures = full_diaryx.init_plugins().await;
+            log::info!("[get_or_init:bg] init_plugins: {:?}", t1.elapsed());
+            for (id, err) in &init_failures {
+                log::error!("Plugin {} failed to init: {}", id, err);
+            }
+
+            match acquire_lock(&app_state.diaryx) {
+                Ok(mut guard) => {
+                    *guard = Some(full_diaryx);
+                }
+                Err(e) => {
+                    log::error!("[get_or_init:bg] Failed to cache full instance: {e:?}");
+                    return;
+                }
+            }
+            if let Ok(mut loaded_guard) = acquire_lock(&app_state.plugins_loaded_at) {
+                *loaded_guard = Some(SystemTime::now());
+            }
+            log::info!(
+                "[get_or_init:bg] Plugin loading complete: {:?}",
+                t1.elapsed()
+            );
+
+            // Notify the frontend so it can re-render with plugin support
+            // (e.g. syntax highlighting, spoiler blocks).
+            let _ = app_handle.emit("plugins-ready", ());
+        });
     }
 
-    Ok(new_diaryx)
+    // For non-extism builds, just mark loaded time
+    #[cfg(not(feature = "extism-plugins"))]
+    {
+        let mut loaded_guard = acquire_lock(&app_state.plugins_loaded_at)?;
+        *loaded_guard = Some(SystemTime::now());
+    }
+
+    Ok(basic_diaryx)
 }
 
 // ============================================================================
@@ -3141,6 +3250,15 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
         {
             *acquire_lock(&app_state.workspace_access)? = active_access;
         }
+    }
+
+    // Pre-warm the Diaryx instance (loads plugins, sets workspace root) so
+    // the first execute() call gets a cache hit instead of a cold start.
+    if let Err(e) = get_or_init_tauri_diaryx(&app).await {
+        log::warn!(
+            "[initialize_app] Failed to pre-warm Diaryx instance: {:?}",
+            e
+        );
     }
 
     // Determine iCloud state from config

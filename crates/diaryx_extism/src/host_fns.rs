@@ -556,6 +556,13 @@ pub fn register_host_functions(
             host_list_files,
         )
         .with_function(
+            "host_list_dir",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_list_dir,
+        )
+        .with_function(
             "host_workspace_file_set",
             [ValType::I64],
             [ValType::I64],
@@ -877,6 +884,47 @@ fn host_read_binary(
         "data": base64::engine::general_purpose::STANDARD.encode(&bytes)
     })
     .to_string();
+
+    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_list_dir(input: {path}) -> string[] JSON`
+///
+/// Lists direct children of a directory (non-recursive, single level).
+/// Returns paths as strings. This is much cheaper than `host_list_files`
+/// for large workspaces because it never descends into subdirectories.
+fn host_list_dir(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct ListDirInput {
+        path: String,
+    }
+
+    let parsed: ListDirInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_list_dir: invalid input: {e}")))?;
+    let dir_path = HostContext::validate_file_path(&parsed.path)?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_list_dir: lock: {e}")))?;
+    ctx.check_perm(PermissionType::ReadFiles, &dir_path)?;
+    let files = futures_lite::future::block_on(ctx.fs.list_files(Path::new(&dir_path)))
+        .map_err(|e| ExtismError::msg(format!("host_list_dir: {e}")))?;
+
+    let file_strings: Vec<String> = files
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+    let json = serde_json::to_string(&file_strings)
+        .map_err(|e| ExtismError::msg(format!("host_list_dir: serialize: {e}")))?;
 
     plugin.memory_set_val(&mut outputs[0], json.as_str())?;
     Ok(())

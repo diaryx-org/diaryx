@@ -137,17 +137,17 @@
         flex-shrink: 0;
       }
 
-      .tag-public {
+      .tag-family {
         background: hsl(var(--accent) / 0.12);
         color: hsl(var(--accent));
       }
 
-      .tag-developers {
+      .tag-friends {
         background: hsl(var(--primary) / 0.12);
         color: hsl(var(--primary));
       }
 
-      .tag-agents {
+      .tag-private {
         background: hsl(var(--muted-foreground) / 0.15);
         color: hsl(var(--muted-foreground));
       }
@@ -173,29 +173,29 @@
     <script>
       const filters = [
         { id: "all", label: "Everything" },
-        { id: "public", label: "Public" },
-        { id: "developers", label: "Developers" },
-        { id: "agents", label: "Agents" },
+        { id: "family", label: "Family" },
+        { id: "friends", label: "Close friends" },
+        { id: "private", label: "Only me" },
       ];
 
       const entries = [
-        { title: "Homepage launch", snippet: "A clearer homepage that explains audience filtering\u2026",
-          audience: "public", visibleTo: ["public", "developers", "agents"] },
-        { title: "Why this matters", snippet: "Each extra layer stays hidden until the audience needs it\u2026",
-          audience: "public", visibleTo: ["public", "developers", "agents"] },
-        { title: "Implementation detail", snippet: "Editor preserves HTML attachment MIME types for inline rendering\u2026",
-          audience: "developers", visibleTo: ["developers", "agents"] },
-        { title: "Theme handoff", snippet: "Attachment iframes listen for host theme updates via CSS variables\u2026",
-          audience: "developers", visibleTo: ["developers", "agents"] },
-        { title: "Agent instruction", snippet: "Read relevant docs before changes, update docs afterward\u2026",
-          audience: "agents", visibleTo: ["agents"] },
+        { title: "The day we got Murphy", snippet: "Your mom found him at the shelter on a Tuesday. She wasn\u2019t even looking for a dog\u2026",
+          audience: "family", visibleTo: ["family", "friends"] },
+        { title: "Grandma\u2019s apple pie recipe", snippet: "She never wrote it down. I watched her make it enough times to reconstruct it\u2026",
+          audience: "family", visibleTo: ["family", "friends"] },
+        { title: "Thoughts on turning 40", snippet: "I thought I\u2019d have more figured out by now. Instead I just have better questions\u2026",
+          audience: "friends", visibleTo: ["friends"] },
+        { title: "Processing the layoff", snippet: "I didn\u2019t expect it to feel like relief. But sitting in the parking lot afterward\u2026",
+          audience: "private", visibleTo: ["private"] },
+        { title: "Why I chose this career", snippet: "When you\u2019re old enough to wonder about this, I want you to know it wasn\u2019t about money\u2026",
+          audience: "family", visibleTo: ["family", "friends"] },
       ];
 
       const annotations = {
-        all: "Five blocks, three audiences. Each written with a different reader in mind.",
-        public: "Everyone sees the high-level story. Implementation details and agent instructions stay hidden.",
-        developers: "Developers see the public content plus implementation details. Agent-only instructions stay hidden.",
-        agents: "Agents see everything \u2014 public content, developer details, and their own instructions.",
+        all: "Five entries, one week. Each written with a different reader in mind.",
+        family: "Your children see the stories you chose to pass down. The layoff and the birthday reflections stay invisible.",
+        friends: "Close friends see what you chose to share. Not everything \u2014 just the pieces you decided were theirs.",
+        private: "The entries that are only for you. Not synced, not shared. Just yours.",
       };
 
       let current = "all";

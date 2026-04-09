@@ -157,10 +157,23 @@ Inline HTML attachment previews now also default to a taller embedded iframe
 viewport (`420px`, with an explicit node height still taking precedence) so
 full-page documents do not appear as an empty strip when their content starts
 below the top fold.
+Those HTML attachment previews now also honor the image node's stored
+`width` / `height` attrs, so the existing media resize menu can adjust iframe
+embeds and persist the size back into markdown the same way image sizing does.
+When no explicit width is stored, the HTML embed wrapper now expands to the
+full editor column instead of shrink-wrapping to the iframe's intrinsic width.
+When no explicit height is stored, the host still accepts preview-size messages
+from the iframe, but the embed now keeps normal iframe scrolling enabled so
+interactive attachments can stay usable even before the preview bridge reports
+their full content height.
 Those HTML attachment iframes now also receive the same host-driven `init` /
 `theme-update` message shape used by plugin iframes, including current Diaryx
 CSS variables, so standalone HTML demos can adapt to the active workspace
 theme when embedded in the editor.
+Dragged attachment/image nodes now also normalize any accidental workspace
+filesystem prefix back to a workspace-relative `_attachments/...` path during
+drop insertion and markdown serialization, preventing drag-reorder flows from
+persisting local absolute paths into the note body.
 If an older in-memory editor state still contains a root-level inline image
 node from the previous buggy insert path, `Editor.svelte` now normalizes that
 shape back into a paragraph-wrapped image during invalid-content recovery

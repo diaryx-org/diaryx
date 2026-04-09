@@ -7,6 +7,7 @@
 
 import type { Api } from '$lib/backend/api';
 import { isTauri } from '$lib/backend/interface';
+import { parseLinkDisplay } from '$lib/utils/linkParser';
 import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from '$lib/sync/attachmentSyncService';
 
 // ============================================================================
@@ -329,6 +330,79 @@ export function formatMarkdownDestination(path: string): string {
   return /\s/u.test(path) ? `<${path}>` : path;
 }
 
+function normalizeSlashes(path: string): string {
+  return path.replace(/\\/g, '/');
+}
+
+export function stripWorkspacePrefixFromAttachmentPath(
+  rawPath: string,
+  workspacePath?: string | null,
+): string {
+  const normalizedPath = unwrapAngleBracketPath(normalizeSlashes(rawPath).trim());
+  if (!workspacePath) return normalizedPath;
+
+  const normalizedWorkspacePath = normalizeSlashes(workspacePath).replace(/\/+$/, '');
+  if (!normalizedWorkspacePath) return normalizedPath;
+
+  const workspaceRoots = [normalizedWorkspacePath];
+  if (/\/[^/]+\.md$/i.test(normalizedWorkspacePath)) {
+    const lastSlash = normalizedWorkspacePath.lastIndexOf('/');
+    if (lastSlash > 0) {
+      workspaceRoots.unshift(normalizedWorkspacePath.slice(0, lastSlash));
+    }
+  }
+
+  const normalizedCandidate = normalizedPath.replace(/^\/+/, '');
+  for (const root of workspaceRoots) {
+    const normalizedRoot = root.replace(/^\/+/, '').replace(/\/+$/, '');
+    if (!normalizedRoot) continue;
+    if (normalizedCandidate === normalizedRoot) return normalizedPath;
+    if (normalizedCandidate.startsWith(`${normalizedRoot}/`)) {
+      return normalizedCandidate.slice(normalizedRoot.length + 1);
+    }
+  }
+
+  return normalizedPath;
+}
+
+export async function formatDroppedAttachmentPathForEntry(
+  api: Api | null,
+  targetEntryPath: string,
+  attachmentRaw: string,
+  options: {
+    sourceEntryPath?: string;
+    workspacePath?: string | null;
+  } = {},
+): Promise<{ path: string; label: string }> {
+  const parsed = parseLinkDisplay(attachmentRaw);
+  const rawPath = parsed?.path ?? attachmentRaw;
+  const strippedPath = stripWorkspacePrefixFromAttachmentPath(rawPath, options.workspacePath);
+  const fallbackLabel = parsed?.title?.trim() || getFilename(strippedPath) || 'attachment';
+
+  if (!api || !targetEntryPath) {
+    return { path: strippedPath, label: fallbackLabel };
+  }
+
+  try {
+    const canonical = await api.canonicalizeLink(
+      strippedPath,
+      options.sourceEntryPath || targetEntryPath,
+    );
+    const formatted = await api.formatLink(
+      canonical,
+      getFilename(canonical) || fallbackLabel,
+      'plain_relative',
+      targetEntryPath,
+    );
+    return {
+      path: formatted,
+      label: parsed?.title?.trim() || getFilename(canonical) || fallbackLabel,
+    };
+  } catch {
+    return { path: strippedPath, label: fallbackLabel };
+  }
+}
+
 /**
  * Convert bytes to base64 in chunks to avoid stack overflow.
  */
@@ -426,6 +500,114 @@ function getAttachmentAssetPathHint(path: string): string {
   return withoutMarkdownSuffix;
 }
 
+const HTML_ATTACHMENT_PREVIEW_BRIDGE = String.raw`<script data-diaryx-html-preview-bridge>
+(() => {
+  const root = document.documentElement;
+  let resizeObserver = null;
+  let frame = 0;
+
+  const postSize = () => {
+    frame = 0;
+    const doc = document.documentElement;
+    const body = document.body;
+    const height = Math.max(
+      doc ? doc.scrollHeight : 0,
+      doc ? doc.offsetHeight : 0,
+      doc ? doc.clientHeight : 0,
+      body ? body.scrollHeight : 0,
+      body ? body.offsetHeight : 0,
+      body ? body.clientHeight : 0,
+    );
+    if (!height || !window.parent) return;
+    window.parent.postMessage({ type: "diaryx-html-attachment-size", height }, "*");
+  };
+
+  const schedulePostSize = () => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(postSize);
+    });
+  };
+
+  const applyTheme = (message) => {
+    if (!message || typeof message !== "object") return;
+    if (message.theme === "dark" || message.theme === "light") {
+      root.setAttribute("data-theme", message.theme);
+    }
+
+    const cssVars = message.cssVars;
+    if (!cssVars || typeof cssVars !== "object") return;
+    for (const [name, value] of Object.entries(cssVars)) {
+      if (typeof value === "string" && name.startsWith("--")) {
+        root.style.setProperty(name, value);
+      }
+    }
+  };
+
+  window.addEventListener("message", (event) => {
+    const data = event.data;
+    if (!data || typeof data !== "object") return;
+    if (data.type === "init" || data.type === "theme-update") {
+      applyTheme(data);
+      schedulePostSize();
+    }
+  });
+
+  window.addEventListener("load", schedulePostSize);
+  window.addEventListener("resize", schedulePostSize);
+
+  if (document.fonts && typeof document.fonts.ready?.then === "function") {
+    document.fonts.ready.then(schedulePostSize).catch(() => {});
+  }
+
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => {
+      schedulePostSize();
+    });
+    if (document.documentElement) resizeObserver.observe(document.documentElement);
+    if (document.body) resizeObserver.observe(document.body);
+  }
+
+  window.addEventListener("beforeunload", () => {
+    resizeObserver?.disconnect?.();
+  }, { once: true });
+
+  schedulePostSize();
+})();
+<\/script>`;
+
+function injectHtmlAttachmentPreviewBridge(html: string): string {
+  if (html.includes('data-diaryx-html-preview-bridge')) {
+    return html;
+  }
+
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${HTML_ATTACHMENT_PREVIEW_BRIDGE}</body>`);
+  }
+
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, `${HTML_ATTACHMENT_PREVIEW_BRIDGE}</head>`);
+  }
+
+  return `${HTML_ATTACHMENT_PREVIEW_BRIDGE}${html}`;
+}
+
+function createHtmlPreviewBlobFromBytes(bytes: Uint8Array, mimeType: string): Blob {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const html = decoder.decode(bytes);
+  const bridgedHtml = injectHtmlAttachmentPreviewBridge(html);
+  return new Blob([encoder.encode(bridgedHtml)], { type: mimeType });
+}
+
+async function injectHtmlAttachmentPreviewBridgeIntoBlob(
+  blob: Blob,
+  mimeType: string,
+): Promise<Blob> {
+  const html = await blob.text();
+  return new Blob([injectHtmlAttachmentPreviewBridge(html)], { type: mimeType });
+}
+
 async function resolveAttachmentFromPaths(
   api: Api,
   entryPath: string,
@@ -445,7 +627,9 @@ async function resolveAttachmentFromPaths(
     if (signal.aborted) return null;
     const assetPathHint = getAttachmentAssetPathHint(canonicalPath);
     const mimeType = getMimeType(assetPathHint);
-    let blob = new Blob([bytes as unknown as BlobPart], { type: mimeType });
+    let blob = isHtmlFile(assetPathHint)
+      ? createHtmlPreviewBlobFromBytes(bytes, mimeType)
+      : new Blob([bytes as unknown as BlobPart], { type: mimeType });
     if (isHeicFile(assetPathHint)) {
       blob = await convertHeicToJpeg(blob);
       if (signal.aborted) return null;
@@ -473,7 +657,9 @@ async function resolveAttachmentFromPaths(
       const mimeType = getMimeType(assetPathHint);
       let blob = await resp.blob();
       if (signal.aborted) return null;
-      if (blob.type !== mimeType) {
+      if (isHtmlFile(assetPathHint)) {
+        blob = await injectHtmlAttachmentPreviewBridgeIntoBlob(blob, mimeType);
+      } else if (blob.type !== mimeType) {
         blob = new Blob([blob], { type: mimeType });
       }
       if (isHeicFile(assetPathHint)) {
@@ -546,7 +732,9 @@ async function fetchAttachmentBlobFromServer(
     let blob = await response.blob();
     const assetPathHint = getAttachmentAssetPathHint(attachmentPath);
     const mimeType = getMimeType(assetPathHint);
-    if (blob.type !== mimeType) {
+    if (isHtmlFile(assetPathHint)) {
+      blob = await injectHtmlAttachmentPreviewBridgeIntoBlob(blob, mimeType);
+    } else if (blob.type !== mimeType) {
       blob = new Blob([blob], { type: mimeType });
     }
     if (isHeicFile(assetPathHint)) {

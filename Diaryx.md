@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.4.2
-updated: 2026-04-08T21:37:31-06:00
+updated: 2026-04-08T23:09:17-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -124,11 +124,11 @@ Most writing tools force a choice. Either your writing is private, locked away w
 
 Diaryx gives you that middle ground. Write once, then decide which parts are for which people.
 
-![Audience Filtering Demo](Users/adamharris/Documents/diaryx-repos/diaryx/_attachments/audience-filter-demo.html)
-
-### How it works: label a file, a folder, or a paragraph.
+## How it works: label a file, a folder, or a paragraph.
 
 Tag any section of your writing with an audience — just you, family, close friends, or everyone. When you share, each person sees only what's meant for them.[^1]
+
+![Audience Filtering Demo](_attachments/audience-filter-demo.html)
 
 ### We never hold your words hostage.
 

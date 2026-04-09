@@ -13,6 +13,7 @@
   import Image from "@tiptap/extension-image";
   import {
     formatMarkdownDestination,
+    formatDroppedAttachmentPathForEntry,
     getPathForBlobUrl,
     getBlobUrl,
     isVideoFile,
@@ -20,9 +21,9 @@
     isHtmlFile,
     isPreviewableAttachmentKind,
     queueResolveAttachment,
+    stripWorkspacePrefixFromAttachmentPath,
     type AttachmentMediaKind,
   } from "../models/services/attachmentService";
-  import { parseLinkDisplay } from "$lib/utils/linkParser";
   import { Table } from "@tiptap/extension-table";
   import { TableRow } from "@tiptap/extension-table-row";
   import { TableHeader } from "@tiptap/extension-table-header";
@@ -230,6 +231,10 @@
     }
   }
 
+  function clampHtmlAttachmentPreviewHeight(height: number): number {
+    return Math.max(240, Math.min(Math.round(height), 4000));
+  }
+
   /** Walk up from `el` to find the nearest ancestor with overflow scroll/auto. */
   function getScrollParent(el: HTMLElement | null): HTMLElement | Window {
     if (!el || el === document.documentElement) return window;
@@ -406,7 +411,10 @@
           };
         },
         renderMarkdown: (node: any) => {
-          const src = node.attrs?.src ?? "";
+          const src = stripWorkspacePrefixFromAttachmentPath(
+            node.attrs?.src ?? "",
+            workspaceStore.backend?.getWorkspacePath?.() ?? null,
+          );
           let alt = node.attrs?.alt ?? "";
           const title = node.attrs?.title ?? "";
           const width = node.attrs?.width;
@@ -473,11 +481,14 @@
             }
 
             let mediaEl: HTMLElement;
+            let removeHtmlAttachmentListeners: (() => void) | null = null;
 
             if (isHtmlEmbed) {
               const iframe = document.createElement("iframe");
-              iframe.sandbox.add("allow-scripts");
+              iframe.setAttribute("sandbox", "allow-scripts");
               iframe.className = "editor-image editor-html-island";
+              iframe.scrolling = "auto";
+              iframe.style.display = "block";
               iframe.addEventListener("load", () => {
                 postThemeToHtmlAttachmentIframe(iframe, "init");
               });
@@ -505,6 +516,32 @@
               } else {
                 iframe.src = src;
               }
+
+              const handleHtmlAttachmentMessage = (event: MessageEvent) => {
+                if (event.source !== iframe.contentWindow) return;
+                const data = event.data;
+                if (!data || typeof data !== "object") return;
+                if ((data as { type?: string }).type !== "diaryx-html-attachment-size") return;
+                if (typeof node.attrs.height === "number" && Number.isFinite(node.attrs.height)) {
+                  return;
+                }
+
+                const nextHeight = (data as { height?: unknown }).height;
+                const heightValue =
+                  typeof nextHeight === "number"
+                    ? nextHeight
+                    : typeof nextHeight === "string"
+                      ? Number.parseFloat(nextHeight)
+                      : Number.NaN;
+
+                if (!Number.isFinite(heightValue) || heightValue <= 0) return;
+                iframe.style.height = `${clampHtmlAttachmentPreviewHeight(heightValue)}px`;
+              };
+
+              window.addEventListener("message", handleHtmlAttachmentMessage);
+              removeHtmlAttachmentListeners = () => {
+                window.removeEventListener("message", handleHtmlAttachmentMessage);
+              };
               mediaEl = iframe;
             } else if (isVideo) {
               const video = document.createElement("video");
@@ -584,6 +621,13 @@
             // ── Wrapper with selection ring + dropdown ──────────────
             const wrapper = document.createElement("div");
             wrapper.className = "editor-media-wrapper";
+            if (isHtmlEmbed) {
+              wrapper.classList.add("editor-media-wrapper--html");
+              wrapper.style.width =
+                typeof node.attrs.width === "number" && Number.isFinite(node.attrs.width)
+                  ? `${node.attrs.width}px`
+                  : "100%";
+            }
             wrapper.appendChild(mediaEl);
 
             let selected = false;
@@ -695,7 +739,7 @@
                 menu.appendChild(btn);
               }
 
-              // Resize submenu (images only)
+              // Resize submenu (images and HTML embeds)
               if (!isAudio && !isVideo) {
                 const resizeContainer = document.createElement("div");
                 resizeContainer.className = "editor-media-menu-submenu-container";
@@ -720,7 +764,17 @@
                   }
                 }
 
-                const imgEl = mediaEl as HTMLImageElement;
+                const imgEl = mediaEl instanceof HTMLImageElement ? mediaEl : null;
+                const containerWidth =
+                  wrapper.parentElement instanceof HTMLElement
+                    ? Math.round(wrapper.parentElement.getBoundingClientRect().width)
+                    : Math.round(wrapper.getBoundingClientRect().width);
+                const baseWidth =
+                  imgEl?.naturalWidth ||
+                  (typeof node.attrs.width === "number" ? node.attrs.width : null) ||
+                  containerWidth ||
+                  null;
+                const presetHeight = isHtmlEmbed ? (node.attrs.height ?? null) : null;
                 const presets = [
                   { label: "25%", factor: 0.25 },
                   { label: "50%", factor: 0.5 },
@@ -736,12 +790,11 @@
                   presetBtn.addEventListener("mousedown", (e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    const natW = imgEl.naturalWidth;
                     if (preset.factor === 1) {
-                      // Reset to original — clear stored dimensions
+                      // Reset to full-width/default sizing — clear stored dimensions
                       applyResize(null, null);
-                    } else if (natW) {
-                      applyResize(Math.round(natW * preset.factor), null);
+                    } else if (baseWidth) {
+                      applyResize(Math.round(baseWidth * preset.factor), presetHeight);
                     }
                   });
                   submenu.appendChild(presetBtn);
@@ -755,7 +808,7 @@
                 customBtn.addEventListener("mousedown", (e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  const currentW = node.attrs.width || imgEl.naturalWidth || "";
+                  const currentW = node.attrs.width || baseWidth || "";
                   const input = window.prompt(
                     "Enter size (width or widthxheight):",
                     String(currentW),
@@ -892,6 +945,7 @@
               destroy() {
                 removeMenu();
                 document.removeEventListener("mousedown", handleDocClick, true);
+                removeHtmlAttachmentListeners?.();
               },
             };
           };
@@ -1606,11 +1660,21 @@
    * Insert an attachment at the current cursor position, using the appropriate
    * block type for drawing/audio files or a regular image for everything else.
    */
-  export function handleAttachmentDrop(attachmentRaw: string): void {
+  export async function handleAttachmentDrop(
+    attachmentRaw: string,
+    sourceEntryPath?: string,
+  ): Promise<void> {
     if (!editor) return;
-    const parsed = parseLinkDisplay(attachmentRaw);
-    const attachmentPath = parsed?.path ?? attachmentRaw;
-    const filename = attachmentPath.split("/").pop() || "";
+    const { path: attachmentPath, label } = await formatDroppedAttachmentPathForEntry(
+      api,
+      entryPath,
+      attachmentRaw,
+      {
+        sourceEntryPath,
+        workspacePath: workspaceStore.backend?.getWorkspacePath?.() ?? null,
+      },
+    );
+    const filename = attachmentPath.split("/").pop() || label || "";
     const drawingMatch = filename.match(/^drawing-(.+)\.svg$/);
     const audioMatch = filename.match(/^audio-(.+)\.\w+$/);
 
@@ -1628,7 +1692,7 @@
       }).run();
       return;
     }
-    editor.chain().setImage({ src: attachmentPath, alt: filename }).run();
+    editor.chain().setImage({ src: attachmentPath, alt: label || filename }).run();
   }
 
   /**
@@ -1852,7 +1916,8 @@
       } else {
         editor.commands.setTextSelection(editor.state.doc.content.size);
       }
-      handleAttachmentDrop(attachmentRaw);
+      const sourceEntryPath = e.dataTransfer?.getData("text/x-diaryx-source-entry") || undefined;
+      await handleAttachmentDrop(attachmentRaw, sourceEntryPath);
       return;
     }
 
@@ -2104,6 +2169,11 @@
     border-radius: 6px;
     transition: box-shadow 0.15s ease;
     cursor: pointer;
+  }
+
+  :global(.editor-media-wrapper--html) {
+    display: block;
+    width: 100%;
   }
 
   :global(.editor-media-wrapper img),

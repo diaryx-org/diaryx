@@ -27,7 +27,7 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 }
 
 // vi.hoisted runs before vi.mock factories, making these variables available.
-const { editorState, mockEditorInstance, toastErrorSpy } = vi.hoisted(() => {
+const { editorState, mockEditorInstance, toastErrorSpy, workspaceStoreMock } = vi.hoisted(() => {
   const editorState = { createConfig: null as any, createConfigs: [] as any[] };
   const mockEditorInstance = {
     getHTML: vi.fn(() => "<p>test</p>"),
@@ -63,6 +63,10 @@ const { editorState, mockEditorInstance, toastErrorSpy } = vi.hoisted(() => {
     editorState,
     mockEditorInstance,
     toastErrorSpy: vi.fn(),
+    workspaceStoreMock: {
+      currentNode: null,
+      backend: null as { getWorkspacePath?: () => string } | null,
+    },
   };
 });
 
@@ -172,12 +176,37 @@ vi.mock("@tiptap/pm/state", async (importOriginal) => {
 // ── Mock local modules ──────────────────────────────────────────────
 vi.mock("../models/services/attachmentService", () => ({
   formatMarkdownDestination: vi.fn((s: string) => s),
+  formatDroppedAttachmentPathForEntry: vi.fn(async (_api: unknown, _entryPath: string, attachmentRaw: string) => ({
+    path: attachmentRaw,
+    label: attachmentRaw,
+  })),
   getPathForBlobUrl: vi.fn(() => null),
   getBlobUrl: vi.fn(() => null),
   isVideoFile: vi.fn(() => false),
   isAudioFile: vi.fn(() => false),
+  isHtmlFile: vi.fn(() => false),
   isPreviewableAttachmentKind: vi.fn(() => false),
   queueResolveAttachment: vi.fn(async () => null),
+  stripWorkspacePrefixFromAttachmentPath: vi.fn((path: string, workspacePath?: string | null) => {
+    const normalizedPath = path.replace(/\\/g, "/").trim();
+    if (!workspacePath) return normalizedPath;
+    const normalizedWorkspacePath = workspacePath.replace(/\\/g, "/").replace(/\/+$/, "");
+    const roots = [normalizedWorkspacePath];
+    if (/\/[^/]+\.md$/i.test(normalizedWorkspacePath)) {
+      const lastSlash = normalizedWorkspacePath.lastIndexOf("/");
+      if (lastSlash > 0) {
+        roots.unshift(normalizedWorkspacePath.slice(0, lastSlash));
+      }
+    }
+    const candidate = normalizedPath.replace(/^\/+/, "");
+    for (const root of roots) {
+      const normalizedRoot = root.replace(/^\/+/, "").replace(/\/+$/, "");
+      if (candidate.startsWith(`${normalizedRoot}/`)) {
+        return candidate.slice(normalizedRoot.length + 1);
+      }
+    }
+    return normalizedPath;
+  }),
 }));
 
 vi.mock("$lib/utils/linkParser", () => ({
@@ -253,7 +282,7 @@ vi.mock("$lib/hooks/useMobile.svelte", () => ({
   isIOS: vi.fn(() => false),
 }));
 vi.mock("@/models/stores/workspaceStore.svelte", () => ({
-  workspaceStore: { currentNode: null },
+  workspaceStore: workspaceStoreMock,
 }));
 vi.mock("$lib/stores/linkFormatStore.svelte", () => ({
   getLinkFormatStore: vi.fn(() => ({})),
@@ -292,6 +321,7 @@ describe("Editor.svelte", () => {
     vi.clearAllMocks();
     editorState.createConfig = null;
     editorState.createConfigs = [];
+    workspaceStoreMock.backend = null;
     mockEditorInstance.commands.setContent.mockReset();
     mockEditorInstance.commands.setContent.mockImplementation(() => {});
     mockEditorInstance.view.dispatch.mockReset();
@@ -611,6 +641,148 @@ describe("Editor.svelte", () => {
       "Could not refresh editor decorations",
       expect.anything(),
     );
+  });
+
+  it("applies stored width and height attrs to HTML attachment iframes", async () => {
+    render(EditorComponent, {
+      props: { readonly: true, entryPath: "Diaryx.md" },
+    });
+
+    await waitForEditorCreation();
+
+    const imageExtension = await import("@tiptap/extension-image");
+    const attachmentService = await import("../models/services/attachmentService");
+    vi.mocked(attachmentService.isHtmlFile).mockReturnValue(true);
+
+    const imageConfig = vi.mocked(imageExtension.default.extend).mock.calls.at(-1)?.[0] as
+      | { addNodeView: () => (args: any) => any }
+      | undefined;
+    expect(imageConfig).toBeTruthy();
+    if (!imageConfig) {
+      throw new Error("Image extension config was not captured");
+    }
+
+    const nodeViewFactory = imageConfig.addNodeView();
+    const nodeView = nodeViewFactory({
+      node: {
+        attrs: {
+          src: "_attachments/audience-filter-demo.html",
+          alt: "Audience Filtering Demo",
+          title: "",
+          width: 560,
+          height: 360,
+        },
+        nodeSize: 1,
+      },
+      HTMLAttributes: {},
+      getPos: () => 0,
+      editor: mockEditorInstance,
+    });
+
+    const iframe = nodeView.dom.querySelector("iframe");
+    expect(nodeView.dom.classList.contains("editor-media-wrapper--html")).toBe(true);
+    expect(nodeView.dom.style.width).toBe("560px");
+    expect(iframe).toBeTruthy();
+    expect(iframe?.scrolling).toBe("auto");
+    expect(iframe?.style.width).toBe("100%");
+    expect(iframe?.style.height).toBe("360px");
+
+    nodeView.destroy();
+  });
+
+  it("serializes workspace-absolute HTML attachment paths back to workspace-relative markdown", async () => {
+    workspaceStoreMock.backend = {
+      getWorkspacePath: () => "/Users/adamharris/Documents/diaryx-repos/diaryx/Diaryx.md",
+    };
+
+    render(EditorComponent, {
+      props: { readonly: true, entryPath: "Diaryx.md" },
+    });
+
+    await waitForEditorCreation();
+
+    const imageExtension = await import("@tiptap/extension-image");
+    const imageConfig = vi.mocked(imageExtension.default.extend).mock.calls.at(-1)?.[0] as
+      | { renderMarkdown: (node: any) => string }
+      | undefined;
+    expect(imageConfig).toBeTruthy();
+    if (!imageConfig) {
+      throw new Error("Image extension config was not captured");
+    }
+
+    const markdown = imageConfig.renderMarkdown({
+      attrs: {
+        src: "Users/adamharris/Documents/diaryx-repos/diaryx/_attachments/audience-filter-demo.html",
+        alt: "Audience Filtering Demo",
+        title: "",
+        width: null,
+        height: null,
+      },
+    });
+
+    expect(markdown).toBe("![Audience Filtering Demo](_attachments/audience-filter-demo.html)");
+  });
+
+  it("lets HTML attachment iframes auto-grow from posted preview height when no height attr is stored", async () => {
+    render(EditorComponent, {
+      props: { readonly: true, entryPath: "Diaryx.md" },
+    });
+
+    await waitForEditorCreation();
+
+    const imageExtension = await import("@tiptap/extension-image");
+    const attachmentService = await import("../models/services/attachmentService");
+    vi.mocked(attachmentService.isHtmlFile).mockReturnValue(true);
+
+    const imageConfig = vi.mocked(imageExtension.default.extend).mock.calls.at(-1)?.[0] as
+      | { addNodeView: () => (args: any) => any }
+      | undefined;
+    expect(imageConfig).toBeTruthy();
+    if (!imageConfig) {
+      throw new Error("Image extension config was not captured");
+    }
+
+    const nodeViewFactory = imageConfig.addNodeView();
+    const nodeView = nodeViewFactory({
+      node: {
+        attrs: {
+          src: "_attachments/audience-filter-demo.html",
+          alt: "Audience Filtering Demo",
+          title: "",
+          width: null,
+          height: null,
+        },
+        nodeSize: 1,
+      },
+      HTMLAttributes: {},
+      getPos: () => 0,
+      editor: mockEditorInstance,
+    });
+
+    const iframe = nodeView.dom.querySelector("iframe");
+    expect(nodeView.dom.style.width).toBe("100%");
+    expect(iframe?.scrolling).toBe("auto");
+    expect(iframe?.style.width).toBe("100%");
+    expect(iframe?.style.height).toBe("420px");
+
+    Object.defineProperty(iframe!, "contentWindow", {
+      configurable: true,
+      value: window,
+    });
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: window,
+        data: {
+          type: "diaryx-html-attachment-size",
+          height: 912,
+        },
+      }),
+    );
+
+    expect(iframe?.style.height).toBe("912px");
+
+    nodeView.destroy();
   });
 
   it("intercepts local editor link clicks before native navigation", async () => {

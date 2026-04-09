@@ -18,6 +18,8 @@ import {
   attachmentExistsLocally,
   getAttachmentAvailability,
   computeRelativeAttachmentPath,
+  formatDroppedAttachmentPathForEntry,
+  stripWorkspacePrefixFromAttachmentPath,
 } from './attachmentService'
 
 describe('attachmentService', () => {
@@ -88,6 +90,49 @@ describe('attachmentService', () => {
     it('should handle paths with directories', () => {
       expect(getMimeType('folder/subfolder/photo.png')).toBe('image/png')
       expect(getMimeType('/absolute/path/doc.pdf')).toBe('application/pdf')
+    })
+  })
+
+  describe('drag/drop path normalization', () => {
+    it('strips the workspace prefix from attachment paths before serialization', () => {
+      expect(
+        stripWorkspacePrefixFromAttachmentPath(
+          'Users/adamharris/Documents/diaryx-repos/diaryx/_attachments/audience-filter-demo.html',
+          '/Users/adamharris/Documents/diaryx-repos/diaryx/Diaryx.md',
+        ),
+      ).toBe('_attachments/audience-filter-demo.html')
+    })
+
+    it('reformats dragged attachment paths relative to the drop target entry', async () => {
+      const mockApi = {
+        canonicalizeLink: vi.fn(async (path: string) => path),
+        formatLink: vi.fn(async () => '_attachments/audience-filter-demo.html'),
+      }
+
+      const result = await formatDroppedAttachmentPathForEntry(
+        mockApi as any,
+        'Diaryx.md',
+        '[Audience Filtering Demo](Users/adamharris/Documents/diaryx-repos/diaryx/_attachments/audience-filter-demo.html)',
+        {
+          sourceEntryPath: 'nested/source.md',
+          workspacePath: '/Users/adamharris/Documents/diaryx-repos/diaryx/Diaryx.md',
+        },
+      )
+
+      expect(mockApi.canonicalizeLink).toHaveBeenCalledWith(
+        '_attachments/audience-filter-demo.html',
+        'nested/source.md',
+      )
+      expect(mockApi.formatLink).toHaveBeenCalledWith(
+        '_attachments/audience-filter-demo.html',
+        'audience-filter-demo.html',
+        'plain_relative',
+        'Diaryx.md',
+      )
+      expect(result).toEqual({
+        path: '_attachments/audience-filter-demo.html',
+        label: 'Audience Filtering Demo',
+      })
     })
   })
 
@@ -453,6 +498,7 @@ describe('attachmentService', () => {
       const blobArg = createObjectUrlSpy.mock.calls.at(-1)?.[0]
       expect(blobArg).toBeInstanceOf(Blob)
       expect((blobArg as Blob).type).toBe('text/html')
+      await expect((blobArg as Blob).text()).resolves.toContain('diaryx-html-attachment-size')
       createObjectUrlSpy.mockRestore()
     })
 
@@ -473,6 +519,7 @@ describe('attachmentService', () => {
       const blobArg = createObjectUrlSpy.mock.calls.at(-1)?.[0]
       expect(blobArg).toBeInstanceOf(Blob)
       expect((blobArg as Blob).type).toBe('text/html')
+      await expect((blobArg as Blob).text()).resolves.toContain('data-diaryx-html-preview-bridge')
       createObjectUrlSpy.mockRestore()
     })
   })

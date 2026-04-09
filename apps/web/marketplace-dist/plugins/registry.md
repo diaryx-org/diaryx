@@ -1,6 +1,6 @@
 ---
 schema_version: 2
-generated_at: '2026-04-06T22:54:52.411340+00:00'
+generated_at: '2026-04-09T06:08:52.731086+00:00'
 cdn_base: https://app.diaryx.org/cdn
 plugins:
 - id: diaryx.ai
@@ -295,7 +295,7 @@ plugins:
     published_at: '2026-04-06T22:50:48Z'
 - id: diaryx.publish
   name: Publish
-  version: 0.2.5
+  version: 0.2.8
   description: Export and publish content with optional format conversion
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -312,10 +312,10 @@ plugins:
   - custom_commands
   summary: Export and publish workspaces.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.publish/0.2.5/diaryx_publish_extism.wasm
-    sha256: 6503a0591b923d2e38d0ef10537d1ee8311ffb7989041e5ff1fada90cd849bd6
-    size: 2807456
-    published_at: '2026-04-06T19:41:09Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.publish/0.2.8/diaryx_publish_extism.wasm
+    sha256: 48db5d5645078d2016f75e73e3891a6d2ed640eb5dd3e36b96fcff38b4c6304a
+    size: 2232963
+    published_at: '2026-04-09T06:07:23Z'
   ui:
   - slot: SidebarTab
     id: publish-panel
@@ -530,7 +530,7 @@ plugins:
       plugin_storage: Persist S3 connection settings for the current workspace.
 - id: diaryx.sync
   name: Sync
-  version: 0.2.11
+  version: 0.2.12
   description: Real-time multi-device sync across Diaryx workspaces
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -551,10 +551,10 @@ plugins:
   summary: Realtime multi-device workspace sync, snapshots, history, and workspace-provider
     flows.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.2.11/diaryx_sync_extism.wasm
-    sha256: 1d67c6fbd0f880b9e36f737eed5c0d66f7b79c2e029bf77489331708dd524ebb
-    size: 987242
-    published_at: '2026-04-06T19:39:14Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.2.12/plugin.wasm
+    sha256: aa20a4f653a97b590cab9c14c518dcf2ed8f16bde80d438f4288bd30c29532b7
+    size: 733542
+    published_at: '2026-04-08T05:14:36Z'
   ui:
   - slot: SettingsTab
     id: sync-settings
@@ -618,7 +618,8 @@ plugins:
   capabilities:
   - workspace_events
   - custom_commands
-  summary: Creation-time and render-time templating.
+  summary: Creation-time templating plus frontmatter-driven inline rendering with
+    audience-aware `:vis` directive filtering.
   artifact:
     url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.templating/0.1.6/diaryx_templating_extism.wasm
     sha256: d60f36a1c6b5afd1c885bbd33a031d1deddcfc2be5c86fae5d0a34b5c768bf0e
@@ -635,9 +636,6 @@ plugins:
   - slot: BlockPickerItem
     id: templating-if-else
     label: If / Else
-  - slot: BlockPickerItem
-    id: templating-for-audience
-    label: For Audience
   requested_permissions:
     defaults:
       read_files:
@@ -665,7 +663,7 @@ plugins:
 
 # Diaryx Plugin Registry
 
-Generated at 2026-04-06T22:54:52.411340+00:00
+Generated at 2026-04-09T06:08:52.731086+00:00
 
 **16** plugins available.
 
@@ -706,7 +704,7 @@ Render inline and block LaTeX.
 This experimental plugin uses Pandoc for file conversion.
 
 ## Publish
-**ID:** `diaryx.publish` | **Version:** 0.2.5
+**ID:** `diaryx.publish` | **Version:** 0.2.8
 Export and publish workspaces.
 
 ## Live Share
@@ -726,9 +724,9 @@ Google Drive storage backend.
 S3-compatible storage backend.
 
 ## Sync
-**ID:** `diaryx.sync` | **Version:** 0.2.11
+**ID:** `diaryx.sync` | **Version:** 0.2.12
 Realtime multi-device workspace sync, snapshots, history, and workspace-provider flows.
 
 ## Templating
 **ID:** `diaryx.templating` | **Version:** 0.1.6
-Creation-time and render-time templating.
+Creation-time templating plus frontmatter-driven inline rendering with audience-aware `:vis` directive filtering.

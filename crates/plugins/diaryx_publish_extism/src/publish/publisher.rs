@@ -32,6 +32,98 @@ pub struct RenderedFile {
     pub mime_type: String,
 }
 
+const PUBLISHED_HTML_ATTACHMENT_BRIDGE_MARKER: &str = "data-diaryx-published-html-bridge";
+const PUBLISHED_HTML_ATTACHMENT_BRIDGE: &str = r#"<script data-diaryx-published-html-bridge>
+(() => {
+    if (window.__diaryxPublishedHtmlBridgeInstalled) return;
+    window.__diaryxPublishedHtmlBridgeInstalled = true;
+
+    function postHeight() {
+        const body = document.body;
+        const root = document.documentElement;
+        const height = Math.max(
+            body ? body.scrollHeight : 0,
+            body ? body.offsetHeight : 0,
+            root ? root.scrollHeight : 0,
+            root ? root.offsetHeight : 0,
+        );
+        if (height > 0) {
+            window.parent.postMessage({ type: "diaryx-html-attachment-size", height }, "*");
+        }
+    }
+
+    function schedulePost() {
+        requestAnimationFrame(() => {
+            postHeight();
+            setTimeout(postHeight, 60);
+        });
+    }
+
+    window.addEventListener("message", (event) => {
+        if (event.data && event.data.type === "diaryx-html-attachment-measure") {
+            schedulePost();
+        }
+    });
+
+    window.addEventListener("load", schedulePost);
+    window.addEventListener("resize", schedulePost);
+
+    if (typeof ResizeObserver !== "undefined") {
+        const observer = new ResizeObserver(schedulePost);
+        if (document.documentElement) observer.observe(document.documentElement);
+        if (document.body) observer.observe(document.body);
+    }
+
+    if (document.fonts && typeof document.fonts.ready?.then === "function") {
+        document.fonts.ready.then(schedulePost).catch(() => {});
+    }
+
+    schedulePost();
+})();
+</script>"#;
+
+pub fn prepare_published_attachment_bytes(path: &Path, bytes: &[u8]) -> Vec<u8> {
+    let is_html = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "html" | "htm"))
+        .unwrap_or(false);
+    if !is_html {
+        return bytes.to_vec();
+    }
+
+    let html = match String::from_utf8(bytes.to_vec()) {
+        Ok(html) => html,
+        Err(_) => return bytes.to_vec(),
+    };
+    if html.contains(PUBLISHED_HTML_ATTACHMENT_BRIDGE_MARKER) {
+        return html.into_bytes();
+    }
+
+    if let Some(index) = html.rfind("</body>") {
+        let mut injected =
+            String::with_capacity(html.len() + PUBLISHED_HTML_ATTACHMENT_BRIDGE.len());
+        injected.push_str(&html[..index]);
+        injected.push_str(PUBLISHED_HTML_ATTACHMENT_BRIDGE);
+        injected.push_str(&html[index..]);
+        return injected.into_bytes();
+    }
+
+    if let Some(index) = html.rfind("</html>") {
+        let mut injected =
+            String::with_capacity(html.len() + PUBLISHED_HTML_ATTACHMENT_BRIDGE.len());
+        injected.push_str(&html[..index]);
+        injected.push_str(PUBLISHED_HTML_ATTACHMENT_BRIDGE);
+        injected.push_str(&html[index..]);
+        return injected.into_bytes();
+    }
+
+    let mut injected = String::with_capacity(html.len() + PUBLISHED_HTML_ATTACHMENT_BRIDGE.len());
+    injected.push_str(&html);
+    injected.push_str(PUBLISHED_HTML_ATTACHMENT_BRIDGE);
+    injected.into_bytes()
+}
+
 /// Format-agnostic workspace publisher (async-first).
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub struct Publisher<'a, FS: AsyncFileSystem> {
@@ -319,7 +411,8 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 }
                 match self.fs.read_binary(src).await {
                     Ok(bytes) => {
-                        self.fs.write_binary(&dest, &bytes).await?;
+                        let prepared = prepare_published_attachment_bytes(dest_rel, &bytes);
+                        self.fs.write_binary(&dest, &prepared).await?;
                         attachments_copied += 1;
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -1408,6 +1501,62 @@ mod tests {
             fs.read_binary(&dest2.join("_attachments/image.png"))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_publish_injects_resize_bridge_into_html_attachments() {
+        use super::super::html_format::HtmlFormat;
+        use diaryx_core::fs::FileSystem;
+
+        let fs = diaryx_core::fs::InMemoryFileSystem::new();
+        let workspace_dir = Path::new("/workspace");
+        let workspace_root = workspace_dir.join("README.md");
+        fs.create_dir_all(workspace_dir).unwrap();
+        fs.create_dir_all(&workspace_dir.join("_attachments"))
+            .unwrap();
+        fs.write_file(
+            &workspace_root,
+            "---\ntitle: Test Site\ncontents: []\n---\n\n![demo](_attachments/demo.html)\n",
+        )
+        .unwrap();
+        fs.write_binary(
+            &workspace_dir.join("_attachments/demo.html"),
+            br#"<!doctype html><html><body><main>Demo</main></body></html>"#,
+        )
+        .unwrap();
+
+        let async_fs = diaryx_core::fs::SyncToAsyncFs::new(fs.clone());
+        let renderer = super::super::body_renderer::NoopBodyRenderer;
+        let format = HtmlFormat::new();
+        let publisher = Publisher::new(async_fs, &renderer, &format);
+        let dest = Path::new("/output");
+
+        futures_lite::future::block_on(publisher.publish(
+            &workspace_root,
+            dest,
+            &PublishOptions {
+                copy_attachments: true,
+                force: true,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+
+        let published = String::from_utf8(
+            fs.read_binary(&dest.join("_attachments/demo.html"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(published.contains("data-diaryx-published-html-bridge"));
+        assert!(published.contains("diaryx-html-attachment-size"));
+    }
+
+    #[test]
+    fn test_prepare_published_attachment_bytes_leaves_non_html_attachments_unchanged() {
+        let bytes = b"fake-png-data";
+        let prepared =
+            prepare_published_attachment_bytes(Path::new("_attachments/demo.png"), bytes);
+        assert_eq!(prepared, bytes);
     }
 
     #[test]

@@ -20,6 +20,7 @@ use serde_json::Value as JsonValue;
 
 use crate::publish::body_renderer::BodyRenderer;
 use crate::publish::publish_format::PublishFormat;
+use crate::publish::publisher::prepare_published_attachment_bytes;
 use diaryx_core::error::DiaryxError;
 use diaryx_core::fs::AsyncFileSystem;
 use diaryx_core::link_parser::LinkFormat;
@@ -925,10 +926,11 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                         match self.fs.read_binary(src_path).await {
                             Ok(bytes) => {
                                 let mime = mime_type_from_ext(dest_rel);
+                                let prepared = prepare_published_attachment_bytes(dest_rel, &bytes);
                                 diaryx_plugin_sdk::host::namespace::put_object(
                                     &namespace_id,
                                     &key,
-                                    &bytes,
+                                    &prepared,
                                     &mime,
                                     audience_name,
                                 )
@@ -1063,6 +1065,7 @@ fn mime_type_from_ext(path: &Path) -> String {
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("gif") => "image/gif",
+        Some("html" | "htm") => "text/html",
         Some("svg") => "image/svg+xml",
         Some("webp") => "image/webp",
         Some("pdf") => "application/pdf",
@@ -1169,5 +1172,17 @@ mod tests {
         let resolved =
             block_on(plugin.current_root_index_path()).expect("root index should resolve");
         assert_eq!(resolved, root_index);
+    }
+
+    #[test]
+    fn mime_type_from_ext_preserves_html_attachments_for_iframe_publishes() {
+        assert_eq!(
+            mime_type_from_ext(Path::new("_attachments/audience-filter-demo.html")),
+            "text/html"
+        );
+        assert_eq!(
+            mime_type_from_ext(Path::new("_attachments/audience-filter-demo.htm")),
+            "text/html"
+        );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "diaryx_publish_extism"
-version = "0.2.4"
+version = "0.2.8"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "LICENSE.md"

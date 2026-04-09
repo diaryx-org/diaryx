@@ -72,6 +72,14 @@ The plugin handles:
 - converter lifecycle (`DownloadConverter`, `IsConverterAvailable`)
 - format conversion (`ConvertFormat`, `ConvertToPdf`) by running converter WASI modules through `host_run_wasi_module`
 
+Published attachment uploads preserve attachment MIME types as they are copied
+into namespace/site storage, including `text/html` for standalone HTML embeds,
+so published iframe attachments render as documents instead of downloading as
+generic binary blobs. Published page wrappers now also listen for height
+messages from embedded HTML attachments, and published `.html` / `.htm`
+attachments receive a tiny injected bridge at publish time so sandboxed iframe
+embeds can auto-size without modifying the source file in the workspace.
+
 ## Exports
 
 | Export                          | Description                        |

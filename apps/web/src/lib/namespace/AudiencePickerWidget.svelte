@@ -41,19 +41,14 @@
     ctx.loadAudiences();
   }
 
-  function openManager() {
-    ctx.hostAction?.({ type: 'open-audience-manager' });
-  }
 </script>
 
 {#if entryPath && rootPath}
   <DocumentAudiencePill
     {audience}
     {entryPath}
-    {rootPath}
     {api}
     onChange={handleChange}
-    onOpenManager={openManager}
   />
 {:else}
   <p class="text-xs text-muted-foreground">Open an entry to edit its audience tags.</p>

@@ -4015,7 +4015,6 @@
     requestedTab={requestedSidebarTab}
     onRequestedTabConsumed={() => (requestedSidebarTab = null)}
     onPluginHostAction={handlePluginHostAction}
-    onOpenAudienceManager={() => { audiencePanelStore.openPanel(); }}
     onPropertyReorder={handlePropertyReorder}
     {isDirty}
     {isSaving}

@@ -130,7 +130,6 @@
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
     onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
-    onOpenAudienceManager?: () => void;
     onPropertyReorder?: (keys: string[]) => void;
     onEntryRefreshRequest?: () => void;
     isDirty?: boolean;
@@ -162,7 +161,6 @@
     requestedTab = null,
     onRequestedTabConsumed,
     onPluginHostAction,
-    onOpenAudienceManager,
     onPropertyReorder,
     onEntryRefreshRequest,
     isDirty = false,
@@ -1025,7 +1023,6 @@
                   <DocumentAudiencePill
                     audience={value as string[] | null ?? null}
                     entryPath={entry.path}
-                    rootPath={workspaceStore.tree?.path ?? ""}
                     {api}
                     onChange={async (v) => {
                       if (v === null) {
@@ -1034,7 +1031,6 @@
                         await onPropertyChange?.("audience", v);
                       }
                     }}
-                    onOpenManager={onOpenAudienceManager}
                   />
                 {:else if key === 'attachments'}
                   <!-- Attachments list -->

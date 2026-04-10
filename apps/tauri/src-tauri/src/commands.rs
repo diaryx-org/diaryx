@@ -126,6 +126,9 @@ pub struct AppState {
     /// When the plugin WASM files were last loaded into memory.
     /// Used to detect external updates (e.g. CLI `diaryx plugin update`).
     pub plugins_loaded_at: Mutex<Option<SystemTime>>,
+    /// Signalled when background plugin loading completes.
+    /// Commands that need plugins wait on this before retrying.
+    pub plugins_ready: Arc<tokio::sync::Notify>,
     /// Active macOS security-scoped workspace access, when needed.
     #[cfg(target_os = "macos")]
     pub workspace_access: Mutex<Option<ActiveSecurityScopedAccess>>,
@@ -137,6 +140,7 @@ impl AppState {
             workspace_path: Mutex::new(None),
             diaryx: Mutex::new(None),
             plugins_loaded_at: Mutex::new(None),
+            plugins_ready: Arc::new(tokio::sync::Notify::new()),
             #[cfg(target_os = "macos")]
             workspace_access: Mutex::new(None),
         }
@@ -2125,6 +2129,12 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
                 t1.elapsed()
             );
 
+            // Signal any execute() calls waiting for plugins
+            app_handle
+                .state::<AppState>()
+                .plugins_ready
+                .notify_waiters();
+
             // Notify the frontend so it can re-render with plugin support
             // (e.g. syntax highlighting, spoiler blocks).
             let _ = app_handle.emit("plugins-ready", ());
@@ -2208,10 +2218,26 @@ pub async fn execute<R: Runtime>(
         // Normal mode: use real filesystem
         let diaryx = get_or_init_tauri_diaryx(&app).await?;
 
-        diaryx.execute(cmd).await.map_err(|e| {
-            log_execute_error(&e);
-            e.to_serializable()
-        })?
+        match diaryx.execute(cmd).await {
+            Ok(response) => response,
+            Err(ref e) if matches!(e, DiaryxError::Plugin(msg) if msg.contains("No plugin")) => {
+                // Plugins may still be loading in the background — wait and retry once.
+                log::info!("[execute] Plugin not loaded yet, waiting for background loading...");
+                let app_state = app.state::<AppState>();
+                app_state.plugins_ready.notified().await;
+                // Re-parse the command since Command doesn't impl Clone
+                let retry_cmd: Command = serde_json::from_str(&command_json).unwrap();
+                let diaryx = get_or_init_tauri_diaryx(&app).await?;
+                diaryx.execute(retry_cmd).await.map_err(|e| {
+                    log_execute_error(&e);
+                    e.to_serializable()
+                })?
+            }
+            Err(e) => {
+                log_execute_error(&e);
+                return Err(e.to_serializable());
+            }
+        }
     };
 
     // Serialize the response to JSON

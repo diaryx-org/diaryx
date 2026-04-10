@@ -56,10 +56,19 @@ pub fn read_binary(path: &str) -> Result<Vec<u8>, String> {
 /// Returns a `Vec` of file/directory paths that are immediate children.
 /// Much faster than [`list_files`] for large workspaces.
 pub fn list_dir(path: &str) -> Result<Vec<String>, String> {
-    let input = serde_json::json!({ "path": path }).to_string();
-    let result =
-        unsafe { host_list_dir(input) }.map_err(|e| format!("host_list_dir failed: {e}"))?;
-    serde_json::from_str(&result).map_err(|e| format!("Failed to parse dir listing: {e}"))
+    #[cfg(target_arch = "wasm32")]
+    {
+        let input = serde_json::json!({ "path": path }).to_string();
+        let result =
+            unsafe { host_list_dir(input) }.map_err(|e| format!("host_list_dir failed: {e}"))?;
+        serde_json::from_str(&result).map_err(|e| format!("Failed to parse dir listing: {e}"))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Native builds (tests): fall back to recursive list_files.
+        list_files(path)
+    }
 }
 
 /// List files recursively under a prefix path.

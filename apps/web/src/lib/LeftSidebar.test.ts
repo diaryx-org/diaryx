@@ -67,7 +67,7 @@ vi.mock("$lib/components/ui/popover", async () => {
   return { Root: S, Trigger: S, Content: S };
 });
 
-vi.mock("./SignInPopover.svelte", async () => ({
+vi.mock("./SignInDialog.svelte", async () => ({
   default: (await import("./test/PassthroughStub.svelte")).default,
 }));
 vi.mock("../views/sidebar/MobileActionSheet.svelte", async () => ({

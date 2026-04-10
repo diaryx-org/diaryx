@@ -33,6 +33,7 @@ extern "ExtismHost" {
     pub fn host_read_file(input: String) -> String;
     pub fn host_read_binary(input: String) -> String;
     pub fn host_list_files(input: String) -> String;
+    #[cfg(target_arch = "wasm32")]
     pub fn host_list_dir(input: String) -> String;
     #[cfg(target_arch = "wasm32")]
     pub fn host_workspace_file_set(input: String) -> String;

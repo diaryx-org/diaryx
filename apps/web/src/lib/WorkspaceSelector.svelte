@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import * as Popover from "$lib/components/ui/popover";
+  import * as Dialog from "$lib/components/ui/dialog";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import { Input } from "$lib/components/ui/input";
   import {
@@ -10,7 +10,6 @@
     Loader2,
     HardDrive,
     Cloud,
-    Link2,
     Ellipsis,
     Pencil,
     Trash2,
@@ -20,8 +19,6 @@
     getLocalWorkspaces,
     getWorkspaceStorageType,
     getCurrentWorkspaceId,
-    getWorkspaceProviderLinks,
-    getWorkspaceProviderLink,
     renameLocalWorkspace,
     removeLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
@@ -30,28 +27,11 @@
   import {
     getAuthState,
     getWorkspaces as getServerWorkspaces,
-    listUserWorkspaceNamespaces,
     renameServerWorkspace,
   } from "$lib/auth";
   import { toast } from "svelte-sonner";
-  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
-  import {
-    getProviderStatus,
-    listUnlinkedRemoteWorkspaces,
-    attachExistingLocalWorkspaceToRemote,
-    downloadWorkspace,
-    type RemoteWorkspace,
-  } from "$lib/sync/workspaceProviderService";
   import { deleteLocalWorkspaceData } from "$lib/settings/clearData";
   import { BackendError } from "$lib/backend/interface";
-  import { getBackend, isTauri } from "$lib/backend";
-  import { pickAuthorizedWorkspaceFolder } from "$lib/backend/workspaceAccess";
-  import {
-    getProviderDisplayLabel,
-    getProviderUnavailableReason,
-    isProviderAvailableHere,
-  } from "$lib/sync/builtinProviders";
-  import type { NamespaceEntry } from "$lib/auth/authService";
 
   interface Props {
     onSwitchStart?: () => void;
@@ -65,30 +45,8 @@
   let open = $state(false);
   let switching = $state(false);
 
-  const pluginStore = getPluginStore();
-
   // Derived state
   let allLocalWorkspaces = $derived(getLocalWorkspaces());
-  let workspaceProviders = $derived(pluginStore.workspaceProviders);
-
-  // Remote extras: unlinked remote workspaces per provider
-  let remoteExtras = $state<Record<string, RemoteWorkspace[]>>({});
-  let unavailableRemoteNamespaces = $state<NamespaceEntry[]>([]);
-
-  // RemoteWorkspacePicker state
-  let pickerProvider = $state<{ pluginId: string; label: string; workspaces: RemoteWorkspace[] } | null>(null);
-  let downloading = $state<string | null>(null);
-  let linking = $state<string | null>(null);
-  let supportsFolderLinking = $state(false);
-  let linkTarget = $state<{
-    pluginId: string;
-    providerLabel: string;
-    remoteId: string;
-    remoteName: string;
-    localPath: string;
-    existingLocalId: string | null;
-    existingLocalName: string | null;
-  } | null>(null);
 
   // Local workspace list with sync indicator
   type LocalWorkspaceEntry = { id: string; name: string; synced: boolean };
@@ -131,22 +89,6 @@
   let authState = $derived(getAuthState());
   let currentWsId = $derived(authState.activeWorkspaceId ?? getCurrentWorkspaceId());
 
-  $effect(() => {
-    if (!isTauri()) {
-      supportsFolderLinking = false;
-      return;
-    }
-
-    void (async () => {
-      try {
-        const backend = await getBackend();
-        supportsFolderLinking = backend.getAppPaths?.()?.is_mobile !== true;
-      } catch {
-        supportsFolderLinking = true;
-      }
-    })();
-  });
-
   // Display name
   let displayName = $derived.by(() => {
     if (currentWsId) {
@@ -160,63 +102,12 @@
     return localWs?.name ?? 'My Journal';
   });
 
-  // Fetch remote extras when popover opens
-  async function onPopoverOpen() {
-    const extras: Record<string, RemoteWorkspace[]> = {};
-    const linkedRemoteKeys = new Set(
-      allLocalWorkspaces.flatMap((workspace) =>
-        getWorkspaceProviderLinks(workspace.id).map(
-          (link) => `${link.pluginId}:${link.remoteWorkspaceId}`,
-        ),
-      ),
-    );
-    const localServerIds = new Set(
-      Array.from(linkedRemoteKeys)
-        .map((entry) => entry.slice(entry.indexOf(":") + 1))
-        .filter((id): id is string => id.length > 0),
-    );
-
-    for (const provider of workspaceProviders) {
-      const status = await getProviderStatus(provider.contribution.id);
-      if (!status.ready) continue;
-
-      const unlinked = await listUnlinkedRemoteWorkspaces(
-        provider.contribution.id,
-        localServerIds,
-      );
-      if (unlinked.length > 0) {
-        extras[provider.contribution.id] = unlinked;
-      }
-    }
-
-    if (authState.isAuthenticated) {
-      try {
-        const namespaces = await listUserWorkspaceNamespaces();
-        unavailableRemoteNamespaces = namespaces.filter((ns) => {
-          const providerId = namespaceProviderId(ns);
-          return !isProviderAvailableHere(providerId)
-            && !linkedRemoteKeys.has(`${providerId}:${ns.id}`);
-        });
-      } catch {
-        unavailableRemoteNamespaces = [];
-      }
-    } else {
-      unavailableRemoteNamespaces = [];
-    }
-
-    remoteExtras = extras;
-  }
-
   $effect(() => {
-    if (open) {
-      onPopoverOpen();
-    } else {
+    if (!open) {
       // Reset inline states when popover closes
       menuOpenId = null;
       renamingId = null;
       confirmDeleteId = null;
-      unavailableRemoteNamespaces = [];
-      linkTarget = null;
     }
   });
 
@@ -274,147 +165,10 @@
     }
   }
 
-  function openRemotePicker(pluginId: string) {
-    const provider = workspaceProviders.find(p => p.contribution.id === pluginId);
-    if (!provider) return;
-    const ws = remoteExtras[pluginId] ?? [];
-    pickerProvider = { pluginId, label: provider.contribution.label, workspaces: ws };
-  }
-
-  async function handleDownloadRemote(remoteId: string, name: string) {
-    downloading = remoteId;
-    try {
-      const { localId } = await downloadWorkspace(
-        pickerProvider!.pluginId,
-        { remoteId, name, link: true },
-        () => {}, // progress not shown in selector
-      );
-      pickerProvider = null;
-      open = false;
-      await doSwitch(localId, name);
-      toast.success("Workspace downloaded", { description: `"${name}" is ready.` });
-    } catch (e) {
-      console.error("[WorkspaceSelector] Download failed:", e);
-      toast.error("Failed to download workspace");
-    } finally {
-      downloading = null;
-    }
-  }
-
-  function providerSupportsFolderLinking(pluginId: string): boolean {
-    if (!supportsFolderLinking) return false;
-    const provider = workspaceProviders.find((entry) => entry.contribution.id === pluginId);
-    return !!provider && provider.source !== "builtin";
-  }
-
-  async function handleStartLinkRemote(remoteId: string, name: string) {
-    if (!pickerProvider || !providerSupportsFolderLinking(pickerProvider.pluginId)) return;
-    const { pluginId, label } = pickerProvider;
-
-    try {
-      const folder = await pickAuthorizedWorkspaceFolder(`Link "${name}" to local folder`);
-      if (!folder) return;
-
-      const existingWorkspace = allLocalWorkspaces.find((workspace) => workspace.path === folder) ?? null;
-      if (existingWorkspace) {
-        const conflictingLink = getWorkspaceProviderLinks(existingWorkspace.id).find((link) =>
-          link.pluginId !== pluginId || link.remoteWorkspaceId !== remoteId
-        );
-        if (conflictingLink) {
-          const providerLabel = getProviderDisplayLabel(conflictingLink.pluginId) ?? conflictingLink.pluginId;
-          toast.error(
-            `"${existingWorkspace.name}" is already linked via ${providerLabel}. Use workspace settings to move it first.`,
-          );
-          return;
-        }
-
-        const exactLink = getWorkspaceProviderLink(existingWorkspace.id, pluginId);
-        if (exactLink?.remoteWorkspaceId === remoteId) {
-          pickerProvider = null;
-          open = false;
-          await doSwitch(existingWorkspace.id, existingWorkspace.name);
-          toast.message(`"${existingWorkspace.name}" is already linked to "${name}".`);
-          return;
-        }
-      }
-
-      linkTarget = {
-        pluginId,
-        providerLabel: label,
-        remoteId,
-        remoteName: name,
-        localPath: folder,
-        existingLocalId: existingWorkspace?.id ?? null,
-        existingLocalName: existingWorkspace?.name ?? null,
-      };
-    } catch (e) {
-      console.error("[WorkspaceSelector] Link-folder pick failed:", e);
-      toast.error("Failed to open the folder picker");
-    }
-  }
-
-  async function handleConfirmLink(policy: "link_only" | "upload_local") {
-    if (!linkTarget) return;
-
-    linking = `${linkTarget.remoteId}:${policy}`;
-    try {
-      const result = await attachExistingLocalWorkspaceToRemote(
-        linkTarget.pluginId,
-        {
-          remoteId: linkTarget.remoteId,
-          remoteName: linkTarget.remoteName,
-          localPath: linkTarget.localPath,
-          ...(linkTarget.existingLocalId ? { localId: linkTarget.existingLocalId } : {}),
-          policy,
-        },
-      );
-
-      const shouldSwitch = currentWsId !== result.localId;
-      pickerProvider = null;
-      linkTarget = null;
-      open = false;
-
-      if (shouldSwitch) {
-        await doSwitch(result.localId, result.localName);
-      }
-
-      toast.success(
-        policy === "upload_local"
-          ? `Linked "${result.localName}" and uploaded local content.`
-          : `Linked "${result.localName}" without uploading files.`,
-      );
-    } catch (e) {
-      console.error("[WorkspaceSelector] Link remote failed:", e);
-      toast.error(
-        e instanceof Error ? e.message : "Failed to link workspace",
-      );
-    } finally {
-      linking = null;
-    }
-  }
-
   async function handleCreateWorkspace() {
     open = false;
-    pickerProvider = null;
     await tick();
     onAddWorkspace?.();
-  }
-
-  function namespaceProviderId(ns: NamespaceEntry): string {
-    return ns.metadata?.provider ?? "diaryx.sync";
-  }
-
-  function namespaceProviderLabel(ns: NamespaceEntry): string {
-    const providerId = namespaceProviderId(ns);
-    return getProviderDisplayLabel(providerId) ?? providerId;
-  }
-
-  function namespaceUnavailableReason(ns: NamespaceEntry): string | null {
-    return getProviderUnavailableReason(namespaceProviderId(ns));
-  }
-
-  function namespaceName(ns: NamespaceEntry): string {
-    return ns.metadata?.name ?? ns.id;
   }
 
   function startRename(ws: LocalWorkspaceEntry) {
@@ -478,304 +232,154 @@
 </script>
 
 {#if showSelector}
-  <Popover.Root bind:open>
-    <Popover.Trigger>
-      <button
-        type="button"
-        class="flex items-center gap-1.5 px-2 py-2.5 md:py-1 -mx-1 rounded-md text-sm font-medium text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors max-w-[180px]"
-        disabled={switching}
-      >
-        {#if switching}
-          <Loader2 class="size-3.5 animate-spin shrink-0" />
-        {/if}
-        <span class="truncate">{displayName}</span>
-        <ChevronsUpDown class="size-3.5 shrink-0 opacity-50" />
-      </button>
-    </Popover.Trigger>
-    <Popover.Content class="w-64 p-0" align="start" side="bottom">
-      {#if linkTarget}
-        <div class="p-2">
-          <p class="px-2 py-1 text-xs font-medium text-muted-foreground">
-            Link Existing Folder
-          </p>
-        </div>
-        <div class="px-4 pb-3 space-y-3">
-          <div class="rounded-md border p-3 space-y-1">
-            <div class="text-sm font-medium truncate">{linkTarget.remoteName}</div>
-            <div class="text-[10px] text-muted-foreground">via {linkTarget.providerLabel}</div>
-            <div class="pt-2 text-[10px] text-muted-foreground break-all font-mono">
-              {linkTarget.localPath}
-            </div>
-          </div>
+  <button
+    type="button"
+    class="flex items-center gap-1.5 px-2 py-2.5 md:py-1 -mx-1 rounded-md text-sm font-medium text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors max-w-[180px]"
+    disabled={switching}
+    onclick={() => { open = true; }}
+  >
+    {#if switching}
+      <Loader2 class="size-3.5 animate-spin shrink-0" />
+    {/if}
+    <span class="truncate">{displayName}</span>
+    <ChevronsUpDown class="size-3.5 shrink-0 opacity-50" />
+  </button>
 
-          <div class="space-y-2">
-            <button
-              type="button"
-              class="w-full rounded-md border px-3 py-2 text-left hover:bg-accent transition-colors disabled:opacity-60"
-              onclick={() => handleConfirmLink("link_only")}
-              disabled={!!linking}
-            >
-              <span class="block text-sm font-medium">Already in sync</span>
-              <span class="block text-[10px] text-muted-foreground mt-0.5">
-                Link this folder without uploading files.
-              </span>
-            </button>
+  <Dialog.Root bind:open>
+    <Dialog.Content class="sm:max-w-sm p-0 gap-0">
+      <Dialog.Header class="p-4 pb-2">
+        <Dialog.Title class="text-sm font-medium">Workspaces</Dialog.Title>
+      </Dialog.Header>
 
-            <button
-              type="button"
-              class="w-full rounded-md border px-3 py-2 text-left hover:bg-accent transition-colors disabled:opacity-60"
-              onclick={() => handleConfirmLink("upload_local")}
-              disabled={!!linking}
-            >
-              <span class="block text-sm font-medium">Upload local</span>
-              <span class="block text-[10px] text-muted-foreground mt-0.5">
-                Link this folder and push local files to the remote workspace.
-              </span>
-            </button>
-          </div>
-
-          {#if linking}
-            <div class="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 class="size-3.5 animate-spin" />
-              Linking workspace...
-            </div>
-          {/if}
-        </div>
-        <div class="border-t p-2">
-          <button
-            type="button"
-            class="flex items-center gap-2 w-full px-2 py-2.5 md:py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
-            onclick={() => { linkTarget = null; }}
-            disabled={!!linking}
-          >
-            Back
-          </button>
-        </div>
-      {:else if pickerProvider}
-        <!-- Remote Workspace Picker -->
-        <div class="p-2">
-          <p class="px-2 py-1 text-xs font-medium text-muted-foreground">
-            {pickerProvider.label}
-          </p>
-        </div>
-        <div class="max-h-64 overflow-y-auto">
-          {#each pickerProvider.workspaces as ws (ws.id)}
-            <div class="flex items-center gap-2 px-4 py-2 hover:bg-accent transition-colors">
-              <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
-              <span class="truncate flex-1 text-sm">{ws.name}</span>
-              <div class="flex items-center gap-1 shrink-0">
-                {#if providerSupportsFolderLinking(pickerProvider.pluginId)}
-                  <button
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:bg-background border transition-colors"
-                    onclick={() => handleStartLinkRemote(ws.id, ws.name)}
-                    disabled={downloading === ws.id || !!linking}
-                  >
-                    <Link2 class="size-3" />
-                    link
-                  </button>
-                {/if}
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:bg-background border transition-colors"
-                  disabled={downloading === ws.id || !!linking}
-                  onclick={() => handleDownloadRemote(ws.id, ws.name)}
-                >
-                  {#if downloading === ws.id}
-                    <Loader2 class="size-3 animate-spin" />
-                  {:else}
-                    <Cloud class="size-3" />
-                  {/if}
-                  download
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-        <div class="border-t p-2">
-          <button
-            type="button"
-            class="flex items-center gap-2 w-full px-2 py-2.5 md:py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
-            onclick={() => { pickerProvider = null; }}
-          >
-            Back
-          </button>
-        </div>
-      {:else}
-        <!-- Local Workspace List -->
-        <div class="p-2">
-          <p class="px-2 py-1 text-xs font-medium text-muted-foreground">
-            Workspaces
-          </p>
-        </div>
-        <div class="max-h-64 overflow-y-auto" data-workspace-selector-list bind:this={workspaceListEl}>
-          {#each workspaces as ws (ws.id)}
-            {#if renamingId === ws.id}
-              <!-- Inline rename row -->
-              <div class="flex items-center gap-2 px-4 py-1.5">
-                <Input
-                  bind:value={renameValue}
-                  onkeydown={handleRenameKeydown}
-                  class="h-7 text-sm flex-1"
-                  disabled={renameLoading}
-                />
-                <button
-                  type="button"
-                  class="size-11 md:size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
-                  onclick={submitRename}
-                  disabled={renameLoading || !renameValue.trim()}
-                >
-                  {#if renameLoading}
-                    <Loader2 class="size-4 md:size-3.5 animate-spin" />
-                  {:else}
-                    <Check class="size-4 md:size-3.5" />
-                  {/if}
-                </button>
-                <button
-                  type="button"
-                  class="size-11 md:size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
-                  onclick={cancelRename}
-                  disabled={renameLoading}
-                >
-                  <span class="text-xs">&#x2715;</span>
-                </button>
-              </div>
-            {:else if confirmDeleteId === ws.id}
-              <!-- Inline delete confirmation row -->
-              <div class="flex items-center gap-2 px-4 py-1.5">
-                <span class="text-sm text-destructive truncate flex-1">Delete "{ws.name}"?</span>
-                <button
-                  type="button"
-                  class="px-3 py-2 md:px-2 md:py-0.5 text-xs rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
-                  onclick={() => confirmDelete(ws.id)}
-                  disabled={deleteLoading}
-                >
-                  {#if deleteLoading}
-                    <Loader2 class="size-3 animate-spin" />
-                  {:else}
-                    Delete
-                  {/if}
-                </button>
-                <button
-                  type="button"
-                  class="size-11 md:size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
-                  onclick={cancelDelete}
-                >
-                  <span class="text-xs">&#x2715;</span>
-                </button>
-              </div>
-            {:else}
-              <!-- Normal workspace row -->
-              <div class="group flex items-center gap-0 w-full hover:bg-accent transition-colors">
-                <button
-                  type="button"
-                  class="flex items-center gap-2 flex-1 min-w-0 px-4 py-2 text-sm text-left"
-                  disabled={switching}
-                  onclick={() => handleSelect(ws)}
-                >
-                  <span class="size-4 shrink-0 flex items-center justify-center">
-                    {#if currentWsId === ws.id}
-                      <Check class="size-3.5" />
-                    {/if}
-                  </span>
-                  {#if ws.synced}
-                    <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
-                  {:else}
-                    <HardDrive class="size-3.5 shrink-0 text-muted-foreground" />
-                  {/if}
-                  <span class="truncate flex-1">{ws.name}</span>
-                  {#if showStorageBadges}
-                    <span class="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0 font-medium">{storageLabel(getWorkspaceStorageType(ws.id))}</span>
-                  {/if}
-                </button>
-                <!-- Three-dot menu -->
-                <div class="pr-2">
-                  <DropdownMenu.Root bind:open={
-                    () => menuOpenId === ws.id,
-                    (v) => { menuOpenId = v ? ws.id : null; }
-                  }>
-                    <DropdownMenu.Trigger
-                      class="size-11 md:size-6 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 hover:bg-accent-foreground/10 transition-all {menuOpenId === ws.id ? 'opacity-100' : ''}"
-                      aria-label={"Workspace actions for " + ws.name}
-                      onclick={(e: MouseEvent) => { e.stopPropagation(); }}
-                    >
-                      <Ellipsis class="size-4 md:size-3.5 text-muted-foreground" />
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Content align="end" side="bottom" class="min-w-[120px]">
-                      <DropdownMenu.Item
-                        onclick={(e: Event) => { e.stopPropagation(); startRename(ws); }}
-                      >
-                        <Pencil class="size-3.5" />
-                        Rename
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        variant="destructive"
-                        disabled={currentWsId === ws.id}
-                        aria-label={"Delete workspace " + ws.name}
-                        title={currentWsId === ws.id ? "Switch to another workspace first" : "Delete workspace"}
-                        onclick={(e: Event) => { e.stopPropagation(); startDelete(ws); }}
-                      >
-                        <Trash2 class="size-3.5" />
-                        Delete
-                      </DropdownMenu.Item>
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Root>
-                </div>
-              </div>
-            {/if}
-          {/each}
-        </div>
-
-        <!-- Footer: provider extras + create -->
-        <div class="border-t">
-          {#each Object.entries(remoteExtras) as [pluginId, extras] (pluginId)}
-            {@const provider = workspaceProviders.find(p => p.contribution.id === pluginId)}
-            {#if provider && extras.length > 0}
+      <div class="max-h-64 overflow-y-auto" data-workspace-selector-list bind:this={workspaceListEl}>
+        {#each workspaces as ws (ws.id)}
+          {#if renamingId === ws.id}
+            <!-- Inline rename row -->
+            <div class="flex items-center gap-2 px-4 py-1.5">
+              <Input
+                bind:value={renameValue}
+                onkeydown={handleRenameKeydown}
+                class="h-7 text-sm flex-1"
+                disabled={renameLoading}
+              />
               <button
                 type="button"
-                class="flex items-center gap-2 w-full px-4 py-1.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                onclick={() => openRemotePicker(pluginId)}
+                class="size-11 md:size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
+                onclick={submitRename}
+                disabled={renameLoading || !renameValue.trim()}
               >
-                <Cloud class="size-3" />
-                {extras.length} more on {provider.contribution.label}
+                {#if renameLoading}
+                  <Loader2 class="size-4 md:size-3.5 animate-spin" />
+                {:else}
+                  <Check class="size-4 md:size-3.5" />
+                {/if}
               </button>
-            {/if}
-          {/each}
-          {#if unavailableRemoteNamespaces.length > 0}
-            <div class="px-2 pt-2 pb-1 space-y-1">
-              <p class="px-2 py-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                Unavailable Here
-              </p>
-              {#each unavailableRemoteNamespaces as ns (ns.id)}
-                <div class="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground rounded-md border border-dashed bg-secondary/30">
-                  <Cloud class="size-3 shrink-0" />
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate">{namespaceName(ns)}</span>
-                    <span class="block text-[10px]">
-                      via {namespaceProviderLabel(ns)}
-                    </span>
-                    {#if namespaceUnavailableReason(ns)}
-                      <span class="block text-[10px] mt-0.5">
-                        {namespaceUnavailableReason(ns)}
-                      </span>
-                    {/if}
-                  </span>
-                </div>
-              {/each}
+              <button
+                type="button"
+                class="size-11 md:size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
+                onclick={cancelRename}
+                disabled={renameLoading}
+              >
+                <span class="text-xs">&#x2715;</span>
+              </button>
+            </div>
+          {:else if confirmDeleteId === ws.id}
+            <!-- Inline delete confirmation row -->
+            <div class="flex items-center gap-2 px-4 py-1.5">
+              <span class="text-sm text-destructive truncate flex-1">Delete "{ws.name}"?</span>
+              <button
+                type="button"
+                class="px-3 py-2 md:px-2 md:py-0.5 text-xs rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                onclick={() => confirmDelete(ws.id)}
+                disabled={deleteLoading}
+              >
+                {#if deleteLoading}
+                  <Loader2 class="size-3 animate-spin" />
+                {:else}
+                  Delete
+                {/if}
+              </button>
+              <button
+                type="button"
+                class="size-11 md:size-6 flex items-center justify-center rounded-md hover:bg-accent transition-colors"
+                onclick={cancelDelete}
+              >
+                <span class="text-xs">&#x2715;</span>
+              </button>
+            </div>
+          {:else}
+            <!-- Normal workspace row -->
+            <div class="group flex items-center gap-0 w-full hover:bg-accent transition-colors">
+              <button
+                type="button"
+                class="flex items-center gap-2 flex-1 min-w-0 px-4 py-2 text-sm text-left"
+                disabled={switching}
+                onclick={() => handleSelect(ws)}
+              >
+                <span class="size-4 shrink-0 flex items-center justify-center">
+                  {#if currentWsId === ws.id}
+                    <Check class="size-3.5" />
+                  {/if}
+                </span>
+                {#if ws.synced}
+                  <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
+                {:else}
+                  <HardDrive class="size-3.5 shrink-0 text-muted-foreground" />
+                {/if}
+                <span class="truncate flex-1">{ws.name}</span>
+                {#if showStorageBadges}
+                  <span class="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0 font-medium">{storageLabel(getWorkspaceStorageType(ws.id))}</span>
+                {/if}
+              </button>
+              <!-- Three-dot menu -->
+              <div class="pr-2">
+                <DropdownMenu.Root bind:open={
+                  () => menuOpenId === ws.id,
+                  (v) => { menuOpenId = v ? ws.id : null; }
+                }>
+                  <DropdownMenu.Trigger
+                    class="size-11 md:size-6 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 hover:bg-accent-foreground/10 transition-all {menuOpenId === ws.id ? 'opacity-100' : ''}"
+                    aria-label={"Workspace actions for " + ws.name}
+                    onclick={(e: MouseEvent) => { e.stopPropagation(); }}
+                  >
+                    <Ellipsis class="size-4 md:size-3.5 text-muted-foreground" />
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="end" side="bottom" class="min-w-[120px]">
+                    <DropdownMenu.Item
+                      onclick={(e: Event) => { e.stopPropagation(); startRename(ws); }}
+                    >
+                      <Pencil class="size-3.5" />
+                      Rename
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      variant="destructive"
+                      disabled={currentWsId === ws.id}
+                      aria-label={"Delete workspace " + ws.name}
+                      title={currentWsId === ws.id ? "Switch to another workspace first" : "Delete workspace"}
+                      onclick={(e: Event) => { e.stopPropagation(); startDelete(ws); }}
+                    >
+                      <Trash2 class="size-3.5" />
+                      Delete
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
+              </div>
             </div>
           {/if}
-          <div class="p-2">
-            <button
-              type="button"
-              class="flex items-center gap-2 w-full px-2 py-2.5 md:py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
-              onclick={handleCreateWorkspace}
-            >
-              <Plus class="size-3.5" />
-              New workspace
-            </button>
-          </div>
-        </div>
-      {/if}
-    </Popover.Content>
-  </Popover.Root>
+        {/each}
+      </div>
+
+      <!-- Footer -->
+      <div class="border-t p-2">
+        <button
+          type="button"
+          class="flex items-center gap-2 w-full px-2 py-2.5 md:py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+          onclick={handleCreateWorkspace}
+        >
+          <Plus class="size-3.5" />
+          New workspace
+        </button>
+      </div>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}

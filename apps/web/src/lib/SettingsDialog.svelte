@@ -18,6 +18,7 @@
   import WorkspaceSettings from "./settings/WorkspaceSettings.svelte";
   import LinkSettings from "./settings/LinkSettings.svelte";
   import StorageSettings from "./settings/StorageSettings.svelte";
+  import SyncLinkSettings from "./settings/SyncLinkSettings.svelte";
   import AccountSettings from "./settings/AccountSettings.svelte";
   import BackupSettings from "./settings/BackupSettings.svelte";
   import ImportSettings from "./settings/ImportSettings.svelte";
@@ -209,6 +210,7 @@
       {:else if activeTab === "workspace"}
         <div class="space-y-4">
           <WorkspaceSettings workspaceRootIndex={workspacePath} />
+          <SyncLinkSettings workspaceId={currentWorkspaceId} workspaceName={currentWorkspaceName} />
           <LinkSettings workspaceRootIndex={workspacePath} />
           <StorageSettings workspaceId={currentWorkspaceId} workspaceName={currentWorkspaceName} />
         </div>

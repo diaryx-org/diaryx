@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.4.3
-updated: 2026-04-09T11:49:25-06:00
+updated: 2026-04-09T16:03:04-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'

@@ -528,6 +528,10 @@
   let welcomeScreenRef: ReturnType<typeof WelcomeScreen> | undefined = $state();
   /** Non-null when the user navigated to the welcome screen from an active workspace */
   let welcomeReturnWorkspaceName = $state<string | null>(null);
+  /** When set, opens the welcome screen to a specific view (e.g. 'bundles', 'workspace-picker'). */
+  let welcomeInitialView = $state<'main' | 'sign-in' | 'workspace-picker' | 'bundles' | 'provider-choice' | null>(null);
+  // Clear initialView when the welcome screen closes so it doesn't persist on re-open
+  $effect(() => { if (!showWelcomeScreen) welcomeInitialView = null; });
   let spotlightSteps = $state<SpotlightStep[] | null>(null);
 
   // Launch zoom overlay (persists after WelcomeScreen unmounts)
@@ -3341,10 +3345,7 @@
   </Dialog.Content>
 </Dialog.Root>
 
-<!-- Full-screen Audience Manager -->
-{#if showAudienceManager && api}
-  <AudienceManager {api} rootPath={tree?.path ?? ""} onClose={() => { showAudienceManager = false; }} />
-{/if}
+<AudienceManager bind:open={showAudienceManager} {api} rootPath={tree?.path ?? ""} />
 
 <!-- Toast Notifications -->
 <Toaster position={mobileState.isMobile ? "top-center" : "bottom-right"} />
@@ -3375,6 +3376,7 @@
 {:else if showWelcomeScreen}
   <WelcomeScreen
     bind:this={welcomeScreenRef}
+    initialView={welcomeInitialView}
     onLaunch={(info) => { launchOverlay = info; }}
     onGetStarted={async (selectedBundle, pluginOverrides) => {
       entryStore.setLoading(true);
@@ -3578,6 +3580,14 @@
       const wsId = getCurrentWorkspaceId();
       const localWs = wsId ? getLocalWorkspace(wsId) : null;
       welcomeReturnWorkspaceName = localWs?.name ?? null;
+      welcomeInitialView = 'bundles';
+      showWelcomeScreen = true;
+    }}
+    onBrowseRemoteWorkspaces={() => {
+      const wsId = getCurrentWorkspaceId();
+      const localWs = wsId ? getLocalWorkspace(wsId) : null;
+      welcomeReturnWorkspaceName = localWs?.name ?? null;
+      welcomeInitialView = 'workspace-picker';
       showWelcomeScreen = true;
     }}
     onMoveEntry={handleMoveEntry}
@@ -3686,7 +3696,7 @@
   />
 
   <!-- Main Content Area -->
-  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative md:pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]" data-spotlight="editor-area">
+  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative" data-spotlight="editor-area">
     <!-- Sidebar open buttons (visible when collapsed, fade in focus mode, reveal on hover via edge strip) -->
     {#if leftSidebarCollapsed}
       <!-- svelte-ignore a11y_no_static_element_interactions -->

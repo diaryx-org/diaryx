@@ -13,7 +13,7 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Popover from "$lib/components/ui/popover";
-  import SignInPopover from "./SignInPopover.svelte";
+  import SignInDialog from "./SignInDialog.svelte";
   import MobileActionSheet from "../views/sidebar/MobileActionSheet.svelte";
   import { createContextMenuState, type TreeNodeMenuData } from "./hooks/useContextMenu.svelte";
   import { getMobileState } from "./hooks/useMobile.svelte";
@@ -87,6 +87,7 @@
     marketplaceDialogOpen?: boolean;
     onOpenAccountSettings: () => void;
     onAddWorkspace: () => void;
+    onBrowseRemoteWorkspaces?: () => void;
     onMoveEntry: (fromPath: string, toParentPath: string, position?: { beforePath?: string; afterPath?: string }) => void;
     onOpenMoveDialog?: (path: string) => void;
     onCreateChildEntry: (parentPath: string) => void;
@@ -146,6 +147,7 @@
     marketplaceDialogOpen = false,
     onOpenAccountSettings,
     onAddWorkspace,
+    onBrowseRemoteWorkspaces,
     onMoveEntry,
     onOpenMoveDialog,
     onCreateChildEntry,
@@ -1412,9 +1414,11 @@
 >
   <!-- Content Area -->
   <div
-    class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''} pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]"
+    class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''}"
     bind:this={scrollContainer}
   >
+    <!-- Sticky spacer: keeps content from scrolling behind macOS traffic lights -->
+    <div class="sticky top-0 z-10 bg-sidebar shrink-0 h-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]"></div>
     {#if leftTab === "files"}
       {#if workspaceMissing}
         <!-- Workspace Missing State -->
@@ -1609,35 +1613,34 @@
       class="relative flex items-center gap-1 px-3 py-1.5"
       onmousedown={maybeStartWindowDrag}
     >
-      <Popover.Root bind:open={profilePopoverOpen}>
-        <Popover.Trigger
-          class="flex items-center gap-2.5 flex-1 min-w-0 py-1 hover:bg-sidebar-accent active:bg-sidebar-accent rounded-md px-1.5 transition-colors text-left"
-          aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
-          data-window-drag-exclude
-        >
-          <span class="relative shrink-0">
-            <CircleUser class="size-5 text-muted-foreground" />
-            {#if authState.isAuthenticated}
-              <span
-                class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-sidebar {collaborationStore.serverOffline ? 'bg-amber-500' : 'bg-emerald-500'}"
-              ></span>
-            {/if}
-          </span>
-          {#if collaborationStore.serverOffline && authState.isAuthenticated}
-            <span class="text-sm truncate text-amber-600 dark:text-amber-400">Offline</span>
-          {:else if authState.isAuthenticated && authState.user}
-            <span class="text-sm truncate text-sidebar-foreground">{authState.user.email}</span>
-          {:else}
-            <span class="text-sm text-muted-foreground">Sign in</span>
+      <button
+        type="button"
+        class="flex items-center gap-2.5 flex-1 min-w-0 py-1 hover:bg-sidebar-accent active:bg-sidebar-accent rounded-md px-1.5 transition-colors text-left"
+        aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
+        data-window-drag-exclude
+        onclick={() => { profilePopoverOpen = true; }}
+      >
+        <span class="relative shrink-0">
+          <CircleUser class="size-5 text-muted-foreground" />
+          {#if authState.isAuthenticated}
+            <span
+              class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-sidebar {collaborationStore.serverOffline ? 'bg-amber-500' : 'bg-emerald-500'}"
+            ></span>
           {/if}
-        </Popover.Trigger>
-        <Popover.Content side="top" align="start" class="w-auto p-3">
-          <SignInPopover
-            onOpenAccountSettings={() => { profilePopoverOpen = false; onOpenAccountSettings(); }}
-            onClose={() => { profilePopoverOpen = false; }}
-          />
-        </Popover.Content>
-      </Popover.Root>
+        </span>
+        {#if collaborationStore.serverOffline && authState.isAuthenticated}
+          <span class="text-sm truncate text-amber-600 dark:text-amber-400">Offline</span>
+        {:else if authState.isAuthenticated && authState.user}
+          <span class="text-sm truncate text-sidebar-foreground">{authState.user.email}</span>
+        {:else}
+          <span class="text-sm text-muted-foreground">Sign in</span>
+        {/if}
+      </button>
+      <SignInDialog
+        bind:open={profilePopoverOpen}
+        onOpenAccountSettings={() => { profilePopoverOpen = false; onOpenAccountSettings(); }}
+        onBrowseRemoteWorkspaces={() => { profilePopoverOpen = false; onBrowseRemoteWorkspaces?.(); }}
+      />
       <div class="flex items-center gap-1 shrink-0">
         <Tooltip.Root>
           <Tooltip.Trigger>

@@ -78,9 +78,9 @@ vi.mock("@/models/stores/collaborationStore.svelte", () => ({
   collaborationStore: { serverOffline: false },
 }));
 
-import SignInPopover from "./SignInPopover.svelte";
+import SignInDialog from "./SignInDialog.svelte";
 
-describe("SignInPopover", () => {
+describe("SignInDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authState.isAuthenticated = false;
@@ -92,7 +92,7 @@ describe("SignInPopover", () => {
   it("sends a magic link and transitions into verification state", async () => {
     requestMagicLinkMock.mockResolvedValue({ success: true, devLink: null, devCode: null });
 
-    render(SignInPopover);
+    render(SignInDialog, { open: true });
 
     await fireEvent.input(screen.getByLabelText("Email"), {
       target: { value: "user@example.com" },
@@ -115,16 +115,14 @@ describe("SignInPopover", () => {
     authState.user = { email: "user@example.com" };
 
     const onOpenAccountSettings = vi.fn();
-    const onClose = vi.fn();
 
-    render(SignInPopover, {
+    render(SignInDialog, {
+      open: true,
       onOpenAccountSettings,
-      onClose,
     });
 
     await fireEvent.click(screen.getByRole("button", { name: "Account Settings" }));
 
-    expect(onClose).toHaveBeenCalledTimes(1);
     expect(onOpenAccountSettings).toHaveBeenCalledTimes(1);
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
   });

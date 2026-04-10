@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Api } from "$lib/backend/api";
   import type { TreeNode } from "$lib/backend/interface";
+  import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
@@ -26,23 +27,16 @@
   } from "@lucide/svelte";
 
   interface Props {
+    open: boolean;
     api: Api | null;
     rootPath: string;
-    onClose: () => void;
   }
 
-  let { api, rootPath, onClose }: Props = $props();
+  let { open = $bindable(), api, rootPath }: Props = $props();
 
   const mobileState = getMobileState();
   const templateContextStore = getTemplateContextStore();
   const colorStore = getAudienceColorStore();
-
-  let closing = $state(false);
-
-  function handleClose() {
-    closing = true;
-    setTimeout(onClose, 200);
-  }
 
   // ── Audience list state ───────────────────────────────────────────────
   let audiences = $state<string[]>([]);
@@ -523,34 +517,14 @@
   }
 </script>
 
-<div
-  class="fixed inset-0 z-50 bg-background overflow-hidden {closing
-    ? 'animate-marketplace-out'
-    : 'animate-marketplace-in'}"
->
-  <div class="h-full flex flex-col">
-    <!-- Header -->
-    <header
-      class="border-b px-4 py-3 flex items-center justify-between gap-3 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.75rem)] shrink-0"
-    >
-      <div class="flex items-center gap-2 min-w-0">
-        <div>
-          <h2 class="text-lg font-semibold">Manage Audiences</h2>
-          <p class="text-xs text-muted-foreground hidden sm:block">
-            Select an audience, then click entries to paint them.
-          </p>
-        </div>
-      </div>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="size-11 md:size-9"
-        onclick={handleClose}
-        aria-label="Close audience manager"
-      >
-        <X class="size-5 md:size-4" />
-      </Button>
-    </header>
+<Dialog.Root bind:open>
+  <Dialog.Content class="sm:max-w-4xl p-0 gap-0 h-[min(80vh,720px)] flex flex-col overflow-hidden">
+    <Dialog.Header class="px-4 py-3 border-b shrink-0">
+      <Dialog.Title>Manage Audiences</Dialog.Title>
+      <Dialog.Description class="text-xs text-muted-foreground hidden sm:block">
+        Select an audience, then click entries to paint them.
+      </Dialog.Description>
+    </Dialog.Header>
 
     <!-- Body -->
     <div
@@ -850,7 +824,7 @@
         class="fixed inset-0 z-[60] bg-background animate-detail-in flex flex-col"
       >
         <header
-          class="border-b px-4 py-3 flex items-center gap-3 pt-[calc(env(safe-area-inset-top)+var(--titlebar-area-height)+0.75rem)] shrink-0"
+          class="border-b px-4 py-3 flex items-center gap-3 shrink-0"
         >
           <Button
             variant="ghost"
@@ -894,8 +868,8 @@
         </div>
       </div>
     {/if}
-  </div>
-</div>
+  </Dialog.Content>
+</Dialog.Root>
 
 {#snippet treeContent()}
   <div class="p-3 border-b shrink-0">
@@ -1073,36 +1047,6 @@
 {/snippet}
 
 <style>
-  @keyframes marketplace-in {
-    from {
-      opacity: 0;
-      transform: translateY(12px) scale(0.98);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-    }
-  }
-
-  :global(.animate-marketplace-in) {
-    animation: marketplace-in 0.25s ease-out;
-  }
-
-  @keyframes marketplace-out {
-    from {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-    }
-    to {
-      opacity: 0;
-      transform: translateY(12px) scale(0.98);
-    }
-  }
-
-  :global(.animate-marketplace-out) {
-    animation: marketplace-out 0.2s ease-in forwards;
-  }
-
   @keyframes detail-slide-in {
     from {
       transform: translateX(100%);

@@ -343,11 +343,18 @@ pub fn compute_diff(
         if !local_scan.contains_key(&se.key) {
             let manifest_entry = manifest.files.get(&se.key);
             match manifest_entry {
-                Some(me) if me.state == SyncState::Clean => {
-                    // Was clean locally but now gone → deleted on this device.
-                    // Delete from server.  This covers moves and renames where
-                    // no explicit pending_delete was recorded.
-                    plan.delete_remote.push(se.key.clone());
+                Some(_me) if _me.state == SyncState::Clean => {
+                    // File was clean in our manifest but is no longer in the
+                    // local workspace_file_set.  This can happen legitimately
+                    // when the workspace tree structure changes (e.g. a parent
+                    // entry's `contents` list was edited) — the file still
+                    // exists on disk but isn't reachable via tree-walk.
+                    //
+                    // We must NOT delete from server here; explicit user
+                    // deletions are tracked via pending_deletes (handled
+                    // below).  Pulling is the safe default: worst case we
+                    // re-download a file that already exists locally.
+                    plan.pull.push(se.key.clone());
                 }
                 Some(_) => {
                     // Was dirty but file is gone? Pull it back.
@@ -913,17 +920,19 @@ mod tests {
     }
 
     #[test]
-    fn clean_file_gone_locally_deletes_from_server() {
+    fn clean_file_gone_from_local_scan_pulls_instead_of_deleting() {
         let mut manifest = make_manifest();
         manifest.mark_clean("files/old-name.md", "hash", 100, 500);
 
-        // File is gone locally (e.g. renamed) but still on server
+        // File is gone from workspace_file_set (e.g. tree restructured)
+        // but still on server.  Should pull, not delete — explicit user
+        // deletions are tracked via pending_deletes.
         let local_scan = BTreeMap::new();
         let server = vec![server("files/old-name.md", Some("hash"), 500)];
 
         let plan = compute_diff(&manifest, &local_scan, &server);
-        assert_eq!(plan.delete_remote, vec!["files/old-name.md"]);
-        assert!(plan.pull.is_empty());
+        assert!(plan.delete_remote.is_empty());
+        assert_eq!(plan.pull, vec!["files/old-name.md"]);
     }
 
     #[test]

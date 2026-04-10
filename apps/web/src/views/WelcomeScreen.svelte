@@ -60,6 +60,8 @@
     /** When set, user navigated here from an existing workspace — show a "Return" button */
     returnWorkspaceName?: string | null;
     onReturn?: () => void;
+    /** When set, jump directly to a specific view on mount. */
+    initialView?: WelcomeView | null;
   }
 
   let {
@@ -70,6 +72,7 @@
     onLaunch,
     returnWorkspaceName = null,
     onReturn,
+    initialView = null,
   }: Props = $props();
 
   // View state machine
@@ -505,8 +508,22 @@
     }
   }
 
-  // Run once on mount
-  autoNavigateIfSignedIn();
+  // Run once on mount — honour initialView if provided, otherwise auto-navigate
+  if (initialView === 'workspace-picker' && isAuthenticated()) {
+    // Jump directly to workspace picker and load namespaces
+    loadingWorkspaces = true;
+    workspacePickerProviderId = null;
+    workspacePickerBackView = 'main';
+    navigateTo('workspace-picker');
+    listUserWorkspaceNamespaces()
+      .then((ns) => { workspaceNamespaces = ns; })
+      .catch(() => { workspaceNamespaces = []; })
+      .finally(() => { loadingWorkspaces = false; });
+  } else if (initialView && initialView !== 'main') {
+    navigateTo(initialView);
+  } else {
+    autoNavigateIfSignedIn();
+  }
 
   async function loadData() {
     loading = true;

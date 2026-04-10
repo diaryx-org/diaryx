@@ -3,7 +3,6 @@
   import { isTauri, type TreeNode, type EntryData, type ValidationResultWithMeta, type ValidationErrorWithMeta, type ValidationWarningWithMeta, type Api } from "./backend";
   import { maybeStartWindowDrag } from "./windowDrag";
   import type { ComponentRef, PluginId } from "$lib/backend/generated";
-  import type { FixResult } from "./backend/generated";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Kbd from "$lib/components/ui/kbd";
@@ -485,8 +484,10 @@
   // Inherited Warnings - orphan file warnings bubble up to nearest index
   // =========================================================================
 
-  // Orphan warning types that should inherit to parent indexes
-  const ORPHAN_WARNING_TYPES = ['OrphanFile', 'OrphanBinaryFile', 'MissingPartOf', 'UnlinkedEntry'];
+  // Whether a warning should bubble up to its nearest ancestor index when
+  // rendered in the tree view. The backend sets `inherits_to_parent` on the
+  // metadata wrapper for orphan-style variants; do not maintain a variant
+  // allow-list here.
 
   // Build a map of directory path -> index file path from the tree
   // Only includes actual index files (nodes with children), not leaf files
@@ -532,34 +533,13 @@
     return null;
   }
 
-  // Extract file path from any warning type
+  // The backend computes the primary path for every warning variant (via
+  // `ValidationWarning::file_path`) and exposes it as `primary_path` on the
+  // metadata wrapper, so the frontend never needs to switch on variant
+  // names. Callers should read `warning.primary_path` directly; this helper
+  // normalizes the nullable shape for readability.
   function getWarningFilePath(warning: ValidationWarningWithMeta): string | null {
-    switch (warning.type) {
-      case 'OrphanFile':
-      case 'OrphanBinaryFile':
-      case 'MissingPartOf':
-        return warning.file ?? null;
-      case 'UnlinkedEntry':
-        return warning.path ?? null;
-      case 'CircularReference': {
-        // Return the first file in the cycle for viewing
-        const files = (warning as { files?: string[] }).files;
-        return files && files.length > 0 ? files[0] : null;
-      }
-      case 'NonPortablePath':
-      case 'NonPortableFilename':
-        return warning.file ?? null;
-      case 'MultipleIndexes':
-        return warning.directory ?? null;
-      case 'InvalidContentsRef':
-        return warning.index ?? null;
-      case 'InvalidAttachmentRef':
-        return warning.file ?? null;
-      case 'DuplicateListEntry':
-        return warning.file ?? null;
-      default:
-        return null;
-    }
+    return warning.primary_path ?? null;
   }
 
   // Get filename from path for display
@@ -602,9 +582,9 @@
     // Build the tree index map once
     const treeIndexMap = buildTreeIndexMap(tree);
 
-    // Process each orphan-type warning
+    // Process each warning that opts into parent inheritance via metadata.
     for (const warning of validationResult.warnings) {
-      if (!ORPHAN_WARNING_TYPES.includes(warning.type)) continue;
+      if (!warning.inherits_to_parent) continue;
 
       // Extract the file path from the warning
       const filePath = getWarningFilePath(warning);
@@ -677,34 +657,24 @@
     }
   }
 
-  // Select a parent from the picker
+  // Select a parent from the picker. All four parent-picker-supporting
+  // variants (OrphanFile, OrphanBinaryFile, MissingPartOf, UnlinkedEntry)
+  // carry a `suggested_index` field; overriding it here lets the generic
+  // backend fix dispatch pick the right operation for each variant,
+  // including UnlinkedEntry's is_dir + index_file carve-out.
   async function handleSelectParent(parentPath: string) {
     if (!pendingWarningForParentPicker || !api) return;
 
-    const filePath = getWarningFilePath(pendingWarningForParentPicker);
-    if (!filePath) return;
-
     try {
-      let result;
-      const warning = pendingWarningForParentPicker;
-
-      if (warning.type === 'OrphanBinaryFile') {
-        result = await api.fixOrphanBinaryFile(parentPath, filePath);
-      } else if (warning.type === 'UnlinkedEntry') {
-        const w = warning as { is_dir?: boolean; index_file?: string | null };
-        if (w.is_dir && w.index_file) {
-          result = await api.fixUnlistedFile(parentPath, w.index_file);
-        } else {
-          result = await api.fixUnlistedFile(parentPath, filePath);
-        }
-      } else {
-        result = await api.fixUnlistedFile(parentPath, filePath);
-      }
-
-      if (result?.success) {
+      const warning = {
+        ...pendingWarningForParentPicker,
+        suggested_index: parentPath,
+      };
+      const result = await api.fixValidationWarning(warning as any);
+      if (result.success) {
         toast.success(result.message);
         onValidationFix?.();
-      } else if (result) {
+      } else {
         toast.error(result.message);
       }
     } catch (e) {
@@ -843,91 +813,20 @@
     }
   }
 
-  // Fix individual warning
+  // Fix an individual warning via the generic backend dispatch. The backend
+  // matches on the warning variant and calls the appropriate per-variant
+  // fix routine, so new warning kinds added in Rust become fixable from the
+  // sidebar automatically — no frontend patch required. The metadata
+  // wrapper is sent as-is; the backend's deserializer ignores the extra
+  // `description`/`detail`/`primary_path`/… fields.
   async function handleFixWarning(warning: ValidationWarningWithMeta) {
     if (!api) return;
-
     try {
-      let result: FixResult | undefined;
-      switch (warning.type) {
-        case 'OrphanBinaryFile': {
-          const w = warning as { file: string; suggested_index?: string | null };
-          if (w.suggested_index) {
-            result = await api.fixOrphanBinaryFile(w.suggested_index, w.file);
-          }
-          break;
-        }
-        case 'MissingPartOf': {
-          const w = warning as { file: string; suggested_index?: string | null };
-          if (w.suggested_index) {
-            result = await api.fixMissingPartOf(w.file, w.suggested_index);
-          }
-          break;
-        }
-        case 'NonPortablePath': {
-          const w = warning as { file: string; property: string; value: string; suggested: string };
-          result = await api.fixNonPortablePath(w.file, w.property, w.value, w.suggested);
-          break;
-        }
-        case 'OrphanFile': {
-          // Use the backend's suggested_index
-          const w = warning as { file: string; suggested_index: string | null };
-          if (w.suggested_index) {
-            result = await api.fixUnlistedFile(w.suggested_index, w.file);
-          } else {
-            toast.error('No parent index found to add this file to');
-            return;
-          }
-          break;
-        }
-        case 'UnlinkedEntry': {
-          // Use the backend's suggested_index and index_file for directories
-          const w = warning as unknown as { path: string; is_dir: boolean; suggested_index: string | null; index_file: string | null };
-          if (!w.suggested_index) {
-            toast.error('No parent index found to add this entry to');
-            return;
-          }
-          if (w.is_dir) {
-            // For directories, link the index file inside
-            if (w.index_file) {
-              result = await api.fixUnlistedFile(w.suggested_index, w.index_file);
-            } else {
-              toast.error('Cannot link directory without an index file. Create an index.md or README.md first.');
-              return;
-            }
-          } else {
-            // For files, link directly
-            result = await api.fixUnlistedFile(w.suggested_index, w.path);
-          }
-          break;
-        }
-        case 'CircularReference': {
-          // Fix by removing the suggested contents reference
-          const w = warning as { suggested_file?: string | null; suggested_remove_part_of?: string | null };
-          if (w.suggested_file && w.suggested_remove_part_of) {
-            result = await api.fixCircularReference(w.suggested_file, w.suggested_remove_part_of);
-          } else {
-            toast.error('Cannot auto-fix this circular reference. Manually edit one of the files involved.');
-            return;
-          }
-          break;
-        }
-        case 'NonPortableFilename': {
-          const w = warning as { file: string; suggested_filename: string };
-          const newPath = await api.renameEntry(w.file, w.suggested_filename);
-          if (newPath) {
-            toast.success(`Renamed to ${w.suggested_filename}`);
-            onValidationFix?.();
-            return;
-          }
-          break;
-        }
-      }
-
-      if (result?.success) {
+      const result = await api.fixValidationWarning(warning as any);
+      if (result.success) {
         toast.success(result.message);
         onValidationFix?.();
-      } else if (result) {
+      } else {
         toast.error(result.message);
       }
     } catch (e) {

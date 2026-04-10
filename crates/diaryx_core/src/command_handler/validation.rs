@@ -203,4 +203,48 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         Ok(Response::FixResult(result))
     }
+
+    /// Generic "fix any warning" entry point.
+    ///
+    /// Delegates to `ValidationFixer::fix_warning`, which matches the variant
+    /// and calls the appropriate per-variant fixer. Callers (CLI, web,
+    /// Tauri) can use this instead of picking a variant-specific `Fix*`
+    /// command, keeping the command surface stable as new warning variants
+    /// are added. Returns a `FixResult::failure` if the variant is not
+    /// auto-fixable.
+    pub(crate) async fn cmd_fix_validation_warning(
+        &self,
+        warning: crate::validate::ValidationWarning,
+    ) -> Result<Response> {
+        let fixer = self.validate().fixer();
+        let result = match fixer.fix_warning(&warning).await {
+            Some(r) => r,
+            None => crate::validate::FixResult::failure(format!(
+                "Warning '{}' is not auto-fixable",
+                warning.description()
+            )),
+        };
+
+        if result.success {
+            self.emit_workspace_sync().await;
+        }
+
+        Ok(Response::FixResult(result))
+    }
+
+    /// Generic "fix any error" entry point. See
+    /// [`cmd_fix_validation_warning`].
+    pub(crate) async fn cmd_fix_validation_error(
+        &self,
+        error: crate::validate::ValidationError,
+    ) -> Result<Response> {
+        let fixer = self.validate().fixer();
+        let result = fixer.fix_error(&error).await;
+
+        if result.success {
+            self.emit_workspace_sync().await;
+        }
+
+        Ok(Response::FixResult(result))
+    }
 }

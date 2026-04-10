@@ -38,6 +38,10 @@ pub struct ValidationWarningWithMeta {
     pub is_viewable: bool,
     /// Whether this warning supports choosing a different parent
     pub supports_parent_picker: bool,
+    /// Whether this warning should bubble up to the nearest ancestor index
+    /// when rendered in a tree view (orphan-style warnings). UIs can filter
+    /// on this instead of hardcoding a type list.
+    pub inherits_to_parent: bool,
 }
 
 impl From<ValidationWarning> for ValidationWarningWithMeta {
@@ -51,6 +55,7 @@ impl From<ValidationWarning> for ValidationWarningWithMeta {
             can_auto_fix: warning.can_auto_fix(),
             is_viewable: warning.is_viewable(),
             supports_parent_picker: warning.supports_parent_picker(),
+            inherits_to_parent: warning.inherits_to_parent(),
             warning,
         }
     }

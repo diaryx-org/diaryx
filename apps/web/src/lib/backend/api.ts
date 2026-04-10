@@ -22,8 +22,10 @@ import type {
   EntryData,
   TreeNode,
   SearchResults,
+  ValidationError,
   ValidationResult,
   ValidationResultWithMeta,
+  ValidationWarning,
   FixResult,
   FixSummary,
   ExportPlan,
@@ -913,6 +915,34 @@ export function createApi(backend: Backend) {
       const response = await backend.execute({
         type: 'FixCircularReference',
         params: { file_path: filePath, part_of_value: contentsRefToRemove },
+      });
+      return expectResponse(response, 'FixResult').data;
+    },
+
+    /**
+     * Generic fix entry point: hands the warning to the backend which
+     * dispatches to the appropriate per-variant fix via
+     * `ValidationFixer::fix_warning`. Prefer this over the variant-specific
+     * `fix*` methods — it keeps the frontend variant-agnostic so new warning
+     * kinds added in Rust Just Work without a frontend patch.
+     *
+     * Accepts either the raw `ValidationWarning` or the `WithMeta` wrapper;
+     * the wrapper uses `#[serde(flatten)]` so the extra metadata fields are
+     * ignored by the backend deserializer.
+     */
+    async fixValidationWarning(warning: ValidationWarning | { warning?: never } & Record<string, unknown>): Promise<FixResult> {
+      const response = await backend.execute({
+        type: 'FixValidationWarning',
+        params: { warning: warning as ValidationWarning },
+      });
+      return expectResponse(response, 'FixResult').data;
+    },
+
+    /** Generic error fix. See [`fixValidationWarning`]. */
+    async fixValidationError(error: ValidationError | Record<string, unknown>): Promise<FixResult> {
+      const response = await backend.execute({
+        type: 'FixValidationError',
+        params: { error: error as ValidationError },
       });
       return expectResponse(response, 'FixResult').data;
     },

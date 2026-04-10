@@ -594,6 +594,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 self.cmd_fix_circular_reference(file_path, part_of_value)
                     .await
             }
+            Command::FixValidationWarning { warning } => {
+                self.cmd_fix_validation_warning(warning).await
+            }
+            Command::FixValidationError { error } => self.cmd_fix_validation_error(error).await,
 
             // === Attachment Operations ===
             Command::GetAttachments { path } => self.cmd_get_attachments(path).await,

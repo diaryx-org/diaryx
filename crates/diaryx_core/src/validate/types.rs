@@ -323,6 +323,21 @@ impl ValidationWarning {
                 | Self::UnlinkedEntry { .. }
         )
     }
+
+    /// Whether this warning should bubble up to the nearest ancestor index
+    /// when rendered in a tree view. True for orphan-style warnings
+    /// (`OrphanFile`, `OrphanBinaryFile`, `MissingPartOf`, `UnlinkedEntry`)
+    /// so sidebars can display them under the parent index instead of at
+    /// the workspace root. Other warnings render on the file itself.
+    pub fn inherits_to_parent(&self) -> bool {
+        matches!(
+            self,
+            Self::OrphanFile { .. }
+                | Self::OrphanBinaryFile { .. }
+                | Self::MissingPartOf { .. }
+                | Self::UnlinkedEntry { .. }
+        )
+    }
 }
 
 impl ValidationError {

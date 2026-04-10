@@ -25,7 +25,9 @@ use serde_json::Value as JsonValue;
 use crate::link_parser::LinkFormat;
 use crate::search::SearchResults;
 use crate::types::FileInfo;
-use crate::validate::{FixResult, ValidationResult, ValidationResultWithMeta};
+use crate::validate::{
+    FixResult, ValidationError, ValidationResult, ValidationResultWithMeta, ValidationWarning,
+};
 use crate::workspace::{TreeNode, WorkspaceConfig};
 use crate::yaml_value::YamlValue;
 
@@ -425,6 +427,24 @@ pub enum Command {
         file_path: String,
         /// The part_of value to remove.
         part_of_value: String,
+    },
+
+    /// Auto-fix any validation warning by delegating to
+    /// `ValidationFixer::fix_warning`. Consumers that don't want to switch
+    /// on `ValidationWarning` variants should use this instead of the
+    /// per-variant `Fix*` commands. Paths inside the warning are used
+    /// as-is (matching `FixAll`'s behavior) since callers normally round-trip
+    /// the warning straight from a prior `ValidateWorkspace` response.
+    FixValidationWarning {
+        /// The warning to fix, exactly as emitted by the validator.
+        warning: ValidationWarning,
+    },
+
+    /// Auto-fix any validation error by delegating to
+    /// `ValidationFixer::fix_error`. See [`Command::FixValidationWarning`].
+    FixValidationError {
+        /// The error to fix, exactly as emitted by the validator.
+        error: ValidationError,
     },
 
     /// Get available parent indexes for a file (for "Choose parent" picker).
@@ -893,7 +913,9 @@ impl Command {
                 *workspace_root = normalizer(workspace_root);
             }
 
-            Command::FixAll { .. } => {}
+            Command::FixAll { .. }
+            | Command::FixValidationWarning { .. }
+            | Command::FixValidationError { .. } => {}
 
             // --- Attachments (entry_path only; attachment_path is a link ref) ---
             Command::RegisterAttachment { entry_path, .. }

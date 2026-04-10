@@ -207,6 +207,7 @@ mod tests {
             is_index: false,
             children: vec![],
             properties: HashMap::new(),
+            audience: Vec::new(),
         }
     }
 
@@ -218,6 +219,7 @@ mod tests {
             is_index: false,
             children,
             properties: HashMap::new(),
+            audience: Vec::new(),
         }
     }
 

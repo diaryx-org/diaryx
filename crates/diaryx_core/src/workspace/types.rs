@@ -359,6 +359,9 @@ pub struct TreeNode {
     )]
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub properties: HashMap<String, String>,
+    /// Audience tags from frontmatter (empty if not set)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audience: Vec<String>,
 }
 
 /// Helper function to format a tree node for display

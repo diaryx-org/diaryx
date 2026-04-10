@@ -376,6 +376,7 @@ describe('api', () => {
         is_index: false,
         children: [],
         properties: {},
+        audience: [],
       }
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'Tree',
@@ -394,7 +395,7 @@ describe('api', () => {
     it('should get workspace tree with path and depth', async () => {
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'Tree',
-        data: { path: 'subdir', name: 'subdir', description: null, is_index: false, children: [], properties: {} },
+        data: { path: 'subdir', name: 'subdir', description: null, is_index: false, children: [], properties: {}, audience: [] },
       })
 
       await api.getWorkspaceTree('subdir', 2)
@@ -899,7 +900,7 @@ describe('api', () => {
 
   describe('getFilesystemTree', () => {
     it('should get filesystem tree with defaults', async () => {
-      const mockTree = { path: 'root', name: 'root', description: null, is_index: false, children: [], properties: {} }
+      const mockTree = { path: 'root', name: 'root', description: null, is_index: false, children: [], properties: {}, audience: [] }
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'Tree',
         data: mockTree,
@@ -917,7 +918,7 @@ describe('api', () => {
     it('should pass options through', async () => {
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'Tree',
-        data: { path: 'root', name: 'root', description: null, is_index: false, children: [], properties: {} },
+        data: { path: 'root', name: 'root', description: null, is_index: false, children: [], properties: {}, audience: [] },
       })
 
       await api.getFilesystemTree('subdir', true, 3)
@@ -1915,7 +1916,7 @@ describe('api', () => {
     it('should pass audience parameter', async () => {
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'Tree',
-        data: { path: 'root', name: 'root', description: null, is_index: false, children: [], properties: {} },
+        data: { path: 'root', name: 'root', description: null, is_index: false, children: [], properties: {}, audience: [] },
       })
 
       await api.getWorkspaceTree('root', 2, ['public'])

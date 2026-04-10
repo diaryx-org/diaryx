@@ -309,6 +309,28 @@ export function getWorkspaceStore() {
       }
     },
 
+    /** Update a single node's audience tags (optimistic update for paint mode). */
+    updateNodeAudience(nodePath: string, audience: string[]) {
+      if (!tree) return;
+      function walk(node: TreeNode): [TreeNode, boolean] {
+        if (node.path === nodePath) {
+          return [{ ...node, audience }, true];
+        }
+        for (let i = 0; i < node.children.length; i++) {
+          const [updated, found] = walk(node.children[i]);
+          if (found) {
+            if (updated === node.children[i]) return [node, true];
+            const children = node.children.slice();
+            children[i] = updated;
+            return [{ ...node, children }, true];
+          }
+        }
+        return [node, false];
+      }
+      const [updatedTree, found] = walk(tree);
+      if (found) tree = updatedTree;
+    },
+
     /**
      * Find the parent node path for a given file path in the current tree.
      * Returns null if not found.

@@ -93,7 +93,8 @@ function buildTree(files: Map<string, MockFile>, rootPath: string): TreeNode {
       }
     }
 
-    return { name, description: fm.description ?? null, path: filePath, is_index: isIndex, children, properties: {} };
+    const audience: string[] = Array.isArray(fm.audience) ? fm.audience as string[] : [];
+    return { name, description: fm.description ?? null, path: filePath, is_index: isIndex, children, properties: {}, audience };
   }
 
   return buildNode(rootPath);
@@ -132,6 +133,7 @@ function makeTreeNode(
     is_index: isIndexFile(path, files),
     children,
     properties: {},
+    audience: Array.isArray(file?.frontmatter?.audience) ? file.frontmatter.audience as string[] : [],
   };
 }
 
@@ -223,8 +225,9 @@ const FALLBACK_TREE: TreeNode = {
   path: "workspace/index.md",
   is_index: true,
   properties: {},
+  audience: [],
   children: [
-    { name: "Welcome", path: "workspace/welcome.md", is_index: false, children: [], description: null, properties: {} },
+    { name: "Welcome", path: "workspace/welcome.md", is_index: false, children: [], description: null, properties: {}, audience: [] },
   ],
 };
 

@@ -2356,12 +2356,14 @@
         updated = [...current, brush];
       }
 
+      // Optimistic UI: update the tree node immediately
+      workspaceStore.updateNodeAudience(entryPath, updated);
+
       if (updated.length === 0) {
         await api.removeFrontmatterProperty(entryPath, "audience");
       } else {
         await api.setFrontmatterProperty(entryPath, "audience", updated, rootPath);
       }
-      toast.success(`Updated audience for ${entryPath.split("/").pop()?.replace(/\.md$/, "")}`);
     } catch (e) {
       console.error("[App] Paint entry failed:", e);
       toast.error("Failed to update audience");

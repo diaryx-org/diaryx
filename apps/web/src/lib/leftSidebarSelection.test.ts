@@ -20,6 +20,7 @@ function createNode(
     description: null,
     path,
     is_index: false,
+    audience: [],
     children,
   };
 }

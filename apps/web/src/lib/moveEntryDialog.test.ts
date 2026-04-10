@@ -17,18 +17,21 @@ const tree: TreeNode = {
   name: "README.md",
   description: null,
   is_index: true,
+  audience: [],
   children: [
     {
       path: "projects",
       name: "projects",
       description: null,
       is_index: false,
+      audience: [],
       children: [
         {
           path: "projects/alpha.md",
           name: "alpha.md",
           description: null,
           is_index: false,
+          audience: [],
           children: [],
         },
         {
@@ -36,6 +39,7 @@ const tree: TreeNode = {
           name: "beta.md",
           description: null,
           is_index: false,
+          audience: [],
           children: [],
         },
       ],
@@ -45,12 +49,14 @@ const tree: TreeNode = {
       name: "journal",
       description: null,
       is_index: false,
+      audience: [],
       children: [
         {
           path: "journal/day-one.md",
           name: "day-one.md",
           description: null,
           is_index: false,
+          audience: [],
           children: [],
         },
       ],

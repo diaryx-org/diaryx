@@ -1505,6 +1505,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 is_index: false,
                 children: Vec::new(),
                 properties: std::collections::HashMap::new(),
+                audience: Vec::new(),
             });
         }
         visited.insert(canonical);
@@ -1546,6 +1547,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 is_index: false,
                 children: Vec::new(),
                 properties: std::collections::HashMap::new(),
+                audience: Vec::new(),
             });
         } else {
             let next_depth = max_depth.map(|d| d.saturating_sub(1));
@@ -1600,6 +1602,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                                 is_index: false,
                                 children: Vec::new(),
                                 properties: std::collections::HashMap::new(),
+                                audience: Vec::new(),
                             });
                         }
                     }
@@ -1609,6 +1612,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         }
 
         let is_index = index.frontmatter.is_index();
+        let audience = index.frontmatter.audience.clone().unwrap_or_default();
         Ok(TreeNode {
             name,
             description: index.frontmatter.description,
@@ -1616,6 +1620,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             is_index,
             children,
             properties: std::collections::HashMap::new(),
+            audience,
         })
     }
 
@@ -1757,6 +1762,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     is_index: false,
                     children: Vec::new(),
                     properties: std::collections::HashMap::new(),
+                    audience: Vec::new(),
                 });
             } else {
                 let next_depth = max_depth.map(|d| d.saturating_sub(1));
@@ -1797,6 +1803,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                                 children.push(TreeNode {
                                     name: parsed.frontmatter.title.unwrap_or(file_name.clone()),
                                     description: parsed.frontmatter.description,
+                                    audience: parsed
+                                        .frontmatter
+                                        .audience
+                                        .clone()
+                                        .unwrap_or_default(),
                                     path: entry,
                                     is_index: false,
                                     children: Vec::new(),
@@ -1811,6 +1822,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                                     is_index: false,
                                     children: Vec::new(),
                                     properties: std::collections::HashMap::new(),
+                                    audience: Vec::new(),
                                 });
                             }
                         } else {
@@ -1822,6 +1834,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                                 is_index: false,
                                 children: Vec::new(),
                                 properties: std::collections::HashMap::new(),
+                                audience: Vec::new(),
                             });
                         }
                     }
@@ -1836,6 +1849,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             is_index: true,
             children,
             properties: std::collections::HashMap::new(),
+            audience: Vec::new(),
         })
     }
 
@@ -3910,6 +3924,7 @@ mod tests {
                     is_index: false,
                     children: vec![],
                     properties: std::collections::HashMap::new(),
+                    audience: Vec::new(),
                 },
                 TreeNode {
                     name: "Child 2".to_string(),
@@ -3918,9 +3933,11 @@ mod tests {
                     is_index: false,
                     children: vec![],
                     properties: std::collections::HashMap::new(),
+                    audience: Vec::new(),
                 },
             ],
             properties: std::collections::HashMap::new(),
+            audience: Vec::new(),
         };
 
         let fs = make_test_fs();

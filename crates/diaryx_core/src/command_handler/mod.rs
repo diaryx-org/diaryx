@@ -200,6 +200,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             is_index: node.is_index,
             children: filtered_children,
             properties: node.properties,
+            audience: node.audience,
         }
     }
 

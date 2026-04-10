@@ -53,6 +53,8 @@
   import { getSyncState } from "$lib/sync/syncScheduler.svelte";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
+  import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
+  import { getAudienceColor } from "$lib/utils/audienceDotColor";
   import PluginSidebarPanel from "./components/PluginSidebarPanel.svelte";
   import { Share2, History, FolderTree, Globe } from "@lucide/svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
@@ -214,6 +216,7 @@
 
   // Audience panel state for paint-mode interception
   const audiencePanelStore = getAudiencePanelStore();
+  const colorStore = getAudienceColorStore();
 
   // Progressive swipe derived state (mobile only – desktop keeps width-based animation)
   const swiping = $derived(swipeProgress != null);
@@ -2111,6 +2114,16 @@
               <FileText class="size-5 md:size-4 shrink-0 {isNodeActive(node.path) ? 'text-primary' : 'text-muted-foreground'}" />
             {/if}
             <span class="truncate flex-1">{node.name.replace(".md", "")}</span>
+            {#if node.audience && node.audience.length > 0}
+              <span class="flex items-center gap-0.5 shrink-0">
+                {#each node.audience as tag}
+                  <span
+                    class="size-1.5 rounded-full {getAudienceColor(tag, colorStore.audienceColors)}"
+                    title={tag}
+                  ></span>
+                {/each}
+              </span>
+            {/if}
             {#if hasValidationError(node.path)}
               {@const errors = getValidationErrors(node.path)}
               <Popover.Root>

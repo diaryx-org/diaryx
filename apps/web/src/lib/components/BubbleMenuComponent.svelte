@@ -13,11 +13,8 @@
   import BlockStylePicker from "./BlockStylePicker.svelte";
   import MoreStylesPicker from "./MoreStylesPicker.svelte";
   import LinkInsertPopover from "./LinkInsertPopover.svelte";
-  import { Eye, EyeOff } from "@lucide/svelte";
-  import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
   import type { Api } from "$lib/backend/api";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
-  import { getVisibilityBlockForSelection } from "$lib/extensions/VisibilityBlock";
 
   interface Props {
     editor: Editor | null;
@@ -47,7 +44,6 @@
   let isBoldActive = $state(false);
   let isItalicActive = $state(false);
   let isLinkActive = $state(false);
-  let isVisActive = $state(false);
   let isInCodeBlock = $state(false);
   let isInTable = $state(false);
 
@@ -75,9 +71,6 @@
       }
     }
     isLinkActive = editor.isActive("link");
-    isVisActive =
-      editor.isActive("visibilityMark") ||
-      getVisibilityBlockForSelection(editor.state) !== null;
     isInCodeBlock = editor.isActive("codeBlock");
     isInTable = editor.isActive("table");
   }
@@ -289,24 +282,6 @@
         onOpen={() => { closeAllDropdowns(); markPickerOpen[entry.extensionId] = true; }}
       />
     {/each}
-
-    <button
-      type="button"
-      class="toolbar-button"
-      class:active={isVisActive}
-      onmousedown={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        getAudiencePanelStore().openPanel("paint");
-      }}
-      title="Audience visibility"
-    >
-      {#if isVisActive}
-        <EyeOff class="size-4" />
-      {:else}
-        <Eye class="size-4" />
-      {/if}
-    </button>
 
     <div class="link-button-wrapper">
       <button

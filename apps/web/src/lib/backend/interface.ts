@@ -30,6 +30,8 @@ export interface TreeNode {
   /** Whether this node has a `contents` property (even if empty) */
   is_index: boolean;
   children: TreeNode[];
+  /** Audience tags from frontmatter (empty if not set) */
+  audience: string[];
 }
 
 // Note: For full type compatibility with generated types, use import type { EntryData } from './generated'

@@ -115,6 +115,14 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   conversion pipeline, and validation/fixer logic treats them as an explicit
   outbound/backlink graph layered on top of the main `contents` / `part_of`
   hierarchy.
+- `attachments` and `attachment_of` get the same backlink audit as
+  `links`/`link_of`. An index that lists an attachment note whose
+  `attachment_of` does not point back produces a `MissingAttachmentBacklink`
+  warning; an attachment note with a stale `attachment_of` entry (missing
+  source, or source no longer lists the note) produces
+  `StaleAttachmentBacklink`. Both are auto-fixable via
+  `ValidationFixer::fix_missing_attachment_backlink` /
+  `fix_stale_attachment_backlink`.
 - Orphan-file/orphan-binary exclude patterns are inherited from the nearest
   actual index file and its `part_of` ancestors, even when sibling leaf
   markdown files are present in the same directory as the index.

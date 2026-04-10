@@ -913,6 +913,61 @@ fn handle_validate(
                         println!("  ⚠ Stale backlink: '{}' in {}", value, file.display());
                     }
                 }
+                ValidationWarning::MissingAttachmentBacklink {
+                    file,
+                    source,
+                    suggested,
+                } => {
+                    if fix {
+                        let result =
+                            block_on(fixer.fix_missing_attachment_backlink(file, suggested));
+                        if result.success {
+                            println!(
+                                "  ✓ Fixed: Added attachment backlink '{}' to {}",
+                                suggested,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Missing attachment backlink: {} should list {} in attachment_of (failed to fix)",
+                                file.display(),
+                                source
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Missing attachment backlink: {} should list {} in attachment_of",
+                            file.display(),
+                            source
+                        );
+                    }
+                }
+                ValidationWarning::StaleAttachmentBacklink { file, value } => {
+                    if fix {
+                        let result = block_on(fixer.fix_stale_attachment_backlink(file, value));
+                        if result.success {
+                            println!(
+                                "  ✓ Fixed: Removed stale attachment backlink '{}' from {}",
+                                value,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Stale attachment backlink: '{}' in {} (failed to fix)",
+                                value,
+                                file.display()
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Stale attachment backlink: '{}' in {}",
+                            value,
+                            file.display()
+                        );
+                    }
+                }
             }
         }
     }
@@ -1573,6 +1628,61 @@ fn report_and_fix_validation(
                         }
                     } else {
                         println!("  ⚠ Stale backlink: '{}' in {}", value, file.display());
+                    }
+                }
+                ValidationWarning::MissingAttachmentBacklink {
+                    file,
+                    source,
+                    suggested,
+                } => {
+                    if fix {
+                        let fix_result =
+                            block_on(fixer.fix_missing_attachment_backlink(file, suggested));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Added attachment backlink '{}' to {}",
+                                suggested,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Missing attachment backlink: {} should list {} in attachment_of (failed to fix)",
+                                file.display(),
+                                source
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Missing attachment backlink: {} should list {} in attachment_of",
+                            file.display(),
+                            source
+                        );
+                    }
+                }
+                ValidationWarning::StaleAttachmentBacklink { file, value } => {
+                    if fix {
+                        let fix_result = block_on(fixer.fix_stale_attachment_backlink(file, value));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Removed stale attachment backlink '{}' from {}",
+                                value,
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Stale attachment backlink: '{}' in {} (failed to fix)",
+                                value,
+                                file.display()
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Stale attachment backlink: '{}' in {}",
+                            value,
+                            file.display()
+                        );
                     }
                 }
             }

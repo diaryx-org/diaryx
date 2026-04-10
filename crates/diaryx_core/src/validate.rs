@@ -376,6 +376,24 @@ pub enum ValidationWarning {
         /// The stale backlink value in `link_of`
         value: String,
     },
+    /// An index lists an attachment note whose `attachment_of` does not
+    /// contain the listing index — the attachment-note backlink is missing.
+    MissingAttachmentBacklink {
+        /// The attachment note that should contain the backlink
+        file: PathBuf,
+        /// The index file that should appear in `attachment_of`
+        source: String,
+        /// Suggested backlink value to add
+        suggested: String,
+    },
+    /// An attachment note has an `attachment_of` entry whose source index is
+    /// missing or no longer lists the note in its `attachments`.
+    StaleAttachmentBacklink {
+        /// The attachment note containing the stale backlink
+        file: PathBuf,
+        /// The stale backlink value in `attachment_of`
+        value: String,
+    },
     /// The same entry appears more than once in a frontmatter list.
     ///
     /// Applies to link-bearing lists (`contents`, `attachments`, `links`,
@@ -421,6 +439,8 @@ impl ValidationWarning {
             Self::InvalidSelfLink { .. } => "Invalid canonical link",
             Self::MissingBacklink { .. } => "Missing backlink",
             Self::StaleBacklink { .. } => "Stale backlink",
+            Self::MissingAttachmentBacklink { .. } => "Missing attachment backlink",
+            Self::StaleAttachmentBacklink { .. } => "Stale attachment backlink",
             Self::NonPortableFilename { .. } => "Non-portable filename",
         }
     }
@@ -462,6 +482,8 @@ impl ValidationWarning {
             Self::InvalidSelfLink { .. } => true,
             Self::MissingBacklink { .. } => true,
             Self::StaleBacklink { .. } => true,
+            Self::MissingAttachmentBacklink { .. } => true,
+            Self::StaleAttachmentBacklink { .. } => true,
             Self::NonPortableFilename { .. } => true,
         }
     }
@@ -482,6 +504,8 @@ impl ValidationWarning {
             Self::InvalidSelfLink { file, .. } => Some(file),
             Self::MissingBacklink { file, .. } => Some(file),
             Self::StaleBacklink { file, .. } => Some(file),
+            Self::MissingAttachmentBacklink { file, .. } => Some(file),
+            Self::StaleAttachmentBacklink { file, .. } => Some(file),
             Self::NonPortableFilename { file, .. } => Some(file),
         }
     }
@@ -1376,6 +1400,80 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     ctx.visited,
                 )
                 .await;
+
+                // Verify the attachment note has a matching `attachment_of`
+                // backlink to this index. This parallels the links/link_of
+                // backlink check above.
+                if let Ok(note) = self
+                    .ws
+                    .parse_index_with_hint(&absolute_attachment_path, ctx.link_format)
+                    .await
+                {
+                    let note_canonical = workspace_relative_canonical_path(
+                        &absolute_attachment_path,
+                        ctx.workspace_root,
+                    );
+                    if !list_contains_canonical_link(
+                        note.frontmatter.attachment_of_list(),
+                        &file_canonical,
+                        &note_canonical,
+                        ctx.link_format,
+                    ) {
+                        ctx.result
+                            .warnings
+                            .push(ValidationWarning::MissingAttachmentBacklink {
+                                file: absolute_attachment_path.clone(),
+                                source: file_canonical.clone(),
+                                suggested: expected_self_link(
+                                    &file_canonical,
+                                    index.frontmatter.title.as_deref(),
+                                    ctx.link_format,
+                                ),
+                            });
+                    }
+                }
+            }
+
+            // Check this file's own `attachment_of` entries for stale refs:
+            // the source must exist AND its `attachments` list must still
+            // reference this file.
+            for backlink in index.frontmatter.attachment_of_list() {
+                let source_path = index.resolve_path(backlink);
+                let absolute_source_path = if source_path.is_absolute() {
+                    source_path.clone()
+                } else {
+                    ctx.workspace_root.join(&source_path)
+                };
+
+                let stale = if !self.ws.fs_ref().exists(&absolute_source_path).await {
+                    true
+                } else if let Ok(source_index) = self
+                    .ws
+                    .parse_index_with_hint(&absolute_source_path, ctx.link_format)
+                    .await
+                {
+                    let source_canonical = workspace_relative_canonical_path(
+                        &absolute_source_path,
+                        ctx.workspace_root,
+                    );
+                    !list_contains_canonical_link(
+                        source_index.frontmatter.attachments_list(),
+                        &file_canonical,
+                        &source_canonical,
+                        ctx.link_format,
+                    )
+                } else {
+                    true
+                };
+
+                if stale {
+                    ctx.result
+                        .warnings
+                        .push(ValidationWarning::StaleAttachmentBacklink {
+                            file: path.to_path_buf(),
+                            value: backlink.clone(),
+                        });
+                }
             }
         }
 
@@ -1627,6 +1725,43 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         file: path.clone(),
                         value: backlink.clone(),
                     });
+                }
+            }
+
+            for backlink in index.frontmatter.attachment_of_list() {
+                let source_path = index.resolve_path(backlink);
+                let absolute_source_path = if source_path.is_absolute() {
+                    source_path.clone()
+                } else {
+                    workspace_root.join(&source_path)
+                };
+
+                let stale = if !self.ws.fs_ref().exists(&absolute_source_path).await {
+                    true
+                } else if let Ok(source_index) = self
+                    .ws
+                    .parse_index_with_hint(&absolute_source_path, link_format)
+                    .await
+                {
+                    let source_canonical =
+                        workspace_relative_canonical_path(&absolute_source_path, &workspace_root);
+                    !list_contains_canonical_link(
+                        source_index.frontmatter.attachments_list(),
+                        &file_canonical,
+                        &source_canonical,
+                        link_format,
+                    )
+                } else {
+                    true
+                };
+
+                if stale {
+                    result
+                        .warnings
+                        .push(ValidationWarning::StaleAttachmentBacklink {
+                            file: path.clone(),
+                            value: backlink.clone(),
+                        });
                 }
             }
 
@@ -2959,6 +3094,117 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         }
     }
 
+    /// Fix a missing attachment backlink by appending the suggested source
+    /// link to the attachment note's `attachment_of`.
+    pub async fn fix_missing_attachment_backlink(&self, file: &Path, suggested: &str) -> FixResult {
+        match self.get_frontmatter_property(file, "attachment_of").await {
+            Some(crate::yaml_value::YamlValue::Sequence(mut items)) => {
+                items.push(crate::yaml_value::YamlValue::String(suggested.to_string()));
+                match self
+                    .set_frontmatter_property(
+                        file,
+                        "attachment_of",
+                        crate::yaml_value::YamlValue::Sequence(items),
+                    )
+                    .await
+                {
+                    Ok(_) => FixResult::success(format!(
+                        "Added attachment backlink '{}' to {}",
+                        suggested,
+                        file.display()
+                    )),
+                    Err(e) => FixResult::failure(format!(
+                        "Failed to update attachment_of in {}: {}",
+                        file.display(),
+                        e
+                    )),
+                }
+            }
+            None => match self
+                .set_frontmatter_property(
+                    file,
+                    "attachment_of",
+                    crate::yaml_value::YamlValue::Sequence(vec![
+                        crate::yaml_value::YamlValue::String(suggested.to_string()),
+                    ]),
+                )
+                .await
+            {
+                Ok(_) => FixResult::success(format!(
+                    "Added attachment backlink '{}' to {}",
+                    suggested,
+                    file.display()
+                )),
+                Err(e) => FixResult::failure(format!(
+                    "Failed to create attachment_of in {}: {}",
+                    file.display(),
+                    e
+                )),
+            },
+            _ => FixResult::failure(format!(
+                "Could not read attachment_of from {}",
+                file.display()
+            )),
+        }
+    }
+
+    /// Fix a stale attachment backlink by removing it from `attachment_of`.
+    pub async fn fix_stale_attachment_backlink(&self, file: &Path, value: &str) -> FixResult {
+        match self.get_frontmatter_property(file, "attachment_of").await {
+            Some(crate::yaml_value::YamlValue::Sequence(items)) => {
+                let filtered: Vec<crate::yaml_value::YamlValue> = items
+                    .into_iter()
+                    .filter(|item| match item {
+                        crate::yaml_value::YamlValue::String(s) => s != value,
+                        _ => true,
+                    })
+                    .collect();
+
+                if filtered.is_empty() {
+                    match self
+                        .remove_frontmatter_property(file, "attachment_of")
+                        .await
+                    {
+                        Ok(_) => FixResult::success(format!(
+                            "Removed stale attachment backlink '{}' from {}",
+                            value,
+                            file.display()
+                        )),
+                        Err(e) => FixResult::failure(format!(
+                            "Failed to update attachment_of in {}: {}",
+                            file.display(),
+                            e
+                        )),
+                    }
+                } else {
+                    match self
+                        .set_frontmatter_property(
+                            file,
+                            "attachment_of",
+                            crate::yaml_value::YamlValue::Sequence(filtered),
+                        )
+                        .await
+                    {
+                        Ok(_) => FixResult::success(format!(
+                            "Removed stale attachment backlink '{}' from {}",
+                            value,
+                            file.display()
+                        )),
+                        Err(e) => FixResult::failure(format!(
+                            "Failed to update attachment_of in {}: {}",
+                            file.display(),
+                            e
+                        )),
+                    }
+                }
+            }
+            _ => FixResult::failure(format!(
+                "Could not read attachment_of from {}",
+                file.display()
+            )),
+        }
+    }
+
     /// Dedupe a frontmatter list property, preserving the first occurrence of
     /// each canonical value.
     ///
@@ -3189,6 +3435,12 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             } => Some(self.fix_missing_backlink(file, suggested).await),
             ValidationWarning::StaleBacklink { file, value } => {
                 Some(self.fix_stale_backlink(file, value).await)
+            }
+            ValidationWarning::MissingAttachmentBacklink {
+                file, suggested, ..
+            } => Some(self.fix_missing_attachment_backlink(file, suggested).await),
+            ValidationWarning::StaleAttachmentBacklink { file, value } => {
+                Some(self.fix_stale_attachment_backlink(file, value).await)
             }
             ValidationWarning::DuplicateListEntry { file, property, .. } => {
                 Some(self.fix_duplicate_list_entry(file, property).await)
@@ -3453,6 +3705,74 @@ mod tests {
             ValidationWarning::StaleBacklink { file, value }
                 if file == Path::new("README.md") && value == "ghost.md"
         )));
+    }
+
+    #[test]
+    fn test_missing_attachment_backlink_warns() {
+        let fs = make_test_fs();
+        // Root index references an attachment note, but the note is missing
+        // `attachment_of` pointing back.
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nattachments:\n  - _attachments/pic.png.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("_attachments/pic.png.md"),
+            "---\ntitle: pic\nattachment: _attachments/pic.png\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("_attachments/pic.png"), "PNGDATA")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        assert!(
+            result.warnings.iter().any(|warning| matches!(
+                warning,
+                ValidationWarning::MissingAttachmentBacklink { file, source, .. }
+                    if file == Path::new("_attachments/pic.png.md") && source == "README.md"
+            )),
+            "expected MissingAttachmentBacklink warning, got {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_stale_attachment_backlink_warns() {
+        let fs = make_test_fs();
+        // Attachment note declares `attachment_of: [ghost.md]`, but ghost.md
+        // does not exist.
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("_attachments/pic.png.md"),
+            "---\ntitle: pic\nattachment: _attachments/pic.png\nattachment_of:\n  - ghost.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("_attachments/pic.png"), "PNGDATA")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_file(Path::new("_attachments/pic.png.md"))).unwrap();
+
+        assert!(
+            result.warnings.iter().any(|warning| matches!(
+                warning,
+                ValidationWarning::StaleAttachmentBacklink { file, value }
+                    if file == Path::new("_attachments/pic.png.md") && value == "ghost.md"
+            )),
+            "expected StaleAttachmentBacklink warning, got {:?}",
+            result.warnings
+        );
     }
 
     #[test]

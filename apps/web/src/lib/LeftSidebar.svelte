@@ -924,19 +924,6 @@
     return error.primary_path ?? null;
   }
 
-  // Extract target from errors that have it
-  function getErrorTarget(error: ValidationErrorWithMeta): string | null {
-    switch (error.type) {
-      case 'BrokenPartOf':
-      case 'BrokenContentsRef':
-        return error.target ?? null;
-      case 'BrokenAttachment':
-        return error.attachment ?? null;
-      default:
-        return null;
-    }
-  }
-
   // Check if an error can be viewed
   function isErrorViewable(error: ValidationErrorWithMeta): boolean {
     const filePath = getErrorFilePath(error);
@@ -1230,19 +1217,6 @@
     dropPosition = null;
   }
 
-  // Get the file path associated with an error (for filtering)
-  function getErrorAssociatedPath(error: ValidationErrorWithMeta): string | null {
-    switch (error.type) {
-      case 'BrokenPartOf':
-      case 'BrokenAttachment':
-        return error.file;
-      case 'BrokenContentsRef':
-        return error.index;
-      default:
-        return null;
-    }
-  }
-
   // Group validation errors by file path once, so each rendered row can do O(1)
   // lookups instead of scanning the full errors list.
   let validationErrorsByPath = $derived.by(() => {
@@ -1250,7 +1224,7 @@
     if (!validationResult) return map;
 
     for (const error of validationResult.errors) {
-      const path = getErrorAssociatedPath(error);
+      const path = getErrorFilePath(error);
       if (!path) continue;
 
       const existing = map.get(path);
@@ -1275,11 +1249,6 @@
   }
 
   // Get human-readable description for a validation error
-  function getErrorDescription(error: ValidationErrorWithMeta): string {
-    return error.description;
-  }
-
-
 </script>
 
 <!-- Mobile overlay backdrop -->
@@ -1684,7 +1653,7 @@
                   {getFileName(getErrorFilePath(error) ?? '')}
                 </span>
                 <span class="text-muted-foreground">
-                  {getErrorDescription(error)}
+                  {error.description}
                 </span>
               </div>
               <div class="flex gap-0.5 shrink-0">
@@ -2019,9 +1988,9 @@
                         <p class="text-sm font-medium">Validation Error</p>
                         {#each errors as error}
                           <div class="text-sm text-muted-foreground">
-                            <p>{getErrorDescription(error)}</p>
-                            <p class="font-mono text-xs mt-1 truncate" title={getErrorTarget(error) ?? ''}>
-                              Target: {getErrorTarget(error)}
+                            <p>{error.description}</p>
+                            <p class="font-mono text-xs mt-1 truncate" title={error.detail}>
+                              {error.detail}
                             </p>
                           </div>
                           {#if error.type === "BrokenPartOf" && onRemoveBrokenPartOf}

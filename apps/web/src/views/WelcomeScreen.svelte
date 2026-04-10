@@ -9,6 +9,7 @@
    * - bundles: Full-screen bundle picker
    * - provider-choice: Choose where workspace lives (after bundle selection)
    */
+  import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Progress } from "$lib/components/ui/progress";
   import { ArrowLeft, LogIn, Loader2, Cloud, Download, HardDrive, Lock, Plus } from "@lucide/svelte";
@@ -509,21 +510,23 @@
   }
 
   // Run once on mount — honour initialView if provided, otherwise auto-navigate
-  if (initialView === 'workspace-picker' && isAuthenticated()) {
-    // Jump directly to workspace picker and load namespaces
-    loadingWorkspaces = true;
-    workspacePickerProviderId = null;
-    workspacePickerBackView = 'main';
-    navigateTo('workspace-picker');
-    listUserWorkspaceNamespaces()
-      .then((ns) => { workspaceNamespaces = ns; })
-      .catch(() => { workspaceNamespaces = []; })
-      .finally(() => { loadingWorkspaces = false; });
-  } else if (initialView && initialView !== 'main') {
-    navigateTo(initialView);
-  } else {
-    autoNavigateIfSignedIn();
-  }
+  onMount(() => {
+    if (initialView === 'workspace-picker' && isAuthenticated()) {
+      // Jump directly to workspace picker and load namespaces
+      loadingWorkspaces = true;
+      workspacePickerProviderId = null;
+      workspacePickerBackView = 'main';
+      navigateTo('workspace-picker');
+      listUserWorkspaceNamespaces()
+        .then((ns) => { workspaceNamespaces = ns; })
+        .catch(() => { workspaceNamespaces = []; })
+        .finally(() => { loadingWorkspaces = false; });
+    } else if (initialView && initialView !== 'main') {
+      navigateTo(initialView);
+    } else {
+      autoNavigateIfSignedIn();
+    }
+  });
 
   async function loadData() {
     loading = true;

@@ -35,6 +35,7 @@ export type { FixSummary } from './FixSummary';
 export type { HostAction } from './HostAction';
 export type { InsertCommand } from './InsertCommand';
 export type { InsertCommandPlacement } from './InsertCommandPlacement';
+export type { InvalidAttachmentRefKind } from './InvalidAttachmentRefKind';
 export type { LinkFormat } from './LinkFormat';
 export type { LinkParserOperation } from './LinkParserOperation';
 export type { LinkParserResult } from './LinkParserResult';

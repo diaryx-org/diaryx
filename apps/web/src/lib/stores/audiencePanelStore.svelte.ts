@@ -10,10 +10,14 @@ export type AudiencePanelMode = "view" | "paint";
 /** Special brush value that clears visibility from text/entries. */
 export const CLEAR_BRUSH = "__clear__";
 
+/** Callback registered by the Editor to apply the brush to the current selection. */
+export type ApplyPaintBrushFn = () => boolean;
+
 function createAudiencePanelStore() {
   let panelOpen = $state(false);
   let mode = $state<AudiencePanelMode>("view");
   let paintBrush = $state<string | null>(null);
+  let applyPaintBrushFn = $state<ApplyPaintBrushFn | null>(null);
 
   return {
     get panelOpen() {
@@ -49,6 +53,16 @@ function createAudiencePanelStore() {
     setBrush(name: string | null) {
       paintBrush = name;
     },
+
+    /** Register the editor's paint-apply callback. Called by Editor.svelte on mount. */
+    registerApplyPaintBrush(fn: ApplyPaintBrushFn | null) {
+      applyPaintBrushFn = fn;
+    },
+
+    /** Apply the active brush to the current editor text selection. Returns true if applied. */
+    applyBrushToSelection(): boolean {
+      return applyPaintBrushFn?.() ?? false;
+    },
   };
 }
 
@@ -71,6 +85,8 @@ export function getAudiencePanelStore() {
       closePanel: () => {},
       setMode: (_mode: AudiencePanelMode) => {},
       setBrush: (_name: string | null) => {},
+      registerApplyPaintBrush: (_fn: ApplyPaintBrushFn | null) => {},
+      applyBrushToSelection: () => false,
     };
   }
 

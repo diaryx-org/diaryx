@@ -1889,36 +1889,24 @@
     }
   });
 
-  // ── Paint-mode auto-apply ──────────────────────────────────────────
-  // When the audience panel is in paint mode with an active brush,
-  // auto-apply the brush audience on text selection (mouseup/touchend).
+  // ── Paint-mode apply ────────────────────────────────────────────────
+  // Register a callback so the audience panel can apply the brush via a button.
   const audiencePanelStore = getAudiencePanelStore();
 
-  function handlePaintModeSelection() {
-    if (!editor || readonly) return;
-    if (!audiencePanelStore.panelOpen || audiencePanelStore.mode !== "paint") return;
+  function applyPaintBrush(): boolean {
+    if (!editor || readonly) return false;
     const brush = audiencePanelStore.paintBrush;
-    if (!brush) return;
+    if (!brush) return false;
 
     const { from, to } = editor.state.selection;
-    if (from === to) return; // No selection
+    if (from === to) return false;
 
     const isClear = brush === CLEAR_BRUSH;
 
     if (isClear) {
-      // Remove visibility from selection
-      try {
-        editor.chain().focus().unsetVisibility().run();
-      } catch {
-        // May not have visibility to unset
-      }
-      try {
-        editor.chain().focus().unsetVisibilityBlock().run();
-      } catch {
-        // May not have a block to unset
-      }
+      try { editor.chain().focus().unsetVisibility().run(); } catch { /* noop */ }
+      try { editor.chain().focus().unsetVisibilityBlock().run(); } catch { /* noop */ }
     } else {
-      // Determine whether to use block or inline visibility
       const { state } = editor;
       const isFullBlock =
         state.doc.resolve(from).parentOffset === 0 &&
@@ -1930,7 +1918,14 @@
         editor.chain().focus().setVisibility({ audiences: [brush] }).run();
       }
     }
+    return true;
   }
+
+  // Register/unregister the callback with the panel store
+  $effect(() => {
+    audiencePanelStore.registerApplyPaintBrush(applyPaintBrush);
+    return () => audiencePanelStore.registerApplyPaintBrush(null);
+  });
 </script>
 
 <!-- Editor content area - scrolling handled by parent EditorContent -->
@@ -1938,8 +1933,6 @@
   bind:this={element}
   class="min-h-full"
   role="application"
-  onmouseup={handlePaintModeSelection}
-  ontouchend={handlePaintModeSelection}
   ondragover={(e) => {
     e.preventDefault();
     if (e.dataTransfer) {
@@ -2851,37 +2844,17 @@
     display: none;
   }
 
-  /* Collapse indicator shown where block content was filtered */
-  :global(.vis-block-collapse-indicator) {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 8px;
-    margin: 2px 0;
-    font-size: 0.7em;
-    color: var(--muted-foreground);
-    opacity: 0.6;
-    cursor: pointer;
-    border-radius: 4px;
-    transition: opacity 0.15s ease, background 0.15s ease;
-    user-select: none;
-  }
-
-  :global(.vis-block-collapse-indicator:hover) {
-    opacity: 1;
-    background: color-mix(in oklch, var(--accent) 50%, transparent);
-  }
-
-  :global(.vis-block-collapse-dot) {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  :global(.vis-block-collapse-label) {
-    font-family: var(--font-mono, ui-monospace, monospace);
+  /* Revealed-filtered block: gutter click in preview mode shows hidden block
+     content with strikethrough + muted styling to indicate it's excluded. */
+  :global(.vis-block-content--revealed-filtered) {
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in oklch, var(--vis-gutter-color) 60%, transparent);
+    text-decoration-thickness: 2px;
+    opacity: 0.5;
+    background: color-mix(in oklch, var(--vis-gutter-color) 8%, transparent);
+    border-left: 2px solid color-mix(in oklch, var(--vis-gutter-color) 35%, transparent);
+    padding-left: 8px;
+    transition: opacity 0.15s ease;
   }
 
   /* Mobile-specific styles */

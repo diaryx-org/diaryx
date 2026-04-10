@@ -152,6 +152,8 @@ vi.mock("$lib/stores/audiencePanelStore.svelte", () => ({
     closePanel: () => {},
     setMode: () => {},
     setBrush: () => {},
+    registerApplyPaintBrush: () => {},
+    applyBrushToSelection: () => false,
   }),
 }));
 vi.mock("./components/PluginSidebarPanel.svelte", async () => ({

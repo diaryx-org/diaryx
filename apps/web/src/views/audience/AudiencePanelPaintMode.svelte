@@ -5,12 +5,13 @@
    *
    * User selects a brush (audience or "clear"), then:
    * - Clicking entries in LeftSidebar assigns/removes the audience
-   * - Selecting text in the editor auto-applies a visibility mark/block
+   * - Select text in editor, then click "Apply to selection" button
    */
   import { getAudiencePanelStore, CLEAR_BRUSH } from "$lib/stores/audiencePanelStore.svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
   import { getAudienceColor } from "$lib/utils/audienceDotColor";
-  import { Eraser } from "@lucide/svelte";
+  import { Eraser, Paintbrush } from "@lucide/svelte";
+  import { toast } from "svelte-sonner";
   import type { Api } from "$lib/backend";
 
   interface Props {
@@ -39,6 +40,13 @@
       panelStore.setBrush(CLEAR_BRUSH);
     }
   }
+
+  function handleApplyToSelection() {
+    const applied = panelStore.applyBrushToSelection();
+    if (!applied) {
+      toast.info("Select some text in the editor first");
+    }
+  }
 </script>
 
 <div class="paint-mode">
@@ -50,7 +58,7 @@
     <div class="brush-hint">
       {#if panelStore.paintBrush}
         {#if panelStore.paintBrush === CLEAR_BRUSH}
-          Click entries or select text to clear audiences.
+          Click entries in sidebar, or select text and apply.
         {:else}
           Click entries or select text to paint
           <span class="brush-name">
@@ -62,6 +70,18 @@
         Pick a brush below, then click entries or select text.
       {/if}
     </div>
+
+    <!-- Apply to selection button -->
+    {#if panelStore.paintBrush}
+      <button
+        type="button"
+        class="apply-btn"
+        onclick={handleApplyToSelection}
+      >
+        <Paintbrush class="size-3.5" />
+        Apply to selection
+      </button>
+    {/if}
 
     <!-- Clear/eraser brush -->
     <button
@@ -117,6 +137,32 @@
     gap: 4px;
     font-weight: 500;
     color: var(--foreground);
+  }
+
+  .apply-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: calc(100% - 8px);
+    margin: 4px 4px 2px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--primary-foreground);
+    background: var(--primary);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+
+  .apply-btn:hover {
+    opacity: 0.9;
+  }
+
+  .apply-btn:active {
+    opacity: 0.8;
   }
 
   .brush-row {

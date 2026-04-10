@@ -36,15 +36,19 @@ import {
   parseDirectiveAttrs,
 } from "./directiveUtils";
 // Gutter rendering now uses Decoration.node with CSS classes
+import { createGutterEyeIcon } from "./EditorGutter";
 import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
 import { getAudienceColor } from "$lib/utils/audienceDotColor";
 import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
 
 // ---------------------------------------------------------------------------
-// Plugin key
+// Plugin keys
 // ---------------------------------------------------------------------------
 
 const visBlockDecoKey = new PluginKey("visibilityBlockDecorations");
+const visBlockRevealKey = new PluginKey<{
+  revealedOpenPos: number | null;
+}>("visibilityBlockReveal");
 
 // ---------------------------------------------------------------------------
 // Types
@@ -474,8 +478,29 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
 
     const colorStore = getAudienceColorStore();
     const templateContextStore = getTemplateContextStore();
+    let gutterEditorView: import("@tiptap/pm/view").EditorView | null = null;
 
     return [
+      // ── Reveal state plugin ──────────────────────────────────────
+      new ProseMirrorPlugin({
+        key: visBlockRevealKey,
+        state: {
+          init: () => ({ revealedOpenPos: null }),
+          apply(tr, value) {
+            const meta = tr.getMeta(visBlockRevealKey);
+            if (meta !== undefined) return meta;
+            return value;
+          },
+        },
+        view(editorView) {
+          gutterEditorView = editorView;
+          return {
+            update(view) { gutterEditorView = view; },
+            destroy() { gutterEditorView = null; },
+          };
+        },
+      }),
+
       new ProseMirrorPlugin({
         key: visBlockDecoKey,
         props: {
@@ -542,7 +567,10 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
                 );
 
                 if (!matches) {
-                  // Hide markers and content
+                  const revealState = visBlockRevealKey.getState(state);
+                  const isRevealed = revealState?.revealedOpenPos === open.pos;
+
+                  // Always hide markers
                   decorations.push(
                     Decoration.node(open.pos, open.pos + open.nodeSize, {
                       class: "vis-block--hidden",
@@ -554,48 +582,69 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
                     }),
                   );
 
-                  // Hide content between markers
-                  doc.nodesBetween(contentStart, contentEnd, (node, pos) => {
-                    if (
-                      pos >= contentStart &&
-                      pos < contentEnd &&
-                      node.isBlock &&
-                      !node.isAtom
-                    ) {
-                      decorations.push(
-                        Decoration.node(pos, pos + node.nodeSize, {
-                          class: "vis-block-content--hidden",
-                        }),
-                      );
-                      return false;
-                    }
-                    return true;
-                  });
+                  if (isRevealed) {
+                    // Show content with strikethrough styling
+                    doc.nodesBetween(contentStart, contentEnd, (node, pos) => {
+                      if (
+                        pos >= contentStart &&
+                        pos < contentEnd &&
+                        node.isBlock &&
+                        !node.isAtom
+                      ) {
+                        decorations.push(
+                          Decoration.node(pos, pos + node.nodeSize, {
+                            class: "vis-block-content--revealed-filtered",
+                            style: `--vis-gutter-color: ${colorValue}`,
+                          }),
+                        );
+                        return false;
+                      }
+                      return true;
+                    });
+                  } else {
+                    // Hide content between markers
+                    doc.nodesBetween(contentStart, contentEnd, (node, pos) => {
+                      if (
+                        pos >= contentStart &&
+                        pos < contentEnd &&
+                        node.isBlock &&
+                        !node.isAtom
+                      ) {
+                        decorations.push(
+                          Decoration.node(pos, pos + node.nodeSize, {
+                            class: "vis-block-content--hidden",
+                          }),
+                        );
+                        return false;
+                      }
+                      return true;
+                    });
+                  }
 
-                  // Insert a collapse indicator
+                  // Gutter indicator: eye icon in preview mode (click to reveal)
+                  const tooltip = `Hidden: visible to ${audiences.join(", ")}`;
+                  const toggleReveal = () => {
+                    if (!gutterEditorView) return;
+                    const cur = visBlockRevealKey.getState(gutterEditorView.state);
+                    const alreadyRevealed = cur?.revealedOpenPos === open.pos;
+                    gutterEditorView.dispatch(
+                      gutterEditorView.state.tr.setMeta(visBlockRevealKey, {
+                        revealedOpenPos: alreadyRevealed ? null : open.pos,
+                      }),
+                    );
+                  };
+                  const indicator = isRevealed
+                    ? (() => {
+                        const el = createGutterEyeIcon(tooltip, toggleReveal);
+                        el.classList.add("gutter-eye--active");
+                        return el;
+                      })()
+                    : createGutterEyeIcon(tooltip, toggleReveal);
                   decorations.push(
-                    Decoration.widget(
-                      contentStart,
-                      () => {
-                        const indicator = document.createElement("div");
-                        indicator.className = "vis-block-collapse-indicator";
-                        indicator.title = `Hidden content (visible to: ${audiences.join(", ")})`;
-                        indicator.setAttribute("contenteditable", "false");
-
-                        const dot = document.createElement("span");
-                        dot.className = "vis-block-collapse-dot";
-                        dot.style.backgroundColor = colorValue;
-                        indicator.appendChild(dot);
-
-                        const label = document.createElement("span");
-                        label.className = "vis-block-collapse-label";
-                        label.textContent = `${audiences.join(", ")}`;
-                        indicator.appendChild(label);
-
-                        return indicator;
-                      },
-                      { side: -1, key: `vis-block-collapse-${open.pos}` },
-                    ),
+                    Decoration.widget(contentStart, indicator, {
+                      side: -1,
+                      key: `vis-block-gutter-${open.pos}`,
+                    }),
                   );
                 } else {
                   decorations.push(

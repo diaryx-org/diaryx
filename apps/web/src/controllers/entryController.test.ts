@@ -454,6 +454,36 @@ describe('saveEntryWithSync', () => {
       'journal/entry.md', '# body', 'workspace/README.md', true
     );
   });
+
+  // Regression: a plugin install used to silently delete recent edits because
+  // displayContent never tracked the editor's saved markdown. After autosave
+  // the editor's content prop still held the original-load content, so a
+  // plugin-triggered editor rebuild reset the editor body to that stale value.
+  // Mirroring the saved markdown into displayContent on every successful save
+  // keeps the prop in lockstep with disk truth and prevents the regression.
+  it('mirrors saved markdown into displayContent so plugin-triggered rebuilds keep edits', async () => {
+    const api = makeApi({ saveEntry: vi.fn().mockResolvedValue(null) });
+    const entry = makeEntry({ path: 'journal/entry.md' });
+    const editorRef = { getMarkdown: () => '# edited body' };
+
+    await saveEntryWithSync(api, entry, editorRef);
+
+    expect(setDisplayContent).toHaveBeenCalledWith('# edited body');
+    expect(markClean).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not update displayContent when save fails', async () => {
+    const api = makeApi({
+      saveEntry: vi.fn().mockRejectedValue(new Error('Permission denied')),
+    });
+    const entry = makeEntry();
+    const editorRef = { getMarkdown: () => '# body' };
+
+    await saveEntryWithSync(api, entry, editorRef);
+
+    expect(setDisplayContent).not.toHaveBeenCalled();
+    expect(markClean).not.toHaveBeenCalled();
+  });
 });
 
 // ===========================================================================

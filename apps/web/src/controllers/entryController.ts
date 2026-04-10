@@ -223,6 +223,7 @@ export async function saveEntry(
     // Note: saveEntry expects only the body content, not frontmatter.
     // Frontmatter is preserved by the backend's save_content() method.
     await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath);
+    entryStore.setDisplayContent(markdown);
     entryStore.markClean();
   } catch (e) {
     uiStore.setError(e instanceof Error ? e.message : String(e));
@@ -720,6 +721,12 @@ export async function saveEntryWithSync(
 
     // Save to backend - Rust handles CRDT sync automatically
     const newPath = await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath, detectH1Title);
+    // Mirror the saved markdown into displayContent so it tracks the editor's
+    // live state. Without this, displayContent permanently lags behind the editor
+    // until the user switches entries — and any later code path that re-syncs the
+    // editor from displayContent (e.g. plugin-triggered editor rebuild) will
+    // silently overwrite unsaved-since-load edits, causing data loss.
+    entryStore.setDisplayContent(markdown);
     entryStore.markClean();
 
     if (newPath && newPath !== currentEntry.path) {

@@ -292,12 +292,24 @@
     // Update global iframe context so iframe node views read the current entry
     setEditorExtensionIframeContext({ entryPath, api: api ?? null });
 
+    // When rebuilding an existing editor (e.g. plugin extension change) we
+    // preserve the live editor markdown so unsaved edits aren't dropped.
+    const preservingLiveEdits = overrideContent === undefined && editor !== null;
     const initialContent =
       overrideContent ?? (editor ? appendFootnoteDefinitions(editor) : content);
     const initialMarkdown =
       typeof initialContent === "string"
         ? initialContent
         : (lastAppliedContentProp ?? content ?? "");
+    // After a live-edits-preserving rebuild, the editor body diverges from the
+    // `content` prop (the prop only updates when the parent reloads from disk).
+    // We must seed lastAppliedContentProp with the current prop value so the
+    // sync effect at the bottom of this file doesn't observe a mismatch and
+    // overwrite the preserved live edits with stale prop content. (See the
+    // data-loss bug where installing a plugin caused recent edits to vanish.)
+    const appliedContentPropSeed = preservingLiveEdits
+      ? (content ?? initialMarkdown)
+      : initialMarkdown;
     destroyEditor();
 
     // In non-readonly mode, require FloatingMenu unless native iOS toolbar is active
@@ -1250,7 +1262,7 @@
         onCreate: () => {
           // Track the last external content value that has been applied so we don't
           // overwrite the editor unless the prop actually changes.
-          lastAppliedContentProp = initialMarkdown;
+          lastAppliedContentProp = appliedContentPropSeed;
         },
         onUpdate: () => {
           if (onchange && !isUpdatingContent) {

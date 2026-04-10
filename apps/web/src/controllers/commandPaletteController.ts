@@ -235,7 +235,7 @@ export function handleFindInFile(): void {
 }
 
 /**
- * Show word count for current entry.
+ * Show word and page counts for the current entry.
  */
 export function handleWordCount(
   editorRef: any,
@@ -251,11 +251,12 @@ export function handleWordCount(
     .trim()
     .split(/\s+/)
     .filter((w: string) => w.length > 0).length;
+  const pageCount = words / 300;
   const characters = text.length;
   const lines = markdown.split('\n').length;
 
   toast.info('Word Count', {
-    description: `${words.toLocaleString()} words · ${characters.toLocaleString()} characters · ${lines} lines`,
+    description: `${words.toLocaleString()} words · Page Count: ${pageCount.toFixed(1)} · ${characters.toLocaleString()} characters · ${lines} lines`,
     duration: 5000,
   });
 }

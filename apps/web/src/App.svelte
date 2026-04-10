@@ -1190,7 +1190,11 @@
             console.warn('[App] Failed to refresh plugin store after plugins-ready:', e);
           }
           if (currentEntry) {
-            await openEntry(currentEntry.path);
+            // Force reload from disk: the plugin manifest change above will
+            // trigger an editor rebuild, and we need displayContent to refresh
+            // from disk so the editor's content sync stays consistent with the
+            // backend rather than the (potentially stale) in-memory prop.
+            await openEntry(currentEntry.path, { force: true });
           }
         });
         // Clean up on workspace switch
@@ -1557,7 +1561,7 @@
   }
 
   // Open an entry - thin wrapper that handles auto-save and delegates to controller
-  const runLatestOpenEntry = createLatestOnlyRunner<string>(async (path) => {
+  const runLatestOpenEntry = createLatestOnlyRunner<{ path: string; force: boolean }>(async ({ path, force }) => {
     if (!api || !backend) return;
 
     try {
@@ -1568,7 +1572,11 @@
         await save();
       }
 
-      if (currentEntry?.path === path && !isDirty) {
+      // Skip the reload when we're already on this entry and the caller didn't
+      // ask to force-refresh. `force` exists for paths like onPluginsReady where
+      // the editor was rebuilt and we need disk truth to flow back into
+      // displayContent even though the path hasn't changed.
+      if (!force && currentEntry?.path === path && !isDirty) {
         return;
       }
 
@@ -1580,9 +1588,9 @@
     }
   });
 
-  async function openEntry(path: string) {
+  async function openEntry(path: string, options: { force?: boolean } = {}) {
     pendingEntryPath = path;
-    await runLatestOpenEntry(path);
+    await runLatestOpenEntry({ path, force: options.force ?? false });
   }
 
   // Save current entry - delegates to controller with sync support

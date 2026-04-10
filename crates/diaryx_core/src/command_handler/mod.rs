@@ -128,22 +128,23 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
     }
 
-    /// Recursively filter a tree to only include nodes visible to the given audience.
+    /// Recursively filter a tree to only include nodes visible to any of the given audiences.
     ///
     /// Uses the same visibility rules as export: explicit audience takes priority,
-    /// then inherited from parent, case-insensitive matching.
-    async fn filter_tree_by_audience(
+    /// then inherited from parent, case-insensitive matching. A node is visible if
+    /// it matches ANY of the requested audiences (OR logic).
+    async fn filter_tree_by_audiences(
         &self,
         node: crate::workspace::TreeNode,
-        audience: &str,
+        audiences: &[String],
     ) -> crate::workspace::TreeNode {
-        Box::pin(self.filter_tree_node(node, audience, None)).await
+        Box::pin(self.filter_tree_node(node, audiences, None)).await
     }
 
     async fn filter_tree_node(
         &self,
         node: crate::workspace::TreeNode,
-        audience: &str,
+        audiences: &[String],
         inherited_audience: Option<Vec<String>>,
     ) -> crate::workspace::TreeNode {
         // Parse this node's frontmatter to get its audience
@@ -165,13 +166,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             };
 
             let is_visible = if let Some(ref file_aud) = child_audience {
-                file_aud
-                    .iter()
-                    .any(|a| a.trim().eq_ignore_ascii_case(audience))
+                file_aud.iter().any(|a| {
+                    audiences
+                        .iter()
+                        .any(|q| a.trim().eq_ignore_ascii_case(q.trim()))
+                })
             } else if let Some(ref parent_aud) = effective_for_children {
-                parent_aud
-                    .iter()
-                    .any(|a| a.trim().eq_ignore_ascii_case(audience))
+                parent_aud.iter().any(|a| {
+                    audiences
+                        .iter()
+                        .any(|q| a.trim().eq_ignore_ascii_case(q.trim()))
+                })
             } else {
                 // No audience defined anywhere — exclude
                 false
@@ -180,7 +185,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             if is_visible {
                 let filtered = Box::pin(self.filter_tree_node(
                     child,
-                    audience,
+                    audiences,
                     child_audience.or_else(|| effective_for_children.clone()),
                 ))
                 .await;

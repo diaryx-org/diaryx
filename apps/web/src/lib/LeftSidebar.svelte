@@ -52,7 +52,7 @@
   import SyncDialog from "./components/SyncDialog.svelte";
   import { getSyncState } from "$lib/sync/syncScheduler.svelte";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
-  import AudienceFilter from "./components/AudienceFilter.svelte";
+  import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
   import PluginSidebarPanel from "./components/PluginSidebarPanel.svelte";
   import { Share2, History, FolderTree, Globe } from "@lucide/svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
@@ -113,7 +113,7 @@
     onInitializeWorkspace?: () => void;
     onShowWelcome?: () => void;
     onSetAudience?: (path: string) => void;
-    onOpenAudienceManager?: () => void;
+    onPaintEntry?: (path: string) => void;
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
     onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
@@ -173,7 +173,7 @@
     onInitializeWorkspace,
     onShowWelcome: _onShowWelcome,
     onSetAudience,
-    onOpenAudienceManager,
+    onPaintEntry,
     requestedTab = null,
     onRequestedTabConsumed,
     onPluginHostAction,
@@ -211,6 +211,9 @@
 
   // Mobile state for showing explicit menu button
   const mobileState = getMobileState();
+
+  // Audience panel state for paint-mode interception
+  const audiencePanelStore = getAudiencePanelStore();
 
   // Progressive swipe derived state (mobile only – desktop keeps width-based animation)
   const swiping = $derived(swipeProgress != null);
@@ -1185,6 +1188,13 @@
     // Right-click is handled by oncontextmenu; ignore here to preserve multi-selection
     if (event && event.button === 2) return;
 
+    // Paint mode: intercept click to paint the entry instead of navigating
+    if (audiencePanelStore.panelOpen && audiencePanelStore.mode === "paint" && audiencePanelStore.paintBrush && onPaintEntry) {
+      event?.preventDefault();
+      onPaintEntry(path);
+      return;
+    }
+
     if (event?.shiftKey && !mobileState.isMobile && !mobileState.isTouchDevice) {
       handleRangeSelection(path);
       return;
@@ -1520,11 +1530,7 @@
   {/if}
 
   <!-- Audience Filter -->
-  {#if tree}
-    <div class="px-3 pt-1 shrink-0">
-      <AudienceFilter {api} rootPath={tree.path} onOpenManager={onOpenAudienceManager} />
-    </div>
-  {/if}
+  <!-- AudienceFilter replaced by AudiencePanel (floating bottom-center panel) -->
 
   <!-- Workspace Selector -->
   <div class="flex items-center gap-1 px-3 pt-1 pb-1 shrink-0">

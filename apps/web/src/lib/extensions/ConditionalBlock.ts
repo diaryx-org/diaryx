@@ -332,7 +332,7 @@ export const ConditionalBlock = Node.create<ConditionalBlockOptions>({
 
             // In preview mode, override audience context
             const evalContext = isPreview
-              ? { ...context, audience: [preview] }
+              ? { ...context, audience: preview }
               : context;
 
             for (const block of completedBlocks) {

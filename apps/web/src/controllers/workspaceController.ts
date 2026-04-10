@@ -99,7 +99,7 @@ export async function refreshTree(
   backend: Backend,
   showUnlinkedFiles: boolean,
   showHiddenFiles: boolean,
-  audience?: string
+  audiences?: string[]
 ): Promise<void> {
   const refreshStartedAt = getTimingNow();
   try {
@@ -139,12 +139,12 @@ export async function refreshTree(
         try {
           const workspaceTreeStartedAt = getTimingNow();
           nextTree = await retryTransient(
-            () => api.getWorkspaceTree(resolvedRootIndexPath, TREE_INITIAL_DEPTH, audience),
+            () => api.getWorkspaceTree(resolvedRootIndexPath, TREE_INITIAL_DEPTH, audiences),
             'getWorkspaceTree'
           );
           console.info('[WorkspaceController] getWorkspaceTree completed', {
             rootIndexPath: resolvedRootIndexPath,
-            audience: audience ?? null,
+            audiences: audiences ?? null,
             elapsedMs: getElapsedMs(workspaceTreeStartedAt),
           });
         } catch (error) {
@@ -171,12 +171,12 @@ export async function refreshTree(
           resolvedRootIndexPath = rediscoveredRootIndexPath;
           const workspaceTreeRetryStartedAt = getTimingNow();
           nextTree = await retryTransient(
-            () => api.getWorkspaceTree(resolvedRootIndexPath, TREE_INITIAL_DEPTH, audience),
+            () => api.getWorkspaceTree(resolvedRootIndexPath, TREE_INITIAL_DEPTH, audiences),
             'getWorkspaceTree'
           );
           console.info('[WorkspaceController] getWorkspaceTree completed after root rediscovery', {
             rootIndexPath: resolvedRootIndexPath,
-            audience: audience ?? null,
+            audiences: audiences ?? null,
             elapsedMs: getElapsedMs(workspaceTreeRetryStartedAt),
           });
         }
@@ -203,7 +203,7 @@ export async function refreshTree(
   } finally {
     console.info('[WorkspaceController] refreshTree completed', {
       mode: showUnlinkedFiles ? 'filesystem' : 'workspace',
-      audience: audience ?? null,
+      audiences: audiences ?? null,
       showHiddenFiles,
       treePath: workspaceStore.tree?.path ?? null,
       elapsedMs: getElapsedMs(refreshStartedAt),
@@ -219,7 +219,7 @@ export async function loadNodeChildren(
   nodePath: string,
   showUnlinkedFiles: boolean,
   showHiddenFiles: boolean,
-  audience?: string
+  audiences?: string[]
 ): Promise<void> {
   try {
     let subtree: TreeNode;
@@ -233,7 +233,7 @@ export async function loadNodeChildren(
       subtree = await api.getFilesystemTree(dirPath, showHiddenFiles, TREE_INITIAL_DEPTH);
     } else {
       // Workspace tree mode - use index file path directly
-      subtree = await api.getWorkspaceTree(nodePath, TREE_INITIAL_DEPTH, audience);
+      subtree = await api.getWorkspaceTree(nodePath, TREE_INITIAL_DEPTH, audiences);
     }
 
     // Merge into existing tree

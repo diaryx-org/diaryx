@@ -27,7 +27,8 @@
   import MoveEntryDialog from "./lib/MoveEntryDialog.svelte";
   import PermissionBanner from "./lib/components/PermissionBanner.svelte";
   import AudienceEditor from "./lib/components/AudienceEditor.svelte";
-  import AudienceManager from "./views/audience/AudienceManager.svelte";
+  import AudiencePanel from "./views/audience/AudiencePanel.svelte";
+  import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
   import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
   import EditorFooter from "./views/editor/EditorFooter.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
@@ -167,6 +168,9 @@
 
   // Initialize template context store (feeds live values to editor template variables)
   const templateContextStore = getTemplateContextStore();
+
+  // Initialize audience panel store
+  const audiencePanelStore = getAudiencePanelStore();
 
   // Initialize appearance store (theme presets, typography, layout)
   const appearanceStore = getAppearanceStore();
@@ -499,7 +503,6 @@
 
   // Audience dialog state
   let showAudienceDialog = $state(false);
-  let showAudienceManager = $state(false);
   let audienceDialogPath = $state<string | null>(null);
   let audienceDialogAudience = $state<string[] | null>(null);
   let pendingDeleteName = $derived.by(() => {
@@ -642,7 +645,7 @@
     authState.activeWorkspaceId ?? getCurrentWorkspaceId(),
   );
   const PREVIEW_AUDIENCE_UNSET = Symbol("preview-audience-unset");
-  let lastPreviewAudience = $state<string | null | typeof PREVIEW_AUDIENCE_UNSET>(
+  let lastPreviewAudience = $state<string[] | null | typeof PREVIEW_AUDIENCE_UNSET>(
     PREVIEW_AUDIENCE_UNSET,
   );
 
@@ -945,7 +948,7 @@
       lastPreviewAudience = previewAudience;
       return;
     }
-    if (lastPreviewAudience === previewAudience) {
+    if (JSON.stringify(lastPreviewAudience) === JSON.stringify(previewAudience)) {
       return;
     }
     lastPreviewAudience = previewAudience;
@@ -1911,7 +1914,7 @@
         return { opened: "settings", tab: tab ?? null };
       }
       case "open-audience-manager":
-        showAudienceManager = true;
+        audiencePanelStore.openPanel();
         return { opened: "audience-manager" };
       case "open-marketplace":
         showSettingsDialog = false;
@@ -2316,8 +2319,8 @@
     try {
       const available = await api.getAvailableAudiences(tree?.path ?? "");
       if (available.length === 0) {
-        // No audiences exist — go straight to the full-screen manager
-        showAudienceManager = true;
+        // No audiences exist — open the audience panel
+        audiencePanelStore.openPanel();
         return;
       }
       const entry = await api.getEntry(path);
@@ -2328,6 +2331,40 @@
     } catch (e) {
       console.error("[App] Failed to load entry for audience dialog:", e);
       toast.error("Failed to load entry");
+    }
+  }
+
+  /** Paint-mode: toggle the active brush audience on an entry's frontmatter. */
+  async function handlePaintEntry(entryPath: string) {
+    if (!api) return;
+    const brush = audiencePanelStore.paintBrush;
+    if (!brush) return;
+
+    const rootPath = tree?.path ?? "";
+    const isClear = brush === "__clear__";
+
+    try {
+      const fm = await api.getFrontmatter(entryPath);
+      const current: string[] = Array.isArray(fm.audience) ? (fm.audience as string[]) : [];
+
+      let updated: string[];
+      if (isClear) {
+        updated = [];
+      } else if (current.includes(brush)) {
+        updated = current.filter((a) => a !== brush);
+      } else {
+        updated = [...current, brush];
+      }
+
+      if (updated.length === 0) {
+        await api.removeFrontmatterProperty(entryPath, "audience");
+      } else {
+        await api.setFrontmatterProperty(entryPath, "audience", updated, rootPath);
+      }
+      toast.success(`Updated audience for ${entryPath.split("/").pop()?.replace(/\.md$/, "")}`);
+    } catch (e) {
+      console.error("[App] Paint entry failed:", e);
+      toast.error("Failed to update audience");
     }
   }
 
@@ -2425,10 +2462,10 @@
   // Wrapper functions that delegate to controllers
   async function refreshTree() {
     if (!api || !backend) return;
-    const audience = templateContextStore.previewAudience ?? undefined;
+    const audiences = templateContextStore.previewAudience ?? undefined;
     const startedAt = getTimingNow();
     const treeRefreshStartedAt = getTimingNow();
-    await refreshTreeController(api, backend, showUnlinkedFiles, showHiddenFiles, audience);
+    await refreshTreeController(api, backend, showUnlinkedFiles, showHiddenFiles, audiences);
     const treeRefreshElapsedMs = getElapsedMs(treeRefreshStartedAt);
 
     const permissionsReloadStartedAt = getTimingNow();
@@ -2436,7 +2473,7 @@
     const permissionsReloadElapsedMs = getElapsedMs(permissionsReloadStartedAt);
 
     console.info("[WorkspaceRefresh] completed", {
-      audience: audience ?? null,
+      audiences: audiences ?? null,
       showUnlinkedFiles,
       showHiddenFiles,
       treePath: workspaceStore.tree?.path ?? null,
@@ -2468,8 +2505,8 @@
 
   async function loadNodeChildren(nodePath: string) {
     if (!api) return;
-    const audience = templateContextStore.previewAudience ?? undefined;
-    await loadNodeChildrenController(api, nodePath, showUnlinkedFiles, showHiddenFiles, audience);
+    const audiences = templateContextStore.previewAudience ?? undefined;
+    await loadNodeChildrenController(api, nodePath, showUnlinkedFiles, showHiddenFiles, audiences);
   }
 
   // ========================================================================
@@ -3338,14 +3375,14 @@
           rootPath={tree?.path ?? ""}
           {api}
           onChange={handleAudienceChange}
-          onOpenManager={() => { showAudienceDialog = false; audienceDialogPath = null; showAudienceManager = true; }}
+          onOpenManager={() => { showAudienceDialog = false; audienceDialogPath = null; audiencePanelStore.openPanel(); }}
         />
       {/if}
     </div>
   </Dialog.Content>
 </Dialog.Root>
 
-<AudienceManager bind:open={showAudienceManager} {api} rootPath={tree?.path ?? ""} />
+<AudiencePanel {api} rootPath={tree?.path ?? ""} />
 
 <!-- Toast Notifications -->
 <Toaster position={mobileState.isMobile ? "top-center" : "bottom-right"} />
@@ -3632,7 +3669,7 @@
       showWelcomeScreen = true;
     }}
     onSetAudience={handleSetAudience}
-    onOpenAudienceManager={() => { showAudienceManager = true; }}
+    onPaintEntry={handlePaintEntry}
     requestedTab={requestedLeftTab}
     onRequestedTabConsumed={() => (requestedLeftTab = null)}
     onPluginHostAction={handlePluginHostAction}
@@ -3714,7 +3751,7 @@
               <button
                 type="button"
                 class="p-2 rounded-md hover:bg-accent transition-colors"
-                onclick={() => { showAudienceManager = true; }}
+                onclick={() => { audiencePanelStore.openPanel(); }}
                 aria-label="Audience filter"
               >
                 <Eye class="size-4 text-muted-foreground" />
@@ -3841,7 +3878,7 @@
             <button
               type="button"
               class="flex items-center gap-1 shrink-0 p-2"
-              onclick={() => { showAudienceManager = true; }}
+              onclick={() => { audiencePanelStore.openPanel(); }}
               aria-label="Manage audiences"
             >
               {#each effectiveAudienceTags as tag}
@@ -3904,7 +3941,7 @@
         onRevealMobileFocusChrome={revealMobileFocusChromeTemporarily}
         {api}
         audienceTags={effectiveAudienceTags}
-        onOpenAudienceManager={() => { showAudienceManager = true; }}
+        onOpenAudienceManager={() => { audiencePanelStore.openPanel(); }}
         onFabMount={(el) => { mobileGestures.editorFabElement = el; }}
         {commandRegistry}
         hasEditor={!!editorRef}
@@ -3978,7 +4015,7 @@
     requestedTab={requestedSidebarTab}
     onRequestedTabConsumed={() => (requestedSidebarTab = null)}
     onPluginHostAction={handlePluginHostAction}
-    onOpenAudienceManager={() => { showAudienceManager = true; }}
+    onOpenAudienceManager={() => { audiencePanelStore.openPanel(); }}
     onPropertyReorder={handlePropertyReorder}
     {isDirty}
     {isSaving}

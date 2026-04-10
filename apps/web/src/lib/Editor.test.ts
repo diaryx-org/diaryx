@@ -557,7 +557,7 @@ describe("Editor.svelte", () => {
       templateContextStore.setContext({ title: "One" });
     });
     flushSync(() => {
-      templateContextStore.setPreviewAudience("family");
+      templateContextStore.setPreviewAudience(["family"]);
     });
 
     expect(toastErrorSpy).toHaveBeenCalledTimes(1);

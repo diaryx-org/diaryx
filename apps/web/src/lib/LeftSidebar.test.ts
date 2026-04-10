@@ -143,8 +143,16 @@ vi.mock("@/models/stores/collaborationStore.svelte", () => ({
 vi.mock("./WorkspaceSelector.svelte", async () => ({
   default: (await import("./test/PassthroughStub.svelte")).default,
 }));
-vi.mock("./components/AudienceFilter.svelte", async () => ({
-  default: (await import("./test/PassthroughStub.svelte")).default,
+vi.mock("$lib/stores/audiencePanelStore.svelte", () => ({
+  getAudiencePanelStore: () => ({
+    panelOpen: false,
+    mode: "view" as const,
+    paintBrush: null,
+    openPanel: () => {},
+    closePanel: () => {},
+    setMode: () => {},
+    setBrush: () => {},
+  }),
 }));
 vi.mock("./components/PluginSidebarPanel.svelte", async () => ({
   default: (await import("./test/PassthroughStub.svelte")).default,

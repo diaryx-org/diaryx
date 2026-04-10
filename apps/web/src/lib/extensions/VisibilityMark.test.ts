@@ -135,7 +135,7 @@ describe("VisibilityMark", () => {
 
     expect(element.querySelectorAll(".vis-underline").length).toBeGreaterThan(0);
 
-    templateContextStore.setPreviewAudience("family");
+    templateContextStore.setPreviewAudience(["family"]);
     editor.view.dispatch(
       editor.state.tr.setMeta("templateContextChanged", true),
     );

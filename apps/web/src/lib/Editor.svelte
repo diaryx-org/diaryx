@@ -61,6 +61,7 @@
   import { EditorGutter } from "./extensions/EditorGutter";
   import { toast } from "svelte-sonner";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
+  import { getAudiencePanelStore, CLEAR_BRUSH } from "./stores/audiencePanelStore.svelte";
   import { getEditorExtensions, getPluginExtensionsVersion } from "$lib/plugins/browserPluginManager.svelte";
   import { getPreservedEditorExtensions } from "$lib/plugins/preservedEditorExtensions.svelte";
   import { getTauriEditorExtensions } from "$lib/plugins/tauriEditorExtensions";
@@ -138,7 +139,6 @@
   // BubbleMenu element ref - must exist before editor creation
   let bubbleMenuElement: HTMLDivElement | undefined = $state();
   let bubbleMenuLinkPopoverOpen = $state(false);
-  let bubbleMenuVisPickerOpen = $state(false);
   let isUpdatingContent = false; // Flag to skip onchange during programmatic updates
   let templateContextDispatchErrorShown = false;
   let invalidContentRecoveryAttempted = false;
@@ -1184,7 +1184,7 @@
                 if (bubbleMenuElement) {
                   bubbleMenuElement.style.pointerEvents = "none";
                 }
-                bubbleMenuVisPickerOpen = false;
+                // Panel visibility is managed by audiencePanelStore now
               },
             },
             shouldShow: ({ editor: ed, view, state, from, to }) => {
@@ -1888,6 +1888,49 @@
       }
     }
   });
+
+  // ── Paint-mode auto-apply ──────────────────────────────────────────
+  // When the audience panel is in paint mode with an active brush,
+  // auto-apply the brush audience on text selection (mouseup/touchend).
+  const audiencePanelStore = getAudiencePanelStore();
+
+  function handlePaintModeSelection() {
+    if (!editor || readonly) return;
+    if (!audiencePanelStore.panelOpen || audiencePanelStore.mode !== "paint") return;
+    const brush = audiencePanelStore.paintBrush;
+    if (!brush) return;
+
+    const { from, to } = editor.state.selection;
+    if (from === to) return; // No selection
+
+    const isClear = brush === CLEAR_BRUSH;
+
+    if (isClear) {
+      // Remove visibility from selection
+      try {
+        editor.chain().focus().unsetVisibility().run();
+      } catch {
+        // May not have visibility to unset
+      }
+      try {
+        editor.chain().focus().unsetVisibilityBlock().run();
+      } catch {
+        // May not have a block to unset
+      }
+    } else {
+      // Determine whether to use block or inline visibility
+      const { state } = editor;
+      const isFullBlock =
+        state.doc.resolve(from).parentOffset === 0 &&
+        state.doc.resolve(to).parentOffset === state.doc.resolve(to).parent.content.size;
+
+      if (isFullBlock) {
+        editor.chain().focus().setVisibilityBlock({ audiences: [brush] }).run();
+      } else {
+        editor.chain().focus().setVisibility({ audiences: [brush] }).run();
+      }
+    }
+  }
 </script>
 
 <!-- Editor content area - scrolling handled by parent EditorContent -->
@@ -1895,6 +1938,8 @@
   bind:this={element}
   class="min-h-full"
   role="application"
+  onmouseup={handlePaintModeSelection}
+  ontouchend={handlePaintModeSelection}
   ondragover={(e) => {
     e.preventDefault();
     if (e.dataTransfer) {
@@ -1955,9 +2000,7 @@
     {editor}
     bind:element={bubbleMenuElement}
     bind:linkPopoverOpen={bubbleMenuLinkPopoverOpen}
-    bind:visPickerOpen={bubbleMenuVisPickerOpen}
     {entryPath}
-    rootPath={workspaceStore.tree?.path ?? ""}
     {api}
   />
 {/if}

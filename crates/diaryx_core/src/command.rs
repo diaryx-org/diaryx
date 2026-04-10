@@ -232,8 +232,8 @@ pub enum Command {
         path: Option<String>,
         /// Optional maximum depth to traverse.
         depth: Option<u32>,
-        /// Optional audience filter. When set, only entries visible to this audience are included.
-        audience: Option<String>,
+        /// Optional audience filter. When set, only entries visible to any of these audiences are included.
+        audience: Option<Vec<String>>,
     },
 
     /// Get the canonical file set for a workspace.

@@ -52,7 +52,9 @@
     helperType === "for-audience" &&
       variant === "open" &&
       isFilterActive &&
-      templateContextStore.previewAudience !== condition,
+      !templateContextStore.previewAudience?.some(
+        (a) => a.toLowerCase() === condition.toLowerCase(),
+      ),
   );
 
   const isAudienceOpen = $derived(

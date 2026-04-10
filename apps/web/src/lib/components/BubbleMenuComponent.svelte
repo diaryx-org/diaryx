@@ -13,7 +13,8 @@
   import BlockStylePicker from "./BlockStylePicker.svelte";
   import MoreStylesPicker from "./MoreStylesPicker.svelte";
   import LinkInsertPopover from "./LinkInsertPopover.svelte";
-  import VisibilityPicker from "./VisibilityPicker.svelte";
+  import { Eye, EyeOff } from "@lucide/svelte";
+  import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
   import type { Api } from "$lib/backend/api";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import { getVisibilityBlockForSelection } from "$lib/extensions/VisibilityBlock";
@@ -23,12 +24,9 @@
     element?: HTMLDivElement;
     /** Current entry path for resolving local links */
     entryPath?: string;
-    /** Root workspace path for loading available audiences */
-    rootPath?: string;
     /** API instance for link formatting */
     api?: Api | null;
     linkPopoverOpen?: boolean;
-    visPickerOpen?: boolean;
   }
 
   interface SelectedLink {
@@ -41,10 +39,8 @@
     editor,
     element = $bindable(),
     entryPath = "",
-    rootPath = "",
     api = null,
     linkPopoverOpen = $bindable(false),
-    visPickerOpen = $bindable(false),
   }: Props = $props();
 
   // Track active states reactively
@@ -131,7 +127,6 @@
     blockStyleOpen = false;
     linkPopoverOpen = false;
     moreStylesOpen = false;
-    visPickerOpen = false;
     for (const key of Object.keys(markPickerOpen)) {
       markPickerOpen[key] = false;
     }
@@ -295,14 +290,23 @@
       />
     {/each}
 
-    <VisibilityPicker
-      {editor}
-      {api}
-      {rootPath}
-      isActive={isVisActive}
-      bind:open={visPickerOpen}
-      onOpen={() => { closeAllDropdowns(); }}
-    />
+    <button
+      type="button"
+      class="toolbar-button"
+      class:active={isVisActive}
+      onmousedown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        getAudiencePanelStore().openPanel("paint");
+      }}
+      title="Audience visibility"
+    >
+      {#if isVisActive}
+        <EyeOff class="size-4" />
+      {:else}
+        <Eye class="size-4" />
+      {/if}
+    </button>
 
     <div class="link-button-wrapper">
       <button

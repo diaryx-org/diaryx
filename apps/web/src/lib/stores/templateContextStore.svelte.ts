@@ -12,7 +12,7 @@ export type TemplateContext = Record<string, unknown>;
 
 function createTemplateContextStore() {
   let context = $state<TemplateContext>({});
-  let previewAudience = $state<string | null>(null);
+  let previewAudience = $state<string[] | null>(null);
   let audiencesVersion = $state(0);
 
   return {
@@ -20,14 +20,14 @@ function createTemplateContextStore() {
       return context;
     },
 
-    /** The audience currently being previewed, or null for default (all branches visible). */
+    /** The audiences currently being previewed, or null for default (all branches visible). */
     get previewAudience() {
       return previewAudience;
     },
 
     /**
      * Monotonically increasing counter. Incremented whenever a brand-new audience
-     * tag is created so that AudienceFilter can re-fetch the available list.
+     * tag is created so that the audience panel can re-fetch the available list.
      */
     get audiencesVersion() {
       return audiencesVersion;
@@ -37,12 +37,27 @@ function createTemplateContextStore() {
       context = newContext;
     },
 
-    /** Set a specific audience to preview, or null to exit preview mode. */
-    setPreviewAudience(audience: string | null) {
-      previewAudience = audience;
+    /** Set specific audiences to preview, or null to exit preview mode. */
+    setPreviewAudience(audiences: string[] | null) {
+      previewAudience = audiences && audiences.length > 0 ? audiences : null;
     },
 
-    /** Call after creating a brand-new audience tag to notify the sidebar to refresh. */
+    /** Toggle a single audience in/out of the preview set. */
+    togglePreviewAudience(name: string) {
+      if (!previewAudience) {
+        previewAudience = [name];
+        return;
+      }
+      const idx = previewAudience.indexOf(name);
+      if (idx >= 0) {
+        const next = previewAudience.filter((_, i) => i !== idx);
+        previewAudience = next.length > 0 ? next : null;
+      } else {
+        previewAudience = [...previewAudience, name];
+      }
+    },
+
+    /** Call after creating a brand-new audience tag to notify the panel to refresh. */
     bumpAudiencesVersion() {
       audiencesVersion += 1;
     },
@@ -73,14 +88,15 @@ export function getTemplateContextStore() {
       get context(): TemplateContext {
         return {};
       },
-      get previewAudience(): string | null {
+      get previewAudience(): string[] | null {
         return null;
       },
       get audiencesVersion(): number {
         return 0;
       },
       setContext: (_ctx: TemplateContext) => {},
-      setPreviewAudience: (_audience: string | null) => {},
+      setPreviewAudience: (_audiences: string[] | null) => {},
+      togglePreviewAudience: (_name: string) => {},
       bumpAudiencesVersion: () => {},
       resolve: (_name: string): string | null => null,
       clear: () => {},

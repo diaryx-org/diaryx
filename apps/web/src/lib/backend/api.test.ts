@@ -1918,11 +1918,11 @@ describe('api', () => {
         data: { path: 'root', name: 'root', description: null, is_index: false, children: [], properties: {} },
       })
 
-      await api.getWorkspaceTree('root', 2, 'public')
+      await api.getWorkspaceTree('root', 2, ['public'])
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'GetWorkspaceTree',
-        params: { path: 'root', depth: 2, audience: 'public' },
+        params: { path: 'root', depth: 2, audience: ['public'] },
       })
     })
   })

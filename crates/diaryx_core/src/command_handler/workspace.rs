@@ -173,7 +173,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         &self,
         path: Option<String>,
         depth: Option<u32>,
-        audience: Option<String>,
+        audience: Option<Vec<String>>,
     ) -> Result<Response> {
         let root_path = path.unwrap_or_else(|| "workspace/index.md".to_string());
         let resolved_root_path = self.resolve_fs_path(&root_path);
@@ -194,9 +194,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             )
             .await?;
 
-        // If an audience filter is specified, prune nodes not visible to that audience
-        let tree = if let Some(ref audience) = audience {
-            self.filter_tree_by_audience(tree, audience).await
+        // If an audience filter is specified, prune nodes not visible to those audiences
+        let tree = if let Some(ref audiences) = audience {
+            self.filter_tree_by_audiences(tree, audiences).await
         } else {
             tree
         };

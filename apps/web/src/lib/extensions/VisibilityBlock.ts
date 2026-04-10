@@ -537,8 +537,8 @@ export const VisibilityBlock = Node.create<VisibilityBlockOptions>({
               };
 
               if (preview) {
-                const matches = audiences.some(
-                  (a) => a.toLowerCase() === preview.toLowerCase(),
+                const matches = audiences.some((a) =>
+                  preview.some((p) => a.toLowerCase() === p.toLowerCase()),
                 );
 
                 if (!matches) {

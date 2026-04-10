@@ -38,6 +38,7 @@ import { createGutterMultiDot, createGutterEyeIcon } from "./EditorGutter";
 import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
 import { getAudienceColor } from "$lib/utils/audienceDotColor";
 import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
+import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
 
 // ---------------------------------------------------------------------------
 // Plugin keys
@@ -93,11 +94,11 @@ function audiencesEqual(a: string[], b: string[]): boolean {
 
 function rangeMatchesPreview(
   audiences: string[],
-  previewAudience: string | null,
+  previewAudiences: string[] | null,
 ): boolean {
-  if (!previewAudience) return true;
-  return audiences.some(
-    (a) => a.toLowerCase() === previewAudience.toLowerCase(),
+  if (!previewAudiences) return true;
+  return audiences.some((a) =>
+    previewAudiences.some((p) => a.toLowerCase() === p.toLowerCase()),
   );
 }
 
@@ -381,10 +382,11 @@ export const VisibilityMark = Mark.create<VisibilityMarkOptions>({
             indicator.classList.add("gutter-eye--active");
           }
         } else {
+          // In normal mode, clicking dots opens the audience panel
           indicator = createGutterMultiDot(
             info.colors,
             tooltip,
-            toggleReveal,
+            () => getAudiencePanelStore().openPanel(),
           );
           if (isRevealed) {
             indicator.classList.add("gutter-dot--revealed");

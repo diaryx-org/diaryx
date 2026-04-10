@@ -23,7 +23,7 @@
     const preview = templateContextStore.previewAudience;
     // In preview mode, override "audience" variable with the preview value
     if (preview !== null && name === "audience") {
-      return preview;
+      return preview.join(", ");
     }
     return templateContextStore.resolve(name);
   });

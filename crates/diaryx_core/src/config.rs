@@ -73,25 +73,6 @@ pub struct Config {
     pub link_format: LinkFormat,
 
     // ========================================================================
-    // Sync configuration
-    // ========================================================================
-    /// Sync server URL (e.g., "https://app.diaryx.org/api")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sync_server_url: Option<String>,
-
-    /// Session token for authenticated sync
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sync_session_token: Option<String>,
-
-    /// Email address used for sync authentication
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sync_email: Option<String>,
-
-    /// Workspace ID for sync (identifies the remote workspace)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sync_workspace_id: Option<String>,
-
-    // ========================================================================
     // Git version history configuration
     // ========================================================================
     /// Git-backed version history settings
@@ -175,10 +156,6 @@ impl Config {
             default_workspace,
             editor: None,
             link_format: LinkFormat::default(),
-            sync_server_url: None,
-            sync_session_token: None,
-            sync_email: None,
-            sync_workspace_id: None,
             git: GitConfig::default(),
             workspaces: Vec::new(),
             workspace_bookmarks: HashMap::new(),
@@ -198,10 +175,6 @@ impl Config {
             default_workspace,
             editor,
             link_format: LinkFormat::default(),
-            sync_server_url: None,
-            sync_session_token: None,
-            sync_email: None,
-            sync_workspace_id: None,
             git: GitConfig::default(),
             workspaces: Vec::new(),
             workspace_bookmarks: HashMap::new(),
@@ -351,10 +324,6 @@ impl Default for Config {
             default_workspace: default_base,
             editor: None,
             link_format: LinkFormat::default(),
-            sync_server_url: None,
-            sync_session_token: None,
-            sync_email: None,
-            sync_workspace_id: None,
             git: GitConfig::default(),
             workspaces: Vec::new(),
             workspace_bookmarks: HashMap::new(),
@@ -414,10 +383,6 @@ impl Default for Config {
             default_workspace: PathBuf::from("/workspace"),
             editor: None,
             link_format: LinkFormat::default(),
-            sync_server_url: None,
-            sync_session_token: None,
-            sync_email: None,
-            sync_workspace_id: None,
             git: GitConfig::default(),
             workspaces: Vec::new(),
             workspace_bookmarks: HashMap::new(),

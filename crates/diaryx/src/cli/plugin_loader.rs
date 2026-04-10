@@ -3,11 +3,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use diaryx_core::auth::{AuthCredentials, NativeFileAuthStorage};
+use diaryx_core::auth::{AuthenticatedClient, DEFAULT_SYNC_SERVER};
 use diaryx_core::config::Config;
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use diaryx_core::plugin::permissions::PermissionType;
 use diaryx_core::plugin::{Plugin, PluginContext, PluginManifest};
+
+use super::auth_client::FsAuthenticatedClient;
 use diaryx_extism::protocol::GuestManifest;
 use diaryx_extism::{
     EventEmitter, ExtismPluginAdapter, FrontmatterPermissionChecker, HostContext,
@@ -32,6 +34,35 @@ impl CliRuntimeContextProvider {
     }
 }
 
+/// Auth data passed to a guest plugin's runtime context.
+///
+/// This is the one place in the CLI where the raw bearer token legitimately
+/// leaves [`FsAuthenticatedClient`] via its `export_bearer_token` escape
+/// hatch — the token must cross the WASM sandbox boundary so the guest
+/// plugin (e.g. `diaryx.sync`) can make its own authenticated HTTP calls.
+#[derive(Debug, Default, Clone)]
+pub struct PluginAuthContext {
+    pub server_url: String,
+    pub auth_token: Option<String>,
+    pub workspace_id: Option<String>,
+}
+
+impl PluginAuthContext {
+    /// Load auth context from the default CLI auth storage. Returns `None`
+    /// when the user is not logged in or the config directory is unavailable.
+    fn load_global() -> Option<Self> {
+        let client = FsAuthenticatedClient::from_default_path(None)?;
+        let auth_token = client.export_bearer_token();
+        let workspace_id =
+            FsAuthenticatedClient::read_default_metadata().and_then(|(_, meta)| meta.workspace_id);
+        Some(Self {
+            server_url: client.server_url().to_string(),
+            auth_token,
+            workspace_id,
+        })
+    }
+}
+
 impl diaryx_extism::RuntimeContextProvider for CliRuntimeContextProvider {
     fn get_context(&self, plugin_id: &str) -> JsonValue {
         build_runtime_context(Config::load().ok(), &self.workspace_root, plugin_id)
@@ -45,7 +76,7 @@ fn build_runtime_context(
 ) -> JsonValue {
     build_runtime_context_from_sources(
         config,
-        NativeFileAuthStorage::load_global_credentials(),
+        PluginAuthContext::load_global(),
         workspace_root,
         plugin_id,
     )
@@ -53,7 +84,7 @@ fn build_runtime_context(
 
 fn build_runtime_context_from_sources(
     config: Option<Config>,
-    auth_credentials: Option<AuthCredentials>,
+    auth: Option<PluginAuthContext>,
     workspace_root: &Path,
     plugin_id: &str,
 ) -> JsonValue {
@@ -68,10 +99,8 @@ fn build_runtime_context_from_sources(
     });
 
     let provider_links = if plugin_id == "diaryx.sync" {
-        auth_credentials
-            .as_ref()
-            .and_then(|credentials| credentials.workspace_id.as_ref())
-            .as_ref()
+        auth.as_ref()
+            .and_then(|a| a.workspace_id.as_ref())
             .map(|remote_workspace_id| {
                 vec![serde_json::json!({
                     "pluginId": plugin_id,
@@ -83,11 +112,11 @@ fn build_runtime_context_from_sources(
         Vec::new()
     };
 
-    let server_url = auth_credentials
+    let server_url = auth
         .as_ref()
-        .map(|credentials| credentials.server_url.clone())
-        .unwrap_or_else(|| diaryx_core::auth::DEFAULT_SYNC_SERVER.to_string());
-    let auth_token = auth_credentials.and_then(|credentials| credentials.session_token);
+        .map(|a| a.server_url.clone())
+        .unwrap_or_else(|| DEFAULT_SYNC_SERVER.to_string());
+    let auth_token = auth.and_then(|a| a.auth_token);
 
     serde_json::json!({
         "server_url": server_url,
@@ -571,8 +600,7 @@ fn load_publish_plugin(workspace_root: &Path) -> Result<Arc<ExtismPluginAdapter>
 
 #[cfg(test)]
 mod tests {
-    use super::build_runtime_context_from_sources;
-    use diaryx_core::auth::AuthCredentials;
+    use super::{PluginAuthContext, build_runtime_context_from_sources};
     use diaryx_core::config::Config;
     use diaryx_core::workspace_registry::WorkspaceEntry;
     use std::path::{Path, PathBuf};
@@ -587,19 +615,14 @@ mod tests {
             path: Some(PathBuf::from(workspace_root)),
         });
 
-        let auth_credentials = Some(AuthCredentials {
+        let auth = Some(PluginAuthContext {
             server_url: "https://sync.example.com".into(),
-            session_token: Some("session-token".into()),
-            email: Some("user@example.com".into()),
+            auth_token: Some("session-token".into()),
             workspace_id: Some("remote-123".into()),
         });
 
-        let context = build_runtime_context_from_sources(
-            Some(config),
-            auth_credentials,
-            workspace_root,
-            "diaryx.sync",
-        );
+        let context =
+            build_runtime_context_from_sources(Some(config), auth, workspace_root, "diaryx.sync");
 
         assert_eq!(
             context.get("server_url").and_then(|v| v.as_str()),
@@ -630,16 +653,15 @@ mod tests {
     fn runtime_context_omits_sync_link_for_non_sync_plugins() {
         let workspace_root = Path::new("/tmp/diaryx-workspace");
         let config = Config::new(PathBuf::from(workspace_root));
-        let auth_credentials = Some(AuthCredentials {
+        let auth = Some(PluginAuthContext {
             server_url: "https://sync.example.com".into(),
-            session_token: Some("session-token".into()),
-            email: None,
+            auth_token: Some("session-token".into()),
             workspace_id: Some("remote-123".into()),
         });
 
         let context = build_runtime_context_from_sources(
             Some(config),
-            auth_credentials,
+            auth,
             workspace_root,
             "diaryx.publish",
         );

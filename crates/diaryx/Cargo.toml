@@ -41,7 +41,7 @@ tower-http = { version = "0.6", features = ["fs"], optional = true }
 open = { version = "5", optional = true }
 
 [features]
-default = []
+default = ["plugins"]
 edit = ["dep:diaryx_sync", "dep:tokio", "dep:axum", "dep:open"]
 plugins = ["dep:diaryx_extism", "dep:tokio", "dep:axum", "dep:tower-http", "dep:open", "dep:sha2"]
 

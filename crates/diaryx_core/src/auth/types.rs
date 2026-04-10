@@ -5,16 +5,19 @@ use serde::{Deserialize, Serialize};
 /// Default sync server URL.
 pub const DEFAULT_SYNC_SERVER: &str = "https://app.diaryx.org/api";
 
-/// Stored authentication credentials.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthCredentials {
-    /// Sync server URL.
-    pub server_url: String,
-    /// Session token for authenticated requests.
-    pub session_token: Option<String>,
+/// Non-secret session metadata.
+///
+/// Unlike a raw session token, this struct is safe to log, serialize, pass to
+/// UI layers, or expose through IPC. It intentionally does **not** contain the
+/// session token — that stays encapsulated inside each [`AuthenticatedClient`]
+/// implementation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthMetadata {
     /// Authenticated user's email.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     /// Workspace ID on the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
 }
 
@@ -139,7 +142,7 @@ impl AuthError {
     }
 }
 
-/// HTTP response from [`AuthHttpClient`].
+/// HTTP response from an [`AuthenticatedClient`].
 #[derive(Debug)]
 pub struct HttpResponse {
     /// HTTP status code.
@@ -161,55 +164,73 @@ impl HttpResponse {
     }
 }
 
-/// Trait for platform-specific HTTP requests.
+/// Platform-agnostic authenticated HTTP client.
 ///
-/// Implementations:
-/// - CLI: `reqwest::blocking::Client` (or async reqwest)
-/// - WASM: `js-sys fetch` / `proxyFetch`
+/// Bundles credential storage and HTTP transport so the session token never
+/// appears in service-level code. Each implementation owns its server URL and
+/// decides how authentication is injected:
+///
+/// - **CLI (`FsAuthenticatedClient`)**: token is stored in `auth.md` frontmatter
+///   and attached as `Authorization: Bearer` headers.
+/// - **Tauri (`KeyringAuthenticatedClient`)**: token lives in the OS keyring and
+///   is looked up per request.
+/// - **Web (`BrowserAuthenticatedClient`)**: token lives in an HttpOnly cookie
+///   set by the server; the client sets `credentials: 'include'` on every fetch
+///   and never sees the token string.
+///
+/// `path` arguments to request methods should be server-relative (e.g.
+/// `"/auth/me"`); the implementation prepends its configured server URL.
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-pub trait AuthHttpClient {
-    /// Send a GET request.
-    async fn get(&self, url: &str, bearer_token: Option<&str>) -> Result<HttpResponse, AuthError>;
+pub trait AuthenticatedClient {
+    /// Server URL this client talks to.
+    fn server_url(&self) -> &str;
 
-    /// Send a POST request with a JSON body.
-    async fn post(
-        &self,
-        url: &str,
-        bearer_token: Option<&str>,
-        json_body: Option<&str>,
-    ) -> Result<HttpResponse, AuthError>;
+    /// True iff a session is currently established.
+    async fn has_session(&self) -> bool;
 
-    /// Send a PATCH request with a JSON body.
-    async fn patch(
-        &self,
-        url: &str,
-        bearer_token: Option<&str>,
-        json_body: Option<&str>,
-    ) -> Result<HttpResponse, AuthError>;
+    /// Load non-secret session metadata, if any.
+    async fn load_metadata(&self) -> Option<AuthMetadata>;
 
-    /// Send a DELETE request.
-    async fn delete(
-        &self,
-        url: &str,
-        bearer_token: Option<&str>,
-    ) -> Result<HttpResponse, AuthError>;
-}
+    /// Persist non-secret session metadata.
+    async fn save_metadata(&self, metadata: &AuthMetadata);
 
-/// Trait for platform-specific credential storage.
-///
-/// Implementations:
-/// - CLI: reads/writes `Config` TOML file
-/// - WASM: reads/writes `localStorage`
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-pub trait AuthStorage {
-    /// Load stored credentials.
-    async fn load_credentials(&self) -> Option<AuthCredentials>;
+    /// Persist a newly-issued session token. On browser this is typically a
+    /// no-op — the server sets the HttpOnly cookie directly on the response.
+    async fn store_session_token(&self, token: &str);
 
-    /// Save credentials.
-    async fn save_credentials(&self, credentials: &AuthCredentials);
-
-    /// Clear stored session token (keep email/server for re-login convenience).
+    /// Clear local session state. On browser this only clears the local
+    /// "has session" flag; the actual cookie deletion happens server-side via
+    /// `/auth/logout` (which the caller is expected to invoke first).
     async fn clear_session(&self);
+
+    // ========================================================================
+    // Authenticated requests — implementations inject auth.
+    // ========================================================================
+
+    /// Send an authenticated GET request.
+    async fn get(&self, path: &str) -> Result<HttpResponse, AuthError>;
+
+    /// Send an authenticated POST request with an optional JSON body.
+    async fn post(&self, path: &str, body: Option<&str>) -> Result<HttpResponse, AuthError>;
+
+    /// Send an authenticated PUT request with an optional JSON body.
+    async fn put(&self, path: &str, body: Option<&str>) -> Result<HttpResponse, AuthError>;
+
+    /// Send an authenticated PATCH request with an optional JSON body.
+    async fn patch(&self, path: &str, body: Option<&str>) -> Result<HttpResponse, AuthError>;
+
+    /// Send an authenticated DELETE request.
+    async fn delete(&self, path: &str) -> Result<HttpResponse, AuthError>;
+
+    // ========================================================================
+    // Unauthenticated requests — used for the login flow (magic link request,
+    // magic link verify, code verify). Implementations must NOT attach auth.
+    // ========================================================================
+
+    /// Send an unauthenticated GET request (used for the magic-link verify flow).
+    async fn get_unauth(&self, path: &str) -> Result<HttpResponse, AuthError>;
+
+    /// Send an unauthenticated POST request (used for magic-link request and code verify).
+    async fn post_unauth(&self, path: &str, body: Option<&str>) -> Result<HttpResponse, AuthError>;
 }

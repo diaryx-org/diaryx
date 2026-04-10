@@ -1,9 +1,9 @@
 //! Billing tier model and feature gates.
 //!
 //! Provides a platform-agnostic [`BillingState`] with tier-based feature
-//! gates. The billing state is queried from the sync server via
-//! [`AuthHttpClient`](crate::auth::AuthHttpClient) (reusing the auth HTTP
-//! layer) and can be refreshed by calling [`get_me()`](crate::auth::AuthService::get_me).
+//! gates. The billing state is queried from the sync server via the
+//! [`AuthService`](crate::auth::AuthService) and refreshed by calling
+//! [`get_me()`](crate::auth::AuthService::get_me).
 //!
 //! Payment _initiation_ (Stripe redirect, Apple StoreKit purchase) stays
 //! platform-specific. Core only models the resulting state.

@@ -2,6 +2,7 @@
 
 /// Account management (login, logout, whoami)
 mod account;
+mod auth_client;
 
 /// Clap argument definitions
 mod args;

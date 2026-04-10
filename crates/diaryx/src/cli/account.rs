@@ -1,100 +1,23 @@
 //! CLI handlers for account management (login, logout, whoami).
 
-use diaryx_core::auth::{
-    AuthCredentials, AuthError, AuthHttpClient, AuthService, HttpResponse, NativeFileAuthStorage,
-};
-use std::io::{self, Write};
+use diaryx_core::auth::AuthService;
 
+use super::auth_client::FsAuthenticatedClient;
 use super::block_on;
 
-/// Ureq-backed HTTP client for AuthService.
-struct UreqHttpClient {
-    agent: ureq::Agent,
-}
-
-impl UreqHttpClient {
-    fn new() -> Self {
-        let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(15)))
-            .build()
-            .new_agent();
-        Self { agent }
-    }
-}
-
-fn finish_response(
-    result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
-) -> Result<HttpResponse, AuthError> {
-    match result {
-        Ok(mut resp) => {
-            let status: u16 = resp.status().into();
-            let body = resp.body_mut().read_to_string().unwrap_or_default();
-            Ok(HttpResponse { status, body })
-        }
-        Err(e) => Err(AuthError::network(e.to_string())),
-    }
-}
-
-#[async_trait::async_trait]
-impl AuthHttpClient for UreqHttpClient {
-    async fn get(&self, url: &str, token: Option<&str>) -> Result<HttpResponse, AuthError> {
-        let mut req = self.agent.get(url);
-        if let Some(t) = token {
-            req = req.header("Authorization", &format!("Bearer {t}"));
-        }
-        finish_response(req.call())
-    }
-
-    async fn post(
-        &self,
-        url: &str,
-        token: Option<&str>,
-        body: Option<&str>,
-    ) -> Result<HttpResponse, AuthError> {
-        let mut req = self.agent.post(url);
-        if let Some(t) = token {
-            req = req.header("Authorization", &format!("Bearer {t}"));
-        }
-        req = req.header("Content-Type", "application/json");
-        finish_response(req.send(body.unwrap_or("{}").as_bytes()))
-    }
-
-    async fn patch(
-        &self,
-        url: &str,
-        token: Option<&str>,
-        body: Option<&str>,
-    ) -> Result<HttpResponse, AuthError> {
-        let mut req = self.agent.patch(url);
-        if let Some(t) = token {
-            req = req.header("Authorization", &format!("Bearer {t}"));
-        }
-        req = req.header("Content-Type", "application/json");
-        finish_response(req.send(body.unwrap_or("{}").as_bytes()))
-    }
-
-    async fn delete(&self, url: &str, token: Option<&str>) -> Result<HttpResponse, AuthError> {
-        let mut req = self.agent.delete(url);
-        if let Some(t) = token {
-            req = req.header("Authorization", &format!("Bearer {t}"));
-        }
-        finish_response(req.call())
-    }
-}
-
-fn build_service() -> AuthService<UreqHttpClient, NativeFileAuthStorage> {
-    let http = UreqHttpClient::new();
-    let storage = NativeFileAuthStorage::global()
-        .expect("Cannot determine config directory for auth storage");
-    AuthService::new(http, storage)
+fn build_service(server_override: Option<&str>) -> Option<AuthService<FsAuthenticatedClient>> {
+    let client = FsAuthenticatedClient::from_default_path(server_override)?;
+    Some(AuthService::new(client))
 }
 
 pub fn handle_login(email: &str, server: Option<&str>) -> bool {
-    let service = build_service();
+    let Some(service) = build_service(server) else {
+        eprintln!("✗ Cannot determine config directory for auth storage");
+        return false;
+    };
 
     println!("Requesting magic link for {email}...");
-    let result = block_on(service.request_magic_link(email, server));
-    match result {
+    match block_on(service.request_magic_link(email)) {
         Ok(resp) => {
             println!("{}", resp.message);
         }
@@ -105,6 +28,7 @@ pub fn handle_login(email: &str, server: Option<&str>) -> bool {
     }
 
     println!();
+    use std::io::{self, Write};
     print!("Enter the 6-digit code from your email: ");
     io::stdout().flush().unwrap();
 
@@ -134,7 +58,10 @@ pub fn handle_login(email: &str, server: Option<&str>) -> bool {
 }
 
 pub fn handle_logout() -> bool {
-    let service = build_service();
+    let Some(service) = build_service(None) else {
+        eprintln!("✗ Cannot determine config directory for auth storage");
+        return false;
+    };
     match block_on(service.logout()) {
         Ok(()) => {
             println!("✓ Logged out");
@@ -148,22 +75,25 @@ pub fn handle_logout() -> bool {
 }
 
 pub fn handle_whoami() -> bool {
-    let creds: Option<AuthCredentials> = NativeFileAuthStorage::load_global_credentials();
-    let creds = match creds {
-        Some(c) if c.session_token.is_some() => c,
-        _ => {
-            println!("Not logged in. Run `diaryx login <email>` to sign in.");
-            return true;
-        }
+    let Some(service) = build_service(None) else {
+        eprintln!("✗ Cannot determine config directory for auth storage");
+        return false;
     };
 
-    let service = build_service();
+    if !block_on(service.is_authenticated()) {
+        println!("Not logged in. Run `diaryx login <email>` to sign in.");
+        return true;
+    }
+
+    let server_url = service.server_url().to_string();
+    let metadata = block_on(service.get_metadata());
+
     match block_on(service.get_me()) {
         Ok(me) => {
             println!("Email:   {}", me.user.email);
             println!("User ID: {}", me.user.id);
             println!("Tier:    {}", me.tier);
-            println!("Server:  {}", creds.server_url);
+            println!("Server:  {server_url}");
             if !me.workspaces.is_empty() {
                 println!("\nWorkspaces:");
                 for ws in &me.workspaces {
@@ -175,8 +105,8 @@ pub fn handle_whoami() -> bool {
         Err(e) => {
             if e.is_session_expired() {
                 println!("Session expired. Run `diaryx login <email>` to sign in again.");
-                println!("Server: {}", creds.server_url);
-                if let Some(email) = &creds.email {
+                println!("Server: {server_url}");
+                if let Some(email) = metadata.as_ref().and_then(|m| m.email.as_ref()) {
                     println!("Email:  {email} (last used)");
                 }
             } else {

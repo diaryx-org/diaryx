@@ -1,10 +1,12 @@
 //! CLI handler for server namespace management (list, delete, objects).
 
-use diaryx_core::auth::{AuthCredentials, NativeFileAuthStorage};
+use diaryx_core::auth::AuthenticatedClient;
 use serde::Deserialize;
 use std::io::{self, Write};
 
 use super::args::{NamespaceCommands, NamespaceObjectCommands, NamespaceSubdomainCommands};
+use super::auth_client::FsAuthenticatedClient;
+use super::block_on;
 
 #[derive(Debug, Deserialize)]
 struct NamespaceResponse {
@@ -15,23 +17,13 @@ struct NamespaceResponse {
     metadata: Option<serde_json::Value>,
 }
 
-fn load_auth() -> Result<(String, String), String> {
-    let creds: AuthCredentials = NativeFileAuthStorage::load_global_credentials()
-        .ok_or("Not logged in. Run `diaryx login <email>` first.")?;
-
-    let token = creds
-        .session_token
-        .ok_or("No session token found. Run `diaryx login <email>` first.")?;
-
-    let server_url = creds.server_url.trim_end_matches('/').to_string();
-    Ok((server_url, token))
-}
-
-fn http_agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(15)))
-        .build()
-        .new_agent()
+fn load_client() -> Result<FsAuthenticatedClient, String> {
+    let client = FsAuthenticatedClient::from_default_path(None)
+        .ok_or("Cannot determine config directory for auth storage")?;
+    if !block_on(client.has_session()) {
+        return Err("Not logged in. Run `diaryx login <email>` first.".to_string());
+    }
+    Ok(client)
 }
 
 fn format_timestamp(epoch_secs: i64) -> String {
@@ -120,7 +112,7 @@ fn handle_objects_command(command: NamespaceObjectCommands) -> bool {
 }
 
 fn handle_list(json_output: bool) -> bool {
-    let (server_url, token) = match load_auth() {
+    let client = match load_client() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("✗ {e}");
@@ -128,28 +120,18 @@ fn handle_list(json_output: bool) -> bool {
         }
     };
 
-    let agent = http_agent();
-    let url = format!("{server_url}/namespaces?limit=500");
-    let mut response = match agent
-        .get(&url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .call()
-    {
+    let resp = match block_on(client.get("/namespaces?limit=500")) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("✗ Failed to list namespaces: {e}");
             return false;
         }
     };
-
-    let body = match response.body_mut().read_to_string() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("✗ Failed to read response: {e}");
-            return false;
-        }
-    };
-    let namespaces: Vec<NamespaceResponse> = match serde_json::from_str(&body) {
+    if !resp.is_success() {
+        eprintln!("✗ Failed to list namespaces: HTTP {}", resp.status);
+        return false;
+    }
+    let namespaces: Vec<NamespaceResponse> = match serde_json::from_str(&resp.body) {
         Ok(ns) => ns,
         Err(e) => {
             eprintln!("✗ Failed to parse response: {e}");
@@ -203,7 +185,7 @@ fn handle_list(json_output: bool) -> bool {
 }
 
 fn handle_delete(id: &str, yes: bool) -> bool {
-    let (server_url, token) = match load_auth() {
+    let client = match load_client() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("✗ {e}");
@@ -211,30 +193,20 @@ fn handle_delete(id: &str, yes: bool) -> bool {
         }
     };
 
-    let agent = http_agent();
-
     // Fetch namespace info first
-    let get_url = format!("{server_url}/namespaces/{}", urlencoding::encode(id));
-    let mut get_resp = match agent
-        .get(&get_url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .call()
-    {
+    let get_path = format!("/namespaces/{}", urlencoding::encode(id));
+    let resp = match block_on(client.get(&get_path)) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("✗ Namespace not found: {e}");
             return false;
         }
     };
-
-    let body = match get_resp.body_mut().read_to_string() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("✗ Failed to read response: {e}");
-            return false;
-        }
-    };
-    let ns: NamespaceResponse = match serde_json::from_str(&body) {
+    if !resp.is_success() {
+        eprintln!("✗ Namespace not found: HTTP {}", resp.status);
+        return false;
+    }
+    let ns: NamespaceResponse = match serde_json::from_str(&resp.body) {
         Ok(ns) => ns,
         Err(e) => {
             eprintln!("✗ Failed to parse namespace: {e}");
@@ -271,18 +243,14 @@ fn handle_delete(id: &str, yes: bool) -> bool {
         }
     }
 
-    let delete_url = format!("{server_url}/namespaces/{}", urlencoding::encode(id));
-    match agent
-        .delete(&delete_url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .call()
-    {
-        Ok(r) if r.status() == 204 => {
+    let delete_path = format!("/namespaces/{}", urlencoding::encode(id));
+    match block_on(client.delete(&delete_path)) {
+        Ok(r) if r.status == 204 => {
             println!("✓ Deleted namespace {id}");
             true
         }
         Ok(r) => {
-            eprintln!("✗ Unexpected response: HTTP {}", r.status());
+            eprintln!("✗ Unexpected response: HTTP {}", r.status);
             false
         }
         Err(e) => {
@@ -297,36 +265,27 @@ fn handle_delete(id: &str, yes: bool) -> bool {
 // ---------------------------------------------------------------------------
 
 fn fetch_objects(
-    server_url: &str,
-    token: &str,
+    client: &FsAuthenticatedClient,
     ns_id: &str,
     prefix: Option<&str>,
 ) -> Result<Vec<ObjectMeta>, String> {
-    let agent = http_agent();
-    let mut url = format!(
-        "{server_url}/namespaces/{}/objects?limit=500",
+    let mut path = format!(
+        "/namespaces/{}/objects?limit=500",
         urlencoding::encode(ns_id),
     );
     if let Some(p) = prefix {
-        url.push_str(&format!("&prefix={}", urlencoding::encode(p)));
+        path.push_str(&format!("&prefix={}", urlencoding::encode(p)));
     }
 
-    let mut response = agent
-        .get(&url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .call()
-        .map_err(|e| format!("Failed to list objects: {e}"))?;
-
-    let body = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| format!("Failed to read response: {e}"))?;
-
-    serde_json::from_str(&body).map_err(|e| format!("Failed to parse response: {e}"))
+    let resp = block_on(client.get(&path)).map_err(|e| format!("Failed to list objects: {e}"))?;
+    if !resp.is_success() {
+        return Err(format!("Failed to list objects: HTTP {}", resp.status));
+    }
+    serde_json::from_str(&resp.body).map_err(|e| format!("Failed to parse response: {e}"))
 }
 
 fn handle_objects_list(ns_id: &str, prefix: Option<&str>, json_output: bool) -> bool {
-    let (server_url, token) = match load_auth() {
+    let client = match load_client() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("✗ {e}");
@@ -334,7 +293,7 @@ fn handle_objects_list(ns_id: &str, prefix: Option<&str>, json_output: bool) -> 
         }
     };
 
-    let objects = match fetch_objects(&server_url, &token, ns_id, prefix) {
+    let objects = match fetch_objects(&client, ns_id, prefix) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("✗ {e}");
@@ -382,7 +341,7 @@ fn handle_objects_list(ns_id: &str, prefix: Option<&str>, json_output: bool) -> 
 }
 
 fn handle_objects_delete(ns_id: &str, key: &str, yes: bool) -> bool {
-    let (server_url, token) = match load_auth() {
+    let client = match load_client() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("✗ {e}");
@@ -409,24 +368,16 @@ fn handle_objects_delete(ns_id: &str, key: &str, yes: bool) -> bool {
         }
     }
 
-    let agent = http_agent();
     // Key contains path separators (e.g. "files/src/main.rs") — don't encode
     // slashes since the server route uses a wildcard path `{*key}`.
-    let url = format!(
-        "{server_url}/namespaces/{}/objects/{key}",
-        urlencoding::encode(ns_id),
-    );
-    match agent
-        .delete(&url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .call()
-    {
-        Ok(r) if r.status() == 204 => {
+    let path = format!("/namespaces/{}/objects/{key}", urlencoding::encode(ns_id),);
+    match block_on(client.delete(&path)) {
+        Ok(r) if r.status == 204 => {
             println!("✓ Deleted {key}");
             true
         }
         Ok(r) => {
-            eprintln!("✗ Unexpected response: HTTP {}", r.status());
+            eprintln!("✗ Unexpected response: HTTP {}", r.status);
             false
         }
         Err(e) => {
@@ -452,7 +403,7 @@ fn handle_subdomain_command(command: NamespaceSubdomainCommands) -> bool {
 }
 
 fn handle_subdomain_claim(ns_id: &str, subdomain: &str, audience: Option<&str>) -> bool {
-    let (server_url, token) = match load_auth() {
+    let client = match load_client() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("✗ {e}");
@@ -460,28 +411,17 @@ fn handle_subdomain_claim(ns_id: &str, subdomain: &str, audience: Option<&str>) 
         }
     };
 
-    let agent = http_agent();
-    let url = format!(
-        "{server_url}/namespaces/{}/subdomain",
-        urlencoding::encode(ns_id),
-    );
+    let path = format!("/namespaces/{}/subdomain", urlencoding::encode(ns_id),);
 
     let mut body = serde_json::json!({ "subdomain": subdomain });
     if let Some(aud) = audience {
         body["default_audience"] = serde_json::Value::String(aud.to_string());
     }
-
     let body_str = serde_json::to_string(&body).unwrap_or_default();
 
-    match agent
-        .put(&url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .header("Content-Type", "application/json")
-        .send(body_str.as_bytes())
-    {
-        Ok(mut r) if r.status().is_success() => {
-            let resp_body = r.body_mut().read_to_string().unwrap_or_default();
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&resp_body) {
+    match block_on(client.put(&path, Some(&body_str))) {
+        Ok(r) if r.is_success() => {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&r.body) {
                 let site_domain = parsed
                     .get("site_url")
                     .and_then(|v| v.as_str())
@@ -496,15 +436,14 @@ fn handle_subdomain_claim(ns_id: &str, subdomain: &str, audience: Option<&str>) 
             }
             true
         }
-        Ok(mut r) => {
-            let resp_body = r.body_mut().read_to_string().unwrap_or_default();
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&resp_body)
+        Ok(r) => {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&r.body)
                 && let Some(err) = parsed.get("error").and_then(|v| v.as_str())
             {
                 eprintln!("✗ {err}");
                 return false;
             }
-            eprintln!("✗ Failed to claim subdomain: HTTP {}", r.status());
+            eprintln!("✗ Failed to claim subdomain: HTTP {}", r.status);
             false
         }
         Err(e) => {
@@ -515,7 +454,7 @@ fn handle_subdomain_claim(ns_id: &str, subdomain: &str, audience: Option<&str>) 
 }
 
 fn handle_subdomain_release(ns_id: &str) -> bool {
-    let (server_url, token) = match load_auth() {
+    let client = match load_client() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("✗ {e}");
@@ -523,27 +462,19 @@ fn handle_subdomain_release(ns_id: &str) -> bool {
         }
     };
 
-    let agent = http_agent();
-    let url = format!(
-        "{server_url}/namespaces/{}/subdomain",
-        urlencoding::encode(ns_id),
-    );
+    let path = format!("/namespaces/{}/subdomain", urlencoding::encode(ns_id),);
 
-    match agent
-        .delete(&url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .call()
-    {
-        Ok(r) if r.status() == 204 || r.status() == 200 => {
+    match block_on(client.delete(&path)) {
+        Ok(r) if r.status == 204 || r.status == 200 => {
             println!("✓ Released subdomain for namespace {ns_id}");
             true
         }
-        Ok(r) if r.status() == 404 => {
+        Ok(r) if r.status == 404 => {
             println!("No subdomain configured for namespace {ns_id}");
             true
         }
         Ok(r) => {
-            eprintln!("✗ Unexpected response: HTTP {}", r.status());
+            eprintln!("✗ Unexpected response: HTTP {}", r.status);
             false
         }
         Err(e) => {

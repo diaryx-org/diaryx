@@ -5,47 +5,36 @@ use super::types::*;
 /// Platform-agnostic authentication service.
 ///
 /// Handles magic link authentication, session management, and user info
-/// queries. Platform-specific HTTP and storage are injected via traits.
-pub struct AuthService<H: AuthHttpClient, S: AuthStorage> {
-    http: H,
-    storage: S,
+/// queries. The session token is never exposed at this layer — it's
+/// encapsulated inside the [`AuthenticatedClient`] implementation.
+pub struct AuthService<C: AuthenticatedClient> {
+    client: C,
 }
 
-impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
-    /// Create a new auth service.
-    pub fn new(http: H, storage: S) -> Self {
-        Self { http, storage }
+impl<C: AuthenticatedClient> AuthService<C> {
+    /// Create a new auth service wrapping an [`AuthenticatedClient`].
+    pub fn new(client: C) -> Self {
+        Self { client }
     }
 
-    /// Resolve the server URL from explicit value, stored credentials, or default.
-    async fn resolve_server_url(&self, explicit: Option<&str>) -> String {
-        if let Some(url) = explicit {
-            return url.trim_end_matches('/').to_string();
-        }
-        if let Some(creds) = self.storage.load_credentials().await
-            && !creds.server_url.is_empty()
-        {
-            return creds.server_url.trim_end_matches('/').to_string();
-        }
-        DEFAULT_SYNC_SERVER.to_string()
+    /// Borrow the underlying client.
+    pub fn client(&self) -> &C {
+        &self.client
     }
 
-    /// Get the current auth token from storage, if any.
-    pub async fn get_token(&self) -> Option<String> {
-        self.storage
-            .load_credentials()
-            .await
-            .and_then(|c| c.session_token)
+    /// Server URL this service talks to.
+    pub fn server_url(&self) -> &str {
+        self.client.server_url()
     }
 
-    /// Get stored credentials.
-    pub async fn get_credentials(&self) -> Option<AuthCredentials> {
-        self.storage.load_credentials().await
-    }
-
-    /// Check whether the user has a stored session token.
+    /// Whether the user currently has an active session.
     pub async fn is_authenticated(&self) -> bool {
-        self.get_token().await.is_some()
+        self.client.has_session().await
+    }
+
+    /// Load non-secret session metadata.
+    pub async fn get_metadata(&self) -> Option<AuthMetadata> {
+        self.client.load_metadata().await
     }
 
     // =========================================================================
@@ -54,18 +43,14 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
 
     /// Request a magic link for the given email.
     ///
-    /// Sends a POST to `{server}/auth/magic-link` and saves the server URL
-    /// and email to storage for later use.
-    pub async fn request_magic_link(
-        &self,
-        email: &str,
-        server: Option<&str>,
-    ) -> Result<MagicLinkResponse, AuthError> {
-        let server_url = self.resolve_server_url(server).await;
-        let url = format!("{}/auth/magic-link", server_url);
+    /// Sends a POST to `/auth/magic-link` and stores the email in metadata
+    /// for later convenience.
+    pub async fn request_magic_link(&self, email: &str) -> Result<MagicLinkResponse, AuthError> {
         let body = serde_json::json!({ "email": email }).to_string();
-
-        let resp = self.http.post(&url, None, Some(&body)).await?;
+        let resp = self
+            .client
+            .post_unauth("/auth/magic-link", Some(&body))
+            .await?;
 
         if !resp.is_success() {
             let msg = resp
@@ -76,44 +61,30 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
             return Err(AuthError::new(msg, resp.status));
         }
 
-        // Save server URL and email for verify step
-        let mut creds = self
-            .storage
-            .load_credentials()
-            .await
-            .unwrap_or(AuthCredentials {
-                server_url: server_url.clone(),
-                session_token: None,
-                email: None,
-                workspace_id: None,
-            });
-        creds.server_url = server_url;
-        creds.email = Some(email.to_string());
-        self.storage.save_credentials(&creds).await;
+        let mut meta = self.client.load_metadata().await.unwrap_or_default();
+        meta.email = Some(email.to_string());
+        self.client.save_metadata(&meta).await;
 
         resp.json()
     }
 
     /// Verify a magic link token and obtain a session token.
     ///
-    /// Sends a GET to `{server}/auth/verify?token=...&device_name=...` and
-    /// saves the resulting session token to storage.
+    /// Sends a GET to `/auth/verify?token=...&device_name=...` and persists
+    /// the resulting session token inside the client.
     pub async fn verify_magic_link(
         &self,
         token: &str,
         device_name: Option<&str>,
     ) -> Result<VerifyResponse, AuthError> {
-        let server_url = self.resolve_server_url(None).await;
         let device = device_name.unwrap_or("Diaryx");
-
-        let url = format!(
-            "{}/auth/verify?token={}&device_name={}",
-            server_url,
+        let path = format!(
+            "/auth/verify?token={}&device_name={}",
             urlencoding::encode(token),
             urlencoding::encode(device)
         );
 
-        let resp = self.http.get(&url, None).await?;
+        let resp = self.client.get_unauth(&path).await?;
 
         if !resp.is_success() {
             if resp.status == 401 || resp.status == 400 {
@@ -125,7 +96,6 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
             ));
         }
 
-        // Parse response — server may return "token" or "session_token"
         let json: serde_json::Value = resp.json()?;
         let session_token = json
             .get("token")
@@ -153,29 +123,19 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
             .get("workspace_id")
             .and_then(|v| v.as_str())
             .map(String::from)
-            .or(user_id.clone());
+            .or_else(|| user_id.clone());
 
-        // Save credentials
-        let mut creds = self
-            .storage
-            .load_credentials()
-            .await
-            .unwrap_or(AuthCredentials {
-                server_url: server_url.clone(),
-                session_token: None,
-                email: None,
-                workspace_id: None,
-            });
-        creds.session_token = Some(session_token.clone());
+        self.client.store_session_token(&session_token).await;
+
+        let mut meta = self.client.load_metadata().await.unwrap_or_default();
         if let Some(ref e) = email {
-            creds.email = Some(e.clone());
+            meta.email = Some(e.clone());
         }
         if let Some(ref wid) = workspace_id {
-            creds.workspace_id = Some(wid.clone());
+            meta.workspace_id = Some(wid.clone());
         }
-        self.storage.save_credentials(&creds).await;
+        self.client.save_metadata(&meta).await;
 
-        // Build typed response
         let user = User {
             id: user_id.unwrap_or_default(),
             email: email.unwrap_or_default(),
@@ -195,8 +155,6 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
         email: &str,
         device_name: Option<&str>,
     ) -> Result<VerifyResponse, AuthError> {
-        let server_url = self.resolve_server_url(None).await;
-        let url = format!("{}/auth/verify-code", server_url);
         let body = serde_json::json!({
             "code": code,
             "email": email,
@@ -204,7 +162,10 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
         })
         .to_string();
 
-        let resp = self.http.post(&url, None, Some(&body)).await?;
+        let resp = self
+            .client
+            .post_unauth("/auth/verify-code", Some(&body))
+            .await?;
 
         if !resp.is_success() {
             let msg = resp
@@ -217,20 +178,11 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
 
         let verify: VerifyResponse = resp.json()?;
 
-        // Save credentials
-        let mut creds = self
-            .storage
-            .load_credentials()
-            .await
-            .unwrap_or(AuthCredentials {
-                server_url,
-                session_token: None,
-                email: None,
-                workspace_id: None,
-            });
-        creds.session_token = Some(verify.token.clone());
-        creds.email = Some(verify.user.email.clone());
-        self.storage.save_credentials(&creds).await;
+        self.client.store_session_token(&verify.token).await;
+
+        let mut meta = self.client.load_metadata().await.unwrap_or_default();
+        meta.email = Some(verify.user.email.clone());
+        self.client.save_metadata(&meta).await;
 
         Ok(verify)
     }
@@ -240,21 +192,8 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
     // =========================================================================
 
     /// Get current user info from the server.
-    ///
-    /// Requires an active session token.
     pub async fn get_me(&self) -> Result<MeResponse, AuthError> {
-        let creds = self
-            .storage
-            .load_credentials()
-            .await
-            .ok_or_else(|| AuthError::new("Not authenticated", 0))?;
-        let token = creds
-            .session_token
-            .as_deref()
-            .ok_or_else(|| AuthError::new("No session token", 0))?;
-
-        let url = format!("{}/auth/me", creds.server_url);
-        let resp = self.http.get(&url, Some(token)).await?;
+        let resp = self.client.get("/auth/me").await?;
 
         if !resp.is_success() {
             if resp.status == 401 {
@@ -269,28 +208,19 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
         resp.json()
     }
 
-    /// Log out — clear the session token and notify the server.
+    /// Log out — notify the server and clear local session state.
+    ///
+    /// Server notification is best-effort (failures are ignored) because the
+    /// primary goal is to clear local state. On browser clients the server
+    /// response's `Set-Cookie: Max-Age=0` is the only way to clear the
+    /// HttpOnly cookie, so it's important to call the server first.
     pub async fn logout(&self) -> Result<(), AuthError> {
-        let creds = self.storage.load_credentials().await;
-
-        // Best-effort server notification
-        if let Some(ref creds) = creds
-            && let Some(ref token) = creds.session_token
-        {
-            let url = format!("{}/auth/logout", creds.server_url);
-            let _ = self.http.post(&url, Some(token), None).await;
-        }
-
-        // Clear local session
-        self.storage.clear_session().await;
-
+        let _ = self.client.post("/auth/logout", None).await;
+        self.client.clear_session().await;
         Ok(())
     }
 
     /// Refresh token by re-validating with the server.
-    ///
-    /// Calls `/auth/me` to check if the token is still valid. Returns the
-    /// server response if valid, or an error if expired.
     pub async fn refresh_token(&self) -> Result<MeResponse, AuthError> {
         self.get_me().await
     }
@@ -301,23 +231,19 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
 
     /// Get the user's registered devices.
     pub async fn get_devices(&self) -> Result<Vec<Device>, AuthError> {
-        let (url, token) = self.authenticated_url("/auth/devices").await?;
-        let resp = self.http.get(&url, Some(&token)).await?;
-
+        let resp = self.client.get("/auth/devices").await?;
         if !resp.is_success() {
             return Err(AuthError::new("Failed to get devices", resp.status));
         }
-
         resp.json()
     }
 
     /// Rename a device.
     pub async fn rename_device(&self, device_id: &str, new_name: &str) -> Result<(), AuthError> {
-        let (base_url, token) = self.authenticated_url("").await?;
-        let url = format!("{}/auth/devices/{}", base_url, device_id);
+        let path = format!("/auth/devices/{}", device_id);
         let body = serde_json::json!({ "name": new_name }).to_string();
 
-        let resp = self.http.patch(&url, Some(&token), Some(&body)).await?;
+        let resp = self.client.patch(&path, Some(&body)).await?;
         if !resp.is_success() {
             return Err(AuthError::new("Failed to rename device", resp.status));
         }
@@ -326,10 +252,8 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
 
     /// Delete a device.
     pub async fn delete_device(&self, device_id: &str) -> Result<(), AuthError> {
-        let (base_url, token) = self.authenticated_url("").await?;
-        let url = format!("{}/auth/devices/{}", base_url, device_id);
-
-        let resp = self.http.delete(&url, Some(&token)).await?;
+        let path = format!("/auth/devices/{}", device_id);
+        let resp = self.client.delete(&path).await?;
         if !resp.is_success() {
             return Err(AuthError::new("Failed to delete device", resp.status));
         }
@@ -342,14 +266,13 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
 
     /// Delete the user's account and all server data.
     pub async fn delete_account(&self) -> Result<(), AuthError> {
-        let (url, token) = self.authenticated_url("/auth/account").await?;
-        let resp = self.http.delete(&url, Some(&token)).await?;
+        let resp = self.client.delete("/auth/account").await?;
 
         if !resp.is_success() {
             return Err(AuthError::new("Failed to delete account", resp.status));
         }
 
-        self.storage.clear_session().await;
+        self.client.clear_session().await;
         Ok(())
     }
 
@@ -359,11 +282,8 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
 
     /// Create a workspace on the server.
     pub async fn create_workspace(&self, name: &str) -> Result<ServerWorkspace, AuthError> {
-        let (base_url, token) = self.authenticated_url("").await?;
-        let url = format!("{}/api/workspaces", base_url);
         let body = serde_json::json!({ "name": name }).to_string();
-
-        let resp = self.http.post(&url, Some(&token), Some(&body)).await?;
+        let resp = self.client.post("/api/workspaces", Some(&body)).await?;
 
         if !resp.is_success() {
             let msg = resp
@@ -397,11 +317,10 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
         workspace_id: &str,
         new_name: &str,
     ) -> Result<(), AuthError> {
-        let (base_url, token) = self.authenticated_url("").await?;
-        let url = format!("{}/api/workspaces/{}", base_url, workspace_id);
+        let path = format!("/api/workspaces/{}", workspace_id);
         let body = serde_json::json!({ "name": new_name }).to_string();
 
-        let resp = self.http.patch(&url, Some(&token), Some(&body)).await?;
+        let resp = self.client.patch(&path, Some(&body)).await?;
         if !resp.is_success() {
             return Err(AuthError::new("Failed to rename workspace", resp.status));
         }
@@ -410,140 +329,111 @@ impl<H: AuthHttpClient, S: AuthStorage> AuthService<H, S> {
 
     /// Delete a workspace on the server.
     pub async fn delete_workspace(&self, workspace_id: &str) -> Result<(), AuthError> {
-        let (base_url, token) = self.authenticated_url("").await?;
-        let url = format!("{}/api/workspaces/{}", base_url, workspace_id);
-
-        let resp = self.http.delete(&url, Some(&token)).await?;
+        let path = format!("/api/workspaces/{}", workspace_id);
+        let resp = self.client.delete(&path).await?;
         if !resp.is_success() {
             return Err(AuthError::new("Failed to delete workspace", resp.status));
         }
         Ok(())
-    }
-
-    // =========================================================================
-    // Helpers
-    // =========================================================================
-
-    /// Build a full URL and extract the auth token. Returns (full_url, token).
-    async fn authenticated_url(&self, path: &str) -> Result<(String, String), AuthError> {
-        let creds = self
-            .storage
-            .load_credentials()
-            .await
-            .ok_or_else(|| AuthError::new("Not authenticated", 0))?;
-        let token = creds
-            .session_token
-            .ok_or_else(|| AuthError::new("No session token", 0))?;
-        let url = format!("{}{}", creds.server_url, path);
-        Ok((url, token))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     // =========================================================================
-    // Mock implementations for testing
+    // MockClient — a single AuthenticatedClient impl for testing AuthService.
     // =========================================================================
 
-    struct MockHttp {
-        responses: std::sync::Mutex<Vec<HttpResponse>>,
+    struct MockClient {
+        server_url: String,
+        responses: Mutex<Vec<HttpResponse>>,
+        metadata: Mutex<Option<AuthMetadata>>,
+        session_token: Mutex<Option<String>>,
     }
 
-    impl MockHttp {
+    impl MockClient {
         fn new(responses: Vec<HttpResponse>) -> Self {
             Self {
-                responses: std::sync::Mutex::new(responses),
+                server_url: "https://app.diaryx.org/api".to_string(),
+                responses: Mutex::new(responses),
+                metadata: Mutex::new(None),
+                session_token: Mutex::new(None),
+            }
+        }
+
+        fn with_session(self, token: impl Into<String>) -> Self {
+            *self.session_token.lock().unwrap() = Some(token.into());
+            self
+        }
+
+        fn with_metadata(self, metadata: AuthMetadata) -> Self {
+            *self.metadata.lock().unwrap() = Some(metadata);
+            self
+        }
+
+        fn next_response(&self) -> Result<HttpResponse, AuthError> {
+            let mut responses = self.responses.lock().unwrap();
+            if responses.is_empty() {
+                Err(AuthError::network("No mock response"))
+            } else {
+                Ok(responses.remove(0))
             }
         }
     }
 
     #[async_trait::async_trait]
-    impl AuthHttpClient for MockHttp {
-        async fn get(&self, _url: &str, _token: Option<&str>) -> Result<HttpResponse, AuthError> {
-            let mut responses = self.responses.lock().unwrap();
-            if responses.is_empty() {
-                Err(AuthError::network("No mock response"))
-            } else {
-                Ok(responses.remove(0))
-            }
+    impl AuthenticatedClient for MockClient {
+        fn server_url(&self) -> &str {
+            &self.server_url
         }
 
-        async fn post(
-            &self,
-            _url: &str,
-            _token: Option<&str>,
-            _body: Option<&str>,
-        ) -> Result<HttpResponse, AuthError> {
-            let mut responses = self.responses.lock().unwrap();
-            if responses.is_empty() {
-                Err(AuthError::network("No mock response"))
-            } else {
-                Ok(responses.remove(0))
-            }
+        async fn has_session(&self) -> bool {
+            self.session_token.lock().unwrap().is_some()
         }
 
-        async fn patch(
-            &self,
-            _url: &str,
-            _token: Option<&str>,
-            _body: Option<&str>,
-        ) -> Result<HttpResponse, AuthError> {
-            let mut responses = self.responses.lock().unwrap();
-            if responses.is_empty() {
-                Err(AuthError::network("No mock response"))
-            } else {
-                Ok(responses.remove(0))
-            }
+        async fn load_metadata(&self) -> Option<AuthMetadata> {
+            self.metadata.lock().unwrap().clone()
         }
 
-        async fn delete(
-            &self,
-            _url: &str,
-            _token: Option<&str>,
-        ) -> Result<HttpResponse, AuthError> {
-            let mut responses = self.responses.lock().unwrap();
-            if responses.is_empty() {
-                Err(AuthError::network("No mock response"))
-            } else {
-                Ok(responses.remove(0))
-            }
-        }
-    }
-
-    struct MockStorage {
-        creds: std::sync::Mutex<Option<AuthCredentials>>,
-    }
-
-    impl MockStorage {
-        fn new() -> Self {
-            Self {
-                creds: std::sync::Mutex::new(None),
-            }
+        async fn save_metadata(&self, metadata: &AuthMetadata) {
+            *self.metadata.lock().unwrap() = Some(metadata.clone());
         }
 
-        fn with_creds(creds: AuthCredentials) -> Self {
-            Self {
-                creds: std::sync::Mutex::new(Some(creds)),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl AuthStorage for MockStorage {
-        async fn load_credentials(&self) -> Option<AuthCredentials> {
-            self.creds.lock().unwrap().clone()
-        }
-
-        async fn save_credentials(&self, credentials: &AuthCredentials) {
-            *self.creds.lock().unwrap() = Some(credentials.clone());
+        async fn store_session_token(&self, token: &str) {
+            *self.session_token.lock().unwrap() = Some(token.to_string());
         }
 
         async fn clear_session(&self) {
-            if let Some(ref mut creds) = *self.creds.lock().unwrap() {
-                creds.session_token = None;
-            }
+            *self.session_token.lock().unwrap() = None;
+        }
+
+        async fn get(&self, _path: &str) -> Result<HttpResponse, AuthError> {
+            self.next_response()
+        }
+        async fn post(&self, _path: &str, _body: Option<&str>) -> Result<HttpResponse, AuthError> {
+            self.next_response()
+        }
+        async fn put(&self, _path: &str, _body: Option<&str>) -> Result<HttpResponse, AuthError> {
+            self.next_response()
+        }
+        async fn patch(&self, _path: &str, _body: Option<&str>) -> Result<HttpResponse, AuthError> {
+            self.next_response()
+        }
+        async fn delete(&self, _path: &str) -> Result<HttpResponse, AuthError> {
+            self.next_response()
+        }
+        async fn get_unauth(&self, _path: &str) -> Result<HttpResponse, AuthError> {
+            self.next_response()
+        }
+        async fn post_unauth(
+            &self,
+            _path: &str,
+            _body: Option<&str>,
+        ) -> Result<HttpResponse, AuthError> {
+            self.next_response()
         }
     }
 
@@ -558,55 +448,47 @@ mod tests {
     #[test]
     fn test_request_magic_link_success() {
         run(async {
-            let http = MockHttp::new(vec![HttpResponse {
+            let client = MockClient::new(vec![HttpResponse {
                 status: 200,
                 body: r#"{"success":true,"message":"Check your email"}"#.to_string(),
             }]);
-            let storage = MockStorage::new();
-            let service = AuthService::new(http, storage);
+            let service = AuthService::new(client);
 
-            let result = service.request_magic_link("user@example.com", None).await;
+            let result = service.request_magic_link("user@example.com").await;
             assert!(result.is_ok());
-            let resp = result.unwrap();
-            assert!(resp.success);
+            assert!(result.unwrap().success);
         });
     }
 
     #[test]
-    fn test_request_magic_link_saves_credentials() {
+    fn test_request_magic_link_saves_email() {
         run(async {
-            let http = MockHttp::new(vec![HttpResponse {
+            let client = MockClient::new(vec![HttpResponse {
                 status: 200,
                 body: r#"{"success":true,"message":"Check your email"}"#.to_string(),
             }]);
-            let storage = MockStorage::new();
-            let service = AuthService::new(http, storage);
+            let service = AuthService::new(client);
 
-            let _ = service
-                .request_magic_link("user@example.com", Some("https://custom.server"))
-                .await;
+            let _ = service.request_magic_link("user@example.com").await;
 
-            let creds = service.get_credentials().await.unwrap();
-            assert_eq!(creds.server_url, "https://custom.server");
-            assert_eq!(creds.email.as_deref(), Some("user@example.com"));
+            let meta = service.get_metadata().await.unwrap();
+            assert_eq!(meta.email.as_deref(), Some("user@example.com"));
         });
     }
 
     #[test]
     fn test_verify_magic_link_success() {
         run(async {
-            let http = MockHttp::new(vec![HttpResponse {
+            let client = MockClient::new(vec![HttpResponse {
                 status: 200,
                 body: r#"{"token":"session-123","user":{"id":"uid","email":"user@example.com"}}"#
                     .to_string(),
-            }]);
-            let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://app.diaryx.org/api".to_string(),
-                session_token: None,
+            }])
+            .with_metadata(AuthMetadata {
                 email: Some("user@example.com".to_string()),
                 workspace_id: None,
             });
-            let service = AuthService::new(http, storage);
+            let service = AuthService::new(client);
 
             let result = service.verify_magic_link("token123", Some("CLI")).await;
             assert!(result.is_ok());
@@ -617,65 +499,52 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_saves_session_token() {
+    fn test_verify_stores_token_and_metadata() {
         run(async {
-            let http = MockHttp::new(vec![HttpResponse {
+            let client = MockClient::new(vec![HttpResponse {
                 status: 200,
                 body: r#"{"token":"sess-tok","user":{"id":"uid","email":"user@example.com"},"workspace_id":"ws-1"}"#
                     .to_string(),
             }]);
-            let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://app.diaryx.org/api".to_string(),
-                session_token: None,
-                email: None,
-                workspace_id: None,
-            });
-            let service = AuthService::new(http, storage);
+            let service = AuthService::new(client);
 
             let _ = service.verify_magic_link("tok", None).await;
 
-            let creds = service.get_credentials().await.unwrap();
-            assert_eq!(creds.session_token.as_deref(), Some("sess-tok"));
-            assert_eq!(creds.workspace_id.as_deref(), Some("ws-1"));
+            assert!(service.is_authenticated().await);
+            let meta = service.get_metadata().await.unwrap();
+            assert_eq!(meta.email.as_deref(), Some("user@example.com"));
+            assert_eq!(meta.workspace_id.as_deref(), Some("ws-1"));
         });
     }
 
     #[test]
     fn test_verify_invalid_token() {
         run(async {
-            let http = MockHttp::new(vec![HttpResponse {
+            let client = MockClient::new(vec![HttpResponse {
                 status: 401,
                 body: r#"{"error":"expired"}"#.to_string(),
             }]);
-            let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://app.diaryx.org/api".to_string(),
-                session_token: None,
-                email: None,
-                workspace_id: None,
-            });
-            let service = AuthService::new(http, storage);
+            let service = AuthService::new(client);
 
             let result = service.verify_magic_link("bad-token", None).await;
             assert!(result.is_err());
-            let err = result.unwrap_err();
-            assert!(err.is_unauthorized());
+            assert!(result.unwrap_err().is_unauthorized());
         });
     }
 
     #[test]
     fn test_logout_clears_session() {
         run(async {
-            let http = MockHttp::new(vec![HttpResponse {
+            let client = MockClient::new(vec![HttpResponse {
                 status: 200,
                 body: "{}".to_string(),
-            }]);
-            let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://app.diaryx.org/api".to_string(),
-                session_token: Some("tok".to_string()),
+            }])
+            .with_session("tok")
+            .with_metadata(AuthMetadata {
                 email: Some("user@example.com".to_string()),
                 workspace_id: None,
             });
-            let service = AuthService::new(http, storage);
+            let service = AuthService::new(client);
 
             assert!(service.is_authenticated().await);
             let _ = service.logout().await;
@@ -686,7 +555,7 @@ mod tests {
     #[test]
     fn test_get_me_success() {
         run(async {
-            let http = MockHttp::new(vec![HttpResponse {
+            let client = MockClient::new(vec![HttpResponse {
                 status: 200,
                 body: r#"{
                     "user": {"id": "uid", "email": "u@e.com"},
@@ -698,14 +567,9 @@ mod tests {
                     "attachment_limit_bytes": 2147483648
                 }"#
                 .to_string(),
-            }]);
-            let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://app.diaryx.org/api".to_string(),
-                session_token: Some("tok".to_string()),
-                email: None,
-                workspace_id: None,
-            });
-            let service = AuthService::new(http, storage);
+            }])
+            .with_session("tok");
+            let service = AuthService::new(client);
 
             let me = service.get_me().await.unwrap();
             assert_eq!(me.tier, "plus");
@@ -717,72 +581,16 @@ mod tests {
     #[test]
     fn test_get_me_session_expired() {
         run(async {
-            let http = MockHttp::new(vec![HttpResponse {
+            let client = MockClient::new(vec![HttpResponse {
                 status: 401,
                 body: "Unauthorized".to_string(),
-            }]);
-            let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://app.diaryx.org/api".to_string(),
-                session_token: Some("expired-tok".to_string()),
-                email: None,
-                workspace_id: None,
-            });
-            let service = AuthService::new(http, storage);
+            }])
+            .with_session("expired-tok");
+            let service = AuthService::new(client);
 
             let result = service.get_me().await;
             assert!(result.is_err());
             assert!(result.unwrap_err().is_session_expired());
-        });
-    }
-
-    #[test]
-    fn test_default_server_url() {
-        run(async {
-            let http = MockHttp::new(vec![HttpResponse {
-                status: 200,
-                body: r#"{"success":true,"message":"ok"}"#.to_string(),
-            }]);
-            let storage = MockStorage::new();
-            let service = AuthService::new(http, storage);
-
-            let url = service.resolve_server_url(None).await;
-            assert_eq!(url, DEFAULT_SYNC_SERVER);
-        });
-    }
-
-    #[test]
-    fn test_explicit_server_url_overrides() {
-        run(async {
-            let http = MockHttp::new(vec![]);
-            let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://stored.server".to_string(),
-                session_token: None,
-                email: None,
-                workspace_id: None,
-            });
-            let service = AuthService::new(http, storage);
-
-            let url = service
-                .resolve_server_url(Some("https://explicit.server/"))
-                .await;
-            assert_eq!(url, "https://explicit.server");
-        });
-    }
-
-    #[test]
-    fn test_stored_server_url_used() {
-        run(async {
-            let http = MockHttp::new(vec![]);
-            let storage = MockStorage::with_creds(AuthCredentials {
-                server_url: "https://stored.server".to_string(),
-                session_token: None,
-                email: None,
-                workspace_id: None,
-            });
-            let service = AuthService::new(http, storage);
-
-            let url = service.resolve_server_url(None).await;
-            assert_eq!(url, "https://stored.server");
         });
     }
 }

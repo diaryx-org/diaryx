@@ -37,7 +37,6 @@ This directory contains the source code for the core Diaryx library.
 | `body_template.rs`   | Render-time body templating via Handlebars (`templating` feature) |
 | `template.rs`        | Creation-time template management                      |
 | `test_utils.rs`      | Feature-gated test utilities                           |
-| `validate.rs`        | Workspace validation and fixing                        |
 | `workspace_registry.rs` | Multi-workspace registry types (shared across frontends) |
 
 ## Modules
@@ -51,8 +50,24 @@ This directory contains the source code for the core Diaryx library.
 | `entry/`    | Entry manipulation functionality                            |
 | `fs/`       | Filesystem abstraction layer                                |
 | `utils/`    | Utility functions (date, path)                              |
+| `validate/` | Workspace validation and auto-fixing (split by concern)     |
 | `workspace/`| Workspace tree organization                                 |
 | `import/`   | Import external formats                                     |
+
+### `validate/` submodules
+
+| File            | Purpose                                                             |
+| --------------- | ------------------------------------------------------------------- |
+| `mod.rs`        | Thin re-exporting shim                                              |
+| `types.rs`      | `ValidationError`, `ValidationWarning`, `ValidationResult` + metadata impls (`description`, `can_auto_fix`, `file_path`, `is_viewable`, `supports_parent_picker`) |
+| `meta.rs`       | `*WithMeta` wrappers that attach `description`, `detail`, `primary_path`, and UI booleans for consumers |
+| `detail.rs`     | Per-variant contextual one-line summaries (`warning.detail()` / `error.detail()`) used by CLI output and by the `WithMeta` wrappers |
+| `check.rs`      | Pure helpers (portability checks, canonical-link equivalence, duplicate detection, single-index finder) |
+| `validator.rs`  | Async `Validator` that walks a workspace and emits warnings/errors  |
+| `fixer.rs`      | Async `ValidationFixer` + `FixResult`; dispatch hub is `fix_warning` / `fix_error` so callers never switch on variants |
+| `tests.rs`      | Test suite exercising the public re-exported surface               |
+
+Adding a new `ValidationWarning` variant requires touching (a) the enum + its metadata impls in `types.rs`, (b) a detail arm in `detail.rs`, (c) the validator logic that emits it in `validator.rs`, and (d) a dispatch arm in `fixer.rs::fix_warning`. The CLI and frontend are variant-agnostic and do not need updating.
 
 ## SetFrontmatterProperty: Atomic Title Rename
 

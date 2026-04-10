@@ -239,7 +239,7 @@ jobs:
           EOF
 
       - name: Generate TypeScript bindings
-        run: cargo test -p diaryx_core
+        run: cargo test -p diaryx_core --features typescript
 
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4

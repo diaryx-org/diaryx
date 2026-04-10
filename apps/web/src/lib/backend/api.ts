@@ -836,71 +836,6 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'ValidationResult').data;
     },
 
-    /** Fix a broken part_of reference. */
-    async fixBrokenPartOf(path: string): Promise<FixResult> {
-      const response = await backend.execute({ type: 'FixBrokenPartOf', params: { path } });
-      return expectResponse(response, 'FixResult').data;
-    },
-
-    /** Fix a broken contents reference. */
-    async fixBrokenContentsRef(indexPath: string, target: string): Promise<FixResult> {
-      const response = await backend.execute({
-        type: 'FixBrokenContentsRef',
-        params: { index_path: indexPath, target },
-      });
-      return expectResponse(response, 'FixResult').data;
-    },
-
-    /** Fix a broken attachment reference. */
-    async fixBrokenAttachment(path: string, attachment: string): Promise<FixResult> {
-      const response = await backend.execute({
-        type: 'FixBrokenAttachment',
-        params: { path, attachment },
-      });
-      return expectResponse(response, 'FixResult').data;
-    },
-
-    /** Fix a non-portable path. */
-    async fixNonPortablePath(
-      path: string,
-      property: string,
-      oldValue: string,
-      newValue: string
-    ): Promise<FixResult> {
-      const response = await backend.execute({
-        type: 'FixNonPortablePath',
-        params: { path, property, old_value: oldValue, new_value: newValue },
-      });
-      return expectResponse(response, 'FixResult').data;
-    },
-
-    /** Add an unlisted file to an index's contents. */
-    async fixUnlistedFile(indexPath: string, filePath: string): Promise<FixResult> {
-      const response = await backend.execute({
-        type: 'FixUnlistedFile',
-        params: { index_path: indexPath, file_path: filePath },
-      });
-      return expectResponse(response, 'FixResult').data;
-    },
-
-    /** Add an orphan binary file to an index's attachments. */
-    async fixOrphanBinaryFile(indexPath: string, filePath: string): Promise<FixResult> {
-      const response = await backend.execute({
-        type: 'FixOrphanBinaryFile',
-        params: { index_path: indexPath, file_path: filePath },
-      });
-      return expectResponse(response, 'FixResult').data;
-    },
-
-    /** Fix a missing part_of reference. */
-    async fixMissingPartOf(filePath: string, indexPath: string): Promise<FixResult> {
-      const response = await backend.execute({
-        type: 'FixMissingPartOf',
-        params: { file_path: filePath, index_path: indexPath },
-      });
-      return expectResponse(response, 'FixResult').data;
-    },
-
     /** Fix all validation issues. */
     async fixAll(validationResult: ValidationResult): Promise<FixSummary> {
       const response = await backend.execute({
@@ -908,15 +843,6 @@ export function createApi(backend: Backend) {
         params: { validation_result: validationResult },
       });
       return expectResponse(response, 'FixSummary').data;
-    },
-
-    /** Fix a circular reference by removing a contents reference. */
-    async fixCircularReference(filePath: string, contentsRefToRemove: string): Promise<FixResult> {
-      const response = await backend.execute({
-        type: 'FixCircularReference',
-        params: { file_path: filePath, part_of_value: contentsRefToRemove },
-      });
-      return expectResponse(response, 'FixResult').data;
     },
 
     /**

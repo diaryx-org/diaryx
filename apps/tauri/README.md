@@ -128,18 +128,13 @@ current selection.
 The validation system checks workspace link integrity and can automatically fix issues.
 
 
-| Command                     | Description                            |
-| --------------------------- | -------------------------------------- |
-| `validate_workspace`        | Validate entire workspace from root    |
-| `validate_file`             | Validate a single file's links         |
-| `fix_broken_part_of`        | Remove broken `part_of` reference      |
-| `fix_broken_contents_ref`   | Remove broken `contents` reference     |
-| `fix_broken_attachment`     | Remove broken `attachments` reference  |
-| `fix_non_portable_path`     | Normalize non-portable paths           |
-| `fix_unlisted_file`         | Add file to index's contents           |
-| `fix_orphan_binary_file`    | Add binary file to index's attachments |
-| `fix_missing_part_of`       | Set missing `part_of` property         |
-| `fix_all_validation_issues` | Fix all errors and fixable warnings    |
+| Command                     | Description                                             |
+| --------------------------- | ------------------------------------------------------- |
+| `validate_workspace`        | Validate entire workspace from root                     |
+| `validate_file`             | Validate a single file's links                          |
+| `fix_validation_warning`    | Auto-fix any warning via the generic variant dispatcher |
+| `fix_validation_error`      | Auto-fix any error via the generic variant dispatcher   |
+| `fix_all_validation_issues` | Fix all errors and fixable warnings                     |
 
 
 ### Other Commands

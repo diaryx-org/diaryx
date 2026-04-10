@@ -746,49 +746,6 @@ export class WorkerBackendNew implements Backend {
   validateFile = (filePath: string): Promise<any> =>
     this.remote!.call("validateFile", [filePath]) as Promise<any>;
 
-  fixBrokenPartOf = (filePath: string): Promise<any> =>
-    this.remote!.call("fixBrokenPartOf", [filePath]) as Promise<any>;
-
-  fixBrokenContentsRef = (indexPath: string, target: string): Promise<any> =>
-    this.remote!.call("fixBrokenContentsRef", [
-      indexPath,
-      target,
-    ]) as Promise<any>;
-
-  fixBrokenAttachment = (filePath: string, attachment: string): Promise<any> =>
-    this.remote!.call("fixBrokenAttachment", [
-      filePath,
-      attachment,
-    ]) as Promise<any>;
-
-  fixNonPortablePath = (
-    filePath: string,
-    property: string,
-    oldValue: string,
-    newValue: string,
-  ): Promise<any> =>
-    this.remote!.call("fixNonPortablePath", [
-      filePath,
-      property,
-      oldValue,
-      newValue,
-    ]) as Promise<any>;
-
-  fixUnlistedFile = (indexPath: string, filePath: string): Promise<any> =>
-    this.remote!.call("fixUnlistedFile", [indexPath, filePath]) as Promise<any>;
-
-  fixOrphanBinaryFile = (indexPath: string, filePath: string): Promise<any> =>
-    this.remote!.call("fixOrphanBinaryFile", [
-      indexPath,
-      filePath,
-    ]) as Promise<any>;
-
-  fixMissingPartOf = (filePath: string, indexPath: string): Promise<any> =>
-    this.remote!.call("fixMissingPartOf", [
-      filePath,
-      indexPath,
-    ]) as Promise<any>;
-
   fixAll = (validationResult: any): Promise<any> =>
     this.remote!.call("fixAll", [validationResult]) as Promise<any>;
 

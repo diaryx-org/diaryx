@@ -357,76 +357,10 @@ pub enum Command {
         path: String,
     },
 
-    /// Fix a broken part_of reference.
-    FixBrokenPartOf {
-        /// Path to the file with the broken reference.
-        path: String,
-    },
-
-    /// Fix a broken contents reference.
-    FixBrokenContentsRef {
-        /// Path to the index file.
-        index_path: String,
-        /// The broken reference to remove.
-        target: String,
-    },
-
-    /// Fix a broken attachment reference.
-    FixBrokenAttachment {
-        /// Path to the file with the broken attachment.
-        path: String,
-        /// The broken attachment reference.
-        attachment: String,
-    },
-
-    /// Fix a non-portable path.
-    FixNonPortablePath {
-        /// Path to the file.
-        path: String,
-        /// Property name.
-        property: String,
-        /// Current value.
-        old_value: String,
-        /// New value.
-        new_value: String,
-    },
-
-    /// Add an unlisted file to an index's contents.
-    FixUnlistedFile {
-        /// Path to the index file.
-        index_path: String,
-        /// Path to the file to add.
-        file_path: String,
-    },
-
-    /// Add an orphan binary file to an index's attachments.
-    FixOrphanBinaryFile {
-        /// Path to the index file.
-        index_path: String,
-        /// Path to the binary file.
-        file_path: String,
-    },
-
-    /// Fix a missing part_of reference.
-    FixMissingPartOf {
-        /// Path to the file missing part_of.
-        file_path: String,
-        /// Path to the index file to reference.
-        index_path: String,
-    },
-
     /// Fix all validation issues.
     FixAll {
         /// The validation result to fix.
         validation_result: ValidationResult,
-    },
-
-    /// Fix a circular reference by removing part_of from a file.
-    FixCircularReference {
-        /// Path to the file to edit.
-        file_path: String,
-        /// The part_of value to remove.
-        part_of_value: String,
     },
 
     /// Auto-fix any validation warning by delegating to
@@ -748,9 +682,6 @@ impl Command {
             | Command::RemoveFrontmatterProperty { path, .. }
             | Command::ReorderFrontmatterKeys { path, .. }
             | Command::ValidateFile { path }
-            | Command::FixBrokenPartOf { path }
-            | Command::FixBrokenAttachment { path, .. }
-            | Command::FixNonPortablePath { path, .. }
             | Command::GetAttachments { path }
             | Command::GetAncestorAttachments { path }
             | Command::FileExists { path }
@@ -878,31 +809,6 @@ impl Command {
                 if let Some(wp) = &mut options.workspace_path {
                     *wp = normalizer(wp);
                 }
-            }
-
-            // --- Fix commands ---
-            Command::FixBrokenContentsRef { index_path, .. } => {
-                *index_path = normalizer(index_path);
-            }
-
-            Command::FixUnlistedFile {
-                index_path,
-                file_path,
-            }
-            | Command::FixOrphanBinaryFile {
-                index_path,
-                file_path,
-            }
-            | Command::FixMissingPartOf {
-                file_path,
-                index_path,
-            } => {
-                *index_path = normalizer(index_path);
-                *file_path = normalizer(file_path);
-            }
-
-            Command::FixCircularReference { file_path, .. } => {
-                *file_path = normalizer(file_path);
             }
 
             Command::GetAvailableParentIndexes {

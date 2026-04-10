@@ -100,11 +100,11 @@ console.log(
   `Fixed: ${fixSummary.total_fixed}, Failed: ${fixSummary.total_failed}`,
 );
 
-// Fix individual issues
-validation.fix_broken_part_of("workspace/broken.md");
-validation.fix_broken_contents_ref("workspace/index.md", "missing.md");
-validation.fix_unlisted_file("workspace/index.md", "workspace/unlisted.md");
-validation.fix_missing_part_of("workspace/orphan.md", "workspace/index.md");
+// Fix an individual warning or error by handing the variant straight from
+// a prior `validate_workspace` / `validate_file` result back to the generic
+// fixer. New warning/error kinds Just Work without a frontend patch.
+validation.fix_validation_warning(result.warnings[0]);
+validation.fix_validation_error(result.errors[0]);
 ```
 
 #### Validation Errors

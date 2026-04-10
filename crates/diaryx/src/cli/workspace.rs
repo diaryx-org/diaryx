@@ -2,7 +2,7 @@
 
 use diaryx_core::YamlValue;
 use diaryx_core::config::Config;
-use diaryx_core::entry::{DiaryxAppSync, prettify_filename, slugify};
+use diaryx_core::entry::{prettify_filename, slugify};
 use diaryx_core::fs::{FileSystem, RealFileSystem, SyncToAsyncFs};
 use diaryx_core::link_parser::LinkFormat;
 use diaryx_core::validate::ValidationFixer;
@@ -281,7 +281,6 @@ fn handle_validate(
     let async_fs = SyncToAsyncFs::new(CoreRealFileSystem);
     let validator = Validator::new(async_fs.clone());
     let fixer = ValidationFixer::new(async_fs);
-    let app = DiaryxAppSync::new(CoreRealFileSystem);
 
     // If a specific path is provided, validate it (file or directory)
     if let Some(ref path_str) = file_path {
@@ -332,7 +331,7 @@ fn handle_validate(
             }
 
             // Report and fix using the aggregated result
-            report_and_fix_validation(&fixer, &app, &total_result, fix, &resolved_path, verbose);
+            report_and_fix_validation(&fixer, &total_result, fix, &resolved_path, verbose);
             return true;
         }
 
@@ -349,7 +348,7 @@ fn handle_validate(
             }
         };
 
-        report_and_fix_validation(&fixer, &app, &result, fix, &resolved_path, verbose);
+        report_and_fix_validation(&fixer, &result, fix, &resolved_path, verbose);
         return true;
     }
 
@@ -395,7 +394,7 @@ fn handle_validate(
         return true;
     }
 
-    report_and_fix_validation(&fixer, &app, &result, fix, &root_path, verbose);
+    report_and_fix_validation(&fixer, &result, fix, &root_path, verbose);
     true
 }
 
@@ -504,7 +503,6 @@ fn handle_combine(
 /// Helper function to report validation results and optionally fix issues
 fn report_and_fix_validation(
     fixer: &ValidationFixer<SyncToAsyncFs<RealFileSystem>>,
-    _app: &CliDiaryxAppSync,
     result: &diaryx_core::validate::ValidationResult,
     fix: bool,
     context_path: &Path,

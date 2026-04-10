@@ -558,42 +558,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             // === Validation Operations ===
             Command::ValidateWorkspace { path } => self.cmd_validate_workspace(path).await,
             Command::ValidateFile { path } => self.cmd_validate_file(path).await,
-            Command::FixBrokenPartOf { path } => self.cmd_fix_broken_part_of(path).await,
-            Command::FixBrokenContentsRef { index_path, target } => {
-                self.cmd_fix_broken_contents_ref(index_path, target).await
-            }
-            Command::FixBrokenAttachment { path, attachment } => {
-                self.cmd_fix_broken_attachment(path, attachment).await
-            }
-            Command::FixNonPortablePath {
-                path,
-                property,
-                old_value,
-                new_value,
-            } => {
-                self.cmd_fix_non_portable_path(path, property, old_value, new_value)
-                    .await
-            }
-            Command::FixUnlistedFile {
-                index_path,
-                file_path,
-            } => self.cmd_fix_unlisted_file(index_path, file_path).await,
-            Command::FixOrphanBinaryFile {
-                index_path,
-                file_path,
-            } => self.cmd_fix_orphan_binary_file(index_path, file_path).await,
-            Command::FixMissingPartOf {
-                file_path,
-                index_path,
-            } => self.cmd_fix_missing_part_of(file_path, index_path).await,
             Command::FixAll { validation_result } => self.cmd_fix_all(validation_result).await,
-            Command::FixCircularReference {
-                file_path,
-                part_of_value,
-            } => {
-                self.cmd_fix_circular_reference(file_path, part_of_value)
-                    .await
-            }
             Command::FixValidationWarning { warning } => {
                 self.cmd_fix_validation_warning(warning).await
             }

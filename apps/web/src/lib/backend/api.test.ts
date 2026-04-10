@@ -1216,114 +1216,36 @@ describe('api', () => {
       expect(result).toEqual(mockResult)
     })
 
-    it('should fix broken part_of', async () => {
+    it('should fix a validation warning via the generic dispatch', async () => {
       const mockFix = { success: true, message: 'Fixed' }
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'FixResult',
         data: mockFix,
       })
 
-      const result = await api.fixBrokenPartOf('broken.md')
+      const warning = { type: 'UnlistedFile', index: 'index.md', file: 'unlisted.md' } as any
+      const result = await api.fixValidationWarning(warning)
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'FixBrokenPartOf',
-        params: { path: 'broken.md' },
+        type: 'FixValidationWarning',
+        params: { warning },
       })
       expect(result).toEqual(mockFix)
     })
 
-    it('should fix broken contents ref', async () => {
+    it('should fix a validation error via the generic dispatch', async () => {
       const mockFix = { success: true, message: 'Fixed' }
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'FixResult',
         data: mockFix,
       })
 
-      const result = await api.fixBrokenContentsRef('index.md', 'missing.md')
+      const error = { type: 'BrokenPartOf', file: 'broken.md', target: 'missing.md' } as any
+      const result = await api.fixValidationError(error)
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'FixBrokenContentsRef',
-        params: { index_path: 'index.md', target: 'missing.md' },
-      })
-      expect(result).toEqual(mockFix)
-    })
-
-    it('should fix broken attachment', async () => {
-      const mockFix = { success: true, message: 'Fixed' }
-      vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'FixResult',
-        data: mockFix,
-      })
-
-      const result = await api.fixBrokenAttachment('test.md', 'missing.png')
-
-      expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'FixBrokenAttachment',
-        params: { path: 'test.md', attachment: 'missing.png' },
-      })
-      expect(result).toEqual(mockFix)
-    })
-
-    it('should fix non-portable path', async () => {
-      const mockFix = { success: true, message: 'Fixed' }
-      vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'FixResult',
-        data: mockFix,
-      })
-
-      const result = await api.fixNonPortablePath('test.md', 'part_of', 'Old Name.md', 'old-name.md')
-
-      expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'FixNonPortablePath',
-        params: { path: 'test.md', property: 'part_of', old_value: 'Old Name.md', new_value: 'old-name.md' },
-      })
-      expect(result).toEqual(mockFix)
-    })
-
-    it('should fix unlisted file', async () => {
-      const mockFix = { success: true, message: 'Fixed' }
-      vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'FixResult',
-        data: mockFix,
-      })
-
-      const result = await api.fixUnlistedFile('index.md', 'unlisted.md')
-
-      expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'FixUnlistedFile',
-        params: { index_path: 'index.md', file_path: 'unlisted.md' },
-      })
-      expect(result).toEqual(mockFix)
-    })
-
-    it('should fix orphan binary file', async () => {
-      const mockFix = { success: true, message: 'Fixed' }
-      vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'FixResult',
-        data: mockFix,
-      })
-
-      const result = await api.fixOrphanBinaryFile('index.md', 'orphan.png')
-
-      expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'FixOrphanBinaryFile',
-        params: { index_path: 'index.md', file_path: 'orphan.png' },
-      })
-      expect(result).toEqual(mockFix)
-    })
-
-    it('should fix missing part_of', async () => {
-      const mockFix = { success: true, message: 'Fixed' }
-      vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'FixResult',
-        data: mockFix,
-      })
-
-      const result = await api.fixMissingPartOf('child.md', 'index.md')
-
-      expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'FixMissingPartOf',
-        params: { file_path: 'child.md', index_path: 'index.md' },
+        type: 'FixValidationError',
+        params: { error },
       })
       expect(result).toEqual(mockFix)
     })
@@ -1343,22 +1265,6 @@ describe('api', () => {
         params: { validation_result: mockValidation },
       })
       expect(result).toEqual(mockSummary)
-    })
-
-    it('should fix circular reference', async () => {
-      const mockFix = { success: true, message: 'Fixed' }
-      vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'FixResult',
-        data: mockFix,
-      })
-
-      const result = await api.fixCircularReference('a.md', 'b.md')
-
-      expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'FixCircularReference',
-        params: { file_path: 'a.md', part_of_value: 'b.md' },
-      })
-      expect(result).toEqual(mockFix)
     })
 
     it('should get available parent indexes', async () => {

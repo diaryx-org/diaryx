@@ -921,15 +921,7 @@
 
   // Extract file path from any error type
   function getErrorFilePath(error: ValidationErrorWithMeta): string | null {
-    switch (error.type) {
-      case 'BrokenPartOf':
-      case 'BrokenAttachment':
-        return error.file ?? null;
-      case 'BrokenContentsRef':
-        return error.index ?? null;
-      default:
-        return null;
-    }
+    return error.primary_path ?? null;
   }
 
   // Extract target from errors that have it
@@ -966,24 +958,7 @@
     if (!api) return;
 
     try {
-      let result;
-      switch (error.type) {
-        case 'BrokenPartOf':
-          if (error.file) {
-            result = await api.fixBrokenPartOf(error.file);
-          }
-          break;
-        case 'BrokenContentsRef':
-          if (error.index && error.target) {
-            result = await api.fixBrokenContentsRef(error.index, error.target);
-          }
-          break;
-        case 'BrokenAttachment':
-          if (error.file && error.attachment) {
-            result = await api.fixBrokenAttachment(error.file, error.attachment);
-          }
-          break;
-      }
+      const result = await api.fixValidationError(error);
 
       if (result?.success) {
         toast.success(result.message);

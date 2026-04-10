@@ -132,6 +132,10 @@
   // Template context store — used by ConditionalBlock decorations to detect context changes
   const templateContextStore = getTemplateContextStore();
 
+  // Audience panel store — read here so closures created during editor build
+  // (e.g. onSelectionUpdate) capture a real reference, not a TDZ binding.
+  const audiencePanelStore = getAudiencePanelStore();
+
   // FloatingMenu element ref - must exist before editor creation
   let floatingMenuElement: HTMLDivElement | undefined = $state();
   // FloatingMenu component ref - for programmatic expansion
@@ -1253,6 +1257,10 @@
             onchange();
           }
         },
+        onSelectionUpdate: ({ editor: ed }) => {
+          const { from, to } = ed.state.selection;
+          audiencePanelStore.setHasEditorSelection(from !== to);
+        },
         onBlur: () => {
           onblur?.();
         },
@@ -1891,7 +1899,7 @@
 
   // ── Paint-mode apply ────────────────────────────────────────────────
   // Register a callback so the audience panel can apply the brush via a button.
-  const audiencePanelStore = getAudiencePanelStore();
+  // (audiencePanelStore is declared near the top of the script — see above.)
 
   function applyPaintBrush(): boolean {
     if (!editor || readonly) return false;
@@ -1924,7 +1932,10 @@
   // Register/unregister the callback with the panel store
   $effect(() => {
     audiencePanelStore.registerApplyPaintBrush(applyPaintBrush);
-    return () => audiencePanelStore.registerApplyPaintBrush(null);
+    return () => {
+      audiencePanelStore.registerApplyPaintBrush(null);
+      audiencePanelStore.setHasEditorSelection(false);
+    };
   });
 </script>
 

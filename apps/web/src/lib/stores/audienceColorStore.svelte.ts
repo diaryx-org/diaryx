@@ -71,6 +71,19 @@ function createAudienceColorStore() {
       audienceColors[name] = tailwindClass;
       save();
     },
+
+    /** Drop color entries whose key is not in the keep-set. Used to clean up
+     *  stale entries left behind when audiences disappear from the workspace. */
+    pruneTo(keep: ReadonlySet<string>): void {
+      let changed = false;
+      for (const key of Object.keys(audienceColors)) {
+        if (!keep.has(key)) {
+          delete audienceColors[key];
+          changed = true;
+        }
+      }
+      if (changed) save();
+    },
   };
 }
 
@@ -88,6 +101,7 @@ export function getAudienceColorStore() {
       renameColor: (_oldName: string, _newName: string) => {},
       deleteColor: (_name: string) => {},
       setColor: (_name: string, _color: string) => {},
+      pruneTo: (_keep: ReadonlySet<string>) => {},
     };
   }
   if (!sharedStore) sharedStore = createAudienceColorStore();

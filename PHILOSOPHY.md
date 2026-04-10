@@ -2,10 +2,6 @@
 title: PHILOSOPHY
 part_of: '[Diaryx](/Diaryx.md)'
 updated: 2026-04-04T10:06:44-06:00
-audience:
-- public
-- agents
-- developers
 link_of:
 - '[Diaryx](/Diaryx.md)'
 - '[Diaryx](/diaryx.md)'

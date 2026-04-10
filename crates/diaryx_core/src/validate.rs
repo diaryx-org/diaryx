@@ -1314,6 +1314,8 @@ impl<FS: AsyncFileSystem> Validator<FS> {
     /// - The file's `part_of` reference points to an existing file
     /// - All `contents` references (if any) point to existing files
     /// - Markdown files in the same directory that aren't listed in `contents`
+    /// - Sub-indexes (files with a `contents` property) inside immediate
+    ///   subdirectories that aren't listed in this index's `contents`
     ///
     /// Does not recursively validate the entire workspace, just the specified file.
     pub async fn validate_file(&self, file_path: &Path) -> Result<ValidationResult> {
@@ -1615,6 +1617,11 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 // Collect other index files in this directory
                 let mut other_indexes: Vec<PathBuf> = Vec::new();
 
+                // Collect immediate subdirectories so we can also look 1 level
+                // deep for orphaned sub-indexes (files with a `contents`
+                // property that the current index doesn't reference).
+                let mut subdirs_to_check: Vec<PathBuf> = Vec::new();
+
                 for entry_path in entries {
                     // Skip symlinks - they're filesystem implementation details
                     if self.ws.fs_ref().is_symlink(&entry_path).await {
@@ -1639,66 +1646,33 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         continue;
                     }
 
-                    if !self.ws.fs_ref().is_dir(&entry_path).await {
-                        let extension = entry_path.extension().and_then(|e| e.to_str());
-                        let filename = entry_path.file_name().and_then(|n| n.to_str());
+                    if self.ws.fs_ref().is_dir(&entry_path).await {
+                        if !self.should_skip_workspace_dir(&entry_path) {
+                            subdirs_to_check.push(entry_path);
+                        }
+                        continue;
+                    }
 
-                        match extension {
-                            Some("md") => {
-                                if let Some(fname) = filename {
-                                    // Skip the current file
-                                    if fname == this_filename {
-                                        continue;
-                                    }
-                                    // Check if it's an index file (README.md, index.md, or *.index.md)
-                                    let lower = fname.to_lowercase();
-                                    if lower == "readme.md"
-                                        || lower == "index.md"
-                                        || lower.ends_with(".index.md")
-                                    {
-                                        other_indexes.push(entry_path.clone());
-                                    }
-                                    // Check if this markdown file is in contents
-                                    if !listed_files.contains(fname) {
-                                        // Check if file matches any exclude pattern (inherited from ancestors)
-                                        let is_excluded =
-                                            inherited_exclude_patterns.iter().any(|pattern| {
-                                                self.path_matches_exclude(
-                                                    pattern,
-                                                    &workspace_root,
-                                                    &entry_path,
-                                                    fname,
-                                                )
-                                            });
+                    let extension = entry_path.extension().and_then(|e| e.to_str());
+                    let filename = entry_path.file_name().and_then(|n| n.to_str());
 
-                                        if !is_excluded {
-                                            // Skip attachment notes - they use `attachments`
-                                            // lists, not `contents`/`part_of`.
-                                            let is_attachment_note = if let Ok(idx) =
-                                                self.ws.parse_index(&entry_path).await
-                                            {
-                                                idx.frontmatter.attachment.is_some()
-                                            } else {
-                                                false
-                                            };
-
-                                            if !is_attachment_note {
-                                                result.warnings.push(
-                                                    ValidationWarning::OrphanFile {
-                                                        file: entry_path,
-                                                        suggested_index: Some(path.clone()),
-                                                    },
-                                                );
-                                            }
-                                        }
-                                    }
+                    match extension {
+                        Some("md") => {
+                            if let Some(fname) = filename {
+                                // Skip the current file
+                                if fname == this_filename {
+                                    continue;
                                 }
-                            }
-                            Some(ext) if !ext.eq_ignore_ascii_case("md") => {
-                                // Binary file - check if it's referenced by attachments
-                                if let Some(fname) = filename
-                                    && !referenced_attachments.contains(fname)
+                                // Check if it's an index file (README.md, index.md, or *.index.md)
+                                let lower = fname.to_lowercase();
+                                if lower == "readme.md"
+                                    || lower == "index.md"
+                                    || lower.ends_with(".index.md")
                                 {
+                                    other_indexes.push(entry_path.clone());
+                                }
+                                // Check if this markdown file is in contents
+                                if !listed_files.contains(fname) {
                                     // Check if file matches any exclude pattern (inherited from ancestors)
                                     let is_excluded =
                                         inherited_exclude_patterns.iter().any(|pattern| {
@@ -1711,16 +1685,52 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                                         });
 
                                     if !is_excluded {
-                                        result.warnings.push(ValidationWarning::OrphanBinaryFile {
-                                            file: entry_path,
-                                            // We can suggest connecting to the current index
-                                            suggested_index: Some(path.clone()),
-                                        });
+                                        // Skip attachment notes - they use `attachments`
+                                        // lists, not `contents`/`part_of`.
+                                        let is_attachment_note = if let Ok(idx) =
+                                            self.ws.parse_index(&entry_path).await
+                                        {
+                                            idx.frontmatter.attachment.is_some()
+                                        } else {
+                                            false
+                                        };
+
+                                        if !is_attachment_note {
+                                            result.warnings.push(ValidationWarning::OrphanFile {
+                                                file: entry_path,
+                                                suggested_index: Some(path.clone()),
+                                            });
+                                        }
                                     }
                                 }
                             }
-                            _ => {}
                         }
+                        Some(ext) if !ext.eq_ignore_ascii_case("md") => {
+                            // Binary file - check if it's referenced by attachments
+                            if let Some(fname) = filename
+                                && !referenced_attachments.contains(fname)
+                            {
+                                // Check if file matches any exclude pattern (inherited from ancestors)
+                                let is_excluded =
+                                    inherited_exclude_patterns.iter().any(|pattern| {
+                                        self.path_matches_exclude(
+                                            pattern,
+                                            &workspace_root,
+                                            &entry_path,
+                                            fname,
+                                        )
+                                    });
+
+                                if !is_excluded {
+                                    result.warnings.push(ValidationWarning::OrphanBinaryFile {
+                                        file: entry_path,
+                                        // We can suggest connecting to the current index
+                                        suggested_index: Some(path.clone()),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
 
@@ -1733,6 +1743,76 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         directory: dir.to_path_buf(),
                         indexes: all_indexes,
                     });
+                }
+
+                // Look one level deep into each immediate subdirectory for
+                // orphaned sub-indexes. A sub-index is any file with a
+                // `contents` property. If the current index doesn't reference
+                // it, we flag the sub-index itself as an OrphanFile (we don't
+                // descend further — the sub-index owns its own children).
+                //
+                // Note: this deliberately doesn't warn about subdirs that have
+                // no index file at all; those are caught by workspace-level
+                // validation's orphan scan.
+                for subdir in subdirs_to_check {
+                    let Ok(sub_entries) = self.ws.fs_ref().list_files(&subdir).await else {
+                        continue;
+                    };
+
+                    for sub_entry in sub_entries {
+                        if self.ws.fs_ref().is_symlink(&sub_entry).await {
+                            continue;
+                        }
+                        if self.ws.fs_ref().is_dir(&sub_entry).await {
+                            continue;
+                        }
+                        let Some(fname) = sub_entry.file_name().and_then(|n| n.to_str()) else {
+                            continue;
+                        };
+                        if fname.starts_with('.') || is_temp_file(fname) {
+                            continue;
+                        }
+                        if !sub_entry
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                        {
+                            continue;
+                        }
+
+                        // Only sub-indexes are considered here (files with a
+                        // `contents` property). Non-index files belong to
+                        // their own parent index, not this grandparent.
+                        let Ok(sub_index) = self.ws.parse_index(&sub_entry).await else {
+                            continue;
+                        };
+                        let is_sub_index = sub_index.frontmatter.contents.is_some()
+                            || !sub_index.frontmatter.contents_list().is_empty();
+                        if !is_sub_index {
+                            continue;
+                        }
+                        // Skip attachment notes - they use `attachments`, not
+                        // `contents`/`part_of`.
+                        if sub_index.frontmatter.attachment.is_some() {
+                            continue;
+                        }
+
+                        if listed_files.contains(fname) {
+                            continue;
+                        }
+
+                        let is_excluded = inherited_exclude_patterns.iter().any(|pattern| {
+                            self.path_matches_exclude(pattern, &workspace_root, &sub_entry, fname)
+                        });
+                        if is_excluded {
+                            continue;
+                        }
+
+                        result.warnings.push(ValidationWarning::OrphanFile {
+                            file: sub_entry,
+                            suggested_index: Some(path.clone()),
+                        });
+                    }
                 }
             }
         }

@@ -5,6 +5,9 @@
    * Replaces AudienceFilter (sidebar dropdown), AudienceManager (modal), and
    * VisibilityPicker (bubble menu). Activated by clicking audience color dots.
    * Two modes: View (multi-select filter) and Paint (brush entries/text).
+   *
+   * New audiences are created from Paint mode as transient brushes — they only
+   * persist once the user actually paints something with them.
    */
   import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
   import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
@@ -13,7 +16,6 @@
   import { X, Eye, Paintbrush } from "@lucide/svelte";
   import AudiencePanelViewMode from "./AudiencePanelViewMode.svelte";
   import AudiencePanelPaintMode from "./AudiencePanelPaintMode.svelte";
-  import AudiencePanelCrud from "./AudiencePanelCrud.svelte";
   import type { Api } from "$lib/backend";
 
   interface Props {
@@ -38,6 +40,19 @@
     try {
       audiences = await api.getAvailableAudiences(rootPath);
       for (const name of audiences) colorStore.assignColor(name);
+      // If a transient brush has now appeared on disk, demote it from
+      // transient to "real" so the panel doesn't double-track it.
+      const t = panelStore.transientAudience;
+      if (t && audiences.includes(t)) {
+        panelStore.confirmTransientPersisted();
+      }
+      // Drop colors for audiences that no longer exist anywhere in the
+      // workspace. Keep the active transient (if any) since it has a color
+      // assigned but isn't yet on disk.
+      const keep = new Set(audiences);
+      const stillTransient = panelStore.transientAudience;
+      if (stillTransient) keep.add(stillTransient);
+      colorStore.pruneTo(keep);
     } catch (e) {
       console.warn("[AudiencePanel] Failed to load audiences:", e);
       audiences = [];
@@ -65,20 +80,6 @@
       event.stopPropagation();
       panelStore.closePanel();
     }
-  }
-
-  function handleAudienceCreated(name: string) {
-    if (!audiences.includes(name)) {
-      audiences = [...audiences, name].sort();
-    }
-  }
-
-  function handleAudienceRenamed(oldName: string, newName: string) {
-    audiences = audiences.map((a) => (a === oldName ? newName : a));
-  }
-
-  function handleAudienceDeleted(name: string) {
-    audiences = audiences.filter((a) => a !== name);
   }
 </script>
 
@@ -131,16 +132,6 @@
         <AudiencePanelPaintMode {audiences} {api} {rootPath} />
       {/if}
     </div>
-
-    <!-- CRUD footer -->
-    <AudiencePanelCrud
-      {audiences}
-      {api}
-      {rootPath}
-      onCreated={handleAudienceCreated}
-      onRenamed={handleAudienceRenamed}
-      onDeleted={handleAudienceDeleted}
-    />
   </div>
 {/if}
 

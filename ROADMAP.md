@@ -4,10 +4,6 @@ description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
 updated: 2026-04-04T12:48:20-06:00
-audience:
-- public
-- agents
-- developers
 part_of: '[Diaryx](/Diaryx.md)'
 link_of:
 - '[Diaryx](/Diaryx.md)'

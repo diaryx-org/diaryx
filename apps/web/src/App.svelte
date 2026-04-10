@@ -2364,6 +2364,11 @@
       } else {
         await api.setFrontmatterProperty(entryPath, "audience", updated, rootPath);
       }
+
+      // If the active brush is a transient (newly-typed) audience, this paint
+      // is what makes it real. Mark it persisted and refresh the panel's list.
+      audiencePanelStore.notePainted();
+      templateContextStore.bumpAudiencesVersion();
     } catch (e) {
       console.error("[App] Paint entry failed:", e);
       toast.error("Failed to update audience");

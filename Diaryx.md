@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.4.3
-updated: 2026-04-09T16:03:04-06:00
+updated: 2026-04-09T22:28:04-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -137,7 +137,7 @@ Diaryx is local-first. Your entries live on your device as plain Markdown files 
 - **Works everywhere**: Web, iOS, Mac, Windows, Linux, even CLI!
 - **Plain Markdown**: No proprietary format. Your files are yours, readable forever.
 - **Share your way**: Publish to your own diaryx.org subdomain, email a filtered version, or share in person.
-- **Extend with plugins**: Add drawing, audio recording, cloud sync, =={red}colored== =={brown}highlights==, and more through a growing plugin library.
+- **Extend with plugins**: Add drawing, audio recording, cloud sync, colored highlights, and more through a growing plugin library.
 
 ---
 

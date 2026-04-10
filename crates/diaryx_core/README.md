@@ -219,7 +219,7 @@ if result.is_ok() {
 
 #### Validation Warnings
 
-- `OrphanFile` - A markdown file not referenced by any index's `contents`
+- `OrphanFile` - A markdown file not referenced by any index's `contents`. When validating a single index file, this also flags sub-indexes (files with a `contents` property) sitting in immediate subdirectories that the current index doesn't reference.
 - `UnlinkedEntry` - A file/directory not in the contents hierarchy
 - `CircularReference` - Circular reference detected in workspace hierarchy
 - `NonPortablePath` - A path contains absolute paths or `.`/`..` components

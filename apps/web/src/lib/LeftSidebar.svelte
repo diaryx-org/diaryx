@@ -1600,11 +1600,11 @@
           size="icon"
           onclick={handleOpenMarketplaceClick}
           data-window-drag-exclude
-          class="size-8 shrink-0"
+          class="size-10 md:size-8 shrink-0"
           aria-label="Open marketplace"
           data-spotlight="marketplace-button"
         >
-          <Store class="size-4" />
+          <Store class="size-5 md:size-4" />
         </Button>
       </Tooltip.Trigger>
       {#if !mobileState.isMobile && !collapsed && !marketplaceDialogOpen && !marketplaceTooltipSuppressed}

@@ -39,6 +39,16 @@ vi.mock("$lib/components/ui/separator", async () => ({
   Separator: (await import("./test/SeparatorStub.svelte")).default,
 }));
 
+vi.mock("$lib/components/ui/dialog", async () => {
+  const S = (await import("./test/PassthroughStub.svelte")).default;
+  return { Root: S, Content: S, Header: S, Title: S };
+});
+
+vi.mock("$lib/storage/localWorkspaceRegistry.svelte", () => ({
+  getLocalWorkspaces: () => [],
+  getWorkspaceProviderLinks: () => [],
+}));
+
 vi.mock("$lib/SignOutDialog.svelte", async () => ({
   default: (await import("./test/SignOutDialogStub.svelte")).default,
 }));

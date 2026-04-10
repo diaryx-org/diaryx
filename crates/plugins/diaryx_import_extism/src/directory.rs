@@ -1,8 +1,7 @@
 //! In-place directory import: convert a directory of files to Diaryx
 //! hierarchy format by adding `part_of`/`contents`/`attachments` frontmatter.
 //!
-//! Port of `diaryx_core::import::directory::import_directory_in_place` using
-//! host bridge calls instead of `AsyncFileSystem`.
+//! Uses host bridge calls instead of `AsyncFileSystem`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -10,9 +9,9 @@ use indexmap::IndexMap;
 
 use diaryx_core::entry::prettify_filename;
 use diaryx_core::frontmatter;
-use diaryx_core::import::ImportResult;
 use diaryx_core::yaml_value::YamlValue as Value;
 
+use crate::types::ImportResult;
 use diaryx_plugin_sdk::host;
 
 /// Directories to skip when walking a source tree.

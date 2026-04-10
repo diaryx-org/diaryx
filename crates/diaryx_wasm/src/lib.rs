@@ -29,6 +29,7 @@
 //!
 //! All methods return `Result<T, JsValue>` for JavaScript interop.
 
+mod auth;
 mod backend;
 mod error;
 #[cfg(feature = "browser")]
@@ -39,6 +40,9 @@ mod js_async_fs;
 #[cfg(feature = "browser")]
 mod opfs_fs;
 mod utils;
+
+// Re-export the auth client
+pub use auth::AuthClient;
 
 // Re-export the main backend class
 pub use backend::DiaryxBackend;

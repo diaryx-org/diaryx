@@ -1,15 +1,17 @@
-//! Email import — parse `.eml` files and `.mbox` archives into [`ImportedEntry`] values.
+//! Email import — parse a single `.eml` file into an [`ImportedEntry`].
 //!
-//! [`parse_eml`] is a pure parser (no I/O). [`parse_mbox`] requires a file
-//! path because `mbox-reader` uses memory-mapped I/O internally.
+//! Only single-message parsing is supported in the wasm plugin. Mbox archives
+//! and full HTML-to-markdown conversion were dropped when the parser moved
+//! here because their dependencies (`mbox-reader` → `memmap`,
+//! `html-to-markdown-rs` → `parking_lot`/`libc`) don't build for
+//! `wasm32-unknown-unknown`. HTML bodies are passed through as-is when no
+//! `text/plain` alternative is available.
 
-use std::path::Path;
-
-use crate::yaml_value::YamlValue;
+use diaryx_core::yaml_value::YamlValue;
 use indexmap::IndexMap;
 use mailparse::{MailHeaderMap, ParsedMail, parse_mail};
 
-use super::{ImportedAttachment, ImportedEntry};
+use crate::types::{ImportedAttachment, ImportedEntry};
 
 /// Parse a single `.eml` file's bytes into an [`ImportedEntry`].
 pub fn parse_eml(bytes: &[u8]) -> Result<ImportedEntry, String> {
@@ -49,24 +51,6 @@ pub fn parse_eml(bytes: &[u8]) -> Result<ImportedEntry, String> {
     })
 }
 
-/// Parse all messages in an `.mbox` file, returning one result per message.
-///
-/// Requires a file path because `mbox-reader` uses memory-mapped I/O.
-pub fn parse_mbox(path: &Path) -> Vec<Result<ImportedEntry, String>> {
-    let mbox = match mbox_reader::MboxFile::from_file(path) {
-        Ok(mbox) => mbox,
-        Err(e) => return vec![Err(format!("Failed to open mbox file: {e}"))],
-    };
-
-    mbox.iter()
-        .enumerate()
-        .filter_map(|(i, entry)| {
-            let msg_bytes = entry.message()?;
-            Some(parse_eml(msg_bytes).map_err(|e| format!("Message {}: {e}", i + 1)))
-        })
-        .collect()
-}
-
 /// Extract a UTC datetime from the Date header.
 fn extract_date(parsed: &ParsedMail) -> Option<chrono::DateTime<chrono::Utc>> {
     let date_str = parsed.headers.get_first_value("Date")?;
@@ -84,13 +68,10 @@ fn extract_body_and_attachments(
 
     collect_parts(parsed, &mut plain_text, &mut html_text, &mut attachments)?;
 
-    let body = if let Some(text) = plain_text {
-        text
-    } else if let Some(html) = html_text {
-        html_to_markdown(&html)
-    } else {
-        String::new()
-    };
+    // Prefer text/plain; fall back to raw HTML pass-through when that is all
+    // the message provides. (Full HTML-to-markdown conversion would pull
+    // wasm-incompatible crates; callers can post-process if needed.)
+    let body = plain_text.or(html_text).unwrap_or_default();
 
     Ok((body, attachments))
 }
@@ -105,14 +86,12 @@ fn collect_parts(
     let content_type = part.ctype.mimetype.to_lowercase();
 
     if !part.subparts.is_empty() {
-        // Multipart container — recurse into children
         for sub in &part.subparts {
             collect_parts(sub, plain_text, html_text, attachments)?;
         }
         return Ok(());
     }
 
-    // Check if this is an attachment (Content-Disposition: attachment, or non-text inline)
     let disposition = part
         .headers
         .get_first_value("Content-Disposition")
@@ -123,7 +102,6 @@ fn collect_parts(
     if is_attachment
         || (!content_type.starts_with("text/") && !content_type.starts_with("multipart/"))
     {
-        // Treat as attachment
         let data = part
             .get_body_raw()
             .map_err(|e| format!("Failed to decode attachment: {e}"))?;
@@ -139,7 +117,6 @@ fn collect_parts(
         return Ok(());
     }
 
-    // Text part — decode body
     let body = part
         .get_body()
         .map_err(|e| format!("Failed to decode body: {e}"))?;
@@ -155,13 +132,11 @@ fn collect_parts(
 
 /// Try to extract a filename from Content-Disposition or Content-Type parameters.
 fn extract_attachment_filename(part: &ParsedMail) -> Option<String> {
-    // Try Content-Disposition filename parameter
     if let Some(disp) = part.headers.get_first_value("Content-Disposition") {
         if let Some(name) = extract_param(&disp, "filename") {
             return Some(name);
         }
     }
-    // Fall back to Content-Type name parameter
     if let Some(ct) = part.headers.get_first_value("Content-Type") {
         if let Some(name) = extract_param(&ct, "name") {
             return Some(name);
@@ -179,26 +154,12 @@ fn extract_param(header_value: &str, param_name: &str) -> Option<String> {
     let rest = rest.trim();
 
     if rest.starts_with('"') {
-        // Quoted value
         let end = rest[1..].find('"')?;
         Some(rest[1..1 + end].to_string())
     } else {
-        // Unquoted — up to next semicolon or end
         let end = rest.find(';').unwrap_or(rest.len());
         Some(rest[..end].trim().to_string())
     }
-}
-
-/// Convert HTML to markdown, falling back to the raw HTML on error.
-#[cfg(not(target_arch = "wasm32"))]
-fn html_to_markdown(html: &str) -> String {
-    html_to_markdown_rs::convert(html, None).unwrap_or_else(|_| html.to_string())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn html_to_markdown(html: &str) -> String {
-    // html-to-markdown-rs is not available on WASM; return raw HTML
-    html.to_string()
 }
 
 #[cfg(test)]
@@ -239,13 +200,6 @@ mod tests {
 
         let entry = parse_eml(eml).unwrap();
         assert_eq!(entry.title, "Untitled Email");
-    }
-
-    #[test]
-    fn parse_mbox_nonexistent_file() {
-        let results = parse_mbox(Path::new("/tmp/nonexistent-diaryx-test.mbox"));
-        assert_eq!(results.len(), 1);
-        assert!(results[0].is_err());
     }
 
     #[test]

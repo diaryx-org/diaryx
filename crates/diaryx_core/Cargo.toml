@@ -27,19 +27,11 @@ uuid = { version = "1", features = ["v4", "rng-getrandom"], optional = true }
 # Optional dependencies
 ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"], optional = true }
 
-# Day One ZIP import (works on all platforms including WASM)
-zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
-
-# Email import (native only, not available in WASM)
-mailparse = { version = "0.16", optional = true }
-mbox-reader = { version = "0.2", optional = true }
-
 # Native-only dependencies (not available in WASM)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "6.0"
 futures-lite = "2"
 rusqlite = { version = "0.34", features = ["bundled"], optional = true }
-html-to-markdown-rs = { version = "2", optional = true }
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -52,12 +44,6 @@ typescript = ["dep:ts-rs"]
 
 # SQLite database support (enables Database error variant with rusqlite From impl)
 database = ["dep:rusqlite"]
-
-# Enable email import (.eml and .mbox files)
-import-email = ["dep:mailparse", "dep:mbox-reader", "dep:html-to-markdown-rs"]
-
-# Enable Day One journal import (ZIP with media or Journal.json)
-import-dayone = ["dep:zip"]
 
 # UUID generation for workspace registry IDs
 uuid = ["dep:uuid"]

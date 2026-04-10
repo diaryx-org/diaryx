@@ -10,12 +10,15 @@ Use `apple` for App Store builds and `desktop-updater` for direct desktop distri
 );
 
 /// Where all the Tauri `invoke` functions are defined.
+mod auth_client;
+mod auth_commands;
 mod commands;
 mod credentials;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_security_scoped;
 
+use auth_commands::AuthServiceState;
 use commands::{AppState, GuestModeState};
 #[cfg(feature = "extism-plugins")]
 use commands::{PluginAdapters, RuntimeContextState};
@@ -93,7 +96,8 @@ pub fn run() {
     // Core state
     builder = builder
         .manage(AppState::new())
-        .manage(GuestModeState::new());
+        .manage(GuestModeState::new())
+        .manage(AuthServiceState::new());
 
     // Extism plugin states — only available with extism-plugins feature
     #[cfg(feature = "extism-plugins")]
@@ -188,6 +192,24 @@ pub fn run() {
             credentials::store_credential,
             credentials::get_credential,
             credentials::remove_credential,
+            // Auth service (keyring-backed diaryx_core::auth::AuthService)
+            auth_commands::auth_server_url,
+            auth_commands::auth_set_server_url,
+            auth_commands::auth_is_authenticated,
+            auth_commands::auth_get_metadata,
+            auth_commands::auth_request_magic_link,
+            auth_commands::auth_verify_magic_link,
+            auth_commands::auth_verify_code,
+            auth_commands::auth_get_me,
+            auth_commands::auth_refresh_token,
+            auth_commands::auth_logout,
+            auth_commands::auth_get_devices,
+            auth_commands::auth_rename_device,
+            auth_commands::auth_delete_device,
+            auth_commands::auth_delete_account,
+            auth_commands::auth_create_workspace,
+            auth_commands::auth_rename_workspace,
+            auth_commands::auth_delete_workspace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

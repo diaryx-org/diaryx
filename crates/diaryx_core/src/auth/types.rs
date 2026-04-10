@@ -94,12 +94,16 @@ pub struct MeResponse {
 }
 
 /// Auth error with HTTP status code.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthError {
     /// Human-readable error message.
     pub message: String,
     /// HTTP status code (0 if not HTTP-related).
     pub status_code: u16,
+    /// When the error is "device limit reached" (403), this holds the device
+    /// list returned by the server so the UI can offer device replacement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices: Option<Vec<Device>>,
 }
 
 impl std::fmt::Display for AuthError {
@@ -120,7 +124,14 @@ impl AuthError {
         Self {
             message: message.into(),
             status_code,
+            devices: None,
         }
+    }
+
+    /// Attach a device list (used for 403 device-limit errors).
+    pub fn with_devices(mut self, devices: Vec<Device>) -> Self {
+        self.devices = Some(devices);
+        self
     }
 
     /// Create a network/connection error (no HTTP status).
@@ -128,6 +139,7 @@ impl AuthError {
         Self {
             message: message.into(),
             status_code: 0,
+            devices: None,
         }
     }
 

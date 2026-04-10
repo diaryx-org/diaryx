@@ -27,6 +27,7 @@ import {
   type DownloadAttachmentResponse,
   isWorkspaceNamespace,
 } from "./authService";
+import { coreAuthService, setCoreAuthServerUrl } from "./coreAuthRouter";
 import {
   prepareCreationOptions,
   prepareRequestOptions,
@@ -177,20 +178,20 @@ export function getUser(): User | null {
  *
  * - Browser: returns `null` — the token lives in an HttpOnly cookie that JS
  *   cannot read. Auth happens automatically via `credentials: 'include'`.
- * - Tauri: reads the token from Stronghold (async). The synchronous signature
- *   returns `null`; callers that need the raw token on Tauri should use
- *   `getTokenAsync()` instead.
+ * - Tauri: also returns `null` from the sync signature; the token is owned
+ *   by the native `KeyringAuthenticatedClient` behind `coreAuthService` and
+ *   mirrored into the legacy OS-keychain slot for passkey/billing calls
+ *   that still ride `proxyFetch`. Callers that need the raw token should
+ *   use `getTokenAsync()`.
  */
 export function getToken(): string | null {
-  // On browser the HttpOnly cookie is invisible to JS — return null.
-  // On Tauri, proxyFetch auto-injects the Bearer header from Stronghold,
-  // so most callers don't need the raw token.
   return null;
 }
 
 /**
- * Async token accessor for Tauri (reads from Stronghold).
- * On browser, always returns null (cookie-based auth).
+ * Async token accessor for Tauri (reads from the OS keychain slot that
+ * non-migrated endpoints still use to inject `Authorization: Bearer` via
+ * `proxyFetch`). On browser, always returns null (cookie-based auth).
  */
 export async function getTokenAsync(): Promise<string | null> {
   if (!isTauri()) return null;
@@ -306,7 +307,8 @@ export async function reconnectServer(): Promise<boolean> {
  *
  * - Browser: validates session via cookie (calls `/api/auth/me` with
  *   `credentials: 'include'` — no token needed).
- * - Tauri: loads token from Stronghold, validates with server.
+ * - Tauri: the native `KeyringAuthenticatedClient` owns the token and the
+ *   call to `coreAuthService.getMe()` injects it server-side.
  */
 export async function initAuth(): Promise<void> {
   if (typeof localStorage === "undefined") return;
@@ -317,14 +319,24 @@ export async function initAuth(): Promise<void> {
   if (serverUrl) {
     state.serverUrl = serverUrl;
     authService = createAuthService(serverUrl);
+    // Sync the core auth service's server URL too (no-op on browser, IPC on Tauri).
+    void setCoreAuthServerUrl(serverUrl);
   }
 
-  // On Tauri, load token from Stronghold
-  const token = await getTokenAsync();
+  // On Tauri, the legacy credential store may hold a mirrored bearer token
+  // for passkey/billing flows that still ride the legacy proxyFetch path.
+  // The coreAuthService manages its own token via the OS keyring so it does
+  // not need this value; we only read it to keep setAuthToken's compatibility
+  // plumbing happy below.
+  const legacyToken = await getTokenAsync();
 
-  // On browser, we don't need a token — the cookie is sent automatically.
-  // We still need to validate the session by calling /auth/me.
-  const hasSession = isTauri() ? !!token : !!serverUrl;
+  // `has-session` semantics differ per platform. On the browser, the real
+  // session lives in an HttpOnly cookie and we key off the presence of a
+  // server URL; on Tauri, the native keyring owns the token so a best-effort
+  // presence check is enough.
+  const hasSession = isTauri()
+    ? !!legacyToken || (await coreAuthService.isAuthenticated())
+    : !!serverUrl;
 
   if (hasSession && serverUrl) {
     // Health check: if server is unreachable, enter offline mode
@@ -362,8 +374,10 @@ export async function initAuth(): Promise<void> {
     }
 
     try {
-      // Validate session with server (cookie or Stronghold token via proxyFetch)
-      const me = await authService!.getMe(token ?? undefined);
+      // Validate session with server. On the browser, the HttpOnly cookie is
+      // attached automatically; on Tauri, the keyring-backed AuthService
+      // injects the bearer header from native code.
+      const me = await coreAuthService.getMe();
       state.user = me.user;
       state.workspaces = me.workspaces;
       state.devices = me.devices;
@@ -374,7 +388,7 @@ export async function initAuth(): Promise<void> {
       state.isAuthenticated = true;
 
       // Update collaboration settings
-      setAuthToken(token ?? undefined);
+      setAuthToken(legacyToken ?? undefined);
       const activeWorkspace = getCurrentWorkspace();
       if (activeWorkspace) {
         setCollaborationWorkspaceId(activeWorkspace.id);
@@ -424,7 +438,11 @@ export function setServerUrl(url: string | null): void {
 
   if (url) {
     localStorage.setItem(STORAGE_KEYS.SERVER_URL, url);
+    // Legacy `authService` powers the non-migrated endpoints (passkeys,
+    // billing, snapshots, attachments). The new `coreAuthService` picks up
+    // the URL change via `setCoreAuthServerUrl` below.
     authService = createAuthService(url);
+    void setCoreAuthServerUrl(url);
     // Note: We intentionally do NOT call setCollaborationServer() here.
     // Sync should only start after authentication completes and user
     // chooses to sync via onboarding.
@@ -441,7 +459,7 @@ export function setServerUrl(url: string | null): void {
 export async function requestMagicLink(
   email: string,
 ): Promise<{ success: boolean; devLink?: string; devCode?: string }> {
-  if (!authService) {
+  if (!state.serverUrl) {
     throw new Error("Server URL not configured");
   }
 
@@ -449,7 +467,7 @@ export async function requestMagicLink(
   state.error = null;
 
   try {
-    const response = await authService.requestMagicLink(email);
+    const response = await coreAuthService.requestMagicLink(email);
     return { success: true, devLink: response.dev_link, devCode: response.dev_code };
   } catch (err) {
     const message =
@@ -468,7 +486,7 @@ export async function requestMagicLink(
  * @param replaceDeviceId - If provided, replace this device to make room when at the device limit.
  */
 export async function verifyMagicLink(token: string, customDeviceName?: string, replaceDeviceId?: string): Promise<void> {
-  if (!authService) {
+  if (!state.serverUrl) {
     throw new Error("Server URL not configured");
   }
 
@@ -479,10 +497,21 @@ export async function verifyMagicLink(token: string, customDeviceName?: string, 
     // Use custom name if provided, otherwise auto-detect
     const deviceName = customDeviceName?.trim() || getDeviceName();
 
-    const response = await authService.verifyMagicLink(token, deviceName, replaceDeviceId);
+    const response = await coreAuthService.verifyMagicLink(
+      token,
+      deviceName,
+      replaceDeviceId,
+    );
 
-    // Store token: Stronghold on Tauri, cookie on browser (set by server)
-    if (isTauri()) {
+    // Tauri: mirror the token into the legacy credential store so that
+    // non-migrated endpoints (passkeys, billing, snapshots) can still
+    // inject it as a Bearer header via proxyFetch. On the browser the
+    // token is stored in an HttpOnly cookie by the server and JS never
+    // sees it.
+    // TODO: remove this bridge once all auth endpoints are migrated to
+    //       coreAuthService and the Tauri verify commands start returning
+    //       a redacted VerifyResponse.
+    if (isTauri() && response.token) {
       const { storeCredential } = await import("$lib/credentials");
       await storeCredential(STORAGE_KEYS.TOKEN, response.token);
     }
@@ -525,7 +554,7 @@ export async function verifyCode(
   customDeviceName?: string,
   replaceDeviceId?: string,
 ): Promise<void> {
-  if (!authService) {
+  if (!state.serverUrl) {
     throw new Error("Server URL not configured");
   }
 
@@ -534,10 +563,15 @@ export async function verifyCode(
 
   try {
     const deviceName = customDeviceName?.trim() || getDeviceName();
-    const response = await authService.verifyCode(code, email, deviceName, replaceDeviceId);
+    const response = await coreAuthService.verifyCode(
+      code,
+      email,
+      deviceName,
+      replaceDeviceId,
+    );
 
-    // Store token: Stronghold on Tauri, cookie on browser (set by server)
-    if (isTauri()) {
+    // See comment in verifyMagicLink: same transitional token bridge.
+    if (isTauri() && response.token) {
       const { storeCredential } = await import("$lib/credentials");
       await storeCredential(STORAGE_KEYS.TOKEN, response.token);
     }
@@ -574,12 +608,10 @@ export async function verifyCode(
  * Refresh user info from server.
  */
 export async function refreshUserInfo(): Promise<void> {
-  if (!authService) return;
-  const token = await getTokenAsync();
-  // On browser, token is null but cookie auth works via proxyFetch
+  if (!state.serverUrl) return;
 
   try {
-    const me = await authService.getMe(token ?? undefined);
+    const me = await coreAuthService.getMe();
     state.user = me.user;
     state.workspaces = me.workspaces;
     state.devices = me.devices;
@@ -652,8 +684,6 @@ export function isSyncEnabled(): boolean {
  * Log out and clear auth state.
  */
 export async function logout(): Promise<void> {
-  const token = await getTokenAsync();
-
   // Clear local state first
   state.isAuthenticated = false;
   state.user = null;
@@ -667,13 +697,15 @@ export async function logout(): Promise<void> {
   state.error = null;
   state.storageUsage = null;
 
-  // Clear Stronghold on Tauri
+  // Clear the mirrored token from the legacy OS-keychain slot on Tauri.
+  // The coreAuthService.logout() call below also clears the keyring entry
+  // that KeyringAuthenticatedClient owns.
   if (isTauri()) {
     try {
       const { removeCredential } = await import("$lib/credentials");
       await removeCredential(STORAGE_KEYS.TOKEN);
     } catch {
-      // Stronghold not available
+      // Keychain not available
     }
   }
 
@@ -685,9 +717,10 @@ export async function logout(): Promise<void> {
   setCollaborationWorkspaceId(null);
   collaborationStore.setEnabled(false);
 
-  // Try to logout on server (clears cookie on browser, invalidates session)
-  if (authService) {
-    authService.logout(token ?? undefined).catch(() => {
+  // Try to logout on server (clears cookie on browser, invalidates session,
+  // and drops the token from the Tauri keyring).
+  if (state.serverUrl) {
+    coreAuthService.logout().catch(() => {
       // Ignore logout errors
     });
   }
@@ -697,10 +730,9 @@ export async function logout(): Promise<void> {
  * Rename a device.
  */
 export async function renameDevice(deviceId: string, newName: string): Promise<void> {
-  const token = await getTokenAsync();
-  if (!authService) return;
+  if (!state.serverUrl) return;
 
-  await authService.renameDevice(token ?? undefined, deviceId, newName);
+  await coreAuthService.renameDevice(deviceId, newName);
   await refreshUserInfo();
 }
 
@@ -708,10 +740,9 @@ export async function renameDevice(deviceId: string, newName: string): Promise<v
  * Delete a device.
  */
 export async function deleteDevice(deviceId: string): Promise<void> {
-  const token = await getTokenAsync();
-  if (!authService) return;
+  if (!state.serverUrl) return;
 
-  await authService.deleteDevice(token ?? undefined, deviceId);
+  await coreAuthService.deleteDevice(deviceId);
   await refreshUserInfo();
 }
 
@@ -720,19 +751,18 @@ export async function deleteDevice(deviceId: string): Promise<void> {
  * This deletes data from the server but preserves local workspace data.
  */
 export async function deleteAccount(): Promise<void> {
-  const token = await getTokenAsync();
-  if (!authService) return;
+  if (!state.serverUrl) return;
 
   // Delete server data
-  await authService.deleteAccount(token ?? undefined);
+  await coreAuthService.deleteAccount();
 
-  // Clear Stronghold on Tauri
+  // Clear the mirrored token slot on Tauri.
   if (isTauri()) {
     try {
       const { removeCredential } = await import("$lib/credentials");
       await removeCredential(STORAGE_KEYS.TOKEN);
     } catch {
-      // Stronghold not available
+      // Keychain not available
     }
   }
 
@@ -808,9 +838,8 @@ function getDeviceName(): string {
  * Refreshes the workspace list on success.
  */
 export async function createServerWorkspace(name: string): Promise<Workspace> {
-  const token = await getTokenAsync();
-  if (!authService) throw new Error("Not authenticated");
-  const ws = await authService.createWorkspace(token ?? undefined, name);
+  if (!state.serverUrl) throw new Error("Not authenticated");
+  const ws = await coreAuthService.createWorkspace(name);
   await refreshUserInfo();
   return ws;
 }
@@ -820,9 +849,8 @@ export async function createServerWorkspace(name: string): Promise<Workspace> {
  * Refreshes the workspace list on success.
  */
 export async function renameServerWorkspace(workspaceId: string, newName: string): Promise<void> {
-  const token = await getTokenAsync();
-  if (!authService) throw new Error("Not authenticated");
-  await authService.renameWorkspace(token ?? undefined, workspaceId, newName);
+  if (!state.serverUrl) throw new Error("Not authenticated");
+  await coreAuthService.renameWorkspace(workspaceId, newName);
   await refreshUserInfo();
 }
 
@@ -831,9 +859,8 @@ export async function renameServerWorkspace(workspaceId: string, newName: string
  * Refreshes the workspace list on success.
  */
 export async function deleteServerWorkspace(workspaceId: string): Promise<void> {
-  const token = await getTokenAsync();
-  if (!authService) throw new Error("Not authenticated");
-  await authService.deleteWorkspace(token ?? undefined, workspaceId);
+  if (!state.serverUrl) throw new Error("Not authenticated");
+  await coreAuthService.deleteWorkspace(workspaceId);
   await refreshUserInfo();
   await refreshUserStorageUsage();
 }

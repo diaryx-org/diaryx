@@ -1,10 +1,14 @@
 //! Extism guest plugin for Diaryx import functionality.
 //!
-//! Provides parsing (Day One, Markdown) and orchestration (write_entries,
-//! import_directory_in_place) as plugin commands.
+//! Provides parsing (Day One, Markdown, single `.eml`) and orchestration
+//! (write_entries, import_directory_in_place) as plugin commands.
 
+mod dayone;
 mod directory;
+#[cfg(feature = "email-import")]
+mod email;
 mod orchestrate;
+mod types;
 
 use diaryx_plugin_sdk::prelude::*;
 
@@ -13,9 +17,15 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use extism_pdk::*;
 use serde_json::Value as JsonValue;
 
+use types::{ImportResult, ImportedEntry};
+
 #[cfg(not(feature = "markdown-import"))]
 const MARKDOWN_IMPORT_DISABLED_ERROR: &str =
     "ParseMarkdownFile is unavailable: plugin built without `markdown-import` feature";
+
+#[cfg(not(feature = "email-import"))]
+const EMAIL_IMPORT_DISABLED_ERROR: &str =
+    "ParseEml is unavailable: plugin built without `email-import` feature";
 
 // ============================================================================
 // Types
@@ -148,6 +158,9 @@ fn build_manifest() -> GuestManifest {
 
     #[cfg(feature = "markdown-import")]
     commands.push("ParseMarkdownFile".to_string());
+
+    #[cfg(feature = "email-import")]
+    commands.push("ParseEml".to_string());
 
     #[allow(unused_mut)]
     let mut subcommands = vec![
@@ -658,7 +671,7 @@ fn handle_parse_dayone(params: JsonValue) -> CommandResponse {
 
     #[derive(serde::Serialize)]
     struct ParseResult {
-        entries: Vec<diaryx_core::import::ImportedEntry>,
+        entries: Vec<ImportedEntry>,
         errors: Vec<String>,
         journal_name: Option<String>,
     }
@@ -697,17 +710,13 @@ fn handle_import_dayone(params: JsonValue) -> CommandResponse {
     }
 }
 
-fn import_dayone_direct(
-    bytes: &[u8],
-    folder: &str,
-    parent_path: Option<&str>,
-) -> diaryx_core::import::ImportResult {
+fn import_dayone_direct(bytes: &[u8], folder: &str, parent_path: Option<&str>) -> ImportResult {
     let mut writer = orchestrate::ImportWriter::new(folder, parent_path);
 
-    let mut stream = match diaryx_core::import::dayone::stream_dayone_auto(bytes) {
+    let mut stream = match dayone::stream_dayone_auto(bytes) {
         Ok(stream) => stream,
         Err(error) => {
-            return diaryx_core::import::ImportResult {
+            return ImportResult {
                 imported: 0,
                 skipped: 1,
                 errors: vec![error],
@@ -731,13 +740,13 @@ fn import_dayone_direct(
 }
 
 struct ParsedDayOneEntries {
-    entries: Vec<diaryx_core::import::ImportedEntry>,
+    entries: Vec<ImportedEntry>,
     errors: Vec<String>,
     journal_name: Option<String>,
 }
 
 fn parse_dayone_entries(bytes: &[u8]) -> ParsedDayOneEntries {
-    let result = diaryx_core::import::dayone::parse_dayone_auto(bytes);
+    let result = dayone::parse_dayone_auto(bytes);
 
     let mut entries = Vec::new();
     let mut errors = Vec::new();
@@ -776,6 +785,27 @@ fn resolve_input_bytes(params: &JsonValue) -> Result<Vec<u8>, String> {
 #[cfg(not(feature = "markdown-import"))]
 fn markdown_import_disabled_response() -> CommandResponse {
     CommandResponse::err(MARKDOWN_IMPORT_DISABLED_ERROR)
+}
+
+#[cfg(not(feature = "email-import"))]
+fn email_import_disabled_response() -> CommandResponse {
+    CommandResponse::err(EMAIL_IMPORT_DISABLED_ERROR)
+}
+
+#[cfg(feature = "email-import")]
+fn handle_parse_eml(params: JsonValue) -> CommandResponse {
+    let bytes = match resolve_input_bytes(&params) {
+        Ok(b) => b,
+        Err(error) => return CommandResponse::err(error),
+    };
+
+    match email::parse_eml(&bytes) {
+        Ok(entry) => match serde_json::to_value(&entry) {
+            Ok(data) => CommandResponse::ok(data),
+            Err(e) => CommandResponse::err(format!("Failed to serialize: {e}")),
+        },
+        Err(e) => CommandResponse::err(e),
+    }
 }
 
 #[cfg(feature = "markdown-import")]
@@ -824,6 +854,10 @@ fn dispatch_command(req: CommandRequest) -> CommandResponse {
         "ParseMarkdownFile" => handle_parse_markdown(req.params),
         #[cfg(not(feature = "markdown-import"))]
         "ParseMarkdownFile" => markdown_import_disabled_response(),
+        #[cfg(feature = "email-import")]
+        "ParseEml" => handle_parse_eml(req.params),
+        #[cfg(not(feature = "email-import"))]
+        "ParseEml" => email_import_disabled_response(),
         "ImportEntries" => handle_import_entries(req.params),
         "ImportDirectoryInPlace" => handle_import_directory_in_place(req.params),
         _ => CommandResponse::err(format!("Unknown command: {}", req.command)),
@@ -851,10 +885,7 @@ fn dispatch_typed_command(command: &str, params: JsonValue) -> Result<Option<Jso
 }
 
 #[cfg(feature = "markdown-import")]
-fn parse_markdown_file(
-    bytes: &[u8],
-    filename: &str,
-) -> Result<diaryx_core::import::ImportedEntry, String> {
+fn parse_markdown_file(bytes: &[u8], filename: &str) -> Result<ImportedEntry, String> {
     let content =
         std::str::from_utf8(bytes).map_err(|e| format!("Failed to decode markdown: {e}"))?;
     let parsed = diaryx_core::frontmatter::parse_or_empty(content).map_err(|e| e.to_string())?;
@@ -872,7 +903,7 @@ fn parse_markdown_file(
         })
         .unwrap_or_else(|| "Untitled".to_string());
 
-    Ok(diaryx_core::import::ImportedEntry {
+    Ok(ImportedEntry {
         title,
         date: None,
         body: parsed.body,
@@ -1302,7 +1333,7 @@ mod tests {
         test_helpers::clear_test_written_files();
         test_helpers::write_file("index.md", root_index).expect("seed root index");
 
-        let entry: diaryx_core::import::ImportedEntry = serde_json::from_value(serde_json::json!({
+        let entry: ImportedEntry = serde_json::from_value(serde_json::json!({
             "title": "Gallery Entry",
             "date": "2020-09-24T01:36:35Z",
             "body": "Before\n![](_attachments/pic 1.jpg)\nAfter",
@@ -1365,7 +1396,7 @@ mod tests {
         test_helpers::clear_test_written_files();
         test_helpers::write_file("index.md", root_index).expect("seed root index");
 
-        let entry: diaryx_core::import::ImportedEntry = serde_json::from_value(serde_json::json!({
+        let entry: ImportedEntry = serde_json::from_value(serde_json::json!({
             "title": "Root Import",
             "date": "2020-09-24T01:36:35Z",
             "body": "Imported into root.",
@@ -1396,7 +1427,7 @@ mod tests {
         test_helpers::clear_test_written_files();
         test_helpers::write_file("index.md", root_index).expect("seed root index");
 
-        let entry: diaryx_core::import::ImportedEntry = serde_json::from_value(serde_json::json!({
+        let entry: ImportedEntry = serde_json::from_value(serde_json::json!({
             "title": "Gallery Entry",
             "date": "2020-09-24T01:36:35Z",
             "body": "![](_attachments/pic 1.jpg)",
@@ -1517,8 +1548,7 @@ fn handle_import_entries(params: JsonValue) -> CommandResponse {
 
     let parent_path = params.get("parent_path").and_then(|v| v.as_str());
 
-    let entries: Vec<diaryx_core::import::ImportedEntry> = match serde_json::from_str(entries_json)
-    {
+    let entries: Vec<ImportedEntry> = match serde_json::from_str(entries_json) {
         Ok(e) => e,
         Err(e) => {
             return CommandResponse::err(format!("Invalid entries JSON: {e}"));

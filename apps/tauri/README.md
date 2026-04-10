@@ -111,6 +111,41 @@ to a new absolute path.
 
 All IPC commands are defined in `src-tauri/src/commands.rs` and registered in `src-tauri/src/lib.rs`.
 
+### Auth Commands
+
+Authentication runs through a native `AuthService<KeyringAuthenticatedClient>`
+wired up in `src-tauri/src/auth_client.rs` + `auth_commands.rs`. The session
+token lives in the OS keyring (service `org.diaryx.app`, account
+`session_token`) and HTTP calls go through `reqwest` in Rust, so the raw
+token never leaves the host process when using the 12 migrated endpoints.
+Non-secret metadata (server URL, last email, workspace id) is persisted to
+`<app_data>/auth.json`.
+
+| Command                   | Description                                   |
+| ------------------------- | --------------------------------------------- |
+| `auth_server_url`         | Read currently configured sync server URL     |
+| `auth_set_server_url`     | Rebuild the host client against a new URL     |
+| `auth_is_authenticated`   | Keyring-presence check                        |
+| `auth_get_metadata`       | Non-secret `{email, workspace_id}`            |
+| `auth_request_magic_link` | POST `/auth/magic-link`                       |
+| `auth_verify_magic_link`  | GET `/auth/verify` (+ `replace_device_id`)    |
+| `auth_verify_code`        | POST `/auth/verify-code`                      |
+| `auth_get_me`             | GET `/auth/me` (tier, devices, limits)        |
+| `auth_refresh_token`      | Alias for `auth_get_me`                       |
+| `auth_logout`             | POST `/auth/logout` + clear keyring           |
+| `auth_get_devices`        | GET `/auth/devices`                           |
+| `auth_rename_device`      | PATCH `/auth/devices/:id`                     |
+| `auth_delete_device`      | DELETE `/auth/devices/:id`                    |
+| `auth_delete_account`     | DELETE `/auth/account`                        |
+| `auth_create_workspace`   | POST `/api/workspaces`                        |
+| `auth_rename_workspace`   | PATCH `/api/workspaces/:id`                   |
+| `auth_delete_workspace`   | DELETE `/api/workspaces/:id`                  |
+
+Passkeys, Stripe/Apple billing, snapshots, attachments, and namespace
+queries still ride the legacy `proxyFetch` path with a bearer token
+mirrored into the `credentials.rs` keychain slot. That mirror goes away
+once those endpoints migrate onto `AuthService` too.
+
 ## iOS Editor Toolbar
 
 The `tauri-plugin-editor-toolbar` crate provides the native iOS keyboard

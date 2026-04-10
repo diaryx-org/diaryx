@@ -33,7 +33,7 @@ requested_permissions:
 
 # diaryx_import_extism
 
-Extism guest plugin that provides import orchestration for Diaryx. Parses Day One and Markdown exports using `diaryx_core` parsers, then writes entries into the workspace via host bridge functions.
+Extism guest plugin that provides import parsing and orchestration for Diaryx. Parses Day One exports, single `.eml` messages, and Markdown files in-plugin, then writes entries into the workspace via host bridge functions.
 
 ## Plugin ID
 
@@ -46,6 +46,7 @@ Extism guest plugin that provides import orchestration for Diaryx. Parses Day On
 | `ParseDayOne` | Parse a Day One export (ZIP or JSON). Input: `{ data: "<base64>" }` or `{ file_key: "dayone_export" }` for host-requested file bytes. New hosts pass raw bytes directly for `host_request_file`; the guest keeps a legacy fallback for older base64/JSON hosts. Returns parsed entries, errors, and journal name. |
 | `ImportDayOne` | Parse and write a Day One export in one step. Input: `{ folder, parent_path, data? }` or `{ folder, parent_path, file_key }`. Returns `ImportResult` with parse/write errors combined, avoiding a giant intermediate `entries_json` payload. |
 | `ParseMarkdownFile` | Parse a single markdown file. Input: `{ data: "<base64>", filename: "..." }`. Returns a serialized `ImportedEntry`. Available only when built with the `markdown-import` feature. |
+| `ParseEml` | Parse a single `.eml` message. Input: `{ data: "<base64>" }` or `{ file_key }`. Returns a serialized `ImportedEntry`. Available only when built with the `email-import` feature. HTML-only bodies pass through unchanged (no HTML-to-markdown conversion in-plugin). |
 | `ImportEntries` | Write parsed entries into workspace with date-based hierarchy. Input: `{ entries_json, folder, parent_path }`. Returns `ImportResult`. |
 | `ImportDirectoryInPlace` | Add hierarchy metadata to an already-written directory of files. Input: `{ path }`. Returns `ImportResult`. |
 
@@ -65,10 +66,13 @@ All CLI import subcommands use `native_handler` — the CLI binary reads source 
 
 ## Architecture
 
-- **Parsers**: `diaryx_core::import::{dayone, markdown}` — pure functions, no I/O
+- **Types**: `types.rs` — `ImportedEntry`, `ImportedAttachment`, `ImportResult`
+- **Parsers** (pure functions, no I/O):
+  - `dayone.rs` — Day One ZIP / JSON exports (uses `zip` crate for media extraction)
+  - `email.rs` — single `.eml` parser using `mailparse` (feature-gated; mbox and HTML-to-markdown were dropped because their deps don't build for `wasm32-unknown-unknown`)
+  - Markdown parsing lives inline in `lib.rs::parse_markdown_file` (frontmatter-based; feature-gated)
 - **Orchestration**: `orchestrate.rs` — writes entries into date-based hierarchy via host bridge, used both by legacy `ImportEntries` and the direct `ImportDayOne` path
 - **Directory import**: `directory.rs` — adds `part_of`/`contents` metadata to existing files via host bridge
-- **Host bridge**: `host_bridge.rs` — wraps Extism host functions (`host_read_file`, `host_write_file`, `host_request_file`, etc.). `host_request_file` now prefers raw bytes over JSON/base64 for selected-file handoff.
 - **Command exports**: supports both legacy JSON `handle_command` requests and typed `execute_typed_command` dispatch used by frontend `backend.execute({ type: "PluginCommand", ... })` routing
 
 ## Build
@@ -76,8 +80,10 @@ All CLI import subcommands use `native_handler` — the CLI binary reads source 
 ```bash
 cargo build -p diaryx_import_extism --target wasm32-unknown-unknown --release
 
-# Exclude Markdown parser support (smaller WASM, ParseMarkdownFile disabled)
+# Drop optional parsers (smaller WASM)
 cargo build -p diaryx_import_extism --target wasm32-unknown-unknown --release --no-default-features
 ```
+
+Features: `markdown-import` (default), `email-import` (default). Day One parsing is always included.
 
 The CI plugin pipeline auto-discovers this crate (cdylib + extism-pdk).

@@ -2,6 +2,29 @@
 
 use super::types::*;
 
+/// Parse a non-success [`HttpResponse`] into an [`AuthError`].
+///
+/// Extracts the server's `error` string (falling back to `fallback_msg`) and
+/// any `devices` array returned on 403 device-limit responses. Both fields
+/// are best-effort — a malformed body just yields an error with the fallback
+/// message and no device list.
+fn parse_error_response(resp: &HttpResponse, fallback_msg: &str) -> AuthError {
+    let value = resp.json::<serde_json::Value>().ok();
+    let msg = value
+        .as_ref()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+        .unwrap_or_else(|| fallback_msg.to_string());
+
+    let mut err = AuthError::new(msg, resp.status);
+    if resp.status == 403
+        && let Some(devices_val) = value.as_ref().and_then(|v| v.get("devices"))
+        && let Ok(devices) = serde_json::from_value::<Vec<Device>>(devices_val.clone())
+    {
+        err.devices = Some(devices);
+    }
+    err
+}
+
 /// Platform-agnostic authentication service.
 ///
 /// Handles magic link authentication, session management, and user info
@@ -71,28 +94,35 @@ impl<C: AuthenticatedClient> AuthService<C> {
     /// Verify a magic link token and obtain a session token.
     ///
     /// Sends a GET to `/auth/verify?token=...&device_name=...` and persists
-    /// the resulting session token inside the client.
+    /// the resulting session token inside the client. When `replace_device_id`
+    /// is provided, the server will evict that device to make room if the
+    /// account is at its device limit.
     pub async fn verify_magic_link(
         &self,
         token: &str,
         device_name: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResponse, AuthError> {
         let device = device_name.unwrap_or("Diaryx");
-        let path = format!(
+        let mut path = format!(
             "/auth/verify?token={}&device_name={}",
             urlencoding::encode(token),
             urlencoding::encode(device)
         );
+        if let Some(replace) = replace_device_id {
+            path.push_str("&replace_device_id=");
+            path.push_str(&urlencoding::encode(replace));
+        }
 
         let resp = self.client.get_unauth(&path).await?;
 
         if !resp.is_success() {
             if resp.status == 401 || resp.status == 400 {
-                return Err(AuthError::new("Invalid or expired token", resp.status));
+                return Err(parse_error_response(&resp, "Invalid or expired token"));
             }
-            return Err(AuthError::new(
-                format!("Verification failed: HTTP {}", resp.status),
-                resp.status,
+            return Err(parse_error_response(
+                &resp,
+                &format!("Verification failed: HTTP {}", resp.status),
             ));
         }
 
@@ -149,16 +179,21 @@ impl<C: AuthenticatedClient> AuthService<C> {
     }
 
     /// Verify a 6-digit code and obtain a session token.
+    ///
+    /// When `replace_device_id` is provided, the server will evict that device
+    /// to make room if the account is at its device limit.
     pub async fn verify_code(
         &self,
         code: &str,
         email: &str,
         device_name: Option<&str>,
+        replace_device_id: Option<&str>,
     ) -> Result<VerifyResponse, AuthError> {
         let body = serde_json::json!({
             "code": code,
             "email": email,
             "device_name": device_name.unwrap_or("Diaryx"),
+            "replace_device_id": replace_device_id,
         })
         .to_string();
 
@@ -168,12 +203,10 @@ impl<C: AuthenticatedClient> AuthService<C> {
             .await?;
 
         if !resp.is_success() {
-            let msg = resp
-                .json::<serde_json::Value>()
-                .ok()
-                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
-                .unwrap_or_else(|| format!("Failed to verify code: HTTP {}", resp.status));
-            return Err(AuthError::new(msg, resp.status));
+            return Err(parse_error_response(
+                &resp,
+                &format!("Failed to verify code: HTTP {}", resp.status),
+            ));
         }
 
         let verify: VerifyResponse = resp.json()?;
@@ -490,7 +523,9 @@ mod tests {
             });
             let service = AuthService::new(client);
 
-            let result = service.verify_magic_link("token123", Some("CLI")).await;
+            let result = service
+                .verify_magic_link("token123", Some("CLI"), None)
+                .await;
             assert!(result.is_ok());
             let verify = result.unwrap();
             assert_eq!(verify.token, "session-123");
@@ -508,7 +543,7 @@ mod tests {
             }]);
             let service = AuthService::new(client);
 
-            let _ = service.verify_magic_link("tok", None).await;
+            let _ = service.verify_magic_link("tok", None, None).await;
 
             assert!(service.is_authenticated().await);
             let meta = service.get_metadata().await.unwrap();
@@ -526,7 +561,7 @@ mod tests {
             }]);
             let service = AuthService::new(client);
 
-            let result = service.verify_magic_link("bad-token", None).await;
+            let result = service.verify_magic_link("bad-token", None, None).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().is_unauthorized());
         });

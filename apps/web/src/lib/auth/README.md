@@ -15,8 +15,39 @@ Authentication services and stores for sync server login.
 
 | File                  | Purpose                                                    |
 | --------------------- | ---------------------------------------------------------- |
-| `authService.ts`      | Magic link auth API, snapshot upload/download, storage usage API, attachment multipart transfer API |
-| `authStore.svelte.ts` | Authentication state store + synced attachment usage state |
+| `authService.ts`      | Legacy class-based HTTP client for endpoints that have NOT been migrated to `coreAuthService` yet — passkeys, Stripe/Apple billing, snapshots, attachments, namespaces |
+| `authStore.svelte.ts` | Svelte 5 reactive auth state. Routes the 12 core endpoints through `coreAuthService` and keeps the legacy `authService` wired for everything else |
+| `coreAuthTypes.ts`    | Narrow `CoreAuthService` interface mirroring `diaryx_core::auth::AuthService`'s 12 public methods |
+| `coreAuthRouter.ts`   | Runtime router: picks `wasmAuthService` in the browser and `tauriAuthService` on Tauri |
+| `wasmAuthService.ts`  | Browser impl — wraps the wasm-bindgen `AuthClient` class from `diaryx_wasm`; delegates HTTP via `proxyFetch` with HttpOnly cookies |
+| `tauriAuthService.ts` | Tauri impl — thin typed wrappers around the `auth_*` IPC commands in `apps/tauri/src-tauri/src/auth_commands.rs` |
+
+## coreAuthService
+
+`coreAuthService` in `coreAuthRouter.ts` is the shared entry point for the
+12 methods that the Rust `AuthService<C>` implements:
+
+```
+requestMagicLink / verifyMagicLink / verifyCode
+getMe / refreshToken / logout
+getDevices / renameDevice / deleteDevice
+deleteAccount
+createWorkspace / renameWorkspace / deleteWorkspace
+```
+
+Both impls implement `CoreAuthService` from `coreAuthTypes.ts`. On the
+browser, the raw session token lives in an HttpOnly cookie and the wasm
+layer only knows "session exists" / "session cleared". On Tauri, the
+token lives in the OS keyring (`org.diaryx.app`/`session_token`) and is
+owned by the `KeyringAuthenticatedClient` running in the Rust host — the
+verify commands mirror it into the legacy keychain slot for now so that
+passkey/billing endpoints still riding `proxyFetch` keep working. That
+mirror is the single remaining place JS can read the token on Tauri; it
+will be removed once those endpoints move onto `coreAuthService` too.
+
+The verify methods accept an optional `replaceDeviceId`, and `AuthError`
+surfaces the server's `devices[]` list on 403 device-limit responses so
+`DeviceReplacementDialog` can drive the retry loop.
 
 Snapshot helpers support `include_attachments=true|false` (default `true`) for
 both upload and download bootstrap flows.

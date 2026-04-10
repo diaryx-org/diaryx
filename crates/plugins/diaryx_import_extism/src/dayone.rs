@@ -5,17 +5,16 @@
 //! `audios/`, `pdfs/`). This module handles both ZIP exports (with full
 //! media extraction) and plain JSON files (backward compatible).
 //!
-//! Use [`parse_dayone_auto`] to auto-detect the format, or call
-//! [`parse_dayone`] / [`parse_dayone_zip`] directly.
+//! Use [`parse_dayone_auto`] to auto-detect the format.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
-use crate::yaml_value::YamlValue;
+use diaryx_core::yaml_value::YamlValue;
 use indexmap::IndexMap;
 use serde::Deserialize;
 
-use super::{ImportedAttachment, ImportedEntry};
+use crate::types::{ImportedAttachment, ImportedEntry};
 
 /// Result of parsing a Day One export.
 pub struct DayOneParseResult {
@@ -110,26 +109,6 @@ struct DayOneMedia {
 /// ZIP files start with `PK` (`0x50 0x4B`). Everything else is treated as JSON.
 pub fn parse_dayone_auto(bytes: &[u8]) -> DayOneParseResult {
     collect_stream_result(stream_dayone_auto(bytes))
-}
-
-/// Parse a Day One `Journal.json` file into [`ImportedEntry`] values.
-///
-/// Returns one `Result` per entry so callers can skip unparseable entries
-/// while still importing the rest. Attachments will have empty `data` since
-/// the JSON does not embed binary content — use [`parse_dayone_zip`] for
-/// full media extraction.
-pub fn parse_dayone(bytes: &[u8]) -> DayOneParseResult {
-    collect_stream_result(stream_dayone(bytes))
-}
-
-/// Parse a Day One ZIP export into [`ImportedEntry`] values.
-///
-/// The ZIP should contain one `.json` file at the root (named after the
-/// journal) and media files under `photos/`, `videos/`, `audios/`, and/or
-/// `pdfs/` directories. Media files are matched to entries by their
-/// identifier (filename stem).
-pub fn parse_dayone_zip(bytes: &[u8]) -> DayOneParseResult {
-    collect_stream_result(stream_dayone_zip(bytes))
 }
 
 /// Open a Day One export as an incremental stream, auto-detecting ZIP vs JSON.
@@ -750,7 +729,7 @@ mod tests {
             }]
         }"##;
 
-        let result = parse_dayone(json.as_bytes());
+        let result = parse_dayone_auto(json.as_bytes());
         assert!(result.journal_name.is_none());
         assert_eq!(result.entries.len(), 1);
 
@@ -786,7 +765,7 @@ mod tests {
             }]
         }"##;
 
-        let result = parse_dayone(json.as_bytes());
+        let result = parse_dayone_auto(json.as_bytes());
         let entry = result.entries.into_iter().next().unwrap().unwrap();
 
         assert_eq!(entry.title, "Tagged Entry");
@@ -822,7 +801,7 @@ mod tests {
             }]
         }"##;
 
-        let result = parse_dayone(json.as_bytes());
+        let result = parse_dayone_auto(json.as_bytes());
         let entry = result.entries.into_iter().next().unwrap().unwrap();
 
         assert_eq!(entry.title, "Hello.");
@@ -831,7 +810,7 @@ mod tests {
 
     #[test]
     fn test_parse_invalid_json() {
-        let result = parse_dayone(b"not json");
+        let result = parse_dayone_auto(b"not json");
         assert_eq!(result.entries.len(), 1);
         assert!(result.entries[0].is_err());
     }
@@ -846,7 +825,7 @@ mod tests {
             }]
         }"##;
 
-        let result = parse_dayone(json.as_bytes());
+        let result = parse_dayone_auto(json.as_bytes());
         let entry = result.entries.into_iter().next().unwrap().unwrap();
         assert_eq!(entry.title, "2020-01-01 Just some text without a heading.");
         assert_eq!(entry.body, "Just some text without a heading.");

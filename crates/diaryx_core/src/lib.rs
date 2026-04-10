@@ -63,13 +63,6 @@ pub mod workspace_registry;
 /// Core data types (FileMetadata, BinaryRef, CrdtStorage trait, history types)
 pub mod types;
 
-/// Import external formats into Diaryx entries.
-///
-/// The base types ([`import::ImportedEntry`], [`import::ImportResult`], etc.) and
-/// the [`import::orchestrate`] module are always available. Format-specific parsers
-/// require feature flags: `import-email`, `import-dayone`, `import-markdown`.
-pub mod import;
-
 /// Plugin architecture for modular feature composition
 pub mod plugin;
 

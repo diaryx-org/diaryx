@@ -1,7 +1,6 @@
 //! Synchronous orchestration for writing imported entries into a workspace.
 //!
-//! Port of `diaryx_core::import::orchestrate::write_entries` using host bridge
-//! calls instead of `AsyncFileSystem`.
+//! Uses host bridge calls instead of `AsyncFileSystem`.
 
 use std::{collections::HashSet, path::Path};
 
@@ -10,11 +9,11 @@ use indexmap::IndexMap;
 
 use diaryx_core::entry::slugify;
 use diaryx_core::frontmatter;
-use diaryx_core::import::{ImportResult, ImportedEntry};
 use diaryx_core::link_parser::{
     LinkFormat, PathType, compute_relative_path, format_link_with_format, parse_link, to_canonical,
 };
 
+use crate::types::{ImportResult, ImportedEntry};
 use diaryx_plugin_sdk::host;
 
 pub struct ImportWriter {

@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-04-07T19:17:30Z
+updated: 2026-04-10T18:32:30Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -67,8 +67,7 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │       ├── Filesystem module - Filesystem abstraction layer - crates/diaryx_core/src/fs/README.md
 │   │       ├── crates/diaryx_core/src/plugin/README.md
 │   │       ├── Utils module - Utility functions for date and path handling - crates/diaryx_core/src/utils/README.md
-│   │       ├── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
-│   │       └── Import module - Import external formats into Diaryx entries - crates/diaryx_core/src/import/README.md
+│   │       └── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   ├── crates/diaryx_daily/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
 │   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md

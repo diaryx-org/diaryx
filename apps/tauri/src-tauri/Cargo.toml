@@ -44,6 +44,7 @@ tauri-plugin-icloud = { path = "../../../crates/tauri-plugin-icloud", optional =
 tauri-plugin-editor-toolbar = { path = "../../../crates/tauri-plugin-editor-toolbar" }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 ureq = "3"
+async-trait = "0.1"
 url = "2"
 dotenvy = "0.15"
 
@@ -71,3 +72,5 @@ apple = ["iap", "icloud", "diaryx_extism/pulley"]
 extism-plugins = ["dep:diaryx_extism", "dep:dirs", "dep:futures-lite", "diaryx_extism/wasi-runner", "diaryx_extism/http", "diaryx_extism/ws-transport"]
 
 [dev-dependencies]
+tempfile = "3"
+futures-lite = "2"

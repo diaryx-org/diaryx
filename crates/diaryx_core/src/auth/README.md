@@ -4,31 +4,54 @@ Platform-agnostic authentication for the Diaryx sync server.
 
 ## Architecture
 
-`AuthService<H, S>` handles magic link authentication, session management,
-and user info queries. Platform-specific HTTP and storage are injected via
-the `AuthHttpClient` and `AuthStorage` traits.
+`AuthService<C>` is the single source of truth for the magic-link flow,
+session management, device management, and workspace CRUD. All platform
+differences are encapsulated in a concrete `AuthenticatedClient`
+implementation that the service wraps:
 
 ```
-AuthService
-├── AuthHttpClient  — host-provided native HTTP client or WASM fetch
-└── AuthStorage     — native auth file + legacy config fallback, or browser localStorage
+AuthService<C: AuthenticatedClient>
+└── AuthenticatedClient  — per-platform HTTP + credential storage
+    ├── FsAuthenticatedClient       (CLI — auth.md frontmatter + ureq)
+    ├── KeyringAuthenticatedClient  (Tauri — OS keyring + reqwest)
+    └── WasmAuthenticatedClient     (Browser — JS callbacks + HttpOnly cookie)
 ```
+
+Each impl owns its own HTTP transport and persists its own session token
+somewhere platform-appropriate. The service never touches the raw token.
 
 ## Key types
 
-| Type | Description |
-|------|------------|
-| `AuthService` | Main service with `request_magic_link()`, `verify_magic_link()`, `logout()`, `get_me()` |
-| `AuthCredentials` | Stored credentials (server_url, session_token, email, workspace_id) |
-| `AuthHttpClient` | Trait for platform-specific HTTP |
-| `AuthStorage` | Trait for platform-specific credential persistence |
-| `MeResponse` | Server user info including tier, workspace_limit, devices |
+| Type                   | Description                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------- |
+| `AuthService`          | Magic link, `get_me`, device + workspace CRUD, account deletion                 |
+| `AuthenticatedClient`  | Trait bundling authenticated HTTP + `store/clear_session_token` + metadata I/O |
+| `AuthMetadata`         | Non-secret session metadata (`email`, `workspace_id`)                           |
+| `AuthError`            | `{ message, status_code, devices }` — `devices` populated on 403 device-limit  |
+| `MeResponse`           | Server user info: tier, workspace limit, devices, storage limit                 |
+| `VerifyResponse`       | `{ success, token, user }` returned by magic-link / code verification           |
 
-## Native hosts
+## Verify flow extras
 
-`NativeFileAuthStorage` persists credentials to `~/.config/diaryx/auth.md`
-(or the platform equivalent) as a markdown file with YAML frontmatter. The
-file includes `part_of: config.md` so that the config directory forms a mini
-Diaryx workspace. Falls back to legacy `auth.toml` and `Config.sync_*` fields
-for migration/compatibility. CLI plugin hosts load these credentials into the
-runtime context passed to sync-capable plugins.
+`verify_magic_link` and `verify_code` both accept an optional
+`replace_device_id` so frontends can surface the device picker when the
+account is at its device limit. On a 403 response, the service parses the
+server's `devices` array into `AuthError.devices`, letting UIs drive a
+retry loop without reimplementing the parse.
+
+## Concrete implementations
+
+- **CLI** — `FsAuthenticatedClient` in `crates/diaryx/src/cli/auth_client.rs`
+  persists the token into `~/.config/diaryx/auth.md` frontmatter (alongside
+  `config.md`) and uses `ureq` for transport.
+- **Tauri** — `KeyringAuthenticatedClient` in
+  `apps/tauri/src-tauri/src/auth_client.rs` stores the token in the OS
+  keyring (`org.diaryx.app`/`session_token`) and writes non-secret metadata
+  (server URL + `email`/`workspace_id`) to `<app_data>/auth.json`. The
+  twelve `AuthService` methods are exposed to the web layer via the
+  `auth_*` Tauri IPC commands in `auth_commands.rs`.
+- **Browser** — `WasmAuthenticatedClient` in `crates/diaryx_wasm/src/auth.rs`
+  delegates HTTP to a JavaScript `fetch` callback (which runs
+  `proxyFetch` with `credentials: 'include'` so the server's HttpOnly
+  session cookie is always attached). The token itself never touches JS.
+  The wasm-bindgen `AuthClient` class wraps `AuthService<WasmAuthenticatedClient>`.

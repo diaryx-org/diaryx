@@ -15,6 +15,7 @@ This directory contains the source code for the WASM bindings.
 | File | Purpose |
 |------|---------|
 | `lib.rs` | WASM entry point and exported classes |
+| `auth.rs` | `AuthClient` wasm-bindgen class wrapping `AuthService<WasmAuthenticatedClient>` — delegates HTTP and credential persistence to JS callbacks |
 | `backend.rs` | Backend abstraction for WASM |
 | `error.rs` | JavaScript-compatible error handling |
 | `fsa_fs.rs` | File System Access API filesystem |

@@ -27,7 +27,9 @@
 //! let client = /* platform-specific AuthenticatedClient */;
 //! let service = AuthService::new(client);
 //! service.request_magic_link("user@example.com").await?;
-//! let verify = service.verify_magic_link("token123", Some("CLI")).await?;
+//! let verify = service
+//!     .verify_magic_link("token123", Some("CLI"), None)
+//!     .await?;
 //! ```
 
 mod service;

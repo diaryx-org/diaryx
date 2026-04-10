@@ -45,7 +45,7 @@ pub fn handle_login(email: &str, server: Option<&str>) -> bool {
     }
 
     println!("Verifying...");
-    match block_on(service.verify_code(code, email, Some("Diaryx CLI"))) {
+    match block_on(service.verify_code(code, email, Some("Diaryx CLI"), None)) {
         Ok(verify) => {
             println!("✓ Logged in as {}", verify.user.email);
             true

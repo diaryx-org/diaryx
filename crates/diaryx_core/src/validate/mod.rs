@@ -40,7 +40,7 @@ mod validator;
 
 pub use fixer::{FixResult, ValidationFixer};
 pub use meta::{ValidationErrorWithMeta, ValidationResultWithMeta, ValidationWarningWithMeta};
-pub use types::{ValidationError, ValidationResult, ValidationWarning};
+pub use types::{InvalidAttachmentRefKind, ValidationError, ValidationResult, ValidationWarning};
 pub use validator::Validator;
 
 #[cfg(test)]

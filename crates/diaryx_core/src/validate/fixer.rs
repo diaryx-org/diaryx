@@ -17,8 +17,10 @@ use crate::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
 use crate::utils::path::relative_path_from_file_to_target;
 use crate::workspace::Workspace;
 
-use super::check::canonicalize_link_value;
-use super::types::{ValidationError, ValidationResult, ValidationWarning};
+use super::check::{canonicalize_link_value, expected_self_link};
+use super::types::{
+    InvalidAttachmentRefKind, ValidationError, ValidationResult, ValidationWarning,
+};
 
 // ============================================================================
 // ValidationFixer - Fix validation issues
@@ -461,6 +463,62 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         }
     }
 
+    /// Derive the canonical attachment-note path for a binary asset.
+    ///
+    /// The wrapper note lives next to the binary with `.md` appended so the
+    /// original extension stays visible (e.g. `photo.jpg` → `photo.jpg.md`).
+    fn attachment_wrapper_note_path(&self, binary: &Path) -> std::result::Result<PathBuf, String> {
+        let binary_filename = binary
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("Cannot derive filename for binary {}", binary.display()))?;
+        let parent_dir = binary
+            .parent()
+            .ok_or_else(|| format!("Binary {} has no parent directory", binary.display()))?;
+        Ok(parent_dir.join(format!("{binary_filename}.md")))
+    }
+
+    /// Create a fresh markdown attachment note that wraps `binary`, with an
+    /// `attachment_of` backlink to `backlink_index` seeded at creation time.
+    ///
+    /// Both auto-fixers that spawn wrapper notes (`fix_orphan_binary_file`
+    /// and `fix_invalid_attachment_ref`) go through this helper so the note
+    /// is immediately backlink-consistent — the user does not need a second
+    /// round of backlink autofixes to settle the workspace. The backlink is
+    /// formatted with the same `expected_self_link` helper the validator
+    /// uses when suggesting `MissingAttachmentBacklink` fixes, so the two
+    /// paths produce byte-identical values.
+    async fn create_attachment_wrapper_note(
+        &self,
+        binary: &Path,
+        note_path: &Path,
+        backlink_index: &Path,
+    ) -> std::result::Result<(), String> {
+        let binary_filename = binary
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment");
+        let self_link = self.format_self_link(note_path).await;
+        let attachment_link = self.format_attachment_link(binary, note_path).await;
+        let index_title = self.resolve_title(backlink_index).await;
+        let backlink = expected_self_link(
+            &self.get_canonical(backlink_index),
+            Some(&index_title),
+            Some(self.link_format),
+        );
+        let content = format!(
+            "---\ntitle: {title}\nlink: \"{self_link}\"\nattachment: \"{attachment_link}\"\nattachment_of:\n  - \"{backlink}\"\n---\n",
+            title = binary_filename,
+        );
+        self.fs.write_file(note_path, &content).await.map_err(|e| {
+            format!(
+                "Failed to create attachment note {}: {}",
+                note_path.display(),
+                e
+            )
+        })
+    }
+
     /// Wrap an orphan binary file in a markdown attachment note and add that
     /// note to an index's `attachments` list.
     ///
@@ -470,37 +528,17 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// one doesn't already exist) and links the note — not the binary — into
     /// the index.
     pub async fn fix_orphan_binary_file(&self, index: &Path, file: &Path) -> FixResult {
-        // The attachment note lives next to the binary, with `.md` appended so
-        // it keeps the extension visible (e.g. `photo.jpg.md`).
-        let Some(binary_filename) = file.file_name().and_then(|n| n.to_str()) else {
-            return FixResult::failure(format!(
-                "Cannot derive filename for binary {}",
-                file.display()
-            ));
+        let note_path = match self.attachment_wrapper_note_path(file) {
+            Ok(p) => p,
+            Err(msg) => return FixResult::failure(msg),
         };
-        let Some(parent_dir) = file.parent() else {
-            return FixResult::failure(format!(
-                "Binary {} has no parent directory",
-                file.display()
-            ));
-        };
-        let note_path = parent_dir.join(format!("{binary_filename}.md"));
 
-        // Create the attachment note if it doesn't already exist.
-        if !self.fs.exists(&note_path).await {
-            let self_link = self.format_self_link(&note_path).await;
-            let attachment_link = self.format_attachment_link(file, &note_path).await;
-            let content = format!(
-                "---\ntitle: {title}\nlink: \"{self_link}\"\nattachment: \"{attachment_link}\"\n---\n",
-                title = binary_filename,
-            );
-            if let Err(e) = self.fs.write_file(&note_path, &content).await {
-                return FixResult::failure(format!(
-                    "Failed to create attachment note {}: {}",
-                    note_path.display(),
-                    e
-                ));
-            }
+        if !self.fs.exists(&note_path).await
+            && let Err(msg) = self
+                .create_attachment_wrapper_note(file, &note_path, index)
+                .await
+        {
+            return FixResult::failure(msg);
         }
 
         // Reference the NOTE (not the binary) from the index's attachments.
@@ -554,6 +592,95 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     e
                 )),
             },
+            _ => FixResult::failure(format!(
+                "Could not read attachments from {}",
+                index.display()
+            )),
+        }
+    }
+
+    /// Migrate a legacy flat-format `attachments` entry (which points directly
+    /// at a binary asset) to the current attachment-note model.
+    ///
+    /// The fix wraps the binary in a markdown attachment note next to it
+    /// (creating one if needed) and rewrites the source index's `attachments`
+    /// list entry to point at the new note. The resulting missing
+    /// `attachment_of` backlink on the note is handled by the existing
+    /// backlink autofix on a subsequent pass.
+    pub async fn fix_invalid_attachment_ref(
+        &self,
+        index: &Path,
+        target: &str,
+        binary: &Path,
+    ) -> FixResult {
+        let note_path = match self.attachment_wrapper_note_path(binary) {
+            Ok(p) => p,
+            Err(msg) => return FixResult::failure(msg),
+        };
+
+        if !self.fs.exists(&note_path).await
+            && let Err(msg) = self
+                .create_attachment_wrapper_note(binary, &note_path, index)
+                .await
+        {
+            return FixResult::failure(msg);
+        }
+
+        let note_link = self.format_link(&note_path, index).await;
+
+        match self.get_frontmatter_property(index, "attachments").await {
+            Some(crate::yaml_value::YamlValue::Sequence(items)) => {
+                let mut replaced = false;
+                let mut rewritten: Vec<crate::yaml_value::YamlValue> = items
+                    .into_iter()
+                    .map(|item| match item {
+                        crate::yaml_value::YamlValue::String(s) if s == target => {
+                            replaced = true;
+                            crate::yaml_value::YamlValue::String(note_link.clone())
+                        }
+                        other => other,
+                    })
+                    .collect();
+                if !replaced {
+                    return FixResult::failure(format!(
+                        "Could not find attachment entry '{}' in {}",
+                        target,
+                        index.display()
+                    ));
+                }
+                // Drop any duplicates of the new note link that may now exist.
+                let mut seen_note_link = false;
+                rewritten.retain(|item| match item {
+                    crate::yaml_value::YamlValue::String(s) if s == &note_link => {
+                        if seen_note_link {
+                            false
+                        } else {
+                            seen_note_link = true;
+                            true
+                        }
+                    }
+                    _ => true,
+                });
+                match self
+                    .set_frontmatter_property(
+                        index,
+                        "attachments",
+                        crate::yaml_value::YamlValue::Sequence(rewritten),
+                    )
+                    .await
+                {
+                    Ok(_) => FixResult::success(format!(
+                        "Wrapped '{}' in attachment note and updated {}",
+                        binary.display(),
+                        index.display()
+                    )),
+                    Err(e) => FixResult::failure(format!(
+                        "Failed to update attachments in {}: {}",
+                        index.display(),
+                        e
+                    )),
+                }
+            }
             _ => FixResult::failure(format!(
                 "Could not read attachments from {}",
                 index.display()
@@ -1133,10 +1260,19 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             ValidationWarning::DuplicateListEntry { file, property, .. } => {
                 Some(self.fix_duplicate_list_entry(file, property).await)
             }
+            ValidationWarning::InvalidAttachmentRef {
+                file, target, kind, ..
+            } => match kind {
+                InvalidAttachmentRefKind::LegacyBinary { binary_path } => Some(
+                    self.fix_invalid_attachment_ref(file, target, binary_path)
+                        .await,
+                ),
+                InvalidAttachmentRefKind::NotAttachmentNote
+                | InvalidAttachmentRefKind::UnparseableNote => None,
+            },
             // These cannot be auto-fixed
             ValidationWarning::MultipleIndexes { .. } => None,
             ValidationWarning::InvalidContentsRef { .. } => None,
-            ValidationWarning::InvalidAttachmentRef { .. } => None,
         }
     }
 

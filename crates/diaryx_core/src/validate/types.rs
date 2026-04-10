@@ -140,6 +140,8 @@ pub enum ValidationWarning {
         target: String,
         /// Short human-readable reason (shown in the UI).
         reason: String,
+        /// Structured classification of the problem, used by the autofixer.
+        kind: InvalidAttachmentRefKind,
     },
     /// A file's declared `link` does not resolve back to itself.
     InvalidSelfLink {
@@ -211,6 +213,29 @@ pub enum ValidationWarning {
     },
 }
 
+/// Structured classification of why an `attachments` entry is rejected.
+///
+/// Only [`InvalidAttachmentRefKind::LegacyBinary`] is auto-fixable: it carries
+/// the absolute path of the binary so the fixer can wrap it in a markdown
+/// attachment note and replace the stale entry in the source index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[serde(tag = "type")]
+pub enum InvalidAttachmentRefKind {
+    /// The entry points directly at a binary asset (legacy flat format).
+    /// Auto-fixable: wrap the binary in a markdown attachment note.
+    LegacyBinary {
+        /// Absolute path to the binary asset the entry resolves to.
+        binary_path: PathBuf,
+    },
+    /// The entry points at a `.md` file that lacks an `attachment:` property.
+    /// Not auto-fixable — intent is ambiguous.
+    NotAttachmentNote,
+    /// The entry points at a file that could not be parsed.
+    UnparseableNote,
+}
+
 impl ValidationWarning {
     /// Get a human-readable description of this warning.
     pub fn description(&self) -> &'static str {
@@ -267,7 +292,9 @@ impl ValidationWarning {
             } => suggested_file.is_some() && suggested_remove_part_of.is_some(),
             Self::MultipleIndexes { .. } => false,
             Self::InvalidContentsRef { .. } => false,
-            Self::InvalidAttachmentRef { .. } => false,
+            Self::InvalidAttachmentRef { kind, .. } => {
+                matches!(kind, InvalidAttachmentRefKind::LegacyBinary { .. })
+            }
             Self::DuplicateListEntry { .. } => true,
             Self::InvalidSelfLink { .. } => true,
             Self::MissingBacklink { .. } => true,

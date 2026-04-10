@@ -118,6 +118,13 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   still produces a `BrokenAttachment` error. The `fix_orphan_binary_file` fix
   creates a sibling attachment note next to the binary and links the note
   (not the binary) into the index's `attachments` list.
+- An `attachments` entry that points directly at a binary (legacy flat format)
+  produces an `InvalidAttachmentRef` warning tagged
+  `InvalidAttachmentRefKind::LegacyBinary`, which is auto-fixable via
+  `ValidationFixer::fix_invalid_attachment_ref`: the fix wraps the binary in a
+  sibling attachment note and rewrites the source index's `attachments` entry
+  to point at the new note. The `NotAttachmentNote` and `UnparseableNote`
+  kinds remain non-auto-fixable because the intended binary is ambiguous.
 - The singular attachment-note `attachment` property is also normalized through
   the attachment-aware link pipeline, so plain canonical binary paths are read
   correctly and rewritten back into the workspace link format on save.

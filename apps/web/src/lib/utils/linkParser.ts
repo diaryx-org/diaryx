@@ -7,5 +7,9 @@ export function parseLinkDisplay(
 ): { title: string; path: string } | null {
   const m = LINK_RE.exec(link);
   if (!m) return null;
-  return { title: m[1], path: m[2] };
+  let path = m[2];
+  if (path.startsWith("<") && path.endsWith(">")) {
+    path = path.slice(1, -1);
+  }
+  return { title: m[1], path };
 }

@@ -146,6 +146,7 @@ pub fn warning_detail(warning: &ValidationWarning) -> String {
             file,
             target,
             reason,
+            ..
         } => format!(
             "{} has invalid attachment '{}': {}",
             display(file),

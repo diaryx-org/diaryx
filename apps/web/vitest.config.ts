@@ -7,6 +7,7 @@ export default defineConfig({
   plugins: [svelte({ hot: !process.env.VITEST }), svelteTesting()],
   resolve: {
     alias: {
+      '$wasm': resolve(__dirname, './src/lib/wasm-stub.js'),
       '$lib': resolve(__dirname, './src/lib'),
       '@': resolve(__dirname, './src'),
     },

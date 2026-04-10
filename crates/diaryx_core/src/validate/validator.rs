@@ -22,7 +22,9 @@ use super::check::{
     expected_self_link, find_index_in_directory, is_clearly_non_portable_path,
     list_contains_canonical_link, normalize_path, workspace_relative_canonical_path,
 };
-use super::types::{ValidationError, ValidationResult, ValidationWarning};
+use super::types::{
+    InvalidAttachmentRefKind, ValidationError, ValidationResult, ValidationWarning,
+};
 
 /// Validator for checking workspace link integrity (async-first).
 pub struct Validator<FS: AsyncFileSystem> {
@@ -738,7 +740,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 // (`.md` with an `attachment:` frontmatter property). Anything
                 // else is the legacy flat format and we flag it so the user
                 // can migrate.
-                if let Some(reason) = self
+                if let Some((reason, kind)) = self
                     .attachment_entry_invalid_reason(&absolute_attachment_path)
                     .await
                 {
@@ -748,6 +750,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                             file: path.to_path_buf(),
                             target: attachment.clone(),
                             reason,
+                            kind,
                         });
                     continue;
                 }
@@ -842,31 +845,42 @@ impl<FS: AsyncFileSystem> Validator<FS> {
     }
 
     /// Decide whether a resolved `attachments[]` entry is a valid markdown
-    /// attachment note. Returns `None` if it is, or `Some(reason)` with a
-    /// short human-readable explanation if it is not.
+    /// attachment note. Returns `None` if it is, or `Some((reason, kind))`
+    /// with a short human-readable explanation and a structured classification
+    /// used by the autofixer if it is not.
     ///
     /// Rules:
     /// - Extension must be `.md` (case-insensitive).
     /// - The parsed file must expose an `attachment:` frontmatter property.
-    async fn attachment_entry_invalid_reason(&self, entry: &Path) -> Option<String> {
+    async fn attachment_entry_invalid_reason(
+        &self,
+        entry: &Path,
+    ) -> Option<(String, InvalidAttachmentRefKind)> {
         let is_markdown = entry
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
         if !is_markdown {
-            return Some(
+            return Some((
                 "not a markdown attachment note (wrap the binary in a `.md` note with an `attachment:` property)"
                     .to_string(),
-            );
+                InvalidAttachmentRefKind::LegacyBinary {
+                    binary_path: entry.to_path_buf(),
+                },
+            ));
         }
 
         match self.ws.parse_index(entry).await {
             Ok(note) if note.frontmatter.attachment.is_some() => None,
-            Ok(_) => Some(
+            Ok(_) => Some((
                 "markdown file is not an attachment note (missing `attachment:` frontmatter property)"
                     .to_string(),
-            ),
-            Err(_) => Some("could not parse file as an attachment note".to_string()),
+                InvalidAttachmentRefKind::NotAttachmentNote,
+            )),
+            Err(_) => Some((
+                "could not parse file as an attachment note".to_string(),
+                InvalidAttachmentRefKind::UnparseableNote,
+            )),
         }
     }
 
@@ -1257,7 +1271,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 }
 
                 // Verify the entry points at a valid markdown attachment note.
-                if let Some(reason) = self
+                if let Some((reason, kind)) = self
                     .attachment_entry_invalid_reason(&absolute_attachment_path)
                     .await
                 {
@@ -1267,6 +1281,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                             file: path.clone(),
                             target: attachment.clone(),
                             reason,
+                            kind,
                         });
                 }
             }

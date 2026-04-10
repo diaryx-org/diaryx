@@ -6,6 +6,7 @@ import { AuthError } from "./authService";
 // ---------------------------------------------------------------------------
 
 const mockAuthService = vi.hoisted(() => ({
+  // Legacy AuthService methods (still used for non-migrated endpoints).
   requestMagicLink: vi.fn(),
   verifyMagicLink: vi.fn(),
   verifyCode: vi.fn(),
@@ -35,9 +36,17 @@ const mockAuthService = vi.hoisted(() => ({
   uploadAttachmentPart: vi.fn(),
   completeAttachmentUpload: vi.fn(),
   downloadAttachment: vi.fn(),
+  // CoreAuthService methods (the migrated 12 + helpers).
+  isAuthenticated: vi.fn().mockResolvedValue(false),
+  getMetadata: vi.fn().mockResolvedValue(null),
+  refreshToken: vi.fn(),
+  getDevices: vi.fn().mockResolvedValue([]),
 }));
 
 const mockCreateAuthService = vi.hoisted(() => vi.fn(() => mockAuthService));
+const mockSetCoreAuthServerUrl = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(undefined),
+);
 
 const mockCollaborationStore = vi.hoisted(() => ({
   collaborationStore: {
@@ -66,6 +75,15 @@ vi.mock("./authService", async (importOriginal) => {
     createAuthService: mockCreateAuthService,
   };
 });
+
+// The auth store routes the migrated 12 methods (verifyMagicLink, getMe,
+// logout, createWorkspace, etc.) through `coreAuthService` from
+// `./coreAuthRouter`, so the same mock object backs both. This avoids loading
+// the real wasm/tauri implementations during tests.
+vi.mock("./coreAuthRouter", () => ({
+  coreAuthService: mockAuthService,
+  setCoreAuthServerUrl: mockSetCoreAuthServerUrl,
+}));
 
 vi.mock("@/models/stores/collaborationStore.svelte", () => mockCollaborationStore);
 

@@ -1834,3 +1834,84 @@ fn test_validate_file_works_with_in_memory_fs() {
     );
     assert_eq!(result.files_checked, 1);
 }
+
+#[test]
+fn test_fix_invalid_attachment_ref_legacy_binary() {
+    // An index lists a raw binary in `attachments` (legacy flat format).
+    // The autofix should wrap the binary in a `.md` attachment note and
+    // rewrite the `attachments` entry to point at the note.
+    let fs = make_test_fs();
+    fs.write_file(
+        Path::new("README.md"),
+        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+    )
+    .unwrap();
+    fs.write_file(
+        Path::new("pictures.md"),
+        "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - photo.HEIC\n---\n",
+    )
+    .unwrap();
+    fs.write_file(Path::new("photo.HEIC"), "binary content")
+        .unwrap();
+
+    let async_fs: TestFs = SyncToAsyncFs::new(fs.clone());
+    let validator = Validator::new(async_fs);
+    let result = block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+    let warning = result
+        .warnings
+        .iter()
+        .find(|w| matches!(w, ValidationWarning::InvalidAttachmentRef { .. }))
+        .expect("expected InvalidAttachmentRef warning");
+    assert!(
+        warning.can_auto_fix(),
+        "LegacyBinary kind must be auto-fixable"
+    );
+
+    let async_fs: TestFs = SyncToAsyncFs::new(fs.clone());
+    let fixer = ValidationFixer::new(async_fs);
+    let fix = block_on_test(fixer.fix_warning(warning))
+        .expect("fix_warning should return a result for LegacyBinary");
+    assert!(fix.success, "fix failed: {}", fix.message);
+
+    // The wrapper note was created with both the `attachment:` property and
+    // a seeded `attachment_of:` backlink pointing at the source index, so a
+    // second pass through the backlink autofix is not required.
+    let note = fs.read_to_string(Path::new("photo.HEIC.md")).unwrap();
+    assert!(
+        note.contains("attachment:"),
+        "wrapper note missing attachment prop: {note}"
+    );
+    assert!(
+        note.contains("attachment_of:"),
+        "wrapper note missing attachment_of backlink: {note}"
+    );
+
+    // The source index's attachments list now points at the note, not the
+    // raw binary.
+    let index_content = fs.read_to_string(Path::new("pictures.md")).unwrap();
+    let parsed = crate::frontmatter::parse_or_empty(&index_content).unwrap();
+    let attachments = crate::frontmatter::get_string_array(&parsed.frontmatter, "attachments");
+    assert_eq!(attachments.len(), 1);
+    assert!(
+        !attachments.iter().any(|a| a == "photo.HEIC"),
+        "raw binary entry should have been replaced: {attachments:?}"
+    );
+    assert!(
+        attachments.iter().any(|a| a.contains("photo.HEIC.md")),
+        "expected attachments to reference photo.HEIC.md: {attachments:?}"
+    );
+
+    // Re-validating should no longer produce the InvalidAttachmentRef warning.
+    let async_fs: TestFs = SyncToAsyncFs::new(fs);
+    let validator = Validator::new(async_fs);
+    let result = block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::InvalidAttachmentRef { .. })),
+        "InvalidAttachmentRef should be gone after fix, got: {:?}",
+        result.warnings
+    );
+}

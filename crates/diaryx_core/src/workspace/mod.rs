@@ -2550,6 +2550,134 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         Ok(())
     }
 
+    /// Move every file under `old_dir` into `new_dir`, preserving subdirectory
+    /// structure. Works across every `AsyncFileSystem` backend by only ever
+    /// calling `move_file` on leaf files — backends like OPFS/FSA don't
+    /// implement directory moves, so we iterate rather than rely on a single
+    /// directory rename.
+    async fn move_dir_contents_recursive(&self, old_dir: &Path, new_dir: &Path) -> Result<()> {
+        self.fs
+            .create_dir_all(new_dir)
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: new_dir.to_path_buf(),
+                source: e,
+            })?;
+
+        let entries = self
+            .fs
+            .list_files(old_dir)
+            .await
+            .map_err(|e| DiaryxError::FileRead {
+                path: old_dir.to_path_buf(),
+                source: e,
+            })?;
+
+        for entry in entries {
+            let name = match entry.file_name() {
+                Some(n) => n,
+                None => continue,
+            };
+            let target = new_dir.join(name);
+
+            if self.fs.is_dir(&entry).await {
+                Box::pin(self.move_dir_contents_recursive(&entry, &target)).await?;
+            } else {
+                self.fs
+                    .move_file(&entry, &target)
+                    .await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: target,
+                        source: e,
+                    })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Walk every markdown file under `tree_root_dir` and rewrite each file's
+    /// `part_of` to point at its directory-nearest ancestor index, using the
+    /// workspace's link format for the current file location.
+    ///
+    /// This is how we heal descendants after a folder move: the moved tree
+    /// has shifted to a new absolute path, so any `part_of` in `markdown_root`
+    /// or other absolute formats still points into the old location. By
+    /// re-snapping each descendant to `find_nearest_index`, every
+    /// grandchild gets a freshly-formatted link against its (also-moved)
+    /// nearest index.
+    ///
+    /// Only files that already have a `part_of` value are touched — this
+    /// preserves detached files and avoids auto-attaching anything that
+    /// wasn't already in the hierarchy.
+    async fn rewrite_descendants_part_of_in_dir(
+        &self,
+        tree_root_dir: &Path,
+        skip_path: Option<&Path>,
+    ) -> Result<()> {
+        use crate::path_utils::relative_path_from_file_to_target;
+
+        let md_files = match self.fs.list_md_files_recursive(tree_root_dir).await {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!(
+                    "rewrite_descendants_part_of_in_dir: list failed for '{}': {}",
+                    tree_root_dir.display(),
+                    e
+                );
+                return Ok(());
+            }
+        };
+
+        for file in md_files {
+            if let Some(skip) = skip_path
+                && file == skip
+            {
+                continue;
+            }
+
+            // Only rewrite files that already have an explicit part_of — we
+            // don't want to auto-attach previously-detached files.
+            let has_part_of = matches!(
+                self.get_frontmatter_property(&file, "part_of").await,
+                Ok(Some(_))
+            );
+            if !has_part_of {
+                continue;
+            }
+
+            let nearest = match self.find_nearest_index(&file).await {
+                Ok(Some(p)) => p,
+                _ => continue,
+            };
+            if nearest == file {
+                continue;
+            }
+
+            let part_of_value = if self.root_path.is_some() {
+                let nearest_canonical = self.get_canonical_path(&nearest);
+                let title = self.resolve_title(&nearest_canonical).await;
+                let file_canonical = self.get_canonical_path(&file);
+                self.format_link_sync(&nearest_canonical, &title, &file_canonical)
+            } else {
+                relative_path_from_file_to_target(&file, &nearest)
+            };
+
+            if let Err(e) = self
+                .set_frontmatter_property(&file, "part_of", YamlValue::String(part_of_value))
+                .await
+            {
+                log::warn!(
+                    "rewrite_descendants_part_of_in_dir: failed to update '{}': {}",
+                    file.display(),
+                    e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Move/rename an entry while updating workspace index references.
     ///
     /// This method:
@@ -2668,6 +2796,18 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     e
                 );
             }
+        }
+
+        // If the moved file is an index whose containing directory changed,
+        // any descendants living in the new directory still have `part_of`
+        // values written against the old location. Heal them by re-snapping
+        // each one to its directory-nearest index at the new location.
+        if old_path.parent() != new_path.parent()
+            && self.is_index_file(new_path).await
+            && let Some(new_dir) = new_path.parent()
+        {
+            self.rewrite_descendants_part_of_in_dir(new_dir, Some(new_path))
+                .await?;
         }
 
         Ok(())
@@ -3763,6 +3903,74 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 message: "Parent index has no directory".to_string(),
             })?;
 
+        // If the entry being moved is itself a non-root index (i.e. a folder
+        // represented by a directory + its index file), we need to move the
+        // entire containing directory — not just the .md file. Moving just
+        // the index would strand every descendant at the old path with stale
+        // `part_of` links. The root index lives at the workspace root and has
+        // no containing subfolder to move, so it falls through to leaf-style
+        // handling below.
+        let entry_is_index = self.is_index_file(entry).await;
+        let entry_is_root = entry_is_index && self.is_root_index(entry).await;
+        if entry_is_index && !entry_is_root {
+            let old_dir = entry.parent().ok_or_else(|| DiaryxError::InvalidPath {
+                path: entry.to_path_buf(),
+                message: "Index file has no parent directory".to_string(),
+            })?;
+
+            // If the folder is already directly inside the new parent's
+            // directory, there's nothing to move — just make sure the index
+            // is attached to the correct parent.
+            if old_dir.parent() == Some(parent_dir) {
+                self.attach_entry_to_parent(entry, &effective_parent)
+                    .await?;
+                return Ok(entry.to_path_buf());
+            }
+
+            let dir_name = old_dir
+                .file_name()
+                .ok_or_else(|| DiaryxError::InvalidPath {
+                    path: old_dir.to_path_buf(),
+                    message: "Index directory has no name".to_string(),
+                })?;
+            let new_dir = parent_dir.join(dir_name);
+
+            // Refuse to move a folder into itself or into one of its own
+            // descendants — that would create a cycle on disk.
+            if new_dir == old_dir || new_dir.starts_with(old_dir) {
+                return Err(DiaryxError::InvalidPath {
+                    path: new_dir,
+                    message: "Cannot move a folder into itself or its descendants".to_string(),
+                });
+            }
+
+            if self.fs.exists(&new_dir).await {
+                return Err(DiaryxError::InvalidPath {
+                    path: new_dir,
+                    message: "Target directory already exists".to_string(),
+                });
+            }
+
+            let entry_filename = entry.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+                DiaryxError::InvalidPath {
+                    path: entry.to_path_buf(),
+                    message: "Invalid entry filename".to_string(),
+                }
+            })?;
+            let new_entry_path = new_dir.join(entry_filename);
+
+            // Physically move the whole directory tree.
+            self.move_dir_contents_recursive(old_dir, &new_dir).await?;
+
+            // sync_move_metadata updates the moved index's own part_of and,
+            // because it's an index whose directory changed, also walks the
+            // new subtree and rewrites every descendant's part_of against
+            // its directory-nearest index at the new location.
+            self.sync_move_metadata(entry, &new_entry_path).await?;
+
+            return Ok(new_entry_path);
+        }
+
         // Get entry filename
         let entry_filename =
             entry
@@ -4722,6 +4930,120 @@ mod tests {
             !root_contents.iter().any(|e| e == "entry.md"),
             "expected README.md to no longer reference entry.md, got {:?}",
             root_contents
+        );
+    }
+
+    #[test]
+    fn test_attach_and_move_entry_to_parent_moves_folder_and_rewrites_nested_part_of() {
+        // Projects/ is a folder (represented by Projects/projects.md) with a
+        // nested sub-index (Projects/sub/sub.md) and a grandchild leaf
+        // (Projects/sub/task.md). Every file uses markdown_root-format
+        // part_of values, so absolute paths get stale after the move unless
+        // we rewrite them. We drag Projects into Archive/ and expect the
+        // whole tree to move AND every part_of to point at the new location.
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("Projects/sub")).unwrap();
+        fs.create_dir_all(Path::new("Archive")).unwrap();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - \"[Projects](/Projects/projects.md)\"\n  - \"[Archive](/Archive/archive.md)\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("Archive/archive.md"),
+            "---\ntitle: Archive\ncontents: []\npart_of: \"[Root](/README.md)\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("Projects/projects.md"),
+            "---\ntitle: Projects\ncontents:\n  - \"[Sub](/Projects/sub/sub.md)\"\npart_of: \"[Root](/README.md)\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("Projects/sub/sub.md"),
+            "---\ntitle: Sub\ncontents:\n  - \"[Task](/Projects/sub/task.md)\"\npart_of: \"[Projects](/Projects/projects.md)\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("Projects/sub/task.md"),
+            "---\ntitle: Task\npart_of: \"[Sub](/Projects/sub/sub.md)\"\n---\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::with_link_format(async_fs, PathBuf::from(""), LinkFormat::MarkdownRoot);
+
+        let new_path = block_on_test(ws.attach_and_move_entry_to_parent(
+            Path::new("Projects/projects.md"),
+            Path::new("Archive/archive.md"),
+        ))
+        .unwrap();
+
+        assert_eq!(new_path, PathBuf::from("Archive/Projects/projects.md"));
+
+        // Folder contents moved.
+        assert!(block_on_test(
+            ws.fs.exists(Path::new("Archive/Projects/projects.md"))
+        ));
+        assert!(block_on_test(
+            ws.fs.exists(Path::new("Archive/Projects/sub/sub.md"))
+        ));
+        assert!(block_on_test(
+            ws.fs.exists(Path::new("Archive/Projects/sub/task.md"))
+        ));
+        assert!(!block_on_test(
+            ws.fs.exists(Path::new("Projects/projects.md"))
+        ));
+        assert!(!block_on_test(
+            ws.fs.exists(Path::new("Projects/sub/sub.md"))
+        ));
+
+        // Moved index's own part_of now points to the new parent.
+        let projects_part_of = block_on_test(
+            ws.get_frontmatter_property(Path::new("Archive/Projects/projects.md"), "part_of"),
+        )
+        .unwrap();
+        let projects_part_of = match projects_part_of {
+            Some(YamlValue::String(s)) => s,
+            other => panic!("expected projects.md part_of string, got {:?}", other),
+        };
+        assert!(
+            projects_part_of.contains("/Archive/archive.md"),
+            "projects.md part_of should point at new parent, got: {projects_part_of}"
+        );
+
+        // Nested sub-index's part_of should now reference the moved projects.md.
+        let sub_part_of = block_on_test(
+            ws.get_frontmatter_property(Path::new("Archive/Projects/sub/sub.md"), "part_of"),
+        )
+        .unwrap();
+        let sub_part_of = match sub_part_of {
+            Some(YamlValue::String(s)) => s,
+            other => panic!("expected sub.md part_of string, got {:?}", other),
+        };
+        assert!(
+            sub_part_of.contains("/Archive/Projects/projects.md"),
+            "sub.md part_of should point at new projects.md, got: {sub_part_of}"
+        );
+        assert!(
+            !sub_part_of.contains("/Projects/projects.md")
+                || sub_part_of.contains("/Archive/Projects/projects.md"),
+            "sub.md part_of should not point at old path, got: {sub_part_of}"
+        );
+
+        // Grandchild task.md's part_of should now reference the moved sub.md
+        // — this is the recursion case the bug was about.
+        let task_part_of = block_on_test(
+            ws.get_frontmatter_property(Path::new("Archive/Projects/sub/task.md"), "part_of"),
+        )
+        .unwrap();
+        let task_part_of = match task_part_of {
+            Some(YamlValue::String(s)) => s,
+            other => panic!("expected task.md part_of string, got {:?}", other),
+        };
+        assert!(
+            task_part_of.contains("/Archive/Projects/sub/sub.md"),
+            "task.md part_of should point at new sub.md, got: {task_part_of}"
         );
     }
 

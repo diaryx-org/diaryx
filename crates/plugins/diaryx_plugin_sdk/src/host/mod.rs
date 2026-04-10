@@ -33,13 +33,7 @@ extern "ExtismHost" {
     pub fn host_read_file(input: String) -> String;
     pub fn host_read_binary(input: String) -> String;
     pub fn host_list_files(input: String) -> String;
-    #[cfg(target_arch = "wasm32")]
-    pub fn host_list_dir(input: String) -> String;
-    #[cfg(target_arch = "wasm32")]
-    pub fn host_workspace_file_set(input: String) -> String;
     pub fn host_file_exists(input: String) -> String;
-    #[cfg(target_arch = "wasm32")]
-    pub fn host_file_metadata(input: String) -> String;
     pub fn host_write_file(input: String) -> String;
     pub fn host_write_binary(input: String) -> String;
     pub fn host_delete_file(input: String) -> String;
@@ -89,6 +83,18 @@ extern "ExtismHost" {
 
     // Proxy
     pub fn host_proxy_request(input: String) -> String;
+}
+
+// WASM-only host functions. These must be in a separate `#[host_fn]` block
+// because the proc macro does not propagate per-item `#[cfg]` attributes —
+// placing them in the main block generates native symbols that cause linker
+// errors when any downstream crate is compiled as a test binary.
+#[cfg(target_arch = "wasm32")]
+#[host_fn]
+extern "ExtismHost" {
+    pub fn host_list_dir(input: String) -> String;
+    pub fn host_workspace_file_set(input: String) -> String;
+    pub fn host_file_metadata(input: String) -> String;
 }
 
 // ---------------------------------------------------------------------------

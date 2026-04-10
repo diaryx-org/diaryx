@@ -9,6 +9,10 @@ on:
       tag:
         description: "Release tag (e.g., v0.1.0)"
         required: true
+      dry_run:
+        description: "Dry run: build only, do not create or upload to a GitHub release"
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -127,8 +131,8 @@ jobs:
           projectPath: apps/tauri
           tauriScript: ../web/node_modules/.bin/tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --features desktop-updater --config src-tauri/tauri.updater.conf.json
-          tagName: ${{ steps.tag.outputs.tag }}
-          releaseName: "Diaryx ${{ steps.tag.outputs.tag }}"
+          tagName: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run == true) && '' || steps.tag.outputs.tag }}
+          releaseName: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run == true) && '' || format('Diaryx {0}', steps.tag.outputs.tag) }}
           releaseBody: "See the assets below to download and install Diaryx."
           releaseDraft: true
           prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}

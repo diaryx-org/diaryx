@@ -111,6 +111,13 @@ xcrun altool --upload-app --type macos \
 
 Handled by CI in `.github/workflows/tauri-release.yml`. Push a tag matching `v*` to trigger a release build.
 
+To rehearse the workflow before tagging, dispatch it manually with `dry_run=true`. The Tauri workflow will build for every target but skip the GitHub release upload; the CLI workflow will skip `cargo publish` and create the GitHub release as a draft.
+
+```bash
+gh workflow run tauri-release.yml -f tag=v0.0.0-dryrun -f dry_run=true
+gh workflow run cli-release.yml   -f tag=v0.0.0-dryrun -f dry_run=true
+```
+
 The release workflow renders `apps/tauri/src-tauri/tauri.updater.conf.json`
 with `apps/tauri/scripts/render-updater-config.mjs`, enables the
 `desktop-updater` feature, and signs the generated updater artifacts before

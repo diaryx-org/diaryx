@@ -694,8 +694,8 @@ let serializable = error.to_serializable();
 
 Diaryx uses a two-layer configuration model plus a separate native auth store:
 
-- **User config** (`~/.config/diaryx/config.toml`) - Device/user-level settings such as default workspace and editor. Managed by the `config` module.
-- **Native auth store** (`~/.config/diaryx/auth.toml`) - Device/user-level Diaryx account session and remembered sync server/workspace metadata. Managed by the `auth` module on native hosts, with legacy fallback from `config.toml`.
+- **User config** (`~/.config/diaryx/config.md`) - Device/user-level settings such as default workspace and editor. Stored as markdown with YAML frontmatter. Managed by the `config` module.
+- **Native auth store** (`~/.config/diaryx/auth.md`) - Device/user-level Diaryx account session and remembered sync server/workspace metadata. Managed by the `auth` module on native hosts.
 - **Workspace config** (root index frontmatter) - Workspace-level settings (link format, filename style, templates, audience). Managed by `WorkspaceConfig` in the `workspace` module.
 
 ### User Config

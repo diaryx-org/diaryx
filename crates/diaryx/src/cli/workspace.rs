@@ -758,6 +758,47 @@ fn handle_validate(
                         index.display()
                     );
                 }
+                ValidationWarning::InvalidAttachmentRef {
+                    file,
+                    target,
+                    reason,
+                } => {
+                    // Can't auto-fix — user should wrap the binary in an attachment note.
+                    println!(
+                        "  ⚠ Invalid attachment ref: '{}' in {} ({})",
+                        target,
+                        file.display(),
+                        reason
+                    );
+                }
+                ValidationWarning::DuplicateListEntry {
+                    file,
+                    property,
+                    value,
+                    count,
+                } => {
+                    if fix {
+                        let fix_result = block_on(fixer.fix_duplicate_list_entry(file, property));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Deduped {property} in {} ({count}× '{value}')",
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Duplicate {property} entry in {}: '{value}' ({count} occurrences) (failed to fix: {})",
+                                file.display(),
+                                fix_result.message
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Duplicate {property} entry in {}: '{value}' ({count} occurrences)",
+                            file.display()
+                        );
+                    }
+                }
                 ValidationWarning::NonPortableFilename {
                     file,
                     reason,
@@ -1378,6 +1419,47 @@ fn report_and_fix_validation(
                         target,
                         index.display()
                     );
+                }
+                ValidationWarning::InvalidAttachmentRef {
+                    file,
+                    target,
+                    reason,
+                } => {
+                    // Can't auto-fix — user should wrap the binary in an attachment note.
+                    println!(
+                        "  ⚠ Invalid attachment ref: '{}' in {} ({})",
+                        target,
+                        file.display(),
+                        reason
+                    );
+                }
+                ValidationWarning::DuplicateListEntry {
+                    file,
+                    property,
+                    value,
+                    count,
+                } => {
+                    if fix {
+                        let fix_result = block_on(fixer.fix_duplicate_list_entry(file, property));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Deduped {property} in {} ({count}× '{value}')",
+                                file.display()
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Duplicate {property} entry in {}: '{value}' ({count} occurrences) (failed to fix: {})",
+                                file.display(),
+                                fix_result.message
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Duplicate {property} entry in {}: '{value}' ({count} occurrences)",
+                            file.display()
+                        );
+                    }
                 }
                 ValidationWarning::NonPortableFilename {
                     file,

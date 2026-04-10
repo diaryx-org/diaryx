@@ -324,12 +324,32 @@ pub enum ValidationWarning {
         /// Suggested index to connect to (if exactly one index in same directory)
         suggested_index: Option<PathBuf>,
     },
-    /// A non-markdown file is referenced in `contents` (should be in `attachments` instead).
+    /// A non-markdown file is referenced in `contents`.
+    ///
+    /// `contents` entries must be markdown files. Binary assets belong in
+    /// `attachments` wrapped by a markdown attachment note (a file with an
+    /// `attachment:` property pointing at the binary).
     InvalidContentsRef {
         /// The index file containing the invalid reference
         index: PathBuf,
         /// The non-markdown file that was referenced
         target: String,
+    },
+    /// An `attachments` entry doesn't point at a markdown attachment note.
+    ///
+    /// Under the current attachment model, `attachments` must contain markdown
+    /// "attachment notes" whose frontmatter carries an `attachment:` property
+    /// pointing at the actual binary asset. Two shapes are rejected:
+    /// - A raw binary path (`foo.HEIC`, `image.png`, …) — legacy flat format.
+    /// - A markdown file that lacks an `attachment:` frontmatter property —
+    ///   it's just a regular note, not an attachment note.
+    InvalidAttachmentRef {
+        /// The index file containing the invalid reference
+        file: PathBuf,
+        /// The entry as written in the `attachments` list
+        target: String,
+        /// Short human-readable reason (shown in the UI).
+        reason: String,
     },
     /// A file's declared `link` does not resolve back to itself.
     InvalidSelfLink {
@@ -356,6 +376,21 @@ pub enum ValidationWarning {
         /// The stale backlink value in `link_of`
         value: String,
     },
+    /// The same entry appears more than once in a frontmatter list.
+    ///
+    /// Applies to link-bearing lists (`contents`, `attachments`, `links`,
+    /// `link_of`, `attachment_of`). Duplicates are detected by canonical-link
+    /// equivalence, so `[Foo](./foo.md)` and `foo.md` collapse together.
+    DuplicateListEntry {
+        /// The file containing the list
+        file: PathBuf,
+        /// The frontmatter property name (e.g. `attachments`)
+        property: String,
+        /// The first occurrence of the duplicated value, as it appears in YAML
+        value: String,
+        /// Total number of occurrences (>= 2)
+        count: usize,
+    },
     /// A filename contains characters that are not portable across platforms.
     /// Chrome's File System Access API rejects these even on macOS/Linux.
     NonPortableFilename {
@@ -381,6 +416,8 @@ impl ValidationWarning {
             Self::OrphanBinaryFile { .. } => "Binary file not attached",
             Self::MissingPartOf { .. } => "Missing part_of reference",
             Self::InvalidContentsRef { .. } => "Non-markdown file in contents",
+            Self::InvalidAttachmentRef { .. } => "Attachment entry is not an attachment note",
+            Self::DuplicateListEntry { .. } => "Duplicate entry in frontmatter list",
             Self::InvalidSelfLink { .. } => "Invalid canonical link",
             Self::MissingBacklink { .. } => "Missing backlink",
             Self::StaleBacklink { .. } => "Stale backlink",
@@ -420,6 +457,8 @@ impl ValidationWarning {
             } => suggested_file.is_some() && suggested_remove_part_of.is_some(),
             Self::MultipleIndexes { .. } => false,
             Self::InvalidContentsRef { .. } => false,
+            Self::InvalidAttachmentRef { .. } => false,
+            Self::DuplicateListEntry { .. } => true,
             Self::InvalidSelfLink { .. } => true,
             Self::MissingBacklink { .. } => true,
             Self::StaleBacklink { .. } => true,
@@ -438,6 +477,8 @@ impl ValidationWarning {
             Self::NonPortablePath { file, .. } => Some(file),
             Self::MultipleIndexes { directory, .. } => Some(directory),
             Self::InvalidContentsRef { index, .. } => Some(index),
+            Self::InvalidAttachmentRef { file, .. } => Some(file),
+            Self::DuplicateListEntry { file, .. } => Some(file),
             Self::InvalidSelfLink { file, .. } => Some(file),
             Self::MissingBacklink { file, .. } => Some(file),
             Self::StaleBacklink { file, .. } => Some(file),
@@ -911,16 +952,14 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                                 });
 
                                 // Also check if this orphan file is missing part_of
-                                if let Ok(index) = self.ws.parse_index(&entry).await {
-                                    let is_index = index.frontmatter.contents.is_some()
-                                        || !index.frontmatter.contents_list().is_empty();
-
-                                    if !is_index && index.frontmatter.part_of.is_none() {
-                                        result.warnings.push(ValidationWarning::MissingPartOf {
-                                            file: entry.clone(),
-                                            suggested_index,
-                                        });
-                                    }
+                                if let Ok(index) = self.ws.parse_index(&entry).await
+                                    && !index.frontmatter.is_index()
+                                    && index.frontmatter.part_of.is_none()
+                                {
+                                    result.warnings.push(ValidationWarning::MissingPartOf {
+                                        file: entry.clone(),
+                                        suggested_index,
+                                    });
                                 }
                             }
                         }
@@ -1069,6 +1108,16 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         if let Ok(index) = self.ws.parse_index_with_hint(path, ctx.link_format).await {
             let dir = index.directory().unwrap_or_else(|| Path::new(""));
             let file_canonical = workspace_relative_canonical_path(path, ctx.workspace_root);
+
+            // Flag duplicate entries in any link-bearing list.
+            check_duplicate_lists(
+                ctx.result,
+                path,
+                &index.frontmatter,
+                &file_canonical,
+                ctx.link_format,
+            );
+
             if let Some(link) = index.frontmatter.link.as_deref() {
                 let parsed = link_parser::parse_link(link);
                 let resolved = link_parser::to_canonical_with_link_format(
@@ -1188,13 +1237,22 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     ctx.workspace_root.join(&child_path)
                 };
 
+                // Flag non-portable relative dot-component paths (e.g.
+                // `../foo.md`). Absolute-path portability is handled
+                // separately below for `part_of`.
+                if let Some(warning) = check_non_portable_path(path, "contents", child_ref, dir) {
+                    ctx.result.warnings.push(warning);
+                }
+
                 if !self.ws.fs_ref().exists(&absolute_child_path).await {
                     ctx.result.errors.push(ValidationError::BrokenContentsRef {
                         index: path.to_path_buf(),
                         target: child_ref.clone(),
                     });
                 } else if child_path.extension().is_none_or(|ext| ext != "md") {
-                    // Non-markdown file in contents - should be in attachments instead
+                    // Non-markdown file in contents - contents entries must be
+                    // markdown. Binary assets belong in `attachments`, wrapped
+                    // by a markdown attachment note.
                     ctx.result
                         .warnings
                         .push(ValidationWarning::InvalidContentsRef {
@@ -1216,7 +1274,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             // Check part_of if present
             if let Some(ref part_of) = index.frontmatter.part_of {
                 if is_clearly_non_portable_path(part_of) {
-                    // Non-portable path - add warning, skip exists() check
+                    // Non-portable absolute path - add warning, skip exists() check
                     ctx.result
                         .warnings
                         .push(ValidationWarning::NonPortablePath {
@@ -1226,6 +1284,11 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                             suggested: compute_suggested_portable_path(part_of, dir),
                         });
                 } else {
+                    // Flag non-portable relative dot-component paths
+                    if let Some(warning) = check_non_portable_path(path, "part_of", part_of, dir) {
+                        ctx.result.warnings.push(warning);
+                    }
+
                     // Use index.resolve_path which handles markdown links and relative paths
                     let parent_path = index.resolve_path(part_of);
                     // Make path absolute if needed
@@ -1246,11 +1309,9 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 // Non-index files should have part_of to maintain hierarchy links.
                 // Index files without part_of could be sub-roots, which is allowed.
                 // Attachment notes are managed via `attachments`, not `contents`/`part_of`.
-                let is_index = index.frontmatter.contents.is_some()
-                    || !index.frontmatter.contents_list().is_empty();
                 let is_attachment_note = index.frontmatter.attachment.is_some();
 
-                if !is_index && !is_attachment_note {
+                if !index.frontmatter.is_index() && !is_attachment_note {
                     let suggested_index = find_index_in_directory(&self.ws, dir, Some(path)).await;
                     ctx.result.warnings.push(ValidationWarning::MissingPartOf {
                         file: path.to_path_buf(),
@@ -1259,49 +1320,140 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 }
             }
 
-            // Add attachments to visited set so they're not reported as orphans
+            // Mark attachments as visited so they're not reported as orphans.
+            //
+            // An attachments entry is a markdown "attachment note" that wraps a
+            // binary asset. We mark both the note and the binary it points to
+            // as visited so neither is flagged as an orphan at workspace scan
+            // time. If the attachment target is missing, we still emit a
+            // BrokenAttachment error.
             for attachment in index.frontmatter.attachments_list() {
-                // Use index.resolve_path which handles markdown links and relative paths
+                // Flag non-portable relative dot-component paths
+                if let Some(warning) = check_non_portable_path(path, "attachments", attachment, dir)
+                {
+                    ctx.result.warnings.push(warning);
+                }
+
                 let attachment_path = index.resolve_path(attachment);
-                // Make path absolute if needed
                 let absolute_attachment_path = if attachment_path.is_absolute() {
                     attachment_path
                 } else {
                     ctx.workspace_root.join(&attachment_path)
                 };
-                if self.ws.fs_ref().exists(&absolute_attachment_path).await {
-                    ctx.visited.insert(absolute_attachment_path);
+                if !self.ws.fs_ref().exists(&absolute_attachment_path).await {
+                    ctx.result.errors.push(ValidationError::BrokenAttachment {
+                        file: path.to_path_buf(),
+                        attachment: attachment.clone(),
+                    });
+                    continue;
                 }
+                ctx.visited.insert(absolute_attachment_path.clone());
+
+                // An attachments entry must be a markdown attachment note
+                // (`.md` with an `attachment:` frontmatter property). Anything
+                // else is the legacy flat format and we flag it so the user
+                // can migrate.
+                if let Some(reason) = self
+                    .attachment_entry_invalid_reason(&absolute_attachment_path)
+                    .await
+                {
+                    ctx.result
+                        .warnings
+                        .push(ValidationWarning::InvalidAttachmentRef {
+                            file: path.to_path_buf(),
+                            target: attachment.clone(),
+                            reason,
+                        });
+                    continue;
+                }
+
+                // If this is an attachment note, also mark the binary it
+                // wraps as visited so orphan scanning ignores it.
+                self.mark_attachment_binary_visited(
+                    &absolute_attachment_path,
+                    ctx.link_format,
+                    ctx.workspace_root,
+                    ctx.visited,
+                )
+                .await;
             }
         }
 
         Ok(())
     }
 
+    /// Decide whether a resolved `attachments[]` entry is a valid markdown
+    /// attachment note. Returns `None` if it is, or `Some(reason)` with a
+    /// short human-readable explanation if it is not.
+    ///
+    /// Rules:
+    /// - Extension must be `.md` (case-insensitive).
+    /// - The parsed file must expose an `attachment:` frontmatter property.
+    async fn attachment_entry_invalid_reason(&self, entry: &Path) -> Option<String> {
+        let is_markdown = entry
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+        if !is_markdown {
+            return Some(
+                "not a markdown attachment note (wrap the binary in a `.md` note with an `attachment:` property)"
+                    .to_string(),
+            );
+        }
+
+        match self.ws.parse_index(entry).await {
+            Ok(note) if note.frontmatter.attachment.is_some() => None,
+            Ok(_) => Some(
+                "markdown file is not an attachment note (missing `attachment:` frontmatter property)"
+                    .to_string(),
+            ),
+            Err(_) => Some("could not parse file as an attachment note".to_string()),
+        }
+    }
+
+    /// Parse a markdown file as a potential attachment note and, if it has an
+    /// `attachment:` property pointing at a binary asset, mark that binary as
+    /// visited so the orphan scanner doesn't flag it.
+    async fn mark_attachment_binary_visited(
+        &self,
+        note_path: &Path,
+        link_format: Option<LinkFormat>,
+        workspace_root: &Path,
+        visited: &mut HashSet<PathBuf>,
+    ) {
+        let Ok(note) = self.ws.parse_index_with_hint(note_path, link_format).await else {
+            return;
+        };
+        let Some(ref attachment_ref) = note.frontmatter.attachment else {
+            return;
+        };
+        let binary_path = note.resolve_path(attachment_ref);
+        let absolute_binary_path = if binary_path.is_absolute() {
+            binary_path
+        } else {
+            workspace_root.join(&binary_path)
+        };
+        if self.ws.fs_ref().exists(&absolute_binary_path).await {
+            visited.insert(absolute_binary_path);
+        }
+    }
+
     /// Try to find the workspace root by searching for a root index file in parent directories.
     ///
-    /// Looks for README.md, index.md, or *.index.md files that could be workspace roots.
-    /// Returns None if no root index is found.
+    /// Walks up from `start_path` asking `Workspace::find_any_index_in_dir`
+    /// at each level. The first directory whose index has no `part_of` is the
+    /// root. Returns `None` if no root index is found within 10 levels.
     async fn find_workspace_root(&self, start_path: &Path) -> Option<PathBuf> {
         let mut current = start_path.parent()?;
 
-        // Search up to 10 levels to avoid infinite loops
         for _ in 0..10 {
-            // Check for common root index files
-            for name in &["README.md", "index.md"] {
-                let candidate = current.join(name);
-                if self.ws.fs_ref().exists(&candidate).await {
-                    // Check if this looks like a root index (has contents but no part_of)
-                    if let Ok(index) = self.ws.parse_index(&candidate).await
-                        && index.frontmatter.part_of.is_none()
-                        && index.frontmatter.is_index()
-                    {
-                        return Some(current.to_path_buf());
-                    }
-                }
+            if let Ok(Some(candidate)) = self.ws.find_any_index_in_dir(current).await
+                && let Ok(index) = self.ws.parse_index(&candidate).await
+                && index.frontmatter.is_root()
+            {
+                return Some(current.to_path_buf());
             }
 
-            // Move up to parent directory
             current = current.parent()?;
         }
 
@@ -1321,15 +1473,14 @@ impl<FS: AsyncFileSystem> Validator<FS> {
     pub async fn validate_file(&self, file_path: &Path) -> Result<ValidationResult> {
         let mut result = ValidationResult::default();
 
-        // Normalize path
-        let path = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            std::env::current_dir().unwrap_or_default().join(file_path)
-        };
-
-        // Canonicalize to remove . and .. components if possible
-        let path = path.canonicalize().unwrap_or(path);
+        // Strip `.`/`..` components without touching the filesystem. We
+        // deliberately avoid `canonicalize()`: it fails on WASM and on the
+        // in-memory filesystem, and follows symlinks which we don't want.
+        //
+        // We also don't force the path to be absolute — each filesystem
+        // backend (real, in-memory, WASM) handles relative paths according
+        // to its own conventions, and the validator is agnostic.
+        let path = normalize_path(file_path);
 
         if !self.ws.fs_ref().exists(&path).await {
             return Err(crate::error::DiaryxError::InvalidPath {
@@ -1372,6 +1523,16 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         if let Ok(index) = self.ws.parse_index_with_hint(&path, link_format).await {
             let dir = index.directory().unwrap_or_else(|| Path::new(""));
             let file_canonical = workspace_relative_canonical_path(&path, &workspace_root);
+
+            // Flag duplicate entries in any link-bearing list.
+            check_duplicate_lists(
+                &mut result,
+                &path,
+                &index.frontmatter,
+                &file_canonical,
+                link_format,
+            );
+
             if let Some(link) = index.frontmatter.link.as_deref() {
                 let parsed = link_parser::parse_link(link);
                 let resolved = link_parser::to_canonical_with_link_format(
@@ -1469,17 +1630,21 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 }
             }
 
-            // Collect listed files (normalized to just filenames for comparison)
+            // Collect listed contents entries as normalized absolute PathBufs
+            // so we can compare directory entries against them without losing
+            // directory information (filename-only matching would collide on
+            // siblings with the same basename across subdirectories).
             let contents_list = index.frontmatter.contents_list();
-            let listed_files: HashSet<String> = contents_list
+            let listed_files: HashSet<PathBuf> = contents_list
                 .iter()
-                .filter_map(|p| {
-                    // Parse markdown link to extract the actual path
-                    let parsed = link_parser::parse_link(p);
-                    Path::new(&parsed.path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
+                .map(|child_ref| {
+                    let resolved = index.resolve_path(child_ref);
+                    let absolute = if resolved.is_absolute() {
+                        resolved
+                    } else {
+                        workspace_root.join(&resolved)
+                    };
+                    normalize_path(&absolute)
                 })
                 .collect();
 
@@ -1490,13 +1655,21 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
                 // Make path absolute if needed by joining with workspace root
                 let absolute_child_path = if child_path.is_absolute() {
-                    child_path
+                    child_path.clone()
                 } else {
                     workspace_root.join(&child_path)
                 };
 
                 if !self.ws.fs_ref().exists(&absolute_child_path).await {
                     result.errors.push(ValidationError::BrokenContentsRef {
+                        index: path.clone(),
+                        target: child_ref.clone(),
+                    });
+                } else if child_path.extension().is_none_or(|ext| ext != "md") {
+                    // Non-markdown file in contents - contents entries must be
+                    // markdown. Binary assets belong in `attachments`, wrapped
+                    // by a markdown attachment note.
+                    result.warnings.push(ValidationWarning::InvalidContentsRef {
                         index: path.clone(),
                         target: child_ref.clone(),
                     });
@@ -1539,11 +1712,9 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 // Index files without part_of are potential root indexes, which is allowed
                 // Attachment notes are managed via `attachments`, not `contents`/`part_of`
                 // But if it has no contents AND no part_of, it's definitely orphaned
-                let is_index = index.frontmatter.contents.is_some()
-                    || !index.frontmatter.contents_list().is_empty();
                 let is_attachment_note = index.frontmatter.attachment.is_some();
 
-                if !is_index && !is_attachment_note {
+                if !index.frontmatter.is_index() && !is_attachment_note {
                     // Regular file with no part_of = orphan
                     // Try to find an index in the same directory to suggest
                     let suggested_index = find_index_in_directory(&self.ws, dir, Some(&path)).await;
@@ -1573,25 +1744,40 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     workspace_root.join(&attachment_path)
                 };
 
-                // Check if attachment exists
-                if !self.ws.fs_ref().exists(&absolute_attachment_path).await {
-                    result.errors.push(ValidationError::BrokenAttachment {
-                        file: path.clone(),
-                        attachment: attachment.clone(),
-                    });
-                }
-
                 // Check if attachment path is non-portable
                 if let Some(warning) =
                     check_non_portable_path(&path, "attachments", attachment, dir)
                 {
                     result.warnings.push(warning);
                 }
+
+                // Check if attachment exists
+                if !self.ws.fs_ref().exists(&absolute_attachment_path).await {
+                    result.errors.push(ValidationError::BrokenAttachment {
+                        file: path.clone(),
+                        attachment: attachment.clone(),
+                    });
+                    continue;
+                }
+
+                // Verify the entry points at a valid markdown attachment note.
+                if let Some(reason) = self
+                    .attachment_entry_invalid_reason(&absolute_attachment_path)
+                    .await
+                {
+                    result
+                        .warnings
+                        .push(ValidationWarning::InvalidAttachmentRef {
+                            file: path.clone(),
+                            target: attachment.clone(),
+                            reason,
+                        });
+                }
             }
 
             // Check for unlisted .md files in the same directory
             // Only if this file has contents (is an index)
-            if (!contents_list.is_empty() || index.frontmatter.contents.is_some())
+            if index.frontmatter.is_index()
                 && let Ok(entries) = self.ws.fs_ref().list_files(dir).await
             {
                 let this_filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -1599,18 +1785,28 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 // Collect exclude patterns from this index and all ancestors
                 let inherited_exclude_patterns = self.collect_exclude_patterns(&path).await;
 
-                // Collect all attachments referenced by this index
-                // Parse markdown links to extract the actual path
-                let referenced_attachments: HashSet<String> = index
+                // Collect all attachments referenced by this index as
+                // normalized absolute paths, so we can compare directory
+                // entries against them without losing directory information.
+                //
+                // Note: under the current attachment model, `attachments`
+                // entries point at markdown attachment *notes* (not binaries
+                // directly). A binary sitting in the same directory as this
+                // index is therefore correctly reported as an orphan — the
+                // expected layout is `_attachments/<file>.<ext>` wrapped by
+                // `_attachments/<file>.<ext>.md`.
+                let referenced_attachments: HashSet<PathBuf> = index
                     .frontmatter
                     .attachments_list()
                     .iter()
-                    .filter_map(|p| {
-                        let parsed = link_parser::parse_link(p);
-                        Path::new(&parsed.path)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .map(|s| s.to_string())
+                    .map(|attachment_ref| {
+                        let resolved = index.resolve_path(attachment_ref);
+                        let absolute = if resolved.is_absolute() {
+                            resolved
+                        } else {
+                            workspace_root.join(&resolved)
+                        };
+                        normalize_path(&absolute)
                     })
                     .collect();
 
@@ -1663,16 +1859,26 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                                 if fname == this_filename {
                                     continue;
                                 }
-                                // Check if it's an index file (README.md, index.md, or *.index.md)
-                                let lower = fname.to_lowercase();
-                                if lower == "readme.md"
-                                    || lower == "index.md"
-                                    || lower.ends_with(".index.md")
-                                {
+
+                                // Parse the entry once to answer both "is this
+                                // another index in the same directory?" and
+                                // "is this an attachment note?". A file is an
+                                // index iff its frontmatter has a `contents`
+                                // property — filename is irrelevant.
+                                let parsed_entry = self.ws.parse_index(&entry_path).await.ok();
+                                let is_other_index = parsed_entry
+                                    .as_ref()
+                                    .is_some_and(|idx| idx.frontmatter.is_index());
+                                let is_attachment_note = parsed_entry
+                                    .as_ref()
+                                    .is_some_and(|idx| idx.frontmatter.attachment.is_some());
+
+                                if is_other_index {
                                     other_indexes.push(entry_path.clone());
                                 }
                                 // Check if this markdown file is in contents
-                                if !listed_files.contains(fname) {
+                                let entry_normalized = normalize_path(&entry_path);
+                                if !listed_files.contains(&entry_normalized) {
                                     // Check if file matches any exclude pattern (inherited from ancestors)
                                     let is_excluded =
                                         inherited_exclude_patterns.iter().any(|pattern| {
@@ -1684,31 +1890,20 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                                             )
                                         });
 
-                                    if !is_excluded {
-                                        // Skip attachment notes - they use `attachments`
-                                        // lists, not `contents`/`part_of`.
-                                        let is_attachment_note = if let Ok(idx) =
-                                            self.ws.parse_index(&entry_path).await
-                                        {
-                                            idx.frontmatter.attachment.is_some()
-                                        } else {
-                                            false
-                                        };
-
-                                        if !is_attachment_note {
-                                            result.warnings.push(ValidationWarning::OrphanFile {
-                                                file: entry_path,
-                                                suggested_index: Some(path.clone()),
-                                            });
-                                        }
+                                    if !is_excluded && !is_attachment_note {
+                                        result.warnings.push(ValidationWarning::OrphanFile {
+                                            file: entry_path,
+                                            suggested_index: Some(path.clone()),
+                                        });
                                     }
                                 }
                             }
                         }
                         Some(ext) if !ext.eq_ignore_ascii_case("md") => {
                             // Binary file - check if it's referenced by attachments
+                            let entry_normalized = normalize_path(&entry_path);
                             if let Some(fname) = filename
-                                && !referenced_attachments.contains(fname)
+                                && !referenced_attachments.contains(&entry_normalized)
                             {
                                 // Check if file matches any exclude pattern (inherited from ancestors)
                                 let is_excluded =
@@ -1786,9 +1981,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         let Ok(sub_index) = self.ws.parse_index(&sub_entry).await else {
                             continue;
                         };
-                        let is_sub_index = sub_index.frontmatter.contents.is_some()
-                            || !sub_index.frontmatter.contents_list().is_empty();
-                        if !is_sub_index {
+                        if !sub_index.frontmatter.is_index() {
                             continue;
                         }
                         // Skip attachment notes - they use `attachments`, not
@@ -1797,7 +1990,8 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                             continue;
                         }
 
-                        if listed_files.contains(fname) {
+                        let sub_normalized = normalize_path(&sub_entry);
+                        if listed_files.contains(&sub_normalized) {
                             continue;
                         }
 
@@ -1904,8 +2098,68 @@ fn list_contains_canonical_link(
     })
 }
 
-/// Find a single index file in a directory. Returns Some if exactly one index found, None otherwise.
-/// Excludes the file specified in `exclude` from the search.
+/// Emit `DuplicateListEntry` warnings for every link-bearing list on an
+/// index file. Covers `contents`, `attachments`, `links`, `link_of`, and
+/// `attachment_of`. Duplicate detection uses canonical-link equivalence so
+/// `[Foo](./foo.md)` and `foo.md` collapse together.
+fn check_duplicate_lists(
+    result: &mut ValidationResult,
+    file: &Path,
+    frontmatter: &crate::workspace::IndexFrontmatter,
+    file_canonical: &str,
+    link_format: Option<LinkFormat>,
+) {
+    let properties: &[(&str, &[String])] = &[
+        ("contents", frontmatter.contents_list()),
+        ("attachments", frontmatter.attachments_list()),
+        ("links", frontmatter.links_list()),
+        ("link_of", frontmatter.link_of_list()),
+        ("attachment_of", frontmatter.attachment_of_list()),
+    ];
+    for (property, values) in properties {
+        if values.len() < 2 {
+            continue;
+        }
+        push_duplicate_list_warnings(result, file, property, values, file_canonical, link_format);
+    }
+}
+
+/// Emit `DuplicateListEntry` warnings for any entries in a link-bearing list
+/// that collapse to the same canonical path. The first occurrence is kept as
+/// the warning's `value` so the UI shows what the user actually wrote.
+fn push_duplicate_list_warnings(
+    result: &mut ValidationResult,
+    file: &Path,
+    property: &str,
+    values: &[String],
+    file_canonical: &str,
+    link_format: Option<LinkFormat>,
+) {
+    // IndexMap preserves insertion order so warnings are emitted in list order.
+    let mut groups: indexmap::IndexMap<String, (String, usize)> = indexmap::IndexMap::new();
+    for raw in values {
+        let canonical = canonicalize_link_value(raw, file_canonical, link_format);
+        groups
+            .entry(canonical)
+            .and_modify(|(_, count)| *count += 1)
+            .or_insert_with(|| (raw.clone(), 1));
+    }
+    for (_, (first_value, count)) in groups {
+        if count > 1 {
+            result.warnings.push(ValidationWarning::DuplicateListEntry {
+                file: file.to_path_buf(),
+                property: property.to_string(),
+                value: first_value,
+                count,
+            });
+        }
+    }
+}
+
+/// Find a single index file in a directory. Returns `Some` iff exactly one
+/// index is found. A file is an index iff its frontmatter has a `contents`
+/// property (same rule as `IndexFrontmatter::is_index`). Filename is never
+/// consulted. Excludes the file specified in `exclude` from the search.
 async fn find_index_in_directory<FS: AsyncFileSystem>(
     ws: &Workspace<FS>,
     dir: &Path,
@@ -1915,42 +2169,22 @@ async fn find_index_in_directory<FS: AsyncFileSystem>(
 
     if let Ok(entries) = ws.fs_ref().list_files(dir).await {
         for entry_path in entries {
-            // Skip the excluded file
             if let Some(excl) = exclude
                 && entry_path == excl
             {
                 continue;
             }
 
-            // Only check markdown files
-            if entry_path.extension().is_some_and(|ext| ext == "md") {
-                // If it's a file (not a dir), try to parse it as an index
-                if !ws.fs_ref().is_dir(&entry_path).await
-                    && let Ok(index) = ws.parse_index(&entry_path).await
-                {
-                    // Check if it has contents (is an index)
-                    let is_index = index.frontmatter.contents.is_some()
-                        || !index.frontmatter.contents_list().is_empty();
-
-                    // Also consider typical index filenames if they could be empty
-                    // but 2025_12.md implies it likely has content.
-                    // For auto-fix, we prefer files that are clearly indexes.
-                    if is_index {
-                        indexes.push(entry_path);
-                    } else {
-                        // Fallback: check typical filenames if contents are empty/missing
-                        // to support newly created index files
-                        if let Some(fname) = entry_path.file_name().and_then(|n| n.to_str()) {
-                            let lower = fname.to_lowercase();
-                            if lower == "readme.md"
-                                || lower == "index.md"
-                                || lower.ends_with(".index.md")
-                            {
-                                indexes.push(entry_path);
-                            }
-                        }
-                    }
-                }
+            if entry_path.extension().is_none_or(|ext| ext != "md") {
+                continue;
+            }
+            if ws.fs_ref().is_dir(&entry_path).await {
+                continue;
+            }
+            if let Ok(index) = ws.parse_index(&entry_path).await
+                && index.frontmatter.is_index()
+            {
+                indexes.push(entry_path);
             }
         }
     }
@@ -2026,48 +2260,33 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
 
     // ==================== Internal Frontmatter Helpers ====================
 
-    /// Get a frontmatter property from a file
+    /// Get a frontmatter property from a file. Returns `None` if the file
+    /// doesn't exist, has no frontmatter, or the key is missing.
     async fn get_frontmatter_property(
         &self,
         path: &Path,
         key: &str,
     ) -> Option<crate::yaml_value::YamlValue> {
         let content = self.fs.read_to_string(path).await.ok()?;
-
-        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
-            return None;
-        }
-
-        let rest = &content[4..];
-        let end_idx = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n"))?;
-
-        let frontmatter_str = &rest[..end_idx];
-        let frontmatter: indexmap::IndexMap<String, crate::yaml_value::YamlValue> =
-            serde_yaml::from_str(frontmatter_str).ok()?;
-        frontmatter.get(key).cloned()
+        let parsed = crate::frontmatter::parse_or_empty(&content).ok()?;
+        crate::frontmatter::get_property(&parsed.frontmatter, key).cloned()
     }
 
-    /// Set a frontmatter property in a file
+    /// Set a frontmatter property in a file, creating the file (and
+    /// frontmatter block) if necessary.
     async fn set_frontmatter_property(
         &self,
         path: &Path,
         key: &str,
         value: crate::yaml_value::YamlValue,
     ) -> Result<()> {
-        let content = match self.fs.read_to_string(path).await {
-            Ok(c) => c,
+        let (mut frontmatter, body) = match self.fs.read_to_string(path).await {
+            Ok(content) => {
+                let parsed = crate::frontmatter::parse_or_empty(&content)?;
+                (parsed.frontmatter, parsed.body)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Create new file with just this property
-                let mut frontmatter = indexmap::IndexMap::new();
-                frontmatter.insert(key.to_string(), value);
-                let yaml_str = serde_yaml::to_string(&frontmatter)?;
-                let new_content = format!("---\n{}---\n", yaml_str);
-                return self.fs.write_file(path, &new_content).await.map_err(|e| {
-                    crate::error::DiaryxError::FileWrite {
-                        path: path.to_path_buf(),
-                        source: e,
-                    }
-                });
+                (indexmap::IndexMap::new(), String::new())
             }
             Err(e) => {
                 return Err(crate::error::DiaryxError::FileRead {
@@ -2077,25 +2296,8 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             }
         };
 
-        let (mut frontmatter, body) =
-            if content.starts_with("---\n") || content.starts_with("---\r\n") {
-                let rest = &content[4..];
-                if let Some(idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
-                    let frontmatter_str = &rest[..idx];
-                    let body = &rest[idx + 5..];
-                    let fm: indexmap::IndexMap<String, crate::yaml_value::YamlValue> =
-                        serde_yaml::from_str(frontmatter_str)?;
-                    (fm, body.to_string())
-                } else {
-                    (indexmap::IndexMap::new(), content)
-                }
-            } else {
-                (indexmap::IndexMap::new(), content)
-            };
-
-        frontmatter.insert(key.to_string(), value);
-        let yaml_str = serde_yaml::to_string(&frontmatter)?;
-        let new_content = format!("---\n{}---\n{}", yaml_str, body);
+        crate::frontmatter::set_property(&mut frontmatter, key, value);
+        let new_content = crate::frontmatter::serialize(&frontmatter, &body)?;
 
         self.fs.write_file(path, &new_content).await.map_err(|e| {
             crate::error::DiaryxError::FileWrite {
@@ -2105,33 +2307,20 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         })
     }
 
-    /// Remove a frontmatter property from a file
+    /// Remove a frontmatter property from a file. A missing file or missing
+    /// property is treated as a no-op.
     async fn remove_frontmatter_property(&self, path: &Path, key: &str) -> Result<()> {
-        let content = match self.fs.read_to_string(path).await {
-            Ok(c) => c,
-            Err(_) => return Ok(()), // File doesn't exist, nothing to remove
+        let Ok(content) = self.fs.read_to_string(path).await else {
+            return Ok(()); // File doesn't exist — nothing to remove.
         };
 
-        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
-            return Ok(()); // No frontmatter
+        let mut parsed = crate::frontmatter::parse_or_empty(&content)?;
+        if parsed.frontmatter.is_empty() {
+            return Ok(()); // No frontmatter or malformed block.
         }
+        crate::frontmatter::remove_property(&mut parsed.frontmatter, key);
 
-        let rest = &content[4..];
-        let end_idx = match rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
-            Some(idx) => idx,
-            None => return Ok(()), // Malformed frontmatter
-        };
-
-        let frontmatter_str = &rest[..end_idx];
-        let body = &rest[end_idx + 5..];
-
-        let mut frontmatter: indexmap::IndexMap<String, crate::yaml_value::YamlValue> =
-            serde_yaml::from_str(frontmatter_str)?;
-        frontmatter.shift_remove(key);
-
-        let yaml_str = serde_yaml::to_string(&frontmatter)?;
-        let new_content = format!("---\n{}---\n{}", yaml_str, body);
-
+        let new_content = crate::frontmatter::serialize(&parsed.frontmatter, &parsed.body)?;
         self.fs.write_file(path, &new_content).await.map_err(|e| {
             crate::error::DiaryxError::FileWrite {
                 path: path.to_path_buf(),
@@ -2449,13 +2638,58 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         }
     }
 
-    /// Add an orphan binary file to an index's attachments.
+    /// Wrap an orphan binary file in a markdown attachment note and add that
+    /// note to an index's `attachments` list.
+    ///
+    /// Under the current attachment model, `attachments` must contain markdown
+    /// "attachment notes" — a note has an `attachment:` property pointing at
+    /// the binary asset. This fix creates such a note next to the binary (if
+    /// one doesn't already exist) and links the note — not the binary — into
+    /// the index.
     pub async fn fix_orphan_binary_file(&self, index: &Path, file: &Path) -> FixResult {
-        let file_rel = relative_path_from_file_to_target(index, file);
+        // The attachment note lives next to the binary, with `.md` appended so
+        // it keeps the extension visible (e.g. `photo.jpg.md`).
+        let Some(binary_filename) = file.file_name().and_then(|n| n.to_str()) else {
+            return FixResult::failure(format!(
+                "Cannot derive filename for binary {}",
+                file.display()
+            ));
+        };
+        let Some(parent_dir) = file.parent() else {
+            return FixResult::failure(format!(
+                "Binary {} has no parent directory",
+                file.display()
+            ));
+        };
+        let note_path = parent_dir.join(format!("{binary_filename}.md"));
+
+        // Create the attachment note if it doesn't already exist.
+        if !self.fs.exists(&note_path).await {
+            let self_link = self.format_self_link(&note_path).await;
+            let attachment_link = self.format_attachment_link(file, &note_path).await;
+            let content = format!(
+                "---\ntitle: {title}\nlink: \"{self_link}\"\nattachment: \"{attachment_link}\"\n---\n",
+                title = binary_filename,
+            );
+            if let Err(e) = self.fs.write_file(&note_path, &content).await {
+                return FixResult::failure(format!(
+                    "Failed to create attachment note {}: {}",
+                    note_path.display(),
+                    e
+                ));
+            }
+        }
+
+        // Reference the NOTE (not the binary) from the index's attachments.
+        let note_link = self.format_link(&note_path, index).await;
 
         match self.get_frontmatter_property(index, "attachments").await {
             Some(crate::yaml_value::YamlValue::Sequence(mut items)) => {
-                items.push(crate::yaml_value::YamlValue::String(file_rel.clone()));
+                if !items.iter().any(
+                    |v| matches!(v, crate::yaml_value::YamlValue::String(s) if s == &note_link),
+                ) {
+                    items.push(crate::yaml_value::YamlValue::String(note_link.clone()));
+                }
                 match self
                     .set_frontmatter_property(
                         index,
@@ -2465,8 +2699,8 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     .await
                 {
                     Ok(_) => FixResult::success(format!(
-                        "Added '{}' to attachments in {}",
-                        file_rel,
+                        "Wrapped '{}' in attachment note and added to {}",
+                        file.display(),
                         index.display()
                     )),
                     Err(e) => FixResult::failure(format!(
@@ -2476,34 +2710,54 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     )),
                 }
             }
-            None => {
-                // No attachments yet, create it
-                match self
-                    .set_frontmatter_property(
-                        index,
-                        "attachments",
-                        crate::yaml_value::YamlValue::Sequence(vec![
-                            crate::yaml_value::YamlValue::String(file_rel.clone()),
-                        ]),
-                    )
-                    .await
-                {
-                    Ok(_) => FixResult::success(format!(
-                        "Added '{}' to new attachments in {}",
-                        file_rel,
-                        index.display()
-                    )),
-                    Err(e) => FixResult::failure(format!(
-                        "Failed to create attachments in {}: {}",
-                        index.display(),
-                        e
-                    )),
-                }
-            }
+            None => match self
+                .set_frontmatter_property(
+                    index,
+                    "attachments",
+                    crate::yaml_value::YamlValue::Sequence(vec![
+                        crate::yaml_value::YamlValue::String(note_link.clone()),
+                    ]),
+                )
+                .await
+            {
+                Ok(_) => FixResult::success(format!(
+                    "Wrapped '{}' in attachment note and added to new attachments in {}",
+                    file.display(),
+                    index.display()
+                )),
+                Err(e) => FixResult::failure(format!(
+                    "Failed to create attachments in {}: {}",
+                    index.display(),
+                    e
+                )),
+            },
             _ => FixResult::failure(format!(
                 "Could not read attachments from {}",
                 index.display()
             )),
+        }
+    }
+
+    /// Format a frontmatter `attachment:` link from a note to a binary asset.
+    /// Preserves the filename (with extension) as the link title so prettification
+    /// doesn't drop extensions like `.png`.
+    async fn format_attachment_link(&self, binary: &Path, from_note: &Path) -> String {
+        if self.root_path.is_some() {
+            let target_canonical = self.get_canonical(binary);
+            let from_canonical = self.get_canonical(from_note);
+            let title = binary
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&target_canonical)
+                .to_string();
+            link_parser::format_link_with_format(
+                &target_canonical,
+                &title,
+                self.link_format,
+                &from_canonical,
+            )
+        } else {
+            relative_path_from_file_to_target(from_note, binary)
         }
     }
 
@@ -2705,6 +2959,75 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         }
     }
 
+    /// Dedupe a frontmatter list property, preserving the first occurrence of
+    /// each canonical value.
+    ///
+    /// Duplicates are detected by canonical-link equivalence: if two entries
+    /// resolve to the same canonical path under the fixer's link format, only
+    /// the first is kept. Non-string entries pass through untouched.
+    pub async fn fix_duplicate_list_entry(&self, file: &Path, property: &str) -> FixResult {
+        let items = match self.get_frontmatter_property(file, property).await {
+            Some(crate::yaml_value::YamlValue::Sequence(items)) => items,
+            _ => {
+                return FixResult::failure(format!(
+                    "Could not read {} list from {}",
+                    property,
+                    file.display()
+                ));
+            }
+        };
+
+        let file_canonical = self.get_canonical(file);
+        let link_format = Some(self.link_format);
+
+        let mut seen_canonical: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let original_len = items.len();
+        let mut deduped: Vec<crate::yaml_value::YamlValue> = Vec::with_capacity(original_len);
+
+        for item in items {
+            match &item {
+                crate::yaml_value::YamlValue::String(raw) => {
+                    let canonical = canonicalize_link_value(raw, &file_canonical, link_format);
+                    if seen_canonical.insert(canonical) {
+                        deduped.push(item);
+                    }
+                }
+                _ => deduped.push(item),
+            }
+        }
+
+        let removed = original_len - deduped.len();
+        if removed == 0 {
+            return FixResult::success(format!(
+                "No duplicates to remove from {} in {}",
+                property,
+                file.display()
+            ));
+        }
+
+        match self
+            .set_frontmatter_property(
+                file,
+                property,
+                crate::yaml_value::YamlValue::Sequence(deduped),
+            )
+            .await
+        {
+            Ok(_) => FixResult::success(format!(
+                "Removed {removed} duplicate {property} entr{plural} from {}",
+                file.display(),
+                plural = if removed == 1 { "y" } else { "ies" },
+            )),
+            Err(e) => FixResult::failure(format!(
+                "Failed to update {} in {}: {}",
+                property,
+                file.display(),
+                e
+            )),
+        }
+    }
+
     /// Fix a circular reference by removing a contents reference from a file.
     ///
     /// This removes the specified reference from the file's `contents` array,
@@ -2867,9 +3190,13 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             ValidationWarning::StaleBacklink { file, value } => {
                 Some(self.fix_stale_backlink(file, value).await)
             }
+            ValidationWarning::DuplicateListEntry { file, property, .. } => {
+                Some(self.fix_duplicate_list_entry(file, property).await)
+            }
             // These cannot be auto-fixed
             ValidationWarning::MultipleIndexes { .. } => None,
             ValidationWarning::InvalidContentsRef { .. } => None,
+            ValidationWarning::InvalidAttachmentRef { .. } => None,
         }
     }
 
@@ -4152,6 +4479,397 @@ contents:
     }
 
     #[test]
+    fn test_attachment_binary_not_reported_as_orphan() {
+        // A binary file wrapped in an attachment note (referenced via the note's
+        // `attachment:` property) should not be flagged as OrphanBinaryFile.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("note.md"),
+            "---\ntitle: Note\npart_of: README.md\nattachments:\n  - _attachments/photo.jpg.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("_attachments/photo.jpg.md"),
+            "---\ntitle: Photo\nattachment: photo.jpg\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("_attachments/photo.jpg"), "binary content")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let orphan_binaries: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::OrphanBinaryFile { .. }))
+            .collect();
+
+        assert!(
+            orphan_binaries.is_empty(),
+            "Binary wrapped in attachment note should not be an orphan, got: {:?}",
+            orphan_binaries
+        );
+        assert!(
+            result.errors.is_empty(),
+            "Should have no errors, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_missing_attachment_produces_broken_attachment_error() {
+        // validate_workspace should flag an attachments entry that doesn't exist,
+        // matching validate_file's behavior.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\nattachments:\n  - _attachments/missing.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::BrokenAttachment { .. })),
+            "Expected BrokenAttachment error, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_attachments_raw_binary_entry_is_flagged() {
+        // Real-world case: an index lists a `.HEIC` directly in `attachments`
+        // (legacy flat format). The new model requires a markdown attachment
+        // note, so this should produce an InvalidAttachmentRef warning.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("pictures.md"),
+            "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - photo.HEIC\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("photo.HEIC"), "binary content")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let invalid: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::InvalidAttachmentRef { .. }))
+            .collect();
+        assert_eq!(
+            invalid.len(),
+            1,
+            "Expected one InvalidAttachmentRef warning, got: {:?}",
+            result.warnings
+        );
+        match invalid[0] {
+            ValidationWarning::InvalidAttachmentRef { target, .. } => {
+                assert_eq!(target, "photo.HEIC");
+            }
+            _ => unreachable!(),
+        }
+        // No BrokenAttachment since the binary exists on disk.
+        assert!(
+            result.errors.is_empty(),
+            "Should have no errors, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_attachments_markdown_without_attachment_prop_is_flagged() {
+        // An index lists a .md file in attachments, but that file is a regular
+        // note — it has no `attachment:` property — so it's not a valid
+        // attachment note. Must produce InvalidAttachmentRef.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("pictures.md"),
+            "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - notes.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("notes.md"),
+            "---\ntitle: Notes\n---\nJust a regular note, not an attachment note.\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, ValidationWarning::InvalidAttachmentRef { .. })),
+            "Expected InvalidAttachmentRef warning, got: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_attachments_valid_attachment_note_no_warning() {
+        // Positive control: a proper attachment note (.md with `attachment:`
+        // pointing at a binary) must NOT trigger InvalidAttachmentRef.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("pictures.md"),
+            "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - _attachments/photo.HEIC.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("_attachments/photo.HEIC.md"),
+            "---\ntitle: photo.HEIC\nattachment: photo.HEIC\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("_attachments/photo.HEIC"), "binary content")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let invalid: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::InvalidAttachmentRef { .. }))
+            .collect();
+        assert!(
+            invalid.is_empty(),
+            "Valid attachment note should not produce InvalidAttachmentRef, got: {:?}",
+            invalid
+        );
+    }
+
+    #[test]
+    fn test_duplicate_list_entry_string_equality() {
+        // Real-world case from pictures_index.md: the same exact value appears
+        // multiple times in `attachments`. Emit one DuplicateListEntry warning
+        // per distinct duplicated value, not one per duplicate occurrence.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("pictures.md"),
+            "---\ntitle: Pictures\npart_of: README.md\ncontents: []\n\
+             attachments:\n  - _attachments/a.md\n  - _attachments/b.md\n  \
+             - _attachments/a.md\n  - _attachments/b.md\n  - _attachments/a.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("_attachments/a.md"),
+            "---\ntitle: a\nattachment: a.jpg\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("_attachments/b.md"),
+            "---\ntitle: b\nattachment: b.jpg\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("_attachments/a.jpg"), "binary")
+            .unwrap();
+        fs.write_file(Path::new("_attachments/b.jpg"), "binary")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let dupes: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                ValidationWarning::DuplicateListEntry {
+                    property,
+                    value,
+                    count,
+                    ..
+                } => Some((property.as_str(), value.as_str(), *count)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(dupes.len(), 2, "Expected 2 dupes, got: {:?}", dupes);
+        assert!(
+            dupes
+                .iter()
+                .any(|(p, v, c)| *p == "attachments" && *v == "_attachments/a.md" && *c == 3)
+        );
+        assert!(
+            dupes
+                .iter()
+                .any(|(p, v, c)| *p == "attachments" && *v == "_attachments/b.md" && *c == 2)
+        );
+    }
+
+    #[test]
+    fn test_duplicate_list_entry_canonical_equivalence() {
+        // Two entries written in different shapes (`foo.md`, `[Foo](./foo.md)`,
+        // `./foo.md`) all resolve to the same canonical path and must count
+        // as duplicates of one another.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - foo.md\n  - '[Foo](./foo.md)'\n  - ./foo.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("foo.md"),
+            "---\ntitle: Foo\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let dupes: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::DuplicateListEntry { .. }))
+            .collect();
+        assert_eq!(
+            dupes.len(),
+            1,
+            "Expected one DuplicateListEntry warning across equivalent shapes, got: {:?}",
+            dupes
+        );
+        match dupes[0] {
+            ValidationWarning::DuplicateListEntry {
+                property,
+                value,
+                count,
+                ..
+            } => {
+                assert_eq!(property, "contents");
+                assert_eq!(value, "foo.md"); // First occurrence kept as shown
+                assert_eq!(*count, 3);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_no_duplicate_warning_for_unique_entries() {
+        // Sanity check: a list with no duplicates produces no warning.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - a.md\n  - b.md\n  - c.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("a.md"),
+            "---\ntitle: a\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("b.md"),
+            "---\ntitle: b\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("c.md"),
+            "---\ntitle: c\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let has_dupe = result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::DuplicateListEntry { .. }));
+        assert!(!has_dupe, "Unique list should not emit DuplicateListEntry");
+    }
+
+    #[test]
+    fn test_fix_duplicate_list_entry_dedupes_attachments() {
+        // The auto-fix should preserve the first occurrence of each canonical
+        // value and strip the rest, leaving a clean list.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("pictures.md"),
+            "---\ntitle: Pictures\ncontents: []\n\
+             attachments:\n  - _attachments/a.md\n  - _attachments/b.md\n  \
+             - _attachments/a.md\n  - _attachments/b.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("_attachments/a.md"),
+            "---\ntitle: a\nattachment: a.jpg\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("_attachments/b.md"),
+            "---\ntitle: b\nattachment: b.jpg\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs.clone());
+        let fixer = ValidationFixer::new(async_fs);
+        let fix_result =
+            block_on_test(fixer.fix_duplicate_list_entry(Path::new("pictures.md"), "attachments"));
+        assert!(fix_result.success, "fix failed: {}", fix_result.message);
+
+        // Re-parse and confirm the list is now just the two unique entries.
+        let content = fs.read_to_string(Path::new("pictures.md")).unwrap();
+        let parsed = crate::frontmatter::parse_or_empty(&content).unwrap();
+        let attachments = crate::frontmatter::get_string_array(&parsed.frontmatter, "attachments");
+        assert_eq!(
+            attachments,
+            vec![
+                "_attachments/a.md".to_string(),
+                "_attachments/b.md".to_string()
+            ],
+            "Expected deduped list preserving first occurrences"
+        );
+    }
+
+    #[test]
     fn test_temp_files_excluded_from_validation() {
         // Temp files (.bak, .tmp, .swap) from atomic writes should not produce warnings
         let fs = make_test_fs();
@@ -4212,7 +4930,106 @@ contents:
         );
     }
 
-    // Note: Testing exclude patterns in validate_file is skipped because validate_file
-    // uses path canonicalization which doesn't work with InMemoryFileSystem.
-    // The workspace validation test covers the exclude patterns functionality.
+    #[test]
+    fn test_multiple_indexes_detection_is_content_based() {
+        // MultipleIndexes should flag any .md file in the dir whose frontmatter
+        // has `contents:`, regardless of filename. A `README.md` WITHOUT contents
+        // is not an index; a `journal.md` WITH contents is.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - journal.md\n---\n",
+        )
+        .unwrap();
+        // journal.md is a real index (has `contents:`) even though its filename
+        // doesn't match README/index/*.index.md.
+        fs.write_file(
+            Path::new("journal.md"),
+            "---\ntitle: Journal\ncontents: []\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result = block_on_test(validator.validate_file(Path::new("README.md"))).unwrap();
+
+        let multi: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                ValidationWarning::MultipleIndexes { indexes, .. } => Some(indexes),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            multi.len(),
+            1,
+            "Expected one MultipleIndexes warning, got {:?}",
+            result.warnings
+        );
+        assert_eq!(multi[0].len(), 2);
+        assert!(multi[0].iter().any(|p| p.ends_with("journal.md")));
+        assert!(multi[0].iter().any(|p| p.ends_with("README.md")));
+    }
+
+    #[test]
+    fn test_readme_without_contents_is_not_a_second_index() {
+        // A README.md-named file without a `contents:` property is not an index;
+        // having it alongside a real index should not raise MultipleIndexes.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("journal.md"),
+            "---\ntitle: Journal\ncontents:\n  - README.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Placeholder\npart_of: journal.md\n---\nThis is not an index.\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result = block_on_test(validator.validate_file(Path::new("journal.md"))).unwrap();
+
+        let has_multi = result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::MultipleIndexes { .. }));
+        assert!(
+            !has_multi,
+            "README.md without `contents:` should not count as a second index, got: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_validate_file_works_with_in_memory_fs() {
+        // Regression: validate_file used to call path.canonicalize(), which
+        // silently no-ops on the real FS but makes the function unusable on
+        // InMemoryFileSystem (and WASM). Confirm a plain relative path works.
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("note.md"),
+            "---\ntitle: Note\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result = block_on_test(validator.validate_file(Path::new("note.md"))).unwrap();
+
+        assert!(
+            result.is_ok(),
+            "validate_file should succeed for valid file, got errors: {:?}",
+            result.errors
+        );
+        assert_eq!(result.files_checked, 1);
+    }
 }

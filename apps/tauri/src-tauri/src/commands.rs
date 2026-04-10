@@ -2291,7 +2291,7 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
         // Workspace goes in Documents so users can access via Files app
         let default_workspace = document_dir.join("Diaryx");
         // Config stays in Application Support (internal)
-        let config_path = data_dir.join("config.toml");
+        let config_path = data_dir.join("config.md");
 
         Ok(AppPaths {
             data_dir,
@@ -2332,7 +2332,7 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
                 message: format!("Failed to get config directory: {}", e),
                 path: None,
             })?
-            .join("config.toml");
+            .join("config.md");
 
         // Default workspace in home directory for desktop
         let default_workspace = if cfg!(all(target_os = "macos", feature = "apple")) {

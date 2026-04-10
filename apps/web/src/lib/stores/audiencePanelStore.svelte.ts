@@ -2,12 +2,14 @@
  * Audience Panel UI state store.
  *
  * Manages the floating audience panel's open/close state, mode (view vs paint),
- * and the active paint brush. Follows the same singleton pattern as other lib stores.
+ * and the active paint brushes. Follows the same singleton pattern as other lib stores.
  */
 
 export type AudiencePanelMode = "view" | "paint";
 
-/** Special brush value that clears visibility from text/entries. */
+/** Special brush value that clears visibility from text/entries. Mutually
+ *  exclusive with audience brushes — selecting Clear drops audiences, selecting
+ *  an audience drops Clear. */
 export const CLEAR_BRUSH = "__clear__";
 
 /** Callback registered by the Editor to apply the brush to the current selection. */
@@ -16,7 +18,9 @@ export type ApplyPaintBrushFn = () => boolean;
 function createAudiencePanelStore() {
   let panelOpen = $state(false);
   let mode = $state<AudiencePanelMode>("view");
-  let paintBrush = $state<string | null>(null);
+  // Ordered list of picked brushes. Either a list of audience names (in the
+  // order the user picked them) or exactly [CLEAR_BRUSH] — never a mix.
+  let paintBrushes = $state<string[]>([]);
   let applyPaintBrushFn = $state<ApplyPaintBrushFn | null>(null);
   // True iff the editor currently has a non-empty text selection. The editor
   // pushes updates to this flag so the panel's "Apply to selection" button can
@@ -26,16 +30,15 @@ function createAudiencePanelStore() {
   // A transient brush is an audience the user just typed in but hasn't yet
   // applied to any file. It lives only in panel state until either (a) a file
   // gets painted with it (then it persists in frontmatter and shows up via
-  // getAvailableAudiences), or (b) the user moves to a different brush, in
-  // which case it vanishes.
+  // getAvailableAudiences), or (b) the user toggles it out of the picked set
+  // without painting, in which case it vanishes.
   let transientAudience = $state<string | null>(null);
   let transientPainted = $state(false);
 
-  function clearTransientIfUnpainted() {
+  function dropTransientIfUnpainted() {
     if (transientAudience !== null && !transientPainted) {
       transientAudience = null;
     }
-    transientPainted = false;
   }
 
   return {
@@ -47,14 +50,18 @@ function createAudiencePanelStore() {
       return mode;
     },
 
-    /** The active paint brush — an audience name, CLEAR_BRUSH, or null (no brush). */
-    get paintBrush() {
-      return paintBrush;
+    /** The active paint brushes, in pick order. Empty means no brush is active. */
+    get paintBrushes(): readonly string[] {
+      return paintBrushes;
     },
 
     /** Name of an audience that exists only in panel state (not yet on disk), or null. */
     get transientAudience() {
       return transientAudience;
+    },
+
+    get hasEditorSelection() {
+      return hasEditorSelection;
     },
 
     openPanel(initialMode?: AudiencePanelMode) {
@@ -64,7 +71,7 @@ function createAudiencePanelStore() {
 
     closePanel() {
       panelOpen = false;
-      paintBrush = null;
+      paintBrushes = [];
       transientAudience = null;
       transientPainted = false;
     },
@@ -72,35 +79,74 @@ function createAudiencePanelStore() {
     setMode(newMode: AudiencePanelMode) {
       mode = newMode;
       if (newMode === "view") {
-        paintBrush = null;
+        paintBrushes = [];
         transientAudience = null;
         transientPainted = false;
       }
     },
 
-    setBrush(name: string | null) {
-      if (transientAudience !== null && name !== transientAudience) {
-        clearTransientIfUnpainted();
+    /** Toggle a brush in the picked set. CLEAR_BRUSH is mutually exclusive
+     *  with audience brushes — picking Clear wipes audiences, picking an
+     *  audience wipes Clear. */
+    toggleBrush(name: string) {
+      if (name === CLEAR_BRUSH) {
+        if (paintBrushes.length === 1 && paintBrushes[0] === CLEAR_BRUSH) {
+          paintBrushes = [];
+        } else {
+          // Switching from audiences → clear: drop any unpainted transient.
+          dropTransientIfUnpainted();
+          paintBrushes = [CLEAR_BRUSH];
+        }
+        return;
       }
-      paintBrush = name;
+      // Audience brush toggle
+      if (paintBrushes.length === 1 && paintBrushes[0] === CLEAR_BRUSH) {
+        paintBrushes = [name];
+        return;
+      }
+      if (paintBrushes.includes(name)) {
+        paintBrushes = paintBrushes.filter((b) => b !== name);
+        if (name === transientAudience && !transientPainted) {
+          transientAudience = null;
+        }
+      } else {
+        paintBrushes = [...paintBrushes, name];
+      }
     },
 
-    /** Create a brand-new audience as a transient brush. The audience does not
-     *  exist in any file's frontmatter yet — it materializes only when the user
-     *  paints something with it. */
+    /** Explicit set (used by the rename flow to swap an old name for a new one). */
+    setBrushes(next: readonly string[]) {
+      paintBrushes = [...next];
+      if (
+        transientAudience !== null &&
+        !transientPainted &&
+        !paintBrushes.includes(transientAudience)
+      ) {
+        transientAudience = null;
+      }
+    },
+
+    /** Create a brand-new audience as a transient brush and add it to the
+     *  picked set. The audience does not exist in any file's frontmatter yet —
+     *  it materializes only when the user paints something with it. */
     createTransientBrush(name: string) {
       transientAudience = name;
       transientPainted = false;
-      paintBrush = name;
+      // Selecting an audience brush is mutually exclusive with CLEAR_BRUSH.
+      if (paintBrushes.length === 1 && paintBrushes[0] === CLEAR_BRUSH) {
+        paintBrushes = [name];
+      } else if (!paintBrushes.includes(name)) {
+        paintBrushes = [...paintBrushes, name];
+      }
     },
 
-    /** Called by the host after a successful paint operation. If the active
-     *  brush is a transient one, this marks it as "real" so switching brushes
-     *  later won't drop it. */
+    /** Called by the host after a successful paint operation. If the transient
+     *  audience is among the active brushes, this marks it as "real" so
+     *  toggling it off later won't drop it. */
     notePainted() {
       if (
         transientAudience !== null &&
-        paintBrush === transientAudience
+        paintBrushes.includes(transientAudience)
       ) {
         transientPainted = true;
       }
@@ -113,10 +159,6 @@ function createAudiencePanelStore() {
       transientPainted = false;
     },
 
-    get hasEditorSelection() {
-      return hasEditorSelection;
-    },
-
     /** Pushed by the editor whenever its text selection changes. */
     setHasEditorSelection(value: boolean) {
       hasEditorSelection = value;
@@ -127,7 +169,7 @@ function createAudiencePanelStore() {
       applyPaintBrushFn = fn;
     },
 
-    /** Apply the active brush to the current editor text selection. Returns true if applied. */
+    /** Apply the active brushes to the current editor text selection. Returns true if applied. */
     applyBrushToSelection(): boolean {
       return applyPaintBrushFn?.() ?? false;
     },
@@ -139,6 +181,7 @@ let sharedStore: ReturnType<typeof createAudiencePanelStore> | null = null;
 export function getAudiencePanelStore() {
   if (typeof window === "undefined") {
     // SSR fallback
+    const emptyList: readonly string[] = [];
     return {
       get panelOpen() {
         return false;
@@ -146,8 +189,8 @@ export function getAudiencePanelStore() {
       get mode(): AudiencePanelMode {
         return "view";
       },
-      get paintBrush() {
-        return null as string | null;
+      get paintBrushes(): readonly string[] {
+        return emptyList;
       },
       get transientAudience() {
         return null as string | null;
@@ -158,7 +201,8 @@ export function getAudiencePanelStore() {
       openPanel: (_mode?: AudiencePanelMode) => {},
       closePanel: () => {},
       setMode: (_mode: AudiencePanelMode) => {},
-      setBrush: (_name: string | null) => {},
+      toggleBrush: (_name: string) => {},
+      setBrushes: (_next: readonly string[]) => {},
       createTransientBrush: (_name: string) => {},
       notePainted: () => {},
       confirmTransientPersisted: () => {},

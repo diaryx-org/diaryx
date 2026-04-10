@@ -401,7 +401,7 @@ fn handle_init(
     });
 
     // Initialize config
-    match Config::init_with_options(dir.clone()) {
+    match Config::init(dir.clone()) {
         Ok(_) => {
             println!("✓ Initialized diaryx configuration");
             println!("  Default workspace: {}", dir.display());

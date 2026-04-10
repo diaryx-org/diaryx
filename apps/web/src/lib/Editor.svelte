@@ -1903,13 +1903,13 @@
 
   function applyPaintBrush(): boolean {
     if (!editor || readonly) return false;
-    const brush = audiencePanelStore.paintBrush;
-    if (!brush) return false;
+    const brushes = audiencePanelStore.paintBrushes;
+    if (brushes.length === 0) return false;
 
     const { from, to } = editor.state.selection;
     if (from === to) return false;
 
-    const isClear = brush === CLEAR_BRUSH;
+    const isClear = brushes.length === 1 && brushes[0] === CLEAR_BRUSH;
 
     if (isClear) {
       try { editor.chain().focus().unsetVisibility().run(); } catch { /* noop */ }
@@ -1921,9 +1921,9 @@
         state.doc.resolve(to).parentOffset === state.doc.resolve(to).parent.content.size;
 
       if (isFullBlock) {
-        editor.chain().focus().setVisibilityBlock({ audiences: [brush] }).run();
+        editor.chain().focus().setVisibilityBlock({ audiences: [...brushes] }).run();
       } else {
-        editor.chain().focus().setVisibility({ audiences: [brush] }).run();
+        editor.chain().focus().setVisibility({ audiences: [...brushes] }).run();
       }
     }
     return true;

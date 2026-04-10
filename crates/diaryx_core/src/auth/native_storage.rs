@@ -70,9 +70,7 @@ impl NativeFileAuthStorage {
     }
 
     fn load_credentials_blocking(&self) -> Option<AuthCredentials> {
-        read_credentials_file(&self.path)
-            .or_else(|| read_legacy_toml_credentials(&self.path))
-            .or_else(load_legacy_credentials)
+        read_credentials_file(&self.path).or_else(load_legacy_credentials)
     }
 
     fn save_credentials_blocking(&self, credentials: &AuthCredentials) -> Result<()> {
@@ -103,32 +101,8 @@ fn read_credentials_file(path: &Path) -> Option<AuthCredentials> {
     }
 
     let contents = fs::read_to_string(path).ok()?;
-
-    // If it starts with frontmatter delimiters, parse as YAML frontmatter
-    if contents.starts_with("---\n") || contents.starts_with("---\r\n") {
-        let auth_file: AuthFile = crate::frontmatter::parse_typed(&contents).ok()?;
-        return Some(auth_file.credentials);
-    }
-
-    // Otherwise try TOML (legacy auth.toml that was renamed to auth.md)
-    toml::from_str(&contents).ok()
-}
-
-/// Try to read the legacy auth.toml file and migrate to auth.md.
-fn read_legacy_toml_credentials(md_path: &Path) -> Option<AuthCredentials> {
-    let toml_path = md_path.with_extension("toml");
-    if !toml_path.exists() {
-        return None;
-    }
-
-    let contents = fs::read_to_string(&toml_path).ok()?;
-    let credentials: AuthCredentials = toml::from_str(&contents).ok()?;
-
-    // Migrate: write as markdown and remove old file
-    let _ = write_credentials_file(md_path, &credentials);
-    let _ = fs::remove_file(&toml_path);
-
-    Some(credentials)
+    let auth_file: AuthFile = crate::frontmatter::parse_typed(&contents).ok()?;
+    Some(auth_file.credentials)
 }
 
 fn write_credentials_file(path: &Path, credentials: &AuthCredentials) -> Result<()> {
@@ -257,34 +231,5 @@ mod tests {
                 workspace_id: Some("remote-1".into()),
             })
         );
-    }
-
-    #[test]
-    fn migrates_from_toml_to_md() {
-        let temp = tempfile::tempdir().unwrap();
-        let toml_path = temp.path().join("auth.toml");
-        let md_path = temp.path().join("auth.md");
-
-        // Write legacy TOML file
-        let credentials = AuthCredentials {
-            server_url: "https://sync.example.com".into(),
-            session_token: Some("token-legacy".into()),
-            email: Some("legacy@example.com".into()),
-            workspace_id: None,
-        };
-        let toml_str = toml::to_string_pretty(&credentials).unwrap();
-        fs::write(&toml_path, toml_str).unwrap();
-
-        let storage = NativeFileAuthStorage::new(md_path.clone());
-        let loaded = storage.load_credentials_blocking().unwrap();
-        assert_eq!(loaded.session_token.as_deref(), Some("token-legacy"));
-
-        // TOML file should be gone, MD file should exist
-        assert!(!toml_path.exists());
-        assert!(md_path.exists());
-
-        // MD file should have frontmatter
-        let contents = fs::read_to_string(&md_path).unwrap();
-        assert!(contents.starts_with("---\n"));
     }
 }

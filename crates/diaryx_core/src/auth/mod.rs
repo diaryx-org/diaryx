@@ -26,12 +26,12 @@
 //! let creds = service.verify_magic_link("token123", Some("CLI")).await?;
 //! ```
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
+#[cfg(not(target_arch = "wasm32"))]
 mod native_storage;
 mod service;
 mod types;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use native_storage::NativeFileAuthStorage;
 pub use service::AuthService;
 pub use types::*;

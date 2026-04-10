@@ -40,12 +40,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[cfg(feature = "toml-config")]
 use crate::error::{DiaryxError, Result};
-#[cfg(feature = "toml-config")]
 use crate::fs::AsyncFileSystem;
-#[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
-use crate::fs::{FileSystem, SyncToAsyncFs};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::fs::{FileSystem, RealFileSystem, SyncToAsyncFs};
 use crate::link_parser::LinkFormat;
 use crate::workspace_registry::{WorkspaceEntry, WorkspaceRegistry};
 
@@ -258,7 +256,6 @@ impl Config {
     // ========================================================================
 
     /// Load config from a specific path using an AsyncFileSystem.
-    #[cfg(feature = "toml-config")]
     pub async fn load_from<FS: AsyncFileSystem>(fs: &FS, path: &std::path::Path) -> Result<Self> {
         let contents = fs
             .read_to_string(path)
@@ -268,21 +265,11 @@ impl Config {
                 source: e,
             })?;
 
-        // Detect format: if path ends in .toml or content doesn't start with ---, parse as TOML
-        let is_toml = path.extension().is_some_and(|ext| ext == "toml")
-            || (!contents.starts_with("---\n") && !contents.starts_with("---\r\n"));
-
-        if is_toml {
-            let config: Config = toml::from_str(&contents)?;
-            Ok(config)
-        } else {
-            let config: Config = crate::frontmatter::parse_typed(&contents)?;
-            Ok(config)
-        }
+        let config: Config = crate::frontmatter::parse_typed(&contents)?;
+        Ok(config)
     }
 
     /// Save config to a specific path using an AsyncFileSystem.
-    #[cfg(feature = "toml-config")]
     pub async fn save_to<FS: AsyncFileSystem>(
         &self,
         fs: &FS,
@@ -301,7 +288,6 @@ impl Config {
     }
 
     /// Load config from an AsyncFileSystem, returning default if not found.
-    #[cfg(feature = "toml-config")]
     pub async fn load_from_or_default<FS: AsyncFileSystem>(
         fs: &FS,
         path: &std::path::Path,
@@ -322,19 +308,19 @@ impl Config {
     // blocking executor. On WASM, filesystem access is expected to be async.
 
     /// Sync wrapper for [`Config::load_from`].
-    #[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load_from_sync<FS: FileSystem>(fs: FS, path: &std::path::Path) -> Result<Self> {
         futures_lite::future::block_on(Self::load_from(&SyncToAsyncFs::new(fs), path))
     }
 
     /// Sync wrapper for [`Config::save_to`].
-    #[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn save_to_sync<FS: FileSystem>(&self, fs: FS, path: &std::path::Path) -> Result<()> {
         futures_lite::future::block_on(self.save_to(&SyncToAsyncFs::new(fs), path))
     }
 
     /// Sync wrapper for [`Config::load_from_or_default`].
-    #[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load_from_or_default_sync<FS: FileSystem>(
         fs: FS,
         path: &std::path::Path,
@@ -377,7 +363,7 @@ impl Default for Config {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
+#[cfg(not(target_arch = "wasm32"))]
 impl Config {
     /// Get the config file path (~/.config/diaryx/config.md)
     /// Only available on native platforms
@@ -385,88 +371,29 @@ impl Config {
         dirs::config_dir().map(|dir| dir.join("diaryx").join("config.md"))
     }
 
-    /// Legacy TOML config path for migration.
-    fn legacy_config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|dir| dir.join("diaryx").join("config.toml"))
-    }
-
     /// Load config from default location, or return default if file doesn't exist.
-    /// Automatically migrates from `config.toml` to `config.md` if needed.
     /// Only available on native platforms
     pub fn load() -> Result<Self> {
-        // Try new config.md first
-        if let Some(path) = Self::config_path()
-            && path.exists()
-        {
-            let contents = std::fs::read_to_string(&path)?;
-            let config: Config = crate::frontmatter::parse_typed(&contents)?;
-            return Ok(config);
+        let Some(path) = Self::config_path() else {
+            return Ok(Config::default());
+        };
+        if !path.exists() {
+            return Ok(Config::default());
         }
-
-        // Try legacy config.toml and migrate
-        if let Some(legacy_path) = Self::legacy_config_path()
-            && legacy_path.exists()
-        {
-            let contents = std::fs::read_to_string(&legacy_path)?;
-            let mut config: Config = toml::from_str(&contents)?;
-            // Ensure workspace fields are populated after TOML migration
-            if config.title.is_empty() {
-                config.title = default_config_title();
-            }
-            if config.contents.is_empty() {
-                config.contents = default_config_contents();
-            }
-            // Save as new format and remove legacy file
-            config.save()?;
-            let _ = std::fs::remove_file(&legacy_path);
-            return Ok(config);
-        }
-
-        // Return default config if no file exists
-        Ok(Config::default())
+        Self::load_from_sync(RealFileSystem, &path)
     }
 
     /// Save config to default location as markdown with YAML frontmatter.
     /// Only available on native platforms
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path().ok_or(DiaryxError::NoConfigDir)?;
-
-        // Create config directory if it doesn't exist
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let contents = crate::frontmatter::serialize_typed(self)?;
-        std::fs::write(&path, contents)?;
-
-        Ok(())
+        self.save_to_sync(RealFileSystem, &path)
     }
 
-    /// Initialize config with user-provided values
+    /// Initialize config with the given default workspace and save to default location.
     /// Only available on native platforms
     pub fn init(default_workspace: PathBuf) -> Result<Self> {
-        Self::init_with_options(default_workspace)
-    }
-
-    /// Initialize config with user-provided values.
-    /// Only available on native platforms
-    pub fn init_with_options(default_workspace: PathBuf) -> Result<Self> {
-        let config = Config {
-            title: default_config_title(),
-            contents: default_config_contents(),
-            default_workspace,
-            editor: None,
-            link_format: LinkFormat::default(),
-            sync_server_url: None,
-            sync_session_token: None,
-            sync_email: None,
-            sync_workspace_id: None,
-            git: GitConfig::default(),
-            workspaces: Vec::new(),
-            workspace_bookmarks: HashMap::new(),
-            icloud_enabled: false,
-        };
-
+        let config = Config::new(default_workspace);
         config.save()?;
         Ok(config)
     }

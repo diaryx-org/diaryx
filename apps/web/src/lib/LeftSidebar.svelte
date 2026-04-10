@@ -553,6 +553,10 @@
         return warning.directory ?? null;
       case 'InvalidContentsRef':
         return warning.index ?? null;
+      case 'InvalidAttachmentRef':
+        return warning.file ?? null;
+      case 'DuplicateListEntry':
+        return warning.file ?? null;
       default:
         return null;
     }
@@ -1192,7 +1196,7 @@
     if (event && event.button === 2) return;
 
     // Paint mode: intercept click to paint the entry instead of navigating
-    if (audiencePanelStore.panelOpen && audiencePanelStore.mode === "paint" && audiencePanelStore.paintBrush && onPaintEntry) {
+    if (audiencePanelStore.panelOpen && audiencePanelStore.mode === "paint" && audiencePanelStore.paintBrushes.length > 0 && onPaintEntry) {
       event?.preventDefault();
       onPaintEntry(path);
       return;

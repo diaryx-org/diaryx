@@ -96,6 +96,13 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   flows still accept direct binary body refs (for example raw HTML `<img src>`
   and `<picture><source srcset>` paths) so existing body media does not need to
   become note-backed before it can render.
+- Validation follows attachment notes: when an index lists an attachment note
+  in `attachments`, the validator parses the note and marks the binary that its
+  `attachment:` property points at as visited, so the orphan scanner never
+  flags note-wrapped binaries. A missing `attachments` target (note or binary)
+  still produces a `BrokenAttachment` error. The `fix_orphan_binary_file` fix
+  creates a sibling attachment note next to the binary and links the note
+  (not the binary) into the index's `attachments` list.
 - The singular attachment-note `attachment` property is also normalized through
   the attachment-aware link pipeline, so plain canonical binary paths are read
   correctly and rewritten back into the workspace link format on save.

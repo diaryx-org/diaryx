@@ -41,7 +41,7 @@ It distinguishes between "index" files and "content" or "leaf" files. An "index"
 > diaryx init
 ✓ Initialized diaryx configuration
   Default workspace: /Users/your_username/diaryx
-  Config file: /Users/your_username/<config-path>/diaryx/config.toml
+  Config file: /Users/your_username/<config-path>/diaryx/config.md
 ✓ Initialized workspace
   Index file: /Users/your_username/diaryx/README.md
 > diaryx w info

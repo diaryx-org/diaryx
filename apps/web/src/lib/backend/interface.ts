@@ -79,19 +79,23 @@ export interface ValidationWarning {
     | "MultipleIndexes"
     | "OrphanBinaryFile"
     | "MissingPartOf"
-    | "InvalidContentsRef";
-  file?: string; // For OrphanFile, UnlistedFile, NonPortablePath, OrphanBinaryFile, MissingPartOf
+    | "InvalidContentsRef"
+    | "InvalidAttachmentRef"
+    | "DuplicateListEntry";
+  file?: string; // For OrphanFile, UnlistedFile, NonPortablePath, OrphanBinaryFile, MissingPartOf, InvalidAttachmentRef, DuplicateListEntry
   files?: string[]; // For CircularReference
   path?: string; // For UnlinkedEntry
   is_dir?: boolean; // For UnlinkedEntry
   index?: string; // For UnlistedFile, InvalidContentsRef
-  property?: string; // For NonPortablePath
-  value?: string; // For NonPortablePath
+  property?: string; // For NonPortablePath, DuplicateListEntry
+  value?: string; // For NonPortablePath, DuplicateListEntry
   suggested?: string; // For NonPortablePath
   directory?: string; // For MultipleIndexes
   indexes?: string[]; // For MultipleIndexes
   suggested_index?: string | null; // For OrphanBinaryFile, MissingPartOf
-  target?: string; // For InvalidContentsRef
+  target?: string; // For InvalidContentsRef, InvalidAttachmentRef
+  reason?: string; // For InvalidAttachmentRef
+  count?: number; // For DuplicateListEntry
 }
 
 export interface ValidationResult {

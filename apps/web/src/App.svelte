@@ -2334,14 +2334,16 @@
     }
   }
 
-  /** Paint-mode: toggle the active brush audience on an entry's frontmatter. */
+  /** Paint-mode: toggle each active brush audience on an entry's frontmatter.
+   *  Clear brush empties the list; otherwise each picked brush XORs against
+   *  the entry's current audience set in pick order. */
   async function handlePaintEntry(entryPath: string) {
     if (!api) return;
-    const brush = audiencePanelStore.paintBrush;
-    if (!brush) return;
+    const brushes = audiencePanelStore.paintBrushes;
+    if (brushes.length === 0) return;
 
     const rootPath = tree?.path ?? "";
-    const isClear = brush === "__clear__";
+    const isClear = brushes.length === 1 && brushes[0] === "__clear__";
 
     try {
       const fm = await api.getFrontmatter(entryPath);
@@ -2350,10 +2352,16 @@
       let updated: string[];
       if (isClear) {
         updated = [];
-      } else if (current.includes(brush)) {
-        updated = current.filter((a) => a !== brush);
       } else {
-        updated = [...current, brush];
+        updated = [...current];
+        for (const brush of brushes) {
+          const idx = updated.indexOf(brush);
+          if (idx !== -1) {
+            updated.splice(idx, 1);
+          } else {
+            updated.push(brush);
+          }
+        }
       }
 
       // Optimistic UI: update the tree node immediately

@@ -51,21 +51,20 @@
   function selectBrush(name: string) {
     if (editingAudience === name) return;
     if (editingAudience !== null) cancelEdit();
-    if (panelStore.paintBrush === name) {
-      panelStore.setBrush(null);
-    } else {
-      panelStore.setBrush(name);
-    }
+    panelStore.toggleBrush(name);
   }
 
   function selectClearBrush() {
     if (editingAudience !== null) cancelEdit();
-    if (panelStore.paintBrush === CLEAR_BRUSH) {
-      panelStore.setBrush(null);
-    } else {
-      panelStore.setBrush(CLEAR_BRUSH);
-    }
+    panelStore.toggleBrush(CLEAR_BRUSH);
   }
+
+  let audienceBrushes = $derived(
+    panelStore.paintBrushes.filter((b) => b !== CLEAR_BRUSH),
+  );
+  let clearBrushActive = $derived(
+    panelStore.paintBrushes.length === 1 && panelStore.paintBrushes[0] === CLEAR_BRUSH,
+  );
 
   function handleApplyToSelection() {
     const applied = panelStore.applyBrushToSelection();
@@ -94,8 +93,10 @@
     }
     const existing = audiences.find((a) => a.toLowerCase() === name.toLowerCase());
     if (existing) {
-      // Already a real audience — just select it as the brush.
-      panelStore.setBrush(existing);
+      // Already a real audience — just add it to the picked set if missing.
+      if (!panelStore.paintBrushes.includes(existing)) {
+        panelStore.toggleBrush(existing);
+      }
       cancelAdd();
       return;
     }
@@ -197,7 +198,11 @@
         }),
       );
       colorStore.renameColor(oldName, newName);
-      if (panelStore.paintBrush === oldName) panelStore.setBrush(newName);
+      if (panelStore.paintBrushes.includes(oldName)) {
+        panelStore.setBrushes(
+          panelStore.paintBrushes.map((b) => (b === oldName ? newName : b)),
+        );
+      }
       templateContextStore.bumpAudiencesVersion();
       toast.success(
         `Renamed "${oldName}" \u2192 "${newName}" across ${paths.length} entr${paths.length === 1 ? "y" : "ies"}`,
@@ -220,25 +225,28 @@
 
 <div class="paint-mode">
   <div class="brush-hint">
-    {#if panelStore.paintBrush}
-      {#if panelStore.paintBrush === CLEAR_BRUSH}
-        Click entries in sidebar, or select text and apply.
-      {:else}
-        Click entries or select text to paint
-        <span class="brush-name">
-          <span class="dot {getAudienceColor(panelStore.paintBrush, colorStore.audienceColors)}"></span>
-          {panelStore.paintBrush}
-        </span>
-      {/if}
+    {#if clearBrushActive}
+      Click entries in sidebar, or select text and apply.
+    {:else if audienceBrushes.length > 0}
+      Click entries or select text to toggle
+      <span class="brush-list">
+        {#each audienceBrushes as brush, i}
+          <span class="brush-name">
+            <span class="dot {getAudienceColor(brush, colorStore.audienceColors)}"></span>
+            {brush}
+          </span>
+          {#if i < audienceBrushes.length - 1}<span class="brush-sep">,</span>{/if}
+        {/each}
+      </span>
     {:else if displayedAudiences.length === 0}
       Add an audience below, then click entries or select text.
     {:else}
-      Pick a brush below, then click entries or select text.
+      Pick brushes below, then click entries or select text.
     {/if}
   </div>
 
-  <!-- Apply to selection button — only when there's a brush AND a non-empty editor selection -->
-  {#if panelStore.paintBrush && panelStore.hasEditorSelection}
+  <!-- Apply to selection button — only when brushes picked AND a non-empty editor selection -->
+  {#if panelStore.paintBrushes.length > 0 && panelStore.hasEditorSelection}
     <button
       type="button"
       class="apply-btn"
@@ -254,7 +262,7 @@
     <button
       type="button"
       class="brush-row"
-      class:active={panelStore.paintBrush === CLEAR_BRUSH}
+      class:active={clearBrushActive}
       onclick={selectClearBrush}
     >
       <Eraser class="size-3.5 text-muted-foreground" />
@@ -314,12 +322,18 @@
             <button
               type="button"
               class="brush-row"
-              class:active={panelStore.paintBrush === audience}
+              class:active={panelStore.paintBrushes.includes(audience)}
               onclick={() => selectBrush(audience)}
               {...props}
             >
               <span class="dot {getAudienceColor(audience, colorStore.audienceColors)}"></span>
               <span class="brush-name-text">{audience}</span>
+              {#if panelStore.paintBrushes.includes(audience)}
+                {@const pickOrder = panelStore.paintBrushes.indexOf(audience) + 1}
+                {#if audienceBrushes.length > 1}
+                  <span class="pick-order">{pickOrder}</span>
+                {/if}
+              {/if}
             </button>
           {/snippet}
         </ContextMenu.Trigger>
@@ -425,6 +439,33 @@
     gap: 4px;
     font-weight: 500;
     color: var(--foreground);
+  }
+
+  .brush-list {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .brush-sep {
+    color: var(--muted-foreground);
+    margin-right: 2px;
+  }
+
+  .pick-order {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--primary-foreground);
+    background: var(--primary);
+    border-radius: 8px;
+    flex-shrink: 0;
   }
 
   .apply-btn {

@@ -55,6 +55,7 @@ vi.mock("$lib/auth", () => ({
   requestMagicLink: (...args: unknown[]) => requestMagicLinkMock(...args),
   verifyMagicLink: (...args: unknown[]) => verifyMagicLinkMock(...args),
   reconnectServer: (...args: unknown[]) => reconnectServerMock(...args),
+  listUserWorkspaceNamespaces: () => Promise.resolve([]),
 }));
 
 vi.mock("$lib/auth/authStore.svelte", () => ({

@@ -210,9 +210,9 @@ async function inspectPluginForInstall(
 }
 
 export async function uninstallPlugin(pluginId: string): Promise<void> {
-  // Discover the namespace ID *before* tearing down the plugin, since the
-  // publish plugin stores it in its own config (only queryable while alive).
-  const namespaceId = await discoverPluginNamespaceId(pluginId);
+  // Read the namespace ID from host-side metadata *before* tearing down the
+  // plugin so we can clean up the namespace afterward.
+  const namespaceId = discoverPluginNamespaceId(pluginId);
 
   if (isTauri()) {
     const backend: Backend = await getBackend();
@@ -296,35 +296,20 @@ function readPluginNamespaceId(
 }
 
 /**
- * Try to discover the namespace ID owned by a plugin.  Checks host-side
- * workspace metadata first (sync plugin stores `remoteWorkspaceId`), then
- * falls back to querying the plugin itself (publish plugin stores
- * `namespace_id` in its own config via `GetPublishConfig`).
+ * Look up the namespace ID owned by a plugin from host-side workspace
+ * metadata. We deliberately do not fall back to querying the plugin itself:
+ * if the plugin failed to init (e.g. broken download), executing a command
+ * against it requires the registry to load it, which can hang or error and
+ * block the uninstall it's trying to support.
  *
- * Call this **before** the plugin WASM is torn down so the command query
- * still works.
+ * Plugins that own a namespace are expected to mirror the ID into host
+ * workspace metadata (sync plugin writes `remoteWorkspaceId`; publish plugin
+ * should write `namespace_id` alongside its own config).
  */
-async function discoverPluginNamespaceId(pluginId: string): Promise<string | null> {
+function discoverPluginNamespaceId(pluginId: string): string | null {
   const workspaceId = getCurrentWorkspaceId();
   if (!workspaceId) return null;
-
-  // 1. Check host-side workspace metadata.
-  const metadata = getPluginMetadata(workspaceId, pluginId);
-  const fromMetadata = readPluginNamespaceId(metadata);
-  if (fromMetadata) return fromMetadata;
-
-  // 2. Ask the plugin directly (best-effort; it may not support this command).
-  try {
-    const backend = await getBackend();
-    const api = createApi(backend);
-    const config = await api.executePluginCommand(pluginId, "GetPublishConfig", {});
-    const raw = (config as Record<string, unknown> | null)?.namespace_id;
-    if (typeof raw === "string" && raw.trim()) return raw;
-  } catch {
-    // Plugin doesn't support GetPublishConfig or is already gone — that's fine.
-  }
-
-  return null;
+  return readPluginNamespaceId(getPluginMetadata(workspaceId, pluginId));
 }
 
 async function cleanupPluginLocalMetadata(

@@ -18,7 +18,21 @@ import { getWorkspaceConfigStore } from '$lib/stores/workspaceConfigStore.svelte
 import { workspaceStore } from '@/models/stores';
 import { showError, showSuccess, showInfo } from '@/models/services/toastService';
 import { proxyFetch } from '$lib/backend/proxyFetch';
+import {
+  getCurrentWorkspaceId,
+  setPluginMetadata,
+} from '$lib/storage/localWorkspaceRegistry.svelte';
 import { createNamespace } from './namespaceService';
+
+const PUBLISH_PLUGIN_ID = 'diaryx.publish';
+
+/** Mirror the publish plugin's namespace ID into host workspace metadata so
+ *  uninstall (and other host code) can find it without querying the plugin. */
+function mirrorPublishNamespaceId(namespaceId: string | null) {
+  const workspaceId = getCurrentWorkspaceId();
+  if (!workspaceId) return;
+  setPluginMetadata(workspaceId, PUBLISH_PLUGIN_ID, { namespace_id: namespaceId });
+}
 
 const CONTEXT_KEY = Symbol('namespace-context');
 
@@ -218,6 +232,7 @@ export class NamespaceContext {
       this.namespaceId = config.namespace_id ?? null;
       this.subdomain = config.subdomain ?? null;
       this.audienceStates = config.audience_states ?? {};
+      mirrorPublishNamespaceId(this.namespaceId);
 
       // Verify the namespace still exists on the current server.
       // If it was created on a different server (e.g., switching from
@@ -248,6 +263,7 @@ export class NamespaceContext {
         );
         this.namespaceId = null;
         this.subdomain = null;
+        mirrorPublishNamespaceId(null);
         // Persist the cleared config so the stale ID doesn't come back
         try {
           await this.executePublishCommand('SetPublishConfig', {
@@ -318,6 +334,7 @@ export class NamespaceContext {
       try {
         const ns = await createNamespace();
         this.namespaceId = ns.id;
+        mirrorPublishNamespaceId(ns.id);
         await this.executePublishCommand('SetPublishConfig', {
           namespace_id: ns.id,
           subdomain: this.subdomain,

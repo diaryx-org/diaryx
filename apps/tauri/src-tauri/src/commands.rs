@@ -16,6 +16,7 @@ use crate::macos_security_scoped::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -114,6 +115,63 @@ type TauriBaseFs = SyncToAsyncFs<RealFileSystem>;
 /// Base filesystem type for guest mode (in-memory filesystem wrapped for async).
 type GuestBaseFs = SyncToAsyncFs<InMemoryFileSystem>;
 
+/// Latch that lets `execute()` wait for background plugin loading without
+/// losing the wakeup if loading finishes first.
+///
+/// Plain `tokio::sync::Notify::notify_waiters()` only wakes tasks that are
+/// already parked at `notified()`; if the background task finishes before
+/// the consumer reaches its await point, the wakeup is dropped and the
+/// consumer hangs forever. We close that race by storing a flag that the
+/// waiter checks both before and after registering for notification.
+pub struct PluginsReady {
+    flag: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl PluginsReady {
+    pub fn new() -> Self {
+        Self {
+            flag: AtomicBool::new(false),
+            notify: tokio::sync::Notify::new(),
+        }
+    }
+
+    /// Mark plugins as loaded and wake any current/future waiters.
+    pub fn mark_ready(&self) {
+        self.flag.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    /// Reset to "not ready" before kicking off a fresh background load.
+    pub fn reset(&self) {
+        self.flag.store(false, Ordering::Release);
+    }
+
+    /// Wait until plugins are ready. Returns immediately if already ready.
+    pub async fn wait(&self) {
+        if self.flag.load(Ordering::Acquire) {
+            return;
+        }
+        // Register for notification *before* re-checking the flag so we
+        // can't miss the wakeup: mark_ready() stores the flag before it
+        // calls notify_waiters(), so seeing `false` here means our enabled
+        // waiter is guaranteed to be woken.
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.flag.load(Ordering::Acquire) {
+            return;
+        }
+        notified.await;
+    }
+}
+
+impl Default for PluginsReady {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Global application state for the Tauri backend.
 ///
 /// Stores the active workspace path and a cached Diaryx instance that is
@@ -128,7 +186,7 @@ pub struct AppState {
     pub plugins_loaded_at: Mutex<Option<SystemTime>>,
     /// Signalled when background plugin loading completes.
     /// Commands that need plugins wait on this before retrying.
-    pub plugins_ready: Arc<tokio::sync::Notify>,
+    pub plugins_ready: Arc<PluginsReady>,
     /// Active macOS security-scoped workspace access, when needed.
     #[cfg(target_os = "macos")]
     pub workspace_access: Mutex<Option<ActiveSecurityScopedAccess>>,
@@ -140,7 +198,7 @@ impl AppState {
             workspace_path: Mutex::new(None),
             diaryx: Mutex::new(None),
             plugins_loaded_at: Mutex::new(None),
-            plugins_ready: Arc::new(tokio::sync::Notify::new()),
+            plugins_ready: Arc::new(PluginsReady::new()),
             #[cfg(target_os = "macos")]
             workspace_access: Mutex::new(None),
         }
@@ -2069,6 +2127,9 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
         let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
         *diaryx_guard = Some(Arc::clone(&basic_diaryx));
     }
+    // Arm the latch *before* spawning the bg task so any execute() call that
+    // observes the basic instance will correctly wait for the upcoming load.
+    app_state.plugins_ready.reset();
     log::info!("[get_or_init] Basic instance cached: {:?}", t0.elapsed());
 
     // Phase 2: Load plugins in the background and swap in a full instance
@@ -2080,6 +2141,19 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
         tauri::async_runtime::spawn(async move {
             let t1 = std::time::Instant::now();
             let app_state = app_handle.state::<AppState>();
+
+            // Drop guard so the latch is *always* released, even if we
+            // bail out early on a poisoned lock or panic. Without this, a
+            // failed background load would leave execute() callers parked
+            // forever waiting for plugins_ready.
+            struct ReadyGuard(Arc<PluginsReady>);
+            impl Drop for ReadyGuard {
+                fn drop(&mut self) {
+                    self.0.mark_ready();
+                }
+            }
+            let _ready_guard = ReadyGuard(Arc::clone(&app_state.plugins_ready));
+
             let workspace_path = {
                 let ws_guard = match acquire_lock(&app_state.workspace_path) {
                     Ok(g) => g,
@@ -2129,23 +2203,20 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
                 t1.elapsed()
             );
 
-            // Signal any execute() calls waiting for plugins
-            app_handle
-                .state::<AppState>()
-                .plugins_ready
-                .notify_waiters();
-
             // Notify the frontend so it can re-render with plugin support
             // (e.g. syntax highlighting, spoiler blocks).
             let _ = app_handle.emit("plugins-ready", ());
+            // _ready_guard's Drop calls mark_ready() here.
         });
     }
 
-    // For non-extism builds, just mark loaded time
+    // For non-extism builds there's no background load, so the latch is
+    // always "ready" — flip it now so any waiters short-circuit.
     #[cfg(not(feature = "extism-plugins"))]
     {
         let mut loaded_guard = acquire_lock(&app_state.plugins_loaded_at)?;
         *loaded_guard = Some(SystemTime::now());
+        app_state.plugins_ready.mark_ready();
     }
 
     Ok(basic_diaryx)
@@ -2224,7 +2295,7 @@ pub async fn execute<R: Runtime>(
                 // Plugins may still be loading in the background — wait and retry once.
                 log::info!("[execute] Plugin not loaded yet, waiting for background loading...");
                 let app_state = app.state::<AppState>();
-                app_state.plugins_ready.notified().await;
+                app_state.plugins_ready.wait().await;
                 // Re-parse the command since Command doesn't impl Clone
                 let retry_cmd: Command = serde_json::from_str(&command_json).unwrap();
                 let diaryx = get_or_init_tauri_diaryx(&app).await?;

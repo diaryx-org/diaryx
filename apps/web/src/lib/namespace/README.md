@@ -24,7 +24,11 @@ overhead for server calls.
 
 Namespace creation and object create/read/update/delete/list operations go
 through `host::namespace::*` host functions so plugins don't need HTTP
-permissions for sync-server namespace work. Those host functions now share a
+permissions for sync-server namespace work. The host also mirrors the active
+`namespace_id` into local workspace metadata via `setPluginMetadata` whenever
+it loads or rotates the publish config — that way uninstall flows can recover
+the namespace ID without round-tripping through the (possibly broken) plugin
+guest. Those host functions now share a
 single same-origin fetch helper in `plugins/extismBrowserLoader.ts`, which
 centralizes URL normalization, credential handling, timeout coverage, and error
 translation for namespace HTTP calls.

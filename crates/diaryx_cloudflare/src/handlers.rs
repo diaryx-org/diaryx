@@ -2846,7 +2846,7 @@ pub async fn ai_compat_proxy(req: Request, ctx: RouteContext<()>) -> Result<Resp
 }
 
 #[cfg(all(test, target_arch = "wasm32"))]
-mod tests {
+mod apple_root_ca_tests {
     use super::*;
     use wasm_bindgen_test::*;
 

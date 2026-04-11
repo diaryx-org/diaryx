@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod config;
+mod getrandom_shim;
 mod handlers;
 pub mod sync;
 mod tokens;

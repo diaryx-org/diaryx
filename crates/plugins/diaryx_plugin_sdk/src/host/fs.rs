@@ -40,6 +40,11 @@ pub fn read_binary(path: &str) -> Result<Vec<u8>, String> {
     if result.is_empty() {
         return Ok(Vec::new());
     }
+    // The host returns {"error": "..."} for I/O or permission errors instead of
+    // trapping, so the guest can handle missing files gracefully.
+    if let Some(msg) = super::extract_error_envelope(&result) {
+        return Err(msg);
+    }
     let parsed: serde_json::Value = serde_json::from_str(&result)
         .map_err(|e| format!("Failed to parse binary response: {e}"))?;
     let data = parsed
@@ -61,6 +66,9 @@ pub fn list_dir(path: &str) -> Result<Vec<String>, String> {
         let input = serde_json::json!({ "path": path }).to_string();
         let result =
             unsafe { host_list_dir(input) }.map_err(|e| format!("host_list_dir failed: {e}"))?;
+        if let Some(msg) = super::extract_error_envelope(&result) {
+            return Err(msg);
+        }
         serde_json::from_str(&result).map_err(|e| format!("Failed to parse dir listing: {e}"))
     }
 
@@ -78,6 +86,9 @@ pub fn list_files(prefix: &str) -> Result<Vec<String>, String> {
     let input = serde_json::json!({ "prefix": prefix }).to_string();
     let result =
         unsafe { host_list_files(input) }.map_err(|e| format!("host_list_files failed: {e}"))?;
+    if let Some(msg) = super::extract_error_envelope(&result) {
+        return Err(msg);
+    }
     serde_json::from_str(&result).map_err(|e| format!("Failed to parse file list: {e}"))
 }
 
@@ -109,6 +120,9 @@ pub fn file_exists(path: &str) -> Result<bool, String> {
     }
     if result == "false" {
         return Ok(false);
+    }
+    if let Some(msg) = super::extract_error_envelope(&result) {
+        return Err(msg);
     }
     serde_json::from_str(&result).map_err(|e| format!("Failed to parse exists result: {e}"))
 }

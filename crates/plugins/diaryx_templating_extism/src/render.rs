@@ -72,10 +72,15 @@ pub fn has_handlebars_templates(body: &str) -> bool {
 ///
 /// All frontmatter key-value pairs become template variables. Virtual properties
 /// (`filename`, `filepath`, `extension`) are added from file metadata.
+///
+/// When `viewer_audiences` is non-empty, the context also exposes:
+/// - `viewer_audience` — comma-joined string for direct interpolation
+/// - `viewer_audiences` — array for `{{#each}}` iteration
 pub fn build_context(
     frontmatter: &IndexMap<String, YamlValue>,
     file_path: &Path,
     workspace_root: Option<&Path>,
+    viewer_audiences: &[&str],
 ) -> JsonValue {
     let mut map = serde_json::Map::new();
 
@@ -104,6 +109,22 @@ pub fn build_context(
     };
     map.insert("filepath".to_string(), JsonValue::String(filepath));
 
+    if !viewer_audiences.is_empty() {
+        map.insert(
+            "viewer_audience".to_string(),
+            JsonValue::String(viewer_audiences.join(", ")),
+        );
+        map.insert(
+            "viewer_audiences".to_string(),
+            JsonValue::Array(
+                viewer_audiences
+                    .iter()
+                    .map(|a| JsonValue::String((*a).to_string()))
+                    .collect(),
+            ),
+        );
+    }
+
     JsonValue::Object(map)
 }
 
@@ -116,7 +137,7 @@ pub fn render(
 ) -> Result<String, String> {
     let preprocessed = visibility::strip_visibility_directives(body);
     let renderer = BodyTemplateRenderer::new();
-    let context = build_context(frontmatter, file_path, workspace_root);
+    let context = build_context(frontmatter, file_path, workspace_root, &[]);
     if has_handlebars_templates(&preprocessed) {
         renderer.render(&preprocessed, &context)
     } else {
@@ -133,9 +154,28 @@ pub fn render_for_audience(
     workspace_root: Option<&Path>,
     target_audience: &str,
 ) -> Result<String, String> {
-    let filtered = visibility::filter_body_for_audience(body, target_audience);
+    render_for_audiences(
+        body,
+        frontmatter,
+        file_path,
+        workspace_root,
+        &[target_audience],
+    )
+}
+
+/// Multi-audience render: filters visibility directives against any of the
+/// supplied viewer audiences and exposes them via the `viewer_audience(s)`
+/// template variables.
+pub fn render_for_audiences(
+    body: &str,
+    frontmatter: &IndexMap<String, YamlValue>,
+    file_path: &Path,
+    workspace_root: Option<&Path>,
+    viewer_audiences: &[&str],
+) -> Result<String, String> {
+    let filtered = visibility::filter_body_for_audiences(body, viewer_audiences);
     let renderer = BodyTemplateRenderer::new();
-    let context = build_context(frontmatter, file_path, workspace_root);
+    let context = build_context(frontmatter, file_path, workspace_root, viewer_audiences);
 
     if has_handlebars_templates(&filtered) {
         renderer.render(&filtered, &context)
@@ -357,13 +397,74 @@ map_val:
   key: value
 "#,
         );
-        let ctx = build_context(&fm, Path::new("test.md"), None);
+        let ctx = build_context(&fm, Path::new("test.md"), None, &[]);
         assert_eq!(ctx.get("string_val").unwrap(), "hello");
         assert_eq!(ctx.get("number_val").unwrap(), 42);
         assert_eq!(ctx.get("bool_val").unwrap(), true);
         assert!(ctx.get("null_val").unwrap().is_null());
         assert!(ctx.get("list_val").unwrap().is_array());
         assert!(ctx.get("map_val").unwrap().is_object());
+    }
+
+    #[test]
+    fn test_viewer_audience_variable_single() {
+        let fm = make_frontmatter("title: Hi");
+        let body = "Hello, {{ viewer_audience }}!";
+        let result = render_for_audience(body, &fm, Path::new("test.md"), None, "family").unwrap();
+        assert_eq!(result, "Hello, family!");
+    }
+
+    #[test]
+    fn test_viewer_audience_variable_multi() {
+        let fm = make_frontmatter("title: Hi");
+        let body = "Hello, {{ viewer_audience }}!";
+        let result = render_for_audiences(
+            body,
+            &fm,
+            Path::new("test.md"),
+            None,
+            &["family", "friends"],
+        )
+        .unwrap();
+        assert_eq!(result, "Hello, family, friends!");
+    }
+
+    #[test]
+    fn test_viewer_audiences_each_block() {
+        let fm = make_frontmatter("title: Hi");
+        let body = "{{#each viewer_audiences}}- {{this}}\n{{/each}}";
+        let result = render_for_audiences(
+            body,
+            &fm,
+            Path::new("test.md"),
+            None,
+            &["family", "friends"],
+        )
+        .unwrap();
+        assert_eq!(result, "- family\n- friends\n");
+    }
+
+    #[test]
+    fn test_viewer_audience_empty_when_no_audience() {
+        let fm = make_frontmatter("title: Hi");
+        let body = "[{{ viewer_audience }}]";
+        let result = render(body, &fm, Path::new("test.md"), None).unwrap();
+        assert_eq!(result, "[]");
+    }
+
+    #[test]
+    fn test_multi_audience_visibility_filter() {
+        let fm = make_frontmatter("title: Hi");
+        let body = ":vis[family-only]{family} :vis[friends-only]{friends}";
+        let result = render_for_audiences(
+            body,
+            &fm,
+            Path::new("test.md"),
+            None,
+            &["family", "friends"],
+        )
+        .unwrap();
+        assert_eq!(result, "family-only friends-only");
     }
 
     #[test]

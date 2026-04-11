@@ -39,6 +39,9 @@ pub fn request(
     }
     let result = unsafe { host_proxy_request(input.to_string()) }
         .map_err(|e| format!("host_proxy_request failed: {e}"))?;
+    if let Some(msg) = super::extract_error_envelope(&result) {
+        return Err(msg);
+    }
     serde_json::from_str(&result).map_err(|e| format!("Failed to parse proxy response: {e}"))
 }
 

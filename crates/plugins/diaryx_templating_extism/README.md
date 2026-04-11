@@ -59,6 +59,23 @@ This plugin owns creation-time and render-time templating end-to-end:
 - render creation-time templates with `{{variable}}` substitution
 - editor extensions via `Builtin` manifest type for TemplateVariable and ConditionalBlock
 
+### Render-time variables
+
+In addition to every frontmatter key, the following virtual variables are exposed
+to render-time templates:
+
+- `{{ filename }}` — entry file stem
+- `{{ filepath }}` — workspace-relative path
+- `{{ extension }}` — file extension
+- `{{ viewer_audience }}` — comma-joined string of the viewer's audience
+  memberships (only present when `RenderBody` is called with an `audience`)
+- `{{ viewer_audiences }}` — array form for `{{#each viewer_audiences}}…{{/each}}`
+
+`RenderBody`'s `audience` parameter accepts either a single string (single
+audience) or an array of strings (viewer belongs to multiple audiences). A
+`:vis[...]{aud}` directive is included when its tag list overlaps the viewer's
+audiences — see `diaryx_core::visibility::filter_body_for_audiences`.
+
 ## Commands
 
 - `ListTemplates` — list workspace and built-in templates

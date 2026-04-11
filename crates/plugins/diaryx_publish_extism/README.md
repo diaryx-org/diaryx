@@ -97,6 +97,7 @@ embeds can auto-size without modifying the source file in the workspace.
 | ---------------------- |
 | `host_log`             |
 | `host_read_file`       |
+| `host_read_binary`     |
 | `host_list_files`      |
 | `host_file_exists`     |
 | `host_write_file`      |

@@ -98,6 +98,23 @@ extern "ExtismHost" {
 }
 
 // ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// If `result` is a JSON object containing an `error` string field, return
+/// that field. Used by host function wrappers to detect graceful error
+/// envelopes from the host (which avoid trapping the entire guest call).
+#[allow(dead_code)]
+pub(crate) fn extract_error_envelope(result: &str) -> Option<String> {
+    if !result.starts_with('{') {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(result).ok()?;
+    let msg = value.get("error")?.as_str()?;
+    Some(msg.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Module re-exports
 // ---------------------------------------------------------------------------
 

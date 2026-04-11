@@ -877,15 +877,26 @@ fn host_read_binary(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_read_binary: lock: {e}")))?;
-    ctx.check_perm(PermissionType::ReadFiles, &path)?;
-    let bytes = futures_lite::future::block_on(ctx.fs.read_binary(Path::new(&path)))
-        .map_err(|e| ExtismError::msg(format!("host_read_binary: {e}")))?;
-    let json = serde_json::json!({
-        "data": base64::engine::general_purpose::STANDARD.encode(&bytes)
-    })
-    .to_string();
 
-    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+    if let Err(e) = ctx.check_perm(PermissionType::ReadFiles, &path) {
+        let err = serde_json::json!({ "error": e.to_string() }).to_string();
+        plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+        return Ok(());
+    }
+
+    match futures_lite::future::block_on(ctx.fs.read_binary(Path::new(&path))) {
+        Ok(bytes) => {
+            let json = serde_json::json!({
+                "data": base64::engine::general_purpose::STANDARD.encode(&bytes)
+            })
+            .to_string();
+            plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+        }
+        Err(e) => {
+            let err = serde_json::json!({ "error": format!("host_read_binary: {e}") }).to_string();
+            plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+        }
+    }
     Ok(())
 }
 
@@ -915,9 +926,19 @@ fn host_list_dir(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_list_dir: lock: {e}")))?;
-    ctx.check_perm(PermissionType::ReadFiles, &dir_path)?;
-    let files = futures_lite::future::block_on(ctx.fs.list_files(Path::new(&dir_path)))
-        .map_err(|e| ExtismError::msg(format!("host_list_dir: {e}")))?;
+    if let Err(e) = ctx.check_perm(PermissionType::ReadFiles, &dir_path) {
+        let err = serde_json::json!({ "error": e.to_string() }).to_string();
+        plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+        return Ok(());
+    }
+    let files = match futures_lite::future::block_on(ctx.fs.list_files(Path::new(&dir_path))) {
+        Ok(files) => files,
+        Err(e) => {
+            let err = serde_json::json!({ "error": format!("host_list_dir: {e}") }).to_string();
+            plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+            return Ok(());
+        }
+    };
 
     let file_strings: Vec<String> = files
         .iter()
@@ -954,9 +975,21 @@ fn host_list_files(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_list_files: lock: {e}")))?;
-    ctx.check_perm(PermissionType::ReadFiles, &prefix)?;
-    let files = futures_lite::future::block_on(ctx.fs.list_all_files_recursive(Path::new(&prefix)))
-        .map_err(|e| ExtismError::msg(format!("host_list_files: {e}")))?;
+    if let Err(e) = ctx.check_perm(PermissionType::ReadFiles, &prefix) {
+        let err = serde_json::json!({ "error": e.to_string() }).to_string();
+        plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+        return Ok(());
+    }
+    let files =
+        match futures_lite::future::block_on(ctx.fs.list_all_files_recursive(Path::new(&prefix))) {
+            Ok(files) => files,
+            Err(e) => {
+                let err =
+                    serde_json::json!({ "error": format!("host_list_files: {e}") }).to_string();
+                plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+                return Ok(());
+            }
+        };
 
     let file_strings: Vec<String> = files
         .iter()
@@ -1058,7 +1091,12 @@ fn host_file_exists(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_file_exists: lock: {e}")))?;
-    ctx.check_perm(PermissionType::ReadFiles, &path)?;
+    // Permission errors return `false` (effectively "not visible") rather than
+    // trapping, mirroring the existing graceful pattern in host_hash_file.
+    if ctx.check_perm(PermissionType::ReadFiles, &path).is_err() {
+        plugin.memory_set_val(&mut outputs[0], "false")?;
+        return Ok(());
+    }
     let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&path)));
 
     let json = serde_json::to_string(&exists)
@@ -1417,7 +1455,14 @@ fn host_secret_get(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_secret_get: lock: {e}")))?;
-    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    // Permission errors return empty (key not found) rather than trapping.
+    if ctx
+        .check_perm(PermissionType::PluginStorage, &parsed.key)
+        .is_err()
+    {
+        plugin.memory_set_val(&mut outputs[0], "")?;
+        return Ok(());
+    }
     let secret_key = ctx.secret_key(&parsed.key);
 
     let result = match ctx.secret_store.get(&secret_key) {
@@ -1453,7 +1498,12 @@ fn host_secret_set(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_secret_set: lock: {e}")))?;
-    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    // Permission errors return an error string rather than trapping.
+    if let Err(e) = ctx.check_perm(PermissionType::PluginStorage, &parsed.key) {
+        let msg = format!("host_secret_set: {e}");
+        plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
+        return Ok(());
+    }
     let secret_key = ctx.secret_key(&parsed.key);
     ctx.secret_store.set(&secret_key, &parsed.value);
 
@@ -1484,7 +1534,12 @@ fn host_secret_delete(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_secret_delete: lock: {e}")))?;
-    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    // Permission errors return an error string rather than trapping.
+    if let Err(e) = ctx.check_perm(PermissionType::PluginStorage, &parsed.key) {
+        let msg = format!("host_secret_delete: {e}");
+        plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
+        return Ok(());
+    }
     let secret_key = ctx.secret_key(&parsed.key);
     ctx.secret_store.delete(&secret_key);
 
@@ -1507,37 +1562,67 @@ fn host_run_wasi_module(
 ) -> Result<(), ExtismError> {
     use base64::Engine;
 
+    /// Build a `WasiRunResult`-shaped error envelope so guests can recover
+    /// gracefully via the SDK's `wasi::run` parser instead of trapping.
+    fn err_envelope(msg: &str) -> String {
+        serde_json::json!({
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": msg,
+            "files": serde_json::Value::Null,
+            "error": msg,
+        })
+        .to_string()
+    }
+
     let input: String = plugin.memory_get_val(&inputs[0])?;
-    let request: crate::wasi_runner::WasiRunRequest = serde_json::from_str(&input)
-        .map_err(|e| ExtismError::msg(format!("host_run_wasi_module: invalid input: {e}")))?;
+    let request: crate::wasi_runner::WasiRunRequest = match serde_json::from_str(&input) {
+        Ok(req) => req,
+        Err(e) => {
+            let msg = format!("host_run_wasi_module: invalid input: {e}");
+            plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+            return Ok(());
+        }
+    };
 
     // Load the WASM module bytes from plugin storage
     let ctx = user_data.get()?;
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_run_wasi_module: lock: {e}")))?;
-    ctx.check_perm(PermissionType::PluginStorage, &request.module_key)?;
+    if let Err(e) = ctx.check_perm(PermissionType::PluginStorage, &request.module_key) {
+        let msg = format!("host_run_wasi_module: {e}");
+        plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+        return Ok(());
+    }
     let storage_key = ctx.storage_key(&request.module_key);
-    let wasm_bytes = ctx.storage.get(&storage_key).ok_or_else(|| {
-        ExtismError::msg(format!(
-            "host_run_wasi_module: module not found in storage: {}",
-            request.module_key
-        ))
-    })?;
+    let wasm_bytes = match ctx.storage.get(&storage_key) {
+        Some(bytes) => bytes,
+        None => {
+            let msg = format!(
+                "host_run_wasi_module: module not found in storage: {}",
+                request.module_key
+            );
+            plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+            return Ok(());
+        }
+    };
     drop(ctx);
 
     // Decode input files from base64
     let decoded_files = if let Some(ref files) = request.files {
         let mut map = std::collections::HashMap::new();
         for (path, b64) in files {
-            let data = base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .map_err(|e| {
-                    ExtismError::msg(format!(
-                        "host_run_wasi_module: base64 decode for {path}: {e}"
-                    ))
-                })?;
-            map.insert(path.clone(), data);
+            match base64::engine::general_purpose::STANDARD.decode(b64) {
+                Ok(data) => {
+                    map.insert(path.clone(), data);
+                }
+                Err(e) => {
+                    let msg = format!("host_run_wasi_module: base64 decode for {path}: {e}");
+                    plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                    return Ok(());
+                }
+            }
         }
         Some(map)
     } else {
@@ -1546,26 +1631,33 @@ fn host_run_wasi_module(
 
     // Decode stdin from base64
     let stdin_bytes = if let Some(ref b64) = request.stdin {
-        Some(
-            base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .map_err(|e| {
-                    ExtismError::msg(format!("host_run_wasi_module: stdin base64 decode: {e}"))
-                })?,
-        )
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(bytes) => Some(bytes),
+            Err(e) => {
+                let msg = format!("host_run_wasi_module: stdin base64 decode: {e}");
+                plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                return Ok(());
+            }
+        }
     } else {
         None
     };
 
     // Run the module
-    let result = crate::wasi_runner::run_wasi_module(
+    let result = match crate::wasi_runner::run_wasi_module(
         &wasm_bytes,
         &request.args,
         stdin_bytes.as_deref(),
         decoded_files.as_ref(),
         request.output_files.as_deref(),
-    )
-    .map_err(|e| ExtismError::msg(format!("host_run_wasi_module: {e}")))?;
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            let msg = format!("host_run_wasi_module: {e}");
+            plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+            return Ok(());
+        }
+    };
 
     let json = serde_json::to_string(&result)
         .map_err(|e| ExtismError::msg(format!("host_run_wasi_module: serialize: {e}")))?;
@@ -1767,7 +1859,16 @@ fn host_ws_request(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_ws_request: lock: {e}")))?;
-    let result = ctx.ws_bridge.request(&input).map_err(ExtismError::msg)?;
+    // Bridge errors return as a JSON envelope so the guest can recover
+    // gracefully instead of trapping the entire `handle_command` call.
+    let result = match ctx.ws_bridge.request(&input) {
+        Ok(s) => s,
+        Err(e) => serde_json::json!({
+            "ok": false,
+            "error": format!("host_ws_request: {e}"),
+        })
+        .to_string(),
+    };
     plugin.memory_set_val(&mut outputs[0], result.as_str())?;
     Ok(())
 }
@@ -1855,10 +1956,32 @@ fn host_proxy_request(
         body_base64: Option<String>,
     }
 
-    let parsed: ProxyInput = serde_json::from_str(&input)
-        .map_err(|e| ExtismError::msg(format!("host_proxy_request: invalid input: {e}")))?;
+    /// Build an `HttpResponse`-shaped error envelope so guests can recover via
+    /// the SDK's `proxy::request` parser instead of trapping.
+    fn err_envelope(msg: &str) -> String {
+        serde_json::json!({
+            "status": 0,
+            "headers": {},
+            "body": msg,
+            "error": msg,
+        })
+        .to_string()
+    }
 
-    HostContext::validate_http_headers(&parsed.headers)?;
+    let parsed: ProxyInput = match serde_json::from_str(&input) {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = format!("host_proxy_request: invalid input: {e}");
+            plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+            return Ok(());
+        }
+    };
+
+    if let Err(e) = HostContext::validate_http_headers(&parsed.headers) {
+        let msg = format!("host_proxy_request: {e}");
+        plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+        return Ok(());
+    }
 
     // Resolve server URL and auth token from runtime context
     let (server_url, auth_token) = {
@@ -1868,13 +1991,18 @@ fn host_proxy_request(
             .map_err(|e| ExtismError::msg(format!("host_proxy_request: lock: {e}")))?;
 
         let runtime_json = ctx.runtime_context_provider.get_context(&ctx.plugin_id);
-        let server_url = runtime_json
+        let server_url = match runtime_json
             .get("server_url")
             .and_then(|v| v.as_str())
             .map(|s| s.trim_end_matches('/').to_string())
-            .ok_or_else(|| {
-                ExtismError::msg("host_proxy_request: server_url not available in runtime context")
-            })?;
+        {
+            Some(url) => url,
+            None => {
+                let msg = "host_proxy_request: server_url not available in runtime context";
+                plugin.memory_set_val(&mut outputs[0], err_envelope(msg).as_str())?;
+                return Ok(());
+            }
+        };
         let auth_token = runtime_json
             .get("auth_token")
             .and_then(|v| v.as_str())
@@ -1915,19 +2043,37 @@ fn host_proxy_request(
     }
 
     let response = if let Some(body) = &parsed.body {
-        let request = request_builder
-            .body(body.clone())
-            .map_err(|e| ExtismError::msg(format!("host_proxy_request: build request: {e}")))?;
-        agent
-            .run(request)
-            .map_err(|e| ExtismError::msg(format!("host_proxy_request: {e}")))?
+        match request_builder.body(body.clone()) {
+            Ok(request) => match agent.run(request) {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = format!("host_proxy_request: {e}");
+                    plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                    return Ok(());
+                }
+            },
+            Err(e) => {
+                let msg = format!("host_proxy_request: build request: {e}");
+                plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                return Ok(());
+            }
+        }
     } else {
-        let request = request_builder
-            .body(())
-            .map_err(|e| ExtismError::msg(format!("host_proxy_request: build request: {e}")))?;
-        agent
-            .run(request)
-            .map_err(|e| ExtismError::msg(format!("host_proxy_request: {e}")))?
+        match request_builder.body(()) {
+            Ok(request) => match agent.run(request) {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = format!("host_proxy_request: {e}");
+                    plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                    return Ok(());
+                }
+            },
+            Err(e) => {
+                let msg = format!("host_proxy_request: build request: {e}");
+                plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                return Ok(());
+            }
+        }
     };
 
     let status = response.status().as_u16();
@@ -1938,10 +2084,14 @@ fn host_proxy_request(
         }
     }
     let mut response = response;
-    let body_bytes = response
-        .body_mut()
-        .read_to_vec()
-        .map_err(|e| ExtismError::msg(format!("host_proxy_request: read body: {e}")))?;
+    let body_bytes = match response.body_mut().read_to_vec() {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            let msg = format!("host_proxy_request: read body: {e}");
+            plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+            return Ok(());
+        }
+    };
     let body = String::from_utf8_lossy(&body_bytes).to_string();
     use base64::Engine as _;
     let body_base64 = Some(base64::engine::general_purpose::STANDARD.encode(&body_bytes));
@@ -1997,17 +2147,43 @@ fn host_http_request(
         body_base64: Option<String>,
     }
 
-    let parsed: HttpInput = serde_json::from_str(&input)
-        .map_err(|e| ExtismError::msg(format!("host_http_request: invalid input: {e}")))?;
+    /// Build an `HttpResponse`-shaped error envelope so guests can recover via
+    /// the SDK's `http::request` parser instead of trapping.
+    fn err_envelope(msg: &str) -> String {
+        serde_json::json!({
+            "status": 0,
+            "headers": {},
+            "body": msg,
+            "error": msg,
+        })
+        .to_string()
+    }
 
-    HostContext::validate_http_headers(&parsed.headers)?;
+    let parsed: HttpInput = match serde_json::from_str(&input) {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = format!("host_http_request: invalid input: {e}");
+            plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+            return Ok(());
+        }
+    };
+
+    if let Err(e) = HostContext::validate_http_headers(&parsed.headers) {
+        let msg = format!("host_http_request: {e}");
+        plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+        return Ok(());
+    }
 
     {
         let ctx = user_data.get()?;
         let ctx = ctx
             .lock()
             .map_err(|e| ExtismError::msg(format!("host_http_request: lock: {e}")))?;
-        ctx.check_perm(PermissionType::HttpRequests, &parsed.url)?;
+        if let Err(e) = ctx.check_perm(PermissionType::HttpRequests, &parsed.url) {
+            let msg = format!("host_http_request: {e}");
+            plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+            return Ok(());
+        }
     }
 
     const MIN_HTTP_TIMEOUT_MS: u64 = 1_000;
@@ -2031,29 +2207,61 @@ fn host_http_request(
     }
 
     let response = if let Some(b64) = &parsed.body_base64 {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .map_err(|e| ExtismError::msg(format!("host_http_request: base64 decode: {e}")))?;
-        let request = request_builder
-            .body(bytes)
-            .map_err(|e| ExtismError::msg(format!("host_http_request: invalid request: {e}")))?;
-        agent
-            .run(request)
-            .map_err(|e| ExtismError::msg(format!("host_http_request: {e}")))?
+        let bytes = match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let msg = format!("host_http_request: base64 decode: {e}");
+                plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                return Ok(());
+            }
+        };
+        match request_builder.body(bytes) {
+            Ok(request) => match agent.run(request) {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = format!("host_http_request: {e}");
+                    plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                    return Ok(());
+                }
+            },
+            Err(e) => {
+                let msg = format!("host_http_request: invalid request: {e}");
+                plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                return Ok(());
+            }
+        }
     } else if let Some(body) = &parsed.body {
-        let request = request_builder
-            .body(body.clone())
-            .map_err(|e| ExtismError::msg(format!("host_http_request: invalid request: {e}")))?;
-        agent
-            .run(request)
-            .map_err(|e| ExtismError::msg(format!("host_http_request: {e}")))?
+        match request_builder.body(body.clone()) {
+            Ok(request) => match agent.run(request) {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = format!("host_http_request: {e}");
+                    plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                    return Ok(());
+                }
+            },
+            Err(e) => {
+                let msg = format!("host_http_request: invalid request: {e}");
+                plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                return Ok(());
+            }
+        }
     } else {
-        let request = request_builder
-            .body(())
-            .map_err(|e| ExtismError::msg(format!("host_http_request: invalid request: {e}")))?;
-        agent
-            .run(request)
-            .map_err(|e| ExtismError::msg(format!("host_http_request: {e}")))?
+        match request_builder.body(()) {
+            Ok(request) => match agent.run(request) {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = format!("host_http_request: {e}");
+                    plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                    return Ok(());
+                }
+            },
+            Err(e) => {
+                let msg = format!("host_http_request: invalid request: {e}");
+                plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+                return Ok(());
+            }
+        }
     };
 
     let status = response.status().as_u16();
@@ -2077,10 +2285,14 @@ fn host_http_request(
         }
     }
     let mut response = response;
-    let body_bytes = response
-        .body_mut()
-        .read_to_vec()
-        .map_err(|e| ExtismError::msg(format!("host_http_request: read body: {e}")))?;
+    let body_bytes = match response.body_mut().read_to_vec() {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            let msg = format!("host_http_request: read body: {e}");
+            plugin.memory_set_val(&mut outputs[0], err_envelope(&msg).as_str())?;
+            return Ok(());
+        }
+    };
     let body = String::from_utf8_lossy(&body_bytes).to_string();
     let body_base64 = Some(base64::engine::general_purpose::STANDARD.encode(&body_bytes));
 

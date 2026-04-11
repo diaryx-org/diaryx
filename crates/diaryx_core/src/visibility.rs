@@ -18,8 +18,19 @@ pub fn has_visibility_directives(body: &str) -> bool {
 }
 
 /// Filter a markdown body to content visible to `target_audience`.
+///
+/// Equivalent to [`filter_body_for_audiences`] with a single-element slice.
 pub fn filter_body_for_audience(body: &str, target_audience: &str) -> String {
-    let (filtered, _, _) = filter_segment(body, 0, Some(target_audience), false);
+    filter_body_for_audiences(body, &[target_audience])
+}
+
+/// Filter a markdown body to content visible to any of `target_audiences`.
+///
+/// A `:vis[...]` or `:::vis{...}` directive is included when its attribute list
+/// shares at least one audience tag with `target_audiences` (case-insensitive,
+/// whitespace-trimmed). An empty `target_audiences` slice strips every directive.
+pub fn filter_body_for_audiences(body: &str, target_audiences: &[&str]) -> String {
+    let (filtered, _, _) = filter_segment(body, 0, Some(target_audiences), false);
     filtered
 }
 
@@ -32,7 +43,7 @@ pub fn strip_visibility_directives(body: &str) -> String {
 fn filter_segment(
     input: &str,
     mut index: usize,
-    target_audience: Option<&str>,
+    target_audiences: Option<&[&str]>,
     stop_at_block_close: bool,
 ) -> (String, usize, bool) {
     let mut out = String::new();
@@ -46,9 +57,9 @@ fn filter_segment(
 
             if let Some((attrs, content_start)) = try_parse_vis_block_open(input, index) {
                 let (inner, next_index, closed) =
-                    filter_segment(input, content_start, target_audience, true);
+                    filter_segment(input, content_start, target_audiences, true);
                 if closed {
-                    if should_include_visibility_content(attrs, target_audience) {
+                    if should_include_visibility_content(attrs, target_audiences) {
                         out.push_str(&inner);
                     }
                     index = next_index;
@@ -58,8 +69,8 @@ fn filter_segment(
         }
 
         if let Some((content, attrs, next_index)) = try_parse_vis_inline(input, index) {
-            if should_include_visibility_content(attrs, target_audience) {
-                let (inner, _, _) = filter_segment(content, 0, target_audience, false);
+            if should_include_visibility_content(attrs, target_audiences) {
+                let (inner, _, _) = filter_segment(content, 0, target_audiences, false);
                 out.push_str(&inner);
             }
             index = next_index;
@@ -187,11 +198,13 @@ fn try_parse_vis_block_close(input: &str, index: usize) -> Option<usize> {
     Some(next_index)
 }
 
-fn should_include_visibility_content(attrs: &str, target_audience: Option<&str>) -> bool {
-    match target_audience {
-        Some(target) => attrs
-            .split_whitespace()
-            .any(|audience| audience.eq_ignore_ascii_case(target)),
+fn should_include_visibility_content(attrs: &str, target_audiences: Option<&[&str]>) -> bool {
+    match target_audiences {
+        Some(targets) => attrs.split_whitespace().any(|audience| {
+            targets
+                .iter()
+                .any(|target| audience.eq_ignore_ascii_case(target.trim()))
+        }),
         None => true,
     }
 }
@@ -240,5 +253,38 @@ mod tests {
             filter_body_for_audience(body, "public"),
             "A outer inner end"
         );
+    }
+
+    #[test]
+    fn multi_audience_includes_when_any_member_matches() {
+        let body = "Before :vis[hello]{family} after";
+        assert_eq!(
+            filter_body_for_audiences(body, &["public", "family"]),
+            "Before hello after"
+        );
+        assert_eq!(
+            filter_body_for_audiences(body, &["public", "internal"]),
+            "Before  after"
+        );
+    }
+
+    #[test]
+    fn multi_audience_block_directive() {
+        let body = "Intro\n:::vis{family friends}\nhello\n:::\nOutro";
+        assert_eq!(
+            filter_body_for_audiences(body, &["friends"]),
+            "Intro\nhello\nOutro"
+        );
+        assert_eq!(
+            filter_body_for_audiences(body, &["public", "family"]),
+            "Intro\nhello\nOutro"
+        );
+        assert_eq!(filter_body_for_audiences(body, &["public"]), "Intro\nOutro");
+    }
+
+    #[test]
+    fn empty_audience_slice_strips_all_directives() {
+        let body = "Before :vis[hello]{public} after";
+        assert_eq!(filter_body_for_audiences(body, &[]), "Before  after");
     }
 }

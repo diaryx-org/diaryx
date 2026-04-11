@@ -1004,8 +1004,9 @@ function buildHostFunctions(
           const backend = getBackendSync();
           const data = await backend.readBinary(path);
           return cp.store(JSON.stringify({ data: bytesToBase64(data) }));
-        } catch {
-          return cp.store("");
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return cp.store(JSON.stringify({ error: `host_read_binary: ${msg}` }));
         }
       },
       async host_list_files(cp: CallContext, offs: bigint) {
@@ -1029,8 +1030,9 @@ function buildHostFunctions(
             return cp.store("[]");
           }
           return cp.store(JSON.stringify(collectFilesystemTreePaths(response.data)));
-        } catch {
-          return cp.store("[]");
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return cp.store(JSON.stringify({ error: `host_list_files: ${msg}` }));
         }
       },
       async host_workspace_file_set(cp: CallContext, _offs: bigint) {
@@ -1078,6 +1080,8 @@ function buildHostFunctions(
           }
           return cp.store("false");
         } catch {
+          // Mirror native: permission/IO errors collapse to "false" so the SDK
+          // parses them as Ok(false), matching the existing graceful behavior.
           return cp.store("false");
         }
       },
@@ -1233,8 +1237,10 @@ function buildHostFunctions(
           const pluginId = opts.getPluginId();
           await setPluginSecret(pluginId, input.key, input.value ?? "");
           return cp.store("");
-        } catch {
-          return cp.store("");
+        } catch (e) {
+          // Mirror native: non-empty result string is treated as Err by SDK.
+          const msg = e instanceof Error ? e.message : String(e);
+          return cp.store(`host_secret_set: ${msg}`);
         }
       },
       async host_secret_delete(cp: CallContext, offs: bigint) {
@@ -1254,8 +1260,9 @@ function buildHostFunctions(
           const pluginId = opts.getPluginId();
           await deletePluginSecret(pluginId, input.key);
           return cp.store("");
-        } catch {
-          return cp.store("");
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return cp.store(`host_secret_delete: ${msg}`);
         }
       },
       host_get_timestamp(cp: CallContext, _offs: bigint) {
@@ -1368,8 +1375,15 @@ function buildHostFunctions(
               : e instanceof Error
                 ? e.message
                 : String(e);
+          // Include `error` field so the SDK detects this as a graceful
+          // error envelope and surfaces it as Result::Err to the guest.
           return cp.store(
-            JSON.stringify({ status: 0, headers: {}, body: msg }),
+            JSON.stringify({
+              status: 0,
+              headers: {},
+              body: msg,
+              error: `host_http_request: ${msg}`,
+            }),
           );
         }
       },
@@ -1571,6 +1585,7 @@ function buildHostFunctions(
                 exit_code: -1,
                 stdout: "",
                 stderr: "host_run_wasi_module: no input",
+                error: "host_run_wasi_module: no input",
               }),
             );
           }
@@ -1590,6 +1605,7 @@ function buildHostFunctions(
               exit_code: -1,
               stdout: "",
               stderr: `host_run_wasi_module: ${msg}`,
+              error: `host_run_wasi_module: ${msg}`,
             }),
           );
         }
@@ -1861,7 +1877,12 @@ function buildHostFunctions(
                 ? e.message
                 : String(e);
           return cp.store(
-            JSON.stringify({ status: 0, headers: {}, body: msg }),
+            JSON.stringify({
+              status: 0,
+              headers: {},
+              body: msg,
+              error: `host_proxy_request: ${msg}`,
+            }),
           );
         }
       },

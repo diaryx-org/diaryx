@@ -92,6 +92,9 @@ pub fn request_with_options(
     let input = build_request_input(method, url, headers, body, None, options);
     let result = unsafe { host_http_request(input.to_string()) }
         .map_err(|e| format!("host_http_request failed: {e}"))?;
+    if let Some(msg) = super::extract_error_envelope(&result) {
+        return Err(msg);
+    }
     serde_json::from_str(&result).map_err(|e| format!("Failed to parse HTTP response: {e}"))
 }
 
@@ -117,6 +120,9 @@ pub fn request_binary_with_options(
     let input = build_request_input(method, url, headers, None, Some(encoded), options);
     let result = unsafe { host_http_request(input.to_string()) }
         .map_err(|e| format!("host_http_request failed: {e}"))?;
+    if let Some(msg) = super::extract_error_envelope(&result) {
+        return Err(msg);
+    }
     serde_json::from_str(&result).map_err(|e| format!("Failed to parse HTTP response: {e}"))
 }
 

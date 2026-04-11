@@ -270,7 +270,17 @@ fn dispatch_command(command: &str, params: JsonValue) -> Result<JsonValue, Strin
                 .and_then(|v| v.as_str())
                 .unwrap_or("entry.md");
             let workspace_root = params.get("workspace_root").and_then(|v| v.as_str());
-            let audience = params.get("audience").and_then(|v| v.as_str());
+
+            // `audience` accepts a single string or an array of strings,
+            // representing the viewer's audience memberships.
+            let audiences: Vec<String> = match params.get("audience") {
+                Some(JsonValue::String(s)) => vec![s.clone()],
+                Some(JsonValue::Array(arr)) => arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect(),
+                _ => Vec::new(),
+            };
 
             // Convert JSON frontmatter to YAML IndexMap for the render API
             let frontmatter: IndexMap<String, YamlValue> =
@@ -282,20 +292,21 @@ fn dispatch_command(command: &str, params: JsonValue) -> Result<JsonValue, Strin
                     IndexMap::new()
                 };
 
-            let rendered = if let Some(aud) = audience {
-                render::render_for_audience(
-                    body,
-                    &frontmatter,
-                    Path::new(file_path),
-                    workspace_root.map(Path::new),
-                    aud,
-                )?
-            } else {
+            let rendered = if audiences.is_empty() {
                 render::render(
                     body,
                     &frontmatter,
                     Path::new(file_path),
                     workspace_root.map(Path::new),
+                )?
+            } else {
+                let aud_refs: Vec<&str> = audiences.iter().map(|s| s.as_str()).collect();
+                render::render_for_audiences(
+                    body,
+                    &frontmatter,
+                    Path::new(file_path),
+                    workspace_root.map(Path::new),
+                    &aud_refs,
                 )?
             };
             Ok(JsonValue::String(rendered))

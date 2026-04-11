@@ -46,5 +46,11 @@ pub fn run(request: &WasiRunRequest) -> Result<WasiRunResult, String> {
         .map_err(|e| format!("Failed to serialize WASI request: {e}"))?;
     let result = unsafe { host_run_wasi_module(input) }
         .map_err(|e| format!("host_run_wasi_module failed: {e}"))?;
+    // The host returns a `WasiRunResult`-shaped envelope with an extra `error`
+    // field for permission/runtime failures so the guest can recover instead
+    // of trapping. Detect that envelope and surface the error.
+    if let Some(msg) = super::extract_error_envelope(&result) {
+        return Err(msg);
+    }
     serde_json::from_str(&result).map_err(|e| format!("Failed to parse WASI result: {e}"))
 }

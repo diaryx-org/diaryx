@@ -40,8 +40,12 @@ fn ws_request_json(request: &WsRequest<'_>) -> Result<(), String> {
 
 /// Send a raw JSON request through the WebSocket bridge.
 pub fn raw_request(payload: &str) -> Result<String, String> {
-    unsafe { host_ws_request(payload.to_string()) }
-        .map_err(|e| format!("host_ws_request failed: {e}"))
+    let result = unsafe { host_ws_request(payload.to_string()) }
+        .map_err(|e| format!("host_ws_request failed: {e}"))?;
+    if let Some(msg) = super::extract_error_envelope(&result) {
+        return Err(msg);
+    }
+    Ok(result)
 }
 
 /// Connect to a WebSocket server.

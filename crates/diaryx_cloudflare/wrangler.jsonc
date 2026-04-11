@@ -2,7 +2,7 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "diaryx-api",
 	"compatibility_date": "2025-03-01",
-	"main": "build/worker/shim.mjs",
+	"main": "build/index.js",
 	"build": {
 		"command": "cargo install -q worker-build --version '^0.8' && worker-build --release"
 	},

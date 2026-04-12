@@ -2616,7 +2616,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync_extism"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "base64 0.22.1",
  "diaryx_core",
@@ -2698,6 +2698,7 @@ dependencies = [
  "keyring",
  "log",
  "pathdiff",
+ "percent-encoding",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

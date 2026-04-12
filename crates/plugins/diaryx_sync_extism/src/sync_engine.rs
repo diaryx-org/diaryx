@@ -713,9 +713,14 @@ pub fn sync(
 
     push_errors.extend(pull_errors);
 
-    // Mark any remaining untracked local files as clean
+    // Mark untracked local files as clean ONLY if the server also has them
+    // (i.e. matching content, no manifest entry yet).  Files that are
+    // local-only must stay untracked so the next sync correctly pushes them
+    // instead of treating them as "deleted on server".
+    let server_key_set: std::collections::BTreeSet<&str> =
+        server_entries.iter().map(|e| e.key.as_str()).collect();
     for (key, info) in &local_scan {
-        if !manifest.files.contains_key(key.as_str()) {
+        if !manifest.files.contains_key(key.as_str()) && server_key_set.contains(key.as_str()) {
             manifest.mark_clean(key, &info.hash, info.size, info.modified_at);
         }
     }

@@ -63,6 +63,292 @@ impl PluginAuthContext {
     }
 }
 
+// ============================================================================
+// CLI namespace provider — HTTP-backed namespace operations
+// ============================================================================
+
+/// Namespace provider that talks to the sync server using the same auth
+/// credentials the CLI already stores on disk. Mirrors the Tauri implementation
+/// but sources server_url/auth_token from [`PluginAuthContext`].
+struct CliNamespaceProvider {
+    server_url: String,
+    auth_token: Option<String>,
+}
+
+impl CliNamespaceProvider {
+    fn new() -> Self {
+        match PluginAuthContext::load_global() {
+            Some(auth) => Self {
+                server_url: auth.server_url.trim_end_matches('/').to_string(),
+                auth_token: auth.auth_token,
+            },
+            None => Self {
+                server_url: diaryx_core::auth::DEFAULT_SYNC_SERVER
+                    .trim_end_matches('/')
+                    .to_string(),
+                auth_token: None,
+            },
+        }
+    }
+
+    fn encode_component(value: &str) -> String {
+        urlencoding::encode(value).into_owned()
+    }
+
+    fn encode_key(key: &str) -> String {
+        key.split('/')
+            .map(Self::encode_component)
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    fn agent() -> ureq::Agent {
+        ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(120)))
+            .build()
+            .into()
+    }
+
+    fn request_bytes(&self, url: String) -> Result<Vec<u8>, String> {
+        let agent = Self::agent();
+        let mut builder = ureq::http::Request::builder()
+            .method("GET")
+            .uri(url.as_str());
+        if let Some(token) = &self.auth_token {
+            builder = builder.header("Authorization", format!("Bearer {token}"));
+        }
+        let request = builder
+            .body(())
+            .map_err(|e| format!("Failed to build namespace request: {e}"))?;
+        let response = agent
+            .run(request)
+            .map_err(|e| format!("Namespace request failed: {e}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.into_body().read_to_string().unwrap_or_default();
+            return Err(if text.is_empty() {
+                format!("Namespace request failed with status {status}")
+            } else {
+                text
+            });
+        }
+        response
+            .into_body()
+            .read_to_vec()
+            .map_err(|e| format!("Failed to read namespace response: {e}"))
+    }
+
+    fn request_json<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        url: String,
+        body: Option<Vec<u8>>,
+        content_type: Option<&str>,
+        audience: Option<&str>,
+    ) -> Result<Option<T>, String> {
+        let agent = Self::agent();
+        let mut builder = ureq::http::Request::builder()
+            .method(method)
+            .uri(url.as_str());
+        if let Some(token) = &self.auth_token {
+            builder = builder.header("Authorization", format!("Bearer {token}"));
+        }
+        if let Some(ct) = content_type {
+            builder = builder.header("Content-Type", ct);
+        }
+        if let Some(aud) = audience {
+            builder = builder.header("X-Audience", aud);
+        }
+        let response = if let Some(body) = body {
+            let request = builder
+                .body(body)
+                .map_err(|e| format!("Failed to build namespace request: {e}"))?;
+            agent
+                .run(request)
+                .map_err(|e| format!("Namespace request failed: {e}"))?
+        } else {
+            let request = builder
+                .body(())
+                .map_err(|e| format!("Failed to build namespace request: {e}"))?;
+            agent
+                .run(request)
+                .map_err(|e| format!("Namespace request failed: {e}"))?
+        };
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.into_body().read_to_string().unwrap_or_default();
+            return Err(if text.is_empty() {
+                format!("Namespace request failed with status {status}")
+            } else {
+                text
+            });
+        }
+        if status == ureq::http::StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        let bytes = response
+            .into_body()
+            .read_to_vec()
+            .map_err(|e| format!("Failed to read namespace response: {e}"))?;
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        serde_json::from_slice::<T>(&bytes)
+            .map(Some)
+            .map_err(|e| format!("Failed to parse namespace response JSON: {e}"))
+    }
+}
+
+impl diaryx_extism::NamespaceProvider for CliNamespaceProvider {
+    fn create_namespace(
+        &self,
+        metadata: Option<&serde_json::Value>,
+    ) -> Result<diaryx_extism::NamespaceEntry, String> {
+        let url = format!("{}/namespaces", self.server_url);
+        let body = serde_json::to_vec(&serde_json::json!({ "metadata": metadata }))
+            .map_err(|e| format!("Failed to serialize namespace request: {e}"))?;
+        self.request_json::<diaryx_extism::NamespaceEntry>(
+            "POST",
+            url,
+            Some(body),
+            Some("application/json"),
+            None,
+        )?
+        .ok_or_else(|| "Namespace create returned an empty response".to_string())
+    }
+
+    fn put_object(
+        &self,
+        ns_id: &str,
+        key: &str,
+        bytes: &[u8],
+        mime_type: &str,
+        audience: Option<&str>,
+    ) -> Result<(), String> {
+        let url = format!(
+            "{}/namespaces/{}/objects/{}",
+            self.server_url,
+            Self::encode_component(ns_id),
+            Self::encode_key(key)
+        );
+        self.request_json::<serde_json::Value>(
+            "PUT",
+            url,
+            Some(bytes.to_vec()),
+            Some(mime_type),
+            audience,
+        )?;
+        Ok(())
+    }
+
+    fn get_object(&self, ns_id: &str, key: &str) -> Result<Vec<u8>, String> {
+        let url = format!(
+            "{}/namespaces/{}/objects/{}",
+            self.server_url,
+            Self::encode_component(ns_id),
+            Self::encode_key(key)
+        );
+        self.request_bytes(url)
+    }
+
+    fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String> {
+        let url = format!(
+            "{}/namespaces/{}/objects/{}",
+            self.server_url,
+            Self::encode_component(ns_id),
+            Self::encode_key(key)
+        );
+        self.request_json::<serde_json::Value>("DELETE", url, None, None, None)?;
+        Ok(())
+    }
+
+    fn list_objects(
+        &self,
+        ns_id: &str,
+        prefix: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<diaryx_extism::NamespaceObjectMeta>, String> {
+        let mut url = format!(
+            "{}/namespaces/{}/objects",
+            self.server_url,
+            Self::encode_component(ns_id)
+        );
+        let mut query = Vec::new();
+        if let Some(prefix) = prefix {
+            query.push(format!("prefix={}", Self::encode_component(prefix)));
+        }
+        if let Some(limit) = limit {
+            query.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = offset {
+            query.push(format!("offset={offset}"));
+        }
+        if !query.is_empty() {
+            url.push('?');
+            url.push_str(&query.join("&"));
+        }
+        Ok(self
+            .request_json::<Vec<diaryx_extism::NamespaceObjectMeta>>("GET", url, None, None, None)?
+            .unwrap_or_default())
+    }
+
+    fn sync_audience(&self, ns_id: &str, audience: &str, access: &str) -> Result<(), String> {
+        let url = format!(
+            "{}/namespaces/{}/audiences/{}",
+            self.server_url,
+            Self::encode_component(ns_id),
+            Self::encode_component(audience)
+        );
+        let body = serde_json::to_vec(&serde_json::json!({ "access": access }))
+            .map_err(|e| format!("Failed to serialize audience request: {e}"))?;
+        self.request_json::<serde_json::Value>(
+            "PUT",
+            url,
+            Some(body),
+            Some("application/json"),
+            None,
+        )?;
+        Ok(())
+    }
+
+    fn send_audience_email(
+        &self,
+        ns_id: &str,
+        audience: &str,
+        subject: &str,
+        reply_to: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let url = format!(
+            "{}/namespaces/{}/audiences/{}/send-email",
+            self.server_url,
+            Self::encode_component(ns_id),
+            Self::encode_component(audience)
+        );
+        let body = serde_json::to_vec(&serde_json::json!({
+            "subject": subject,
+            "reply_to": reply_to,
+        }))
+        .map_err(|e| format!("Failed to serialize send-email request: {e}"))?;
+        Ok(self
+            .request_json::<serde_json::Value>(
+                "POST",
+                url,
+                Some(body),
+                Some("application/json"),
+                None,
+            )?
+            .unwrap_or_else(|| serde_json::json!({ "ok": true })))
+    }
+
+    fn list_namespaces(&self) -> Result<Vec<diaryx_extism::NamespaceEntry>, String> {
+        let url = format!("{}/namespaces", self.server_url);
+        Ok(self
+            .request_json::<Vec<diaryx_extism::NamespaceEntry>>("GET", url, None, None, None)?
+            .unwrap_or_default())
+    }
+}
+
 impl diaryx_extism::RuntimeContextProvider for CliRuntimeContextProvider {
     fn get_context(&self, plugin_id: &str) -> JsonValue {
         build_runtime_context(Config::load().ok(), &self.workspace_root, plugin_id)
@@ -561,7 +847,7 @@ fn create_host_context(
         ws_bridge,
         plugin_command_bridge: Arc::new(diaryx_extism::NoopPluginCommandBridge),
         runtime_context_provider: Arc::new(CliRuntimeContextProvider::new(workspace_root)),
-        namespace_provider: Arc::new(diaryx_extism::NoopNamespaceProvider),
+        namespace_provider: Arc::new(CliNamespaceProvider::new()),
         plugin_command_depth: 0,
         storage_quota_bytes: diaryx_extism::DEFAULT_STORAGE_QUOTA_BYTES,
     })

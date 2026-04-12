@@ -1120,7 +1120,14 @@ impl<R: Runtime> TauriNamespaceProvider<R> {
     }
 
     fn encode_component(value: &str) -> String {
-        url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+        // Percent-encode for URL path segments. Must match the web client
+        // (`encodeURIComponent` in extismBrowserLoader.ts) so that keys land
+        // in the server's object store with the same encoding regardless of
+        // which client uploaded them. The previous `form_urlencoded` encoder
+        // was wrong here: it encodes spaces as `+`, which is form-data
+        // semantics, not path semantics, and corrupted every key containing
+        // a space.
+        percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
     }
 
     fn encode_key(key: &str) -> String {

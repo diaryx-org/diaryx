@@ -445,10 +445,26 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
 
     if !errors.is_empty() {
         host::log::log("warn", &format!("DownloadWorkspace errors: {:?}", errors));
+        const MAX_SHOWN: usize = 3;
+        let shown = errors
+            .iter()
+            .take(MAX_SHOWN)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        let suffix = if errors.len() > MAX_SHOWN {
+            format!(
+                " (and {} more; see plugin logs for details)",
+                errors.len() - MAX_SHOWN
+            )
+        } else {
+            String::new()
+        };
         return Err(format!(
-            "DownloadWorkspace failed while writing {} file(s): {}",
+            "DownloadWorkspace failed while writing {} file(s): {}{}",
             errors.len(),
-            errors.join("; ")
+            shown,
+            suffix
         ));
     }
 
@@ -544,11 +560,14 @@ fn handle_sync_push(params: &JsonValue) -> Result<JsonValue, String> {
             (plan.push.len() + plan.delete_remote.len()).max(1),
         );
 
-        // Mark any remaining untracked local files as clean (e.g. files that
-        // exist both locally and on server with matching content but had no
-        // manifest entry yet).
+        // Mark untracked local files as clean ONLY if the server also has
+        // them (matching content, no manifest entry yet).  Local-only files
+        // must stay untracked so the next sync pushes them instead of
+        // treating them as "deleted on server."
+        let server_key_set: std::collections::BTreeSet<&str> =
+            server_entries.iter().map(|e| e.key.as_str()).collect();
         for (key, info) in &local_scan {
-            if !manifest.files.contains_key(key.as_str()) {
+            if !manifest.files.contains_key(key.as_str()) && server_key_set.contains(key.as_str()) {
                 manifest.mark_clean(key, &info.hash, info.size, info.modified_at);
             }
         }
@@ -615,9 +634,13 @@ fn handle_sync_pull(params: &JsonValue) -> Result<JsonValue, String> {
             (plan.pull.len() + plan.delete_local.len()).max(1),
         );
 
-        // Mark any remaining untracked local files as clean.
+        // Mark untracked local files as clean ONLY if the server also has
+        // them.  Local-only files must stay untracked so a future sync
+        // pushes them instead of treating them as "deleted on server."
+        let server_key_set: std::collections::BTreeSet<&str> =
+            server_entries.iter().map(|e| e.key.as_str()).collect();
         for (key, info) in &local_scan {
-            if !manifest.files.contains_key(key.as_str()) {
+            if !manifest.files.contains_key(key.as_str()) && server_key_set.contains(key.as_str()) {
                 manifest.mark_clean(key, &info.hash, info.size, info.modified_at);
             }
         }

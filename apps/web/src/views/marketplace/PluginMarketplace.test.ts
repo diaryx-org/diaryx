@@ -50,7 +50,7 @@ vi.mock("$lib/plugins/browserPluginManager.svelte", () => ({
 
 vi.mock("$lib/backend", () => ({
   getBackend: async () => ({}),
-  isTauri: () => false,
+  isNativePluginBackend: () => false,
 }));
 
 vi.mock("$lib/backend/api", () => ({

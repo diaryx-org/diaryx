@@ -277,6 +277,8 @@ vi.mock("$lib/backend/api", () => ({
 }));
 vi.mock("$lib/backend/interface", () => ({
   isTauri: vi.fn(() => false),
+  isHttpBackend: vi.fn(() => false),
+  isNativePluginBackend: vi.fn(() => false),
 }));
 vi.mock("$lib/hooks/useMobile.svelte", () => ({
   isIOS: vi.fn(() => false),

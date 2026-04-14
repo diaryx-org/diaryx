@@ -20,12 +20,20 @@ use crate::host_fs::HostFs;
 
 #[plugin_fn]
 pub fn manifest(_input: String) -> FnResult<String> {
-    let palette_export = UiContribution::CommandPaletteItem {
-        id: "pandoc-export".into(),
-        label: "Export...".into(),
-        group: Some("Export".into()),
-        plugin_command: "OpenExportDialog".into(),
-    };
+    let export_formats: Vec<UiContribution> = converter::get_export_formats()
+        .into_iter()
+        .filter(|f| f.requires_converter)
+        .map(|f| UiContribution::ExportFormat {
+            id: f.id.clone(),
+            label: f.label,
+            extension: format!(
+                ".{}",
+                f.extension.trim_start_matches('.')
+            ),
+            binary: ["pdf", "docx", "epub", "odt"].contains(&f.id.as_str()),
+            convert_command: Some("ConvertFormat".into()),
+        })
+        .collect();
 
     let pm = PluginManifest {
         id: PluginId("diaryx.pandoc".into()),
@@ -38,7 +46,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
                 commands: all_commands(),
             },
         ],
-        ui: vec![palette_export],
+        ui: export_formats,
         cli: vec![],
     };
 
@@ -296,10 +304,6 @@ pub fn handle_command(input: String) -> FnResult<String> {
             let attachments = poll_future(exporter.collect_binary_attachments(&resolved));
             CommandResponse::ok(serde_json::to_value(attachments).unwrap_or_default())
         }
-        "OpenExportDialog" => {
-            // The host handles the UI — just acknowledge.
-            CommandResponse::ok(serde_json::json!({ "action": "open-export-dialog" }))
-        }
         _ => CommandResponse::err(format!("Unknown command: {}", req.command)),
     };
 
@@ -341,7 +345,6 @@ fn all_commands() -> Vec<String> {
         "IsConverterAvailable",
         "ConvertFormat",
         "ConvertToPdf",
-        "OpenExportDialog",
     ]
     .into_iter()
     .map(String::from)

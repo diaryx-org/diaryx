@@ -6,7 +6,7 @@ export interface CommandPaletteGroup {
   commands: CommandDefinition[];
 }
 
-const COMMAND_GROUPS = ["insert", "entry", "editor", "workspace"] as const;
+const COMMAND_GROUPS = ["insert", "entry", "editor", "export", "workspace"] as const;
 
 export function getFavoriteCommands(
   commandRegistry: Map<string, CommandDefinition>,

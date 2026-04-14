@@ -42,13 +42,7 @@ export function getLegacyBuiltinFields(componentId: string): SettingsField[] | n
     {
       type: "Section",
       label: "Export",
-      description: "Export this workspace to markdown, HTML, or converter-based formats.",
-    },
-    {
-      type: "HostActionButton",
-      label: "Export Workspace",
-      action_type: "open-export-dialog",
-      variant: "outline",
+      description: "Open the command palette (Cmd/Ctrl+K) and type \"Export\" to export this workspace.",
     },
   ];
 }

@@ -159,6 +159,29 @@ pub enum UiContribution {
         /// Optional description shown in provider picker UIs.
         description: Option<String>,
     },
+    /// An export format contributed by a plugin.
+    ///
+    /// The host adds a command palette entry for each contributed format.
+    /// When selected, the host orchestrates the export (audience filtering,
+    /// file collection, binary attachments) and calls the plugin's
+    /// `convert_command` for each file if conversion is required.
+    ExportFormat {
+        /// Unique identifier for this format (e.g., `"pdf"`, `"docx"`).
+        id: String,
+        /// Human-readable label (e.g., `"PDF"`, `"Word (DOCX)"`).
+        label: String,
+        /// File extension including the dot (e.g., `".pdf"`).
+        extension: String,
+        /// Whether the converted output is binary (true) or text (false).
+        #[serde(default)]
+        binary: bool,
+        /// Plugin command to call for converting each file.
+        ///
+        /// The host calls this command with `{ content, from, to, resources }`.
+        /// If absent, the host exports raw content without conversion.
+        #[serde(default)]
+        convert_command: Option<String>,
+    },
     /// An editor extension (TipTap node/mark) contributed by a plugin.
     ///
     /// The host generates a TipTap extension from this declaration. Atom nodes

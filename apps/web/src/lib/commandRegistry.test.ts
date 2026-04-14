@@ -61,6 +61,8 @@ function makeCtx(overrides?: Partial<CommandRegistryContext> & { editor?: MockEd
     onOpenBackupImport: vi.fn(),
     onImportFromClipboard: vi.fn(),
     onImportMarkdownFile: vi.fn(),
+    exportFormats: [],
+    onExport: vi.fn(),
     pluginBlockCommands: [],
     pluginBlockPickerItems: [],
     pluginCommandPaletteItems: [],

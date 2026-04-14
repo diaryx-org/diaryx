@@ -13,5 +13,6 @@ The Publish sidebar is now declared by the `diaryx.publish` plugin manifest and 
 ## Files
 
 - No dedicated Svelte wrapper lives in this directory anymore.
-- Export is opened through a declarative host action button.
+- Export is driven through the command palette. Plugins contribute `ExportFormat` UI entries in their manifest; the host creates per-format commands (e.g. "Export as PDF"). Audience filtering inherits from the editor's audience view selector (`templateContextStore.previewAudience`).
+- Export orchestration lives in `controllers/exportService.ts`.
 - Site publishing is rendered through the shared declarative host-widget path in `PluginSettingsTab.svelte`.

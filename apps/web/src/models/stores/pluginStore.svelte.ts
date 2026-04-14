@@ -307,6 +307,36 @@ function getCommandPaletteItems(): Array<{
   );
 }
 
+/** Export format contributions from plugins. */
+function getExportFormats(): Array<{
+  pluginId: string;
+  contribution: {
+    slot: "ExportFormat";
+    id: string;
+    label: string;
+    extension: string;
+    binary: boolean;
+    convert_command: string | null;
+  };
+}> {
+  return manifests.flatMap((m) => {
+    const ui = getUiEntries(m);
+    return ui
+      .filter((c) => c.slot === "ExportFormat")
+      .map((c) => ({
+        pluginId: String(m.id),
+        contribution: c as {
+          slot: "ExportFormat";
+          id: string;
+          label: string;
+          extension: string;
+          binary: boolean;
+          convert_command: string | null;
+        },
+      }));
+  });
+}
+
 /** Plugin-owned command palette surface (at most one, first match wins). */
 function getCommandPaletteOwner(): {
   pluginId: PluginId;
@@ -669,6 +699,9 @@ export function getPluginStore() {
     },
     get commandPaletteItems() {
       return getCommandPaletteItems();
+    },
+    get exportFormats() {
+      return getExportFormats();
     },
     get commandPaletteOwner() {
       return getCommandPaletteOwner();

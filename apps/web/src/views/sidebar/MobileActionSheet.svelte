@@ -26,7 +26,7 @@
     nodeName: string;
     onClose: () => void;
     onCreateChild: (path: string) => void;
-    onExport: (path: string) => void;
+    onExport: () => void;
     onValidate?: (path: string) => void;
     onDelete: (path: string) => void;
     onRename?: (path: string, name: string) => void;
@@ -180,10 +180,10 @@
         <button
           type="button"
           class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left"
-          onclick={() => handleAction(() => onExport(nodePath))}
+          onclick={() => handleAction(() => onExport())}
         >
           <Download class="size-5 text-muted-foreground" />
-          <span class="text-base">Export...</span>
+          <span class="text-base">Export</span>
         </button>
 
         <!-- Validate -->

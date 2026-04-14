@@ -34,11 +34,7 @@ let rightSidebarWidth = $state(loadSidebarWidth('diaryx:rightSidebarWidth'));
 // Modal states
 let showCommandPalette = $state(false);
 let showSettingsDialog = $state(false);
-let showExportDialog = $state(false);
 let showNewEntryModal = $state(false);
-
-// Export state
-let exportPath = $state('');
 
 // Error state
 let error = $state<string | null>(null);
@@ -67,11 +63,9 @@ export function getUIStore() {
     get showCommandPalette() { return showCommandPalette; },
     set showCommandPalette(value: boolean) { showCommandPalette = value; },
     get showSettingsDialog() { return showSettingsDialog; },
-    get showExportDialog() { return showExportDialog; },
     get showNewEntryModal() { return showNewEntryModal; },
 
     // Other getters
-    get exportPath() { return exportPath; },
     get error() { return error; },
     get editorRef() { return editorRef; },
 
@@ -123,19 +117,9 @@ export function getUIStore() {
     closeSettingsDialog() { showSettingsDialog = false; },
     setShowSettingsDialog(show: boolean) { showSettingsDialog = show; },
 
-    openExportDialog(path: string = '') {
-      exportPath = path;
-      showExportDialog = true;
-    },
-    closeExportDialog() { showExportDialog = false; },
-    setShowExportDialog(show: boolean) { showExportDialog = show; },
-
     openNewEntryModal() { showNewEntryModal = true; },
     closeNewEntryModal() { showNewEntryModal = false; },
     setShowNewEntryModal(show: boolean) { showNewEntryModal = show; },
-
-    // Export path
-    setExportPath(path: string) { exportPath = path; },
 
     // Error management
     setError(err: string | null) { error = err; },

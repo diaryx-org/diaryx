@@ -21,7 +21,6 @@
   import CommandPalette from "./lib/CommandPalette.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import MarketplaceDialog from "./lib/MarketplaceDialog.svelte";
-  import ExportDialog from "./lib/ExportDialog.svelte";
   import DeviceReplacementDialog from "./lib/components/DeviceReplacementDialog.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
   import MoveEntryDialog from "./lib/MoveEntryDialog.svelte";
@@ -67,6 +66,7 @@
   } from "./models/stores/permissionStore.svelte";
   import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
   import { buildCommandRegistry } from "$lib/commandRegistry";
+  import { runExport, BUILTIN_EXPORT_FORMATS, type ExportFormatInfo } from "./controllers/exportService";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
   import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
   import { startSyncScheduler, stopSyncScheduler, runManualSyncNow, getSyncState } from "$lib/sync/syncScheduler.svelte";
@@ -375,9 +375,7 @@
   let leftSidebarWidth = $derived(uiStore.leftSidebarWidth);
   let rightSidebarWidth = $derived(uiStore.rightSidebarWidth);
   let showSettingsDialog = $derived(uiStore.showSettingsDialog);
-  let showExportDialog = $derived(uiStore.showExportDialog);
   let showNewEntryModal = $derived(uiStore.showNewEntryModal);
-  let exportPath = $derived(uiStore.exportPath);
   let editorRef = $derived(uiStore.editorRef);
 
   // Workspace missing state — set when the workspace directory was moved/deleted externally
@@ -1937,10 +1935,6 @@
         showSettingsDialog = false;
         showMarketplaceDialog = true;
         return { opened: "marketplace" };
-      case "open-export-dialog":
-        exportPath = tree?.path ?? ".";
-        showExportDialog = true;
-        return { opened: "export-dialog", path: exportPath };
       case "toggle-left-sidebar":
         toggleLeftSidebar();
         return { toggled: "left" };
@@ -2716,6 +2710,19 @@
   const pluginBlockCommands = $derived(getPluginStore().editorInsertCommands.block);
   const pluginBlockPickerItems = $derived(getPluginStore().blockPickerItems);
 
+  // Build export formats from built-ins + plugin contributions.
+  const allExportFormats = $derived.by((): ExportFormatInfo[] => {
+    const pluginFormats = getPluginStore().exportFormats.map(({ pluginId, contribution }) => ({
+      id: contribution.id,
+      label: contribution.label,
+      extension: contribution.extension,
+      binary: contribution.binary ?? false,
+      convertCommand: contribution.convert_command ?? null,
+      pluginId,
+    }));
+    return [...BUILTIN_EXPORT_FORMATS, ...pluginFormats];
+  });
+
   const commandRegistry = $derived.by(() =>
     buildCommandRegistry({
       getEditor: () => editorRef?.getEditor?.() ?? null,
@@ -2746,6 +2753,12 @@
       isSyncAvailable: () => {
         const wsId = getCurrentWorkspaceId();
         return !!wsId && isWorkspaceProviderSyncEnabled(wsId);
+      },
+      exportFormats: allExportFormats,
+      onExport: (format: ExportFormatInfo) => {
+        if (!api) return;
+        const rootPath = tree?.path ?? ".";
+        runExport(api, rootPath, format);
       },
       pluginCommandPaletteItems: getPluginStore().commandPaletteItems as Array<{
         pluginId: string;
@@ -3288,15 +3301,6 @@
 
 <MarketplaceDialog bind:open={showMarketplaceDialog} />
 
-<!-- Export Dialog -->
-<ExportDialog
-  bind:open={showExportDialog}
-  rootPath={exportPath}
-  {api}
-  onOpenChange={(open) => (showExportDialog = open)}
-/>
-
-
 <!-- Device Replacement Dialog (shown when sign-in hits device limit) -->
 <DeviceReplacementDialog onAuthenticated={() => {
   if (showWelcomeScreen && welcomeScreenRef) {
@@ -3665,9 +3669,8 @@
     onCreateChildEntry={handleCreateChildEntry}
     onDeleteEntry={handleDeleteEntry}
     onDeleteEntries={handleDeleteEntries}
-    onExport={(path) => {
-      exportPath = path;
-      showExportDialog = true;
+    onExport={() => {
+      uiStore.openCommandPalette();
     }}
     onOpenBackupImport={handleQuickBackupExport}
     onImportMarkdownFile={handleImportMarkdownFile}

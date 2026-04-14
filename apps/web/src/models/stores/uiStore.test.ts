@@ -11,10 +11,8 @@ describe('uiStore', () => {
     store.setRightSidebarCollapsed(true)
     store.closeCommandPalette()
     store.closeSettingsDialog()
-    store.closeExportDialog()
     store.closeNewEntryModal()
     store.setError(null)
-    store.setExportPath('')
   })
 
   describe('sidebar states', () => {
@@ -103,43 +101,6 @@ describe('uiStore', () => {
 
       store.setShowSettingsDialog(false)
       expect(store.showSettingsDialog).toBe(false)
-    })
-  })
-
-  describe('export dialog', () => {
-    it('should initialize with closed export dialog', () => {
-      expect(store.showExportDialog).toBe(false)
-    })
-
-    it('should open export dialog without path', () => {
-      store.openExportDialog()
-      expect(store.showExportDialog).toBe(true)
-      expect(store.exportPath).toBe('')
-    })
-
-    it('should open export dialog with path', () => {
-      store.openExportDialog('workspace/notes')
-      expect(store.showExportDialog).toBe(true)
-      expect(store.exportPath).toBe('workspace/notes')
-    })
-
-    it('should close export dialog', () => {
-      store.openExportDialog('test')
-      store.closeExportDialog()
-      expect(store.showExportDialog).toBe(false)
-    })
-
-    it('should set export dialog visibility', () => {
-      store.setShowExportDialog(true)
-      expect(store.showExportDialog).toBe(true)
-
-      store.setShowExportDialog(false)
-      expect(store.showExportDialog).toBe(false)
-    })
-
-    it('should set export path', () => {
-      store.setExportPath('new/path')
-      expect(store.exportPath).toBe('new/path')
     })
   })
 

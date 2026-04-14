@@ -35,10 +35,12 @@ import {
   ShieldCheck,
   ClipboardPaste,
   FileDown,
+  Download,
   Plug,
 } from "@lucide/svelte";
 import { showInfo, showError } from "@/models/services/toastService";
 import type { PluginInsertCommand } from "@/models/stores/pluginStore.svelte";
+import type { ExportFormatInfo } from "@/controllers/exportService";
 
 /** Format a plugin command result as a human-readable description for toasts. */
 function formatPluginResult(data: unknown): string {
@@ -86,7 +88,7 @@ function formatPluginResult(data: unknown): string {
 export interface CommandDefinition {
   id: string;
   label: string;
-  group: "insert" | "entry" | "editor" | "workspace";
+  group: "insert" | "entry" | "editor" | "workspace" | "export";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   icon: Component<any>;
   shortcut?: string;
@@ -136,6 +138,10 @@ export interface CommandRegistryContext {
     command: string,
     params?: unknown,
   ) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+  /** Export formats contributed by plugins + built-ins. */
+  exportFormats: ExportFormatInfo[];
+  /** Run an export for a given format. */
+  onExport: (format: ExportFormatInfo) => void | Promise<void>;
   pluginBlockCommands: PluginInsertCommand[];
   pluginBlockPickerItems: Array<{
     pluginId: unknown;
@@ -596,6 +602,20 @@ export function buildCommandRegistry(
     execute: ctx.onImportMarkdownFile,
     favoritable: false,
   });
+
+  // ── Export commands ─────────────────────────────────────────────────
+
+  for (const format of ctx.exportFormats) {
+    add({
+      id: `export:${format.id}`,
+      label: `Export as ${format.label}`,
+      group: "export",
+      icon: Download,
+      available: () => true,
+      execute: () => ctx.onExport(format),
+      favoritable: true,
+    });
+  }
 
   return registry;
 }

@@ -18,10 +18,6 @@ describe("pluginBuiltinCompat", () => {
       expect.objectContaining({ type: "HostWidget", widget_id: "namespace.audiences" }),
       expect.objectContaining({ type: "HostWidget", widget_id: "namespace.publish-button" }),
       expect.objectContaining({ type: "Section", label: "Export" }),
-      expect.objectContaining({
-        type: "HostActionButton",
-        action_type: "open-export-dialog",
-      }),
     ]);
   });
 

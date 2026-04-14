@@ -94,7 +94,7 @@
     onCreateChildEntry: (parentPath: string) => void;
     onDeleteEntry: (path: string) => void;
     onDeleteEntries?: (paths: string[]) => void;
-    onExport: (path: string) => void;
+    onExport: () => void;
     onOpenBackupImport?: () => void;
     onImportMarkdownFile?: () => void;
     onAddAttachment: (entryPath: string) => void;
@@ -2223,9 +2223,9 @@
                     </DropdownMenu.Item>
                   {/if}
                   <DropdownMenu.Separator />
-                  <DropdownMenu.Item onclick={() => onExport(node.path)}>
+                  <DropdownMenu.Item onclick={() => onExport()}>
                     <Download class="size-4 mr-2" />
-                    Export...
+                    Export
                   </DropdownMenu.Item>
                   {#if onValidate}
                     <DropdownMenu.Item onclick={() => onValidate(node.path)}>
@@ -2333,9 +2333,9 @@
 
           <ContextMenu.Separator />
 
-          <ContextMenu.Item onclick={() => onExport(node.path)}>
+          <ContextMenu.Item onclick={() => onExport()}>
             <Download class="size-4 mr-2" />
-            Export...
+            Export
           </ContextMenu.Item>
 
           {#if onValidate}

@@ -1114,12 +1114,17 @@
 
       Editor = editorModule.default;
 
+      // HTTP backend mode (`diaryx edit`): skip workspace registry — the CLI
+      // server already knows which workspace to serve.
+      const httpParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+      const isHttpBackend = httpParams?.get("backend") === "http" && !!httpParams?.get("api_url");
+
       // Check if any workspaces exist before proceeding
       let defaultWorkspace = getCurrentWorkspace();
       let localWsList = getLocalWorkspaces();
       let currentWsId = getCurrentWorkspaceId();
 
-      if (!defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
+      if (!isHttpBackend && !defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
         const dataJustCleared = sessionStorage.getItem('diaryx_data_cleared');
         if (dataJustCleared) {
           sessionStorage.removeItem('diaryx_data_cleared');
@@ -1149,7 +1154,11 @@
       // Pass workspace ID and name so the backend uses the correct OPFS directory
       let wsId: string | undefined;
       let wsName: string | undefined;
-      if (defaultWorkspace) {
+      if (isHttpBackend) {
+        // HTTP backend doesn't use the workspace registry
+        wsId = undefined;
+        wsName = undefined;
+      } else if (defaultWorkspace) {
         wsId = defaultWorkspace.id;
         wsName = defaultWorkspace.name;
       } else {

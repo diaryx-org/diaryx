@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.4.3
-updated: 2026-04-10T16:22:24-06:00
+updated: 2026-04-14T08:59:31-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -150,4 +150,4 @@ Read more:
 - See the [Diaryx Roadmap](/ROADMAP.md)
 - Read about the [Diaryx Philosophy](/PHILOSOPHY.md)
 
-[^1]: Try the [interactive audience filtering demo](_attachments/audience-filter-demo.html).
+[^1]: Note that this is only an interactive demo.

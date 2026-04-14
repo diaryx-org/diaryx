@@ -27,6 +27,7 @@ struct AppState {
 
 /// Build the axum router for the edit REST server.
 pub fn edit_router(workspace_root: PathBuf) -> Router {
+    let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
     let fs = SyncToAsyncFs::new(RealFileSystem);
     let diaryx = Diaryx::new(fs);
     diaryx.set_workspace_root(workspace_root.clone());
@@ -108,8 +109,13 @@ async fn handle_workspace_info(State(state): State<Arc<AppState>>) -> Json<serde
         .unwrap_or("workspace")
         .to_string();
 
+    // Return the absolute path — commands like FindRootIndex and
+    // GetFilesystemTree pass the directory directly to the filesystem
+    // without resolve_fs_path, so the frontend must send an absolute path.
+    let abs_path = state.workspace_root.to_string_lossy().to_string();
+
     Json(serde_json::json!({
-        "workspace_path": name,
+        "workspace_path": abs_path,
         "workspace_name": name,
     }))
 }

@@ -29,7 +29,7 @@
     uninstallPlugin as browserUninstallPlugin,
     inspectPluginWasm,
   } from "$lib/plugins/browserPluginManager.svelte";
-  import { getBackend, isTauri } from "$lib/backend";
+  import { getBackend, isNativePluginBackend } from "$lib/backend";
   import { createApi } from "$lib/backend/api";
   import type { Backend } from "$lib/backend/interface";
   import { proxyFetch } from "$lib/backend/proxyFetch";
@@ -83,7 +83,7 @@
 
   const browserPluginSupport = $derived(getBrowserPluginSupport());
   const browserPluginSupportError = $derived(getBrowserPluginSupportError());
-  const pluginsSupported = $derived(isTauri() || browserPluginSupport.supported);
+  const pluginsSupported = $derived(isNativePluginBackend() || browserPluginSupport.supported);
 
   const installedIds = $derived(
     new Set(pluginStore.allManifests.map((m) => String(m.id))),
@@ -199,7 +199,7 @@
     name?: string,
     expectedPluginId?: string,
   ): Promise<void> {
-    if (isTauri()) {
+    if (isNativePluginBackend()) {
       const backend: Backend = await getBackend();
       if (backend.installPlugin) {
         const manifestJson = await backend.installPlugin(new Uint8Array(bytes));
@@ -229,7 +229,7 @@
   }
 
   async function platformUninstall(pluginId: string): Promise<void> {
-    if (isTauri()) {
+    if (isNativePluginBackend()) {
       const backend: Backend = await getBackend();
       if (backend.uninstallPlugin) {
         await backend.uninstallPlugin(pluginId);
@@ -317,7 +317,7 @@
     fallbackName?: string,
     expectedPluginId?: string,
   ): Promise<void> {
-    if (isTauri()) {
+    if (isNativePluginBackend()) {
       await platformInstall(bytes, fallbackName, expectedPluginId);
       return;
     }

@@ -10,10 +10,10 @@
   import ManageAudiencesModal from '$lib/components/ManageAudiencesModal.svelte';
   import {
     AlertCircle,
+    ChevronRight,
     Globe,
     Loader2,
     Settings2,
-    ShieldOff,
     Tags,
   } from '@lucide/svelte';
   import * as browserPlugins from '$lib/plugins/browserPluginManager.svelte';
@@ -103,6 +103,9 @@
   let showDefaultAudienceInput = $state(false);
   let defaultAudienceInput = $state('');
 
+  // Collapsible settings section
+  let showSettings = $state(false);
+
   let isConfigured = $derived(namespaceId !== null);
 
   let allAudiences = $derived.by(() => {
@@ -130,7 +133,7 @@
     && !isCreatingNamespace
     && isAuthenticated
     && hasPublishingAccess
-    && publishedAudienceCount > 0
+    && (publishedAudienceCount > 0 || !hasAnyAudience)
   );
 
   let firstPublishedAudience = $derived.by(() => {
@@ -221,6 +224,40 @@
   }
 
   // ---- Publish ----
+
+  async function handleQuickPublish() {
+    if (!api || !rootPath) return;
+    error = null;
+
+    try {
+      // Set audience: ["public"] on the root index so children inherit
+      const rootIndexPath = await api.resolveWorkspaceRootIndexPath(rootPath);
+      if (!rootIndexPath) {
+        showError('Could not resolve workspace root index', 'Publishing');
+        return;
+      }
+      await api.setFrontmatterProperty(rootIndexPath, 'audience', ['public']);
+
+      // Set the "public" audience to published state
+      await executePublishCommand('SetAudiencePublishState', {
+        audience: 'public',
+        server_url: serverUrl,
+        config: { state: 'public' },
+      });
+
+      // Update local state
+      audienceStates = { ...audienceStates, public: { state: 'public' } };
+      availableAudiences = [...new Set([...availableAudiences, 'public'])];
+      colorStore.assignColor('public');
+      templateContextStore.bumpAudiencesVersion();
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Failed to set up public audience', 'Publishing');
+      return;
+    }
+
+    // Now publish via the normal path
+    await handlePublish();
+  }
 
   async function handlePublish() {
     error = null;
@@ -327,114 +364,119 @@
     <!-- Site URL -->
     <NamespaceSiteUrl {namespaceId} {subdomain} {audienceStates} />
 
-    <!-- Subdomain -->
-    {#if isConfigured && namespaceId}
-      <NamespaceSubdomainManager
-        {namespaceId}
-        {subdomain}
-        {firstPublishedAudience}
-        onSubdomainChange={handleSubdomainChange}
-      />
-    {/if}
+    <!-- Publish button -->
+    <NamespacePublishButton
+      {namespaceId}
+      {canPublish}
+      {publishedAudienceCount}
+      {isPublishing}
+      {isCreatingNamespace}
+      onPublish={!hasAnyAudience ? handleQuickPublish : handlePublish}
+    />
 
-    <!-- Audience list or empty state -->
     {#if !hasAnyAudience}
-      <div class="space-y-3 p-3 rounded-md bg-secondary border border-border">
-        <div class="flex items-start gap-2.5">
-          <ShieldOff class="size-5 text-muted-foreground shrink-0 mt-0.5" />
-          <div class="space-y-1">
-            <p class="text-sm font-medium">Your workspace is private</p>
-            <p class="text-xs text-muted-foreground">
-              To share your workspace, add audience tags to your entries or set a default audience for the entire workspace.
-            </p>
-          </div>
-        </div>
-
-        <div class="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            class="text-xs"
-            onclick={() => { showManageAudiences = true; }}
-          >
-            <Tags class="size-3.5 mr-1.5" />
-            Add audience tags
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            class="text-xs"
-            onclick={() => { showDefaultAudienceInput = !showDefaultAudienceInput; }}
-          >
-            <Globe class="size-3.5 mr-1.5" />
-            Set default audience
-          </Button>
-        </div>
-
-        {#if showDefaultAudienceInput}
-          <div class="flex gap-2">
-            <Input
-              type="text"
-              bind:value={defaultAudienceInput}
-              placeholder="e.g. public, family, friends"
-              class="h-8 text-xs flex-1"
-              onkeydown={(e) => { if (e.key === 'Enter') handleSetDefaultAudience(); }}
-            />
-            <Button
-              variant="default"
-              size="sm"
-              class="h-8 text-xs shrink-0"
-              onclick={handleSetDefaultAudience}
-              disabled={defaultAudienceInput.trim().length === 0}
-            >
-              Save
-            </Button>
-          </div>
-        {/if}
-      </div>
-    {:else}
-      <!-- Manage audiences button -->
-      <div class="flex items-center justify-end">
-        <Button
-          variant="ghost"
-          size="icon"
-          class="size-6"
-          onclick={() => { showManageAudiences = true; }}
-          aria-label="Manage audiences"
-        >
-          <Settings2 class="size-3.5" />
-        </Button>
-      </div>
-
-      <NamespaceAudienceManager
-        namespaceId={namespaceId ?? ''}
-        audiences={allAudiences}
-        {audienceStates}
-        {defaultAudience}
-        onStateChange={handleAudienceStateChange}
-        onSendEmail={async (audience) => {
-          if (!namespaceId) return;
-          try {
-            await executePublishCommand('SendEmailToAudience', {
-              namespace_id: namespaceId,
-              audience,
-            });
-            showSuccess(`Email sent to "${audience}" subscribers`);
-          } catch (e) {
-            showError(e instanceof Error ? e.message : 'Failed to send email', 'Email');
-          }
-        }}
-      />
-
-      <NamespacePublishButton
-        {namespaceId}
-        {canPublish}
-        {publishedAudienceCount}
-        {isPublishing}
-        {isCreatingNamespace}
-        onPublish={handlePublish}
-      />
+      <p class="text-xs text-muted-foreground text-center">All entries will be published publicly</p>
     {/if}
+
+    <!-- Collapsible settings -->
+    <div>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer hover:text-foreground w-full"
+        onclick={() => { showSettings = !showSettings; }}
+      >
+        <ChevronRight class="size-4 md:size-3 transition-transform {showSettings ? 'rotate-90' : ''}" />
+        <Settings2 class="size-4 md:size-3" />
+        <span class="font-medium">Settings</span>
+      </button>
+
+      {#if showSettings}
+        <div class="mt-3 space-y-4 pl-1">
+          <!-- Subdomain -->
+          {#if isConfigured && namespaceId}
+            <NamespaceSubdomainManager
+              {namespaceId}
+              {subdomain}
+              {firstPublishedAudience}
+              onSubdomainChange={handleSubdomainChange}
+            />
+          {/if}
+
+          <!-- Audiences -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-muted-foreground">Audiences</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-6"
+                onclick={() => { showManageAudiences = true; }}
+                aria-label="Manage audiences"
+              >
+                <Tags class="size-3.5" />
+              </Button>
+            </div>
+
+            {#if hasAnyAudience}
+              <NamespaceAudienceManager
+                namespaceId={namespaceId ?? ''}
+                audiences={allAudiences}
+                {audienceStates}
+                {defaultAudience}
+                onStateChange={handleAudienceStateChange}
+                onSendEmail={async (audience) => {
+                  if (!namespaceId) return;
+                  try {
+                    await executePublishCommand('SendEmailToAudience', {
+                      namespace_id: namespaceId,
+                      audience,
+                    });
+                    showSuccess(`Email sent to "${audience}" subscribers`);
+                  } catch (e) {
+                    showError(e instanceof Error ? e.message : 'Failed to send email', 'Email');
+                  }
+                }}
+              />
+            {:else}
+              <div class="space-y-2">
+                <p class="text-xs text-muted-foreground">
+                  No audiences configured. Add audience tags to entries or set a default audience.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="text-xs"
+                  onclick={() => { showDefaultAudienceInput = !showDefaultAudienceInput; }}
+                >
+                  <Globe class="size-3.5 mr-1.5" />
+                  Set default audience
+                </Button>
+                {#if showDefaultAudienceInput}
+                  <div class="flex gap-2">
+                    <Input
+                      type="text"
+                      bind:value={defaultAudienceInput}
+                      placeholder="e.g. public, family, friends"
+                      class="h-8 text-xs flex-1"
+                      onkeydown={(e) => { if (e.key === 'Enter') handleSetDefaultAudience(); }}
+                    />
+                    <Button
+                      variant="default"
+                      size="sm"
+                      class="h-8 text-xs shrink-0"
+                      onclick={handleSetDefaultAudience}
+                      disabled={defaultAudienceInput.trim().length === 0}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </div>
   {/if}
 </div>
 

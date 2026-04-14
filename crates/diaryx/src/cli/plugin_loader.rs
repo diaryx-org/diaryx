@@ -884,6 +884,97 @@ fn load_publish_plugin(workspace_root: &Path) -> Result<Arc<ExtismPluginAdapter>
     load_plugin(workspace_root, "diaryx.publish")
 }
 
+// ============================================================================
+// Edit server plugin registration
+// ============================================================================
+
+/// Load all workspace plugins and register them with a `Diaryx` instance.
+///
+/// Returns the loaded adapters keyed by plugin ID so the edit server can
+/// route render and component-HTML calls without going through the
+/// `PluginRegistry` (which doesn't expose adapters directly).
+///
+/// This mirrors `register_extism_plugins()` in the Tauri backend but uses
+/// CLI host-function implementations (file-based storage, no-op file
+/// provider, stderr event emitter, etc.).
+pub(super) fn register_edit_server_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
+    diaryx: &mut diaryx_core::diaryx::Diaryx<FS>,
+    workspace_root: &Path,
+) -> HashMap<String, Arc<ExtismPluginAdapter>> {
+    use diaryx_core::plugin::Plugin as _;
+
+    let plugins_dir = workspace_root.join(".diaryx").join("plugins");
+    if !plugins_dir.exists() {
+        return HashMap::new();
+    }
+
+    let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
+        Arc::new(SyncToAsyncFs::new(RealFileSystem));
+    let ws_bridge = Arc::new(TokioWebSocketBridge::new());
+    let host_ctx = Arc::new(HostContext {
+        fs,
+        storage: Arc::new(CliPluginStorage::new(workspace_root)),
+        secret_store: Arc::new(diaryx_extism::FilePluginSecretStore::new(
+            workspace_root.join(".diaryx").join("plugin-secrets"),
+        )),
+        event_emitter: Arc::new(CliEventEmitter),
+        plugin_id: String::new(),
+        plugin_id_locked: false,
+        permission_checker: Some(Arc::new(CliPermissionChecker::new(Some(
+            workspace_root.to_path_buf(),
+        )))),
+        file_provider: Arc::new(diaryx_extism::NoopFileProvider),
+        ws_bridge: ws_bridge.clone(),
+        plugin_command_bridge: Arc::new(diaryx_extism::NoopPluginCommandBridge),
+        runtime_context_provider: Arc::new(CliRuntimeContextProvider::new(workspace_root)),
+        namespace_provider: Arc::new(CliNamespaceProvider::new()),
+        plugin_command_depth: 0,
+        storage_quota_bytes: diaryx_extism::DEFAULT_STORAGE_QUOTA_BYTES,
+    });
+
+    let mut result = HashMap::new();
+    match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
+        Ok(plugins) => {
+            for plugin in plugins {
+                let arc = Arc::new(plugin);
+                if arc
+                    .manifest()
+                    .capabilities
+                    .iter()
+                    .any(|cap| matches!(cap, diaryx_core::plugin::PluginCapability::SyncTransport))
+                {
+                    let sync_guest: Arc<dyn diaryx_extism::SyncGuestBridge> = arc.clone();
+                    ws_bridge.set_guest_bridge(Arc::downgrade(&sync_guest));
+                }
+                let id = arc.id().to_string();
+                diaryx
+                    .plugin_registry_mut()
+                    .register_workspace_plugin(arc.clone());
+                diaryx
+                    .plugin_registry_mut()
+                    .register_file_plugin(arc.clone());
+                result.insert(id, arc);
+            }
+        }
+        Err(e) => {
+            eprintln!("[edit-server] Failed to load plugins: {e}");
+        }
+    }
+
+    result
+}
+
+/// Load a single plugin by ID and return the adapter.
+///
+/// Used by the edit server's install endpoint to load a newly-installed
+/// plugin without restarting.
+pub(super) fn load_and_init_plugin(
+    workspace_root: &Path,
+    plugin_id: &str,
+) -> Result<Arc<ExtismPluginAdapter>, String> {
+    load_plugin(workspace_root, plugin_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PluginAuthContext, build_runtime_context_from_sources};

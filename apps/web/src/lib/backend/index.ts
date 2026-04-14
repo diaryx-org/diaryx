@@ -29,7 +29,7 @@ export type {
   StorageInfo,
 } from "./interface";
 
-export { BackendError, isTauri, isBrowser } from "./interface";
+export { BackendError, isTauri, isHttpBackend, isNativePluginBackend, setNativePluginBackend, getHttpApiUrl, isBrowser } from "./interface";
 
 // Re-export API types from generated
 export type { CreateChildResult } from "./generated";

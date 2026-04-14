@@ -53,8 +53,6 @@ The key to supporting both Tauri (desktop) and pure web targets is the **Backend
 1. `interface.ts` - Defines the `Backend` interface with all operations (getConfig, getEntry, saveEntry, search, etc.)
 2. `tauri.ts` - Implements `Backend` using Tauri's `invoke()` IPC to call Rust backend
 3. `wasm.ts` - Implements `Backend` using:
-  - `InMemoryFileSystem` for synchronous file operations
-  - IndexedDB for persistence
   - JavaScript fallbacks (or WASM module) for parsing/rendering
 4. `index.ts` - Factory that auto-detects the runtime environment:
   ```typescript
@@ -90,7 +88,7 @@ Uses WASM backend with IndexedDB for persistence.
 
 ```bash
 cd apps/tauri
-cargo tauri dev
+bun tauri dev
 ```
 
 Uses Tauri IPC backend with real filesystem.
@@ -108,7 +106,7 @@ bun run build    # Output: apps/web/dist/
 
 ```bash
 cd apps/tauri
-cargo tauri build
+bun tauri build
 ```
 
 ## Adding New Backend Operations
@@ -117,18 +115,3 @@ cargo tauri build
 2. Implement in `TauriBackend` (calls `invoke()`)
 3. Implement in `WasmBackend` (uses in-memory FS + WASM)
 4. Add corresponding Tauri command in `src-tauri/src/commands.rs`
-
-## Persistence Strategy (Web)
-
-The WASM backend uses a "load all, work in memory, persist periodically" approach:
-
-1. **On init**: Load all files from IndexedDB into `InMemoryFileSystem`
-2. **During use**: All operations work on the in-memory representation
-3. **On persist**: Dirty files are written back to IndexedDB
-
-Auto-persist runs every 5 seconds, and manual persist happens on:
-
-- Save operations
-- Before page unload
-
-This avoids the complexity of async filesystem operations while keeping data safe.

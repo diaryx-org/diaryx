@@ -38,11 +38,12 @@ crossterm = "0.29"
 axum = { version = "0.8", optional = true }
 tower-http = { version = "0.6", features = ["cors", "fs"], optional = true }
 open = { version = "5", optional = true }
+tempfile = { version = "3", optional = true }
 
 [features]
 default = ["plugins", "edit"]
 edit = ["dep:tokio", "dep:axum", "dep:tower-http", "dep:open"]
-plugins = ["dep:diaryx_extism", "dep:tokio", "dep:axum", "dep:tower-http", "dep:open", "dep:sha2"]
+plugins = ["dep:diaryx_extism", "dep:tokio", "dep:axum", "dep:tower-http", "dep:open", "dep:sha2", "dep:tempfile"]
 
 [build-dependencies]
 diaryx_core = { workspace = true }

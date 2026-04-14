@@ -25,7 +25,7 @@
     getBrowserPluginSupport,
     getBrowserPluginSupportError,
   } from "$lib/plugins/browserPluginManager.svelte";
-  import { isTauri } from "$lib/backend";
+  import { isNativePluginBackend } from "$lib/backend";
   import {
     installLocalPlugin,
     installRegistryPlugin,
@@ -90,7 +90,7 @@
 
   const browserPluginSupport = $derived(getBrowserPluginSupport());
   const browserPluginSupportError = $derived(getBrowserPluginSupportError());
-  const pluginsSupported = $derived(isTauri() || browserPluginSupport.supported);
+  const pluginsSupported = $derived(isNativePluginBackend() || browserPluginSupport.supported);
 
   const installedIds = $derived(
     new Set(pluginStore.allManifests.map((m) => String(m.id))),

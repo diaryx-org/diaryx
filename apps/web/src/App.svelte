@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { getBackend, isTauri, replaceBackend, resetBackend, type TreeNode } from "./lib/backend";
+  import { getBackend, isTauri, isNativePluginBackend, replaceBackend, resetBackend, type TreeNode } from "./lib/backend";
   import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
   import { BackendError } from "./lib/backend/interface";
   import { pickAuthorizedWorkspaceFolder } from "./lib/backend/workspaceAccess";
@@ -840,7 +840,7 @@
       appearanceStore.reloadFromWorkspace?.(),
     ]);
 
-    if (isTauri()) {
+    if (isTauri() || isNativePluginBackend()) {
       return;
     }
 

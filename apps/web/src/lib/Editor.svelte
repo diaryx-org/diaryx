@@ -65,9 +65,10 @@
   import { getEditorExtensions, getPluginExtensionsVersion } from "$lib/plugins/browserPluginManager.svelte";
   import { getPreservedEditorExtensions } from "$lib/plugins/preservedEditorExtensions.svelte";
   import { getTauriEditorExtensions } from "$lib/plugins/tauriEditorExtensions";
+  import { getHttpEditorExtensions } from "$lib/plugins/httpEditorExtensions";
   import { setEditorExtensionIframeContext } from "$lib/plugins/editorExtensionFactory";
   import type { Api } from "$lib/backend/api";
-  import { isTauri } from "$lib/backend/interface";
+  import { isTauri, isNativePluginBackend, isHttpBackend } from "$lib/backend/interface";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { getThemeStore } from "@/models/stores";
@@ -1080,9 +1081,13 @@
           : undefined,
       }),
       // Plugin-generated editor extensions (e.g., math blocks)
-      // Tauri: use native backend (plugins loaded synchronously, available immediately)
+      // Tauri / HTTP-with-plugins: use native backend (plugins loaded by host)
       // Web: use browser Extism plugins (loaded async, editor rebuilds when ready)
-      ...(isTauri() ? getTauriEditorExtensions() : getEditorExtensions()),
+      ...(isTauri()
+        ? getTauriEditorExtensions()
+        : isHttpBackend() && isNativePluginBackend()
+          ? getHttpEditorExtensions()
+          : getEditorExtensions()),
       // Session-local fallback extensions keep removed plugin syntax round-trippable
       // until the next full reload clears marked's shared tokenizer registry.
       ...getPreservedEditorExtensions(),

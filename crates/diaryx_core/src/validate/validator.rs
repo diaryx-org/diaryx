@@ -459,6 +459,12 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         from_parent: Option<&Path>,
         contents_ref: Option<&str>,
     ) -> Result<()> {
+        // Skip symlinks - they're filesystem implementation details.
+        // The real file (the symlink target) is what matters for the hierarchy.
+        if self.ws.fs_ref().is_symlink(path).await {
+            return Ok(());
+        }
+
         // Avoid cycles - use normalize_path for consistent path comparison
         let normalized = normalize_path(path);
         if ctx.visited.contains(&normalized) {

@@ -671,6 +671,69 @@ export function isTauri(): boolean {
 }
 
 /**
+ * Check if running with the HTTP backend (`diaryx edit`).
+ *
+ * Like Tauri, the HTTP backend runs commands natively (via the CLI binary)
+ * rather than in-browser WASM, so plugin loading should follow the native
+ * path rather than the browser Extism/JSPI path.
+ */
+export function isHttpBackend(): boolean {
+  if (typeof window === "undefined") return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.get("backend") === "http" && !!params.get("api_url");
+}
+
+/**
+ * Get the HTTP backend API URL, if using the HTTP backend.
+ * Returns `null` when not in HTTP backend mode.
+ */
+export function getHttpApiUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("backend") === "http") {
+    return params.get("api_url");
+  }
+  return null;
+}
+
+/**
+ * Check if the active backend supports native plugin loading.
+ *
+ * Returns `true` for Tauri (always) and for the HTTP backend when the
+ * server was built with the `plugins` feature.  The HTTP backend stores
+ * the `native_plugins` flag from the `/api/workspace` init response.
+ *
+ * Also caches the result in a module-level variable so subsequent checks
+ * (including non-reactive `$derived` evaluations) pick up the value
+ * even if called from different module instances.
+ */
+let _nativePluginCached: boolean | null = null;
+
+export function isNativePluginBackend(): boolean {
+  if (isTauri()) return true;
+  if (_nativePluginCached !== null) return _nativePluginCached;
+
+  // Check the HTTP backend's flag via the globalThis singleton.
+  const instance = (globalThis as any).__diaryx_backendInstance;
+  if (instance && typeof instance.nativePlugins === "boolean") {
+    _nativePluginCached = instance.nativePlugins as boolean;
+    return instance.nativePlugins as boolean;
+  }
+  return false;
+}
+
+/**
+ * Set the native plugin backend flag explicitly.
+ *
+ * Called by the HTTP backend after init so the flag is available
+ * immediately, even before the globalThis singleton is readable
+ * from other module instances.
+ */
+export function setNativePluginBackend(value: boolean): void {
+  _nativePluginCached = value;
+}
+
+/**
  * Check if running in a browser (non-Tauri) environment.
  */
 export function isBrowser(): boolean {

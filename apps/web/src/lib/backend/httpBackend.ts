@@ -15,14 +15,16 @@ import type {
   BackendEventListener,
   Config,
   ImportResult,
+  PluginInspection,
 } from "./interface";
 import type { Command, Response } from "./generated";
-import { BackendError } from "./interface";
+import { BackendError, setNativePluginBackend } from "./interface";
 
 export class HttpBackend implements Backend {
   private apiUrl: string;
   private _ready = false;
   private workspacePath = "workspace";
+  private _nativePlugins = false;
   private listeners = new Map<BackendEventType, Set<BackendEventListener>>();
 
   constructor(apiUrl: string) {
@@ -37,12 +39,21 @@ export class HttpBackend implements Backend {
       if (res.ok) {
         const info = await res.json();
         this.workspacePath = info.workspace_path ?? "workspace";
+        this._nativePlugins = info.native_plugins === true;
+        // Set the flag immediately so isNativePluginBackend() works before
+        // the singleton is stored in globalThis by the backend factory.
+        setNativePluginBackend(this._nativePlugins);
       }
     } catch (e) {
       console.warn("[HttpBackend] Could not fetch workspace info:", e);
     }
     this._ready = true;
-    console.log("[HttpBackend] Initialized, api:", this.apiUrl);
+    console.log("[HttpBackend] Initialized, api:", this.apiUrl, "nativePlugins:", this._nativePlugins);
+  }
+
+  /** Whether the server supports native plugin loading (plugins feature). */
+  get nativePlugins(): boolean {
+    return this._nativePlugins;
   }
 
   isReady(): boolean {
@@ -121,5 +132,65 @@ export class HttpBackend implements Backend {
 
   async importFromZip(): Promise<ImportResult> {
     return { success: false, files_imported: 0, error: "Import not supported in HTTP backend" };
+  }
+
+  // ===========================================================================
+  // Plugin management (native — mirrors Tauri backend)
+  // ===========================================================================
+
+  async installPlugin(wasmBytes: Uint8Array): Promise<string> {
+    const res = await fetch(`${this.apiUrl}/api/plugins/install`, {
+      method: "POST",
+      headers: { "Content-Type": "application/wasm" },
+      body: new Uint8Array(wasmBytes) as Uint8Array<ArrayBuffer>,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new BackendError(text, "HttpError", undefined);
+    }
+    return res.text();
+  }
+
+  async uninstallPlugin(pluginId: string): Promise<void> {
+    const res = await fetch(
+      `${this.apiUrl}/api/plugins/${encodeURIComponent(pluginId)}`,
+      { method: "DELETE" },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new BackendError(text, "HttpError", undefined);
+    }
+  }
+
+  async inspectPlugin(wasmBytes: Uint8Array): Promise<PluginInspection> {
+    const res = await fetch(`${this.apiUrl}/api/plugins/inspect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/wasm" },
+      body: new Uint8Array(wasmBytes) as Uint8Array<ArrayBuffer>,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new BackendError(text, "HttpError", undefined);
+    }
+    const data = await res.json();
+    return {
+      pluginId: data.plugin_id,
+      pluginName: data.plugin_name,
+      requestedPermissions: data.requested_permissions,
+    };
+  }
+
+  async getPluginComponentHtml(
+    pluginId: string,
+    componentId: string,
+  ): Promise<string> {
+    const res = await fetch(
+      `${this.apiUrl}/api/plugins/${encodeURIComponent(pluginId)}/component/${encodeURIComponent(componentId)}`,
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new BackendError(text, "HttpError", undefined);
+    }
+    return res.text();
   }
 }

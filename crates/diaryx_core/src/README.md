@@ -41,18 +41,19 @@ This directory contains the source code for the core Diaryx library.
 
 ## Modules
 
-| Directory   | Purpose                                                     |
-| ----------- | ----------------------------------------------------------- |
-| `plugin/`   | Plugin architecture: traits, events, registry               |
-| `publish/`  | HTML publishing pipeline (includes `ContentProvider` trait)  |
-| `crdt/`     | CRDT sync and version history (requires `crdt` feature)     |
-| `cloud/`    | Bidirectional file sync with cloud storage                  |
-| `entry/`    | Entry manipulation functionality                            |
-| `fs/`       | Filesystem abstraction layer                                |
-| `utils/`    | Utility functions (date, path)                              |
-| `validate/` | Workspace validation and auto-fixing (split by concern)     |
-| `workspace/`| Workspace tree organization                                 |
-| `import/`   | Import external formats                                     |
+| Directory      | Purpose                                                     |
+| -------------- | ----------------------------------------------------------- |
+| `appearance/`  | Workspace appearance: theme colors, typography, favicon resolution |
+| `plugin/`      | Plugin architecture: traits, events, registry               |
+| `publish/`     | HTML publishing pipeline (includes `ContentProvider` trait)  |
+| `crdt/`        | CRDT sync and version history (requires `crdt` feature)     |
+| `cloud/`       | Bidirectional file sync with cloud storage                  |
+| `entry/`       | Entry manipulation functionality                            |
+| `fs/`          | Filesystem abstraction layer                                |
+| `utils/`       | Utility functions (date, path)                              |
+| `validate/`    | Workspace validation and auto-fixing (split by concern)     |
+| `workspace/`   | Workspace tree organization                                 |
+| `import/`      | Import external formats                                     |
 
 ### `validate/` submodules
 

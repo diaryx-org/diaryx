@@ -19,8 +19,20 @@ use crate::sync_manifest::{SyncManifest, SyncState};
 /// Server listings may return keys with percent-encoding if they were uploaded
 /// with an over-eager encode set. Decoding normalises them so that local ↔
 /// server comparisons work correctly.
+///
+/// Also handles form-url-encoded `+` → space, since some upload paths (e.g. the
+/// web frontend) encode spaces as `+` rather than `%20`.
 fn decode_server_key(key: &str) -> String {
-    percent_decode_str(key).decode_utf8_lossy().into_owned()
+    // Replace `+` with `%20` first so percent_decode handles both forms.
+    let plus_normalised = key.replace('+', "%20");
+    percent_decode_str(&plus_normalised)
+        .decode_utf8_lossy()
+        .into_owned()
+}
+
+fn is_not_found_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("404") || lower.contains("not found")
 }
 
 // ---------------------------------------------------------------------------
@@ -36,7 +48,11 @@ pub struct LocalFileInfo {
 
 #[derive(Debug, Clone)]
 pub struct ServerEntry {
+    /// Decoded key used for comparison with local file paths.
     pub key: String,
+    /// Original key as returned by the server listing.  Used for GET/DELETE
+    /// API calls where the server expects the un-decoded form.
+    pub server_key: String,
     pub content_hash: Option<String>,
     pub size_bytes: u64,
     pub updated_at: i64,
@@ -243,6 +259,7 @@ pub fn fetch_server_manifest(
             let key = decode_server_key(&item.key);
 
             all_entries.push(ServerEntry {
+                server_key: item.key,
                 key,
                 content_hash: item.content_hash,
                 size_bytes: item.size_bytes.unwrap_or(0),
@@ -394,15 +411,17 @@ pub fn execute_push(
     workspace_root: &str,
     plan: &SyncPlan,
     local_scan: &BTreeMap<String, LocalFileInfo>,
+    server_entries: &[ServerEntry],
     manifest: &mut SyncManifest,
     progress_base: u64,
     progress_span: u64,
     progress_offset: usize,
     progress_total: usize,
-) -> (usize, Vec<String>) {
+) -> (usize, usize, Vec<String>) {
     let root_dir = workspace_root_dir(workspace_root);
 
     let mut pushed = 0usize;
+    let mut deleted_remote = 0usize;
     let mut errors = Vec::new();
 
     for (index, key) in plan.push.iter().enumerate() {
@@ -465,10 +484,22 @@ pub fn execute_push(
     }
 
     // Delete remote files
+    let server_key_map: BTreeMap<&str, &str> = server_entries
+        .iter()
+        .map(|e| (e.key.as_str(), e.server_key.as_str()))
+        .collect();
     for (index, key) in plan.delete_remote.iter().enumerate() {
         let relative_path = key.strip_prefix("files/").unwrap_or(key);
-        match host::namespace::delete_object(namespace_id, key) {
-            Ok(()) => {}
+        let api_key = server_key_map.get(key.as_str()).copied().unwrap_or(key);
+        match host::namespace::delete_object(namespace_id, api_key) {
+            Ok(()) => {
+                deleted_remote += 1;
+                manifest.ack_delete(key);
+            }
+            Err(e) if is_not_found_error(&e) => {
+                deleted_remote += 1;
+                manifest.ack_delete(key);
+            }
             Err(e) => errors.push(format!("delete remote {key}: {e}")),
         }
         let completed = progress_offset + plan.push.len() + index + 1;
@@ -485,9 +516,8 @@ pub fn execute_push(
             Some(relative_path),
         );
     }
-    manifest.clear_deletes();
 
-    (pushed, errors)
+    (pushed, deleted_remote, errors)
 }
 
 /// Pull remote files to the local workspace.
@@ -502,13 +532,14 @@ pub fn execute_pull(
     progress_span: u64,
     progress_offset: usize,
     progress_total: usize,
-) -> (usize, Vec<String>) {
+) -> (usize, usize, Vec<String>) {
     let root_dir = workspace_root_dir(workspace_root);
 
     let server_map: BTreeMap<&str, &ServerEntry> =
         server_entries.iter().map(|e| (e.key.as_str(), e)).collect();
 
     let mut pulled = 0usize;
+    let mut deleted_local = 0usize;
     let mut errors = Vec::new();
     let total_pull = plan.pull.len();
 
@@ -544,7 +575,13 @@ pub fn execute_pull(
                 key
             ),
         );
-        match host::namespace::get_object(namespace_id, key) {
+        // Use the original server key for the API call — the decoded key
+        // may differ from how the server stores it (e.g. `+` vs space).
+        let api_key = server_map
+            .get(key.as_str())
+            .map(|se| se.server_key.as_str())
+            .unwrap_or(key);
+        match host::namespace::get_object(namespace_id, api_key) {
             Ok(bytes) => {
                 let full_path = join_workspace_path(&root_dir, relative_path);
 
@@ -581,7 +618,20 @@ pub fn execute_pull(
                     Err(e) => errors.push(format!("write {key}: {e}")),
                 }
             }
-            Err(e) => errors.push(format!("pull {key}: {e}")),
+            Err(e) => {
+                // If the server listing reported this key but the object
+                // can't actually be fetched (404), it's a ghost entry —
+                // clean it up so it doesn't recur on every sync.
+                if is_not_found_error(&e) {
+                    host::log::log(
+                        "info",
+                        &format!("pull {key}: object not found (ghost entry), cleaning up"),
+                    );
+                    let _ = host::namespace::delete_object(namespace_id, api_key);
+                } else {
+                    errors.push(format!("pull {key}: {e}"));
+                }
+            }
         }
         let completed = progress_offset + index + 1;
         emit_sync_progress(
@@ -603,10 +653,13 @@ pub fn execute_pull(
     for (index, key) in plan.delete_local.iter().enumerate() {
         let relative_path = key.strip_prefix("files/").unwrap_or(key);
         let full_path = join_workspace_path(&root_dir, relative_path);
-        if let Err(e) = host::fs::delete_file(&full_path) {
-            errors.push(format!("delete local {key}: {e}"));
+        match host::fs::delete_file(&full_path) {
+            Ok(()) => {
+                deleted_local += 1;
+                manifest.files.remove(key.as_str());
+            }
+            Err(e) => errors.push(format!("delete local {key}: {e}")),
         }
-        manifest.files.remove(key.as_str());
         let completed = progress_offset + plan.pull.len() + index + 1;
         emit_sync_progress(
             staged_percent(progress_base, progress_span, completed, progress_total),
@@ -632,7 +685,7 @@ pub fn execute_pull(
         );
     }
 
-    (pulled, errors)
+    (pulled, deleted_local, errors)
 }
 
 // ---------------------------------------------------------------------------
@@ -686,19 +739,20 @@ pub fn sync(
         None,
     );
 
-    let (pushed, mut push_errors) = execute_push(
+    let (pushed, deleted_remote, mut push_errors) = execute_push(
         params,
         namespace_id,
         &dir_root,
         &plan,
         &local_scan,
+        &server_entries,
         manifest,
         20,
         45,
         0,
         total_ops.max(1),
     );
-    let (pulled, pull_errors) = execute_pull(
+    let (pulled, deleted_local, pull_errors) = execute_pull(
         params,
         namespace_id,
         &dir_root,
@@ -737,8 +791,8 @@ pub fn sync(
     SyncResult {
         pushed,
         pulled,
-        deleted_remote: plan.delete_remote.len(),
-        deleted_local: plan.delete_local.len(),
+        deleted_remote,
+        deleted_local,
         errors: push_errors,
     }
 }
@@ -820,6 +874,7 @@ mod tests {
 
     fn server(key: &str, hash: Option<&str>, updated_at: i64) -> ServerEntry {
         ServerEntry {
+            server_key: key.to_string(),
             key: key.to_string(),
             content_hash: hash.map(String::from),
             size_bytes: 100,

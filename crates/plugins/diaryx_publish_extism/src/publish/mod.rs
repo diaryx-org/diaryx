@@ -23,5 +23,5 @@ pub use publisher::RenderedFile;
 pub use publisher::{build_site_nav_tree, nav_for_page};
 pub use types::{
     FaviconAsset, NavLink, PublishColorPalette, PublishOptions, PublishResult, PublishTheme,
-    PublishedPage, SiteNavNode, SiteNavigation,
+    PublishTypography, PublishedPage, SiteNavNode, SiteNavigation,
 };

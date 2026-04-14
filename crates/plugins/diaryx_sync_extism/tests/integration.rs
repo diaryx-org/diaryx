@@ -5,10 +5,15 @@
 //!
 //! Prerequisites: `cargo build --target wasm32-unknown-unknown --release`
 
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use diaryx_core::plugin::manifest::{PluginCapability, UiContribution};
 use diaryx_extism::testing::*;
+use diaryx_extism::{NamespaceEntry, NamespaceObjectMeta, NamespaceProvider};
+use diaryx_sync_extism::sync_manifest::SyncManifest;
 use serde_json::{Value as JsonValue, json};
 
 const WASM_PATH: &str = "target/wasm32-unknown-unknown/release/diaryx_sync_extism.wasm";
@@ -45,6 +50,222 @@ fn load_with_storage_and_emitter(
         .with_event_emitter(emitter)
         .build()
         .expect("Failed to load sync plugin WASM")
+}
+
+#[derive(Default)]
+struct MockNamespaceProvider {
+    namespaces: Mutex<Vec<NamespaceEntry>>,
+    objects: Mutex<BTreeMap<(String, String), Vec<u8>>>,
+    put_errors: Mutex<HashMap<String, String>>,
+    delete_errors: Mutex<HashMap<String, Vec<String>>>,
+    list_namespaces_error: Mutex<Option<String>>,
+    next_namespace_id: Mutex<u64>,
+}
+
+impl MockNamespaceProvider {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn seed_namespace(&self, id: &str, name: &str) {
+        self.namespaces.lock().unwrap().push(NamespaceEntry {
+            id: id.to_string(),
+            owner_user_id: "user-1".to_string(),
+            created_at: 1,
+            metadata: Some(json!({ "name": name, "provider": "diaryx.sync" })),
+        });
+    }
+
+    fn seed_object(&self, namespace_id: &str, key: &str, body: &[u8]) {
+        self.objects
+            .lock()
+            .unwrap()
+            .insert((namespace_id.to_string(), key.to_string()), body.to_vec());
+    }
+
+    fn fail_put_for_key(&self, key: &str, error: &str) {
+        self.put_errors
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), error.to_string());
+    }
+
+    fn push_delete_error(&self, key: &str, error: &str) {
+        self.delete_errors
+            .lock()
+            .unwrap()
+            .entry(key.to_string())
+            .or_default()
+            .push(error.to_string());
+    }
+}
+
+impl NamespaceProvider for MockNamespaceProvider {
+    fn create_namespace(
+        &self,
+        metadata: Option<&serde_json::Value>,
+    ) -> Result<NamespaceEntry, String> {
+        let mut next_id = self.next_namespace_id.lock().unwrap();
+        *next_id += 1;
+        let entry = NamespaceEntry {
+            id: format!("ns-{}", *next_id),
+            owner_user_id: "user-1".to_string(),
+            created_at: 1,
+            metadata: metadata.cloned(),
+        };
+        self.namespaces.lock().unwrap().push(entry.clone());
+        Ok(entry)
+    }
+
+    fn put_object(
+        &self,
+        ns_id: &str,
+        key: &str,
+        bytes: &[u8],
+        _mime_type: &str,
+        _audience: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(error) = self.put_errors.lock().unwrap().get(key).cloned() {
+            return Err(error);
+        }
+        self.objects
+            .lock()
+            .unwrap()
+            .insert((ns_id.to_string(), key.to_string()), bytes.to_vec());
+        Ok(())
+    }
+
+    fn get_object(&self, ns_id: &str, key: &str) -> Result<Vec<u8>, String> {
+        self.objects
+            .lock()
+            .unwrap()
+            .get(&(ns_id.to_string(), key.to_string()))
+            .cloned()
+            .ok_or_else(|| "404 not found".to_string())
+    }
+
+    fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String> {
+        if let Some(errors) = self.delete_errors.lock().unwrap().get_mut(key) {
+            if !errors.is_empty() {
+                return Err(errors.remove(0));
+            }
+        }
+        self.objects
+            .lock()
+            .unwrap()
+            .remove(&(ns_id.to_string(), key.to_string()));
+        Ok(())
+    }
+
+    fn list_objects(
+        &self,
+        ns_id: &str,
+        prefix: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<NamespaceObjectMeta>, String> {
+        let prefix = prefix.unwrap_or_default();
+        let mut objects = self
+            .objects
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((namespace_id, key), _)| namespace_id == ns_id && key.starts_with(prefix))
+            .map(|((namespace_id, key), body)| NamespaceObjectMeta {
+                namespace_id: Some(namespace_id.clone()),
+                key: key.clone(),
+                r2_key: None,
+                audience: None,
+                mime_type: Some("application/octet-stream".to_string()),
+                size_bytes: Some(body.len() as u64),
+                updated_at: Some(1),
+                content_hash: None,
+            })
+            .collect::<Vec<_>>();
+        objects.sort_by(|a, b| a.key.cmp(&b.key));
+        let offset = offset.unwrap_or(0) as usize;
+        let limit = limit.unwrap_or(u32::MAX) as usize;
+        Ok(objects.into_iter().skip(offset).take(limit).collect())
+    }
+
+    fn sync_audience(&self, _ns_id: &str, _audience: &str, _access: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn send_audience_email(
+        &self,
+        _ns_id: &str,
+        _audience: &str,
+        _subject: &str,
+        _reply_to: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        Ok(json!({ "ok": true }))
+    }
+
+    fn list_namespaces(&self) -> Result<Vec<NamespaceEntry>, String> {
+        if let Some(error) = self.list_namespaces_error.lock().unwrap().clone() {
+            return Err(error);
+        }
+        Ok(self.namespaces.lock().unwrap().clone())
+    }
+}
+
+fn unique_temp_dir(label: &str) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "diaryx-sync-extism-{label}-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).expect("temp dir should be created");
+    path
+}
+
+fn write_workspace_file(root_dir: &Path, relative_path: &str, contents: &str) {
+    let path = root_dir.join(relative_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("workspace parent directories should exist");
+    }
+    std::fs::write(path, contents).expect("workspace file should be written");
+}
+
+fn create_workspace(root_filename: &str, root_contents: &str, files: &[(&str, &str)]) -> PathBuf {
+    let root_dir = unique_temp_dir(root_filename.trim_end_matches(".md"));
+    write_workspace_file(&root_dir, root_filename, root_contents);
+    for (relative_path, contents) in files {
+        write_workspace_file(&root_dir, relative_path, contents);
+    }
+    root_dir.join(root_filename)
+}
+
+fn load_with_storage_workspace_and_namespace(
+    storage: Arc<RecordingStorage>,
+    workspace_root: &Path,
+    namespace_provider: Arc<dyn NamespaceProvider>,
+    runtime_context: Option<JsonValue>,
+) -> PluginTestHarness {
+    let mut builder = PluginTestHarnessBuilder::new(WASM_PATH)
+        .with_storage(storage)
+        .with_workspace_root(workspace_root);
+    if let Some(context) = runtime_context {
+        builder = builder.with_runtime_context(context);
+    }
+    builder
+        .with_namespace_provider(namespace_provider)
+        .build()
+        .expect("Failed to load sync plugin WASM")
+}
+
+fn saved_manifest(storage: &RecordingStorage) -> SyncManifest {
+    let data = storage
+        .data_snapshot()
+        .into_iter()
+        .find(|(key, _)| key.ends_with("sync_manifest"))
+        .map(|(_, value)| value)
+        .expect("sync manifest should be stored");
+    serde_json::from_slice(&data).expect("sync manifest should deserialize")
 }
 
 // ============================================================================
@@ -383,7 +604,13 @@ async fn get_provider_status_not_ready_without_config() {
 async fn get_provider_status_ready_with_credentials() {
     require_wasm!();
     let storage = Arc::new(RecordingStorage::new());
-    let harness = load_with_storage(storage);
+    let namespace_provider = Arc::new(MockNamespaceProvider::new());
+    namespace_provider.seed_namespace("ns-1", "Workspace");
+    let harness = PluginTestHarnessBuilder::new(WASM_PATH)
+        .with_storage(storage)
+        .with_namespace_provider(namespace_provider)
+        .build()
+        .expect("Failed to load sync plugin WASM");
     harness.init().await.expect("init");
 
     // Configure server and auth
@@ -408,7 +635,34 @@ async fn get_provider_status_ready_with_credentials() {
     assert_eq!(
         result.get("ready").and_then(|v| v.as_bool()),
         Some(true),
-        "Provider should be ready with server_url + auth_token. Got: {result}"
+        "Provider should be ready when the namespace probe succeeds. Got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn get_provider_status_ready_with_cookie_style_runtime_context() {
+    require_wasm!();
+    let namespace_provider = Arc::new(MockNamespaceProvider::new());
+    namespace_provider.seed_namespace("ns-1", "Workspace");
+    let harness = PluginTestHarnessBuilder::new(WASM_PATH)
+        .with_runtime_context(json!({
+            "server_url": "https://sync.example.com"
+        }))
+        .with_namespace_provider(namespace_provider)
+        .build()
+        .expect("Failed to load sync plugin WASM");
+    harness.init().await.expect("init");
+
+    let result = harness
+        .command("GetProviderStatus", json!({}))
+        .await
+        .expect("Some")
+        .expect("GetProviderStatus should succeed");
+
+    assert_eq!(
+        result.get("ready").and_then(|v| v.as_bool()),
+        Some(true),
+        "Provider should be ready when the host session can list namespaces. Got: {result}"
     );
 }
 
@@ -651,5 +905,274 @@ async fn file_deleted_event_creates_pending_delete_entry() {
     assert!(
         pending > 0,
         "deleted file should create a pending delete record. Got: {status}"
+    );
+}
+
+#[tokio::test]
+async fn file_moved_absolute_paths_record_relative_manifest_entries() {
+    require_wasm!();
+    let root_index = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents:\n  - new.md\n---\n\n# Root\n",
+        &[],
+    );
+    let storage = Arc::new(RecordingStorage::new());
+    let harness = PluginTestHarnessBuilder::new(WASM_PATH)
+        .with_storage(storage.clone())
+        .with_workspace_root(&root_index)
+        .build()
+        .expect("Failed to load");
+    harness.init().await.expect("init");
+
+    let root_dir = root_index.parent().expect("workspace dir should exist");
+    let old_path = root_dir.join("old.md");
+    let new_path = root_dir.join("new.md");
+    harness
+        .send_file_moved(
+            old_path.to_str().expect("old path should be utf-8"),
+            new_path.to_str().expect("new path should be utf-8"),
+        )
+        .await;
+
+    let _ = harness.call_raw("shutdown", "");
+    let manifest = saved_manifest(&storage);
+
+    assert_eq!(
+        manifest
+            .pending_deletes
+            .iter()
+            .map(|delete| delete.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["files/old.md"],
+    );
+    assert!(
+        manifest.files.contains_key("files/new.md"),
+        "new file should be tracked with a relative manifest key: {:?}",
+        manifest.files.keys().collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn sync_push_retries_remote_delete_after_transient_failure() {
+    require_wasm!();
+    let root_index = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents:\n  - new.md\n---\n\n# Root\n",
+        &[(
+            "new.md",
+            "---\ntitle: New\npart_of: index.md\n---\n\n# New\n",
+        )],
+    );
+    let storage = Arc::new(RecordingStorage::new());
+    let namespace_provider = Arc::new(MockNamespaceProvider::new());
+    namespace_provider.seed_object("ns-1", "files/old.md", b"# Old\n");
+    namespace_provider.push_delete_error("files/old.md", "network timeout");
+    let harness = load_with_storage_workspace_and_namespace(
+        storage.clone(),
+        &root_index,
+        namespace_provider,
+        None,
+    );
+    harness.init().await.expect("init");
+    harness
+        .command("set_config", json!({ "workspace_id": "ns-1" }))
+        .await
+        .expect("Some")
+        .expect("set_config should succeed");
+
+    let root_dir = root_index.parent().expect("workspace dir should exist");
+    let old_path = root_dir.join("old.md");
+    let new_path = root_dir.join("new.md");
+    harness
+        .send_file_moved(
+            old_path.to_str().expect("old path should be utf-8"),
+            new_path.to_str().expect("new path should be utf-8"),
+        )
+        .await;
+
+    let first = harness
+        .command("SyncPush", json!({}))
+        .await
+        .expect("SyncPush should return Some")
+        .expect("SyncPush should succeed with error payload");
+    assert!(
+        first
+            .get("errors")
+            .and_then(|value| value.as_array())
+            .is_some_and(|errors| !errors.is_empty()),
+        "first sync should surface the transient remote delete failure: {first}"
+    );
+
+    let manifest_after_first = saved_manifest(&storage);
+    assert_eq!(
+        manifest_after_first.pending_deletes.len(),
+        1,
+        "failed remote delete should stay pending for retry"
+    );
+    assert_eq!(manifest_after_first.pending_deletes[0].path, "files/old.md",);
+
+    let second = harness
+        .command("SyncPush", json!({}))
+        .await
+        .expect("SyncPush should return Some")
+        .expect("SyncPush should succeed");
+    assert!(
+        second
+            .get("errors")
+            .and_then(|value| value.as_array())
+            .is_some_and(|errors| errors.is_empty()),
+        "second sync should retry and clear the remote delete: {second}"
+    );
+
+    let manifest_after_second = saved_manifest(&storage);
+    assert!(
+        manifest_after_second.pending_deletes.is_empty(),
+        "successful retry should clear pending deletes"
+    );
+}
+
+#[tokio::test]
+async fn sync_push_treats_remote_delete_404_as_acknowledged() {
+    require_wasm!();
+    let root_index = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents:\n  - new.md\n---\n\n# Root\n",
+        &[(
+            "new.md",
+            "---\ntitle: New\npart_of: index.md\n---\n\n# New\n",
+        )],
+    );
+    let storage = Arc::new(RecordingStorage::new());
+    let namespace_provider = Arc::new(MockNamespaceProvider::new());
+    namespace_provider.seed_object("ns-1", "files/old.md", b"# Old\n");
+    namespace_provider.push_delete_error("files/old.md", "404 Not Found");
+    let harness = load_with_storage_workspace_and_namespace(
+        storage.clone(),
+        &root_index,
+        namespace_provider,
+        None,
+    );
+    harness.init().await.expect("init");
+    harness
+        .command("set_config", json!({ "workspace_id": "ns-1" }))
+        .await
+        .expect("Some")
+        .expect("set_config should succeed");
+
+    let root_dir = root_index.parent().expect("workspace dir should exist");
+    let old_path = root_dir.join("old.md");
+    let new_path = root_dir.join("new.md");
+    harness
+        .send_file_moved(
+            old_path.to_str().expect("old path should be utf-8"),
+            new_path.to_str().expect("new path should be utf-8"),
+        )
+        .await;
+
+    let result = harness
+        .command("SyncPush", json!({}))
+        .await
+        .expect("SyncPush should return Some")
+        .expect("SyncPush should succeed");
+    assert!(
+        result
+            .get("errors")
+            .and_then(|value| value.as_array())
+            .is_some_and(|errors| errors.is_empty()),
+        "404 delete should be treated as already removed: {result}"
+    );
+
+    let manifest = saved_manifest(&storage);
+    assert!(
+        manifest.pending_deletes.is_empty(),
+        "404 delete should clear the tombstone"
+    );
+}
+
+#[tokio::test]
+async fn link_workspace_does_not_persist_workspace_id_when_initial_sync_fails() {
+    require_wasm!();
+    let root_index = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n\n# Root\n",
+        &[(
+            "note.md",
+            "---\ntitle: Note\npart_of: index.md\n---\n\n# Note\n",
+        )],
+    );
+    let storage = Arc::new(RecordingStorage::new());
+    let namespace_provider = Arc::new(MockNamespaceProvider::new());
+    namespace_provider.fail_put_for_key("files/note.md", "simulated upload failure");
+    let harness =
+        load_with_storage_workspace_and_namespace(storage, &root_index, namespace_provider, None);
+    harness.init().await.expect("init");
+
+    let result = harness
+        .command("LinkWorkspace", json!({ "remote_id": "ns-1" }))
+        .await
+        .expect("LinkWorkspace should return Some");
+    assert!(
+        result.is_err(),
+        "initial sync failures should bubble up as a command error: {result:?}"
+    );
+
+    let root_contents =
+        std::fs::read_to_string(&root_index).expect("root index should be readable");
+    assert!(
+        !root_contents.contains("workspace_id"),
+        "workspace link should not be persisted after a failed initial sync:\n{root_contents}"
+    );
+}
+
+#[tokio::test]
+async fn upload_workspace_snapshot_fails_on_partial_uploads() {
+    require_wasm!();
+    let root_index = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n\n# Root\n",
+        &[(
+            "note.md",
+            "---\ntitle: Note\npart_of: index.md\n---\n\n# Note\n",
+        )],
+    );
+    let storage = Arc::new(RecordingStorage::new());
+    let namespace_provider = Arc::new(MockNamespaceProvider::new());
+    namespace_provider.fail_put_for_key("files/note.md", "simulated upload failure");
+    let harness =
+        load_with_storage_workspace_and_namespace(storage, &root_index, namespace_provider, None);
+    harness.init().await.expect("init");
+
+    let result = harness
+        .command("UploadWorkspaceSnapshot", json!({ "remote_id": "ns-1" }))
+        .await
+        .expect("UploadWorkspaceSnapshot should return Some");
+    assert!(
+        result.is_err(),
+        "partial upload failures should be surfaced as command errors: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn ns_create_namespace_accepts_name_parameter() {
+    require_wasm!();
+    let namespace_provider = Arc::new(MockNamespaceProvider::new());
+    let harness = PluginTestHarnessBuilder::new(WASM_PATH)
+        .with_namespace_provider(namespace_provider)
+        .build()
+        .expect("Failed to load");
+    harness.init().await.expect("init");
+
+    let result = harness
+        .command("NsCreateNamespace", json!({ "name": "Project Space" }))
+        .await
+        .expect("NsCreateNamespace should return Some")
+        .expect("NsCreateNamespace should succeed");
+
+    assert_eq!(
+        result
+            .get("metadata")
+            .and_then(|value| value.get("name"))
+            .and_then(|value| value.as_str()),
+        Some("Project Space")
     );
 }

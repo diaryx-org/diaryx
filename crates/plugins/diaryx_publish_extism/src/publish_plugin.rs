@@ -351,7 +351,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
 
         // Load theme for email rendering
         let workspace_dir = Self::workspace_dir_from_path(workspace_root);
-        let theme = self.load_workspace_theme(&workspace_dir).await;
+        let theme = diaryx_core::appearance::resolve_appearance(&self.fs, &workspace_dir).await;
 
         // Resolve site title from workspace root entry (same as publisher)
         let site_title = pages
@@ -437,100 +437,21 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
 
     /// Load the workspace's theme and return an `HtmlFormat` configured with it.
     ///
-    /// Reads `.diaryx/themes/settings.json` (for `presetId`) and
-    /// `.diaryx/themes/library.json` (for theme definitions). If the theme
-    /// files don't exist or the preset isn't found, returns the default format.
+    /// Reads workspace appearance files and returns an `HtmlFormat` with the
+    /// resolved theme. Falls back to the default format if no settings exist.
     async fn format_with_workspace_theme(&self) -> Arc<dyn PublishFormat> {
         let workspace_dir = match self.current_workspace_dir() {
             Some(root) => root,
             None => return self.format.clone(),
         };
 
-        let theme = match self.load_workspace_theme(&workspace_dir).await {
-            Some(t) => t,
-            None => return self.format.clone(),
-        };
+        let theme =
+            match diaryx_core::appearance::resolve_appearance(&self.fs, &workspace_dir).await {
+                Some(t) => t,
+                None => return self.format.clone(),
+            };
 
         Arc::new(crate::publish::HtmlFormat::with_theme(theme))
-    }
-
-    /// Try to load a `PublishTheme` from workspace appearance files.
-    async fn load_workspace_theme(
-        &self,
-        workspace_dir: &Path,
-    ) -> Option<crate::publish::PublishTheme> {
-        // Read theme settings (which preset is selected)
-        let settings_path = workspace_dir.join(".diaryx/themes/settings.json");
-        let settings_str = self.fs.read_to_string(&settings_path).await.ok()?;
-        let settings: serde_json::Value = serde_json::from_str(&settings_str).ok()?;
-        let preset_id = settings.get("presetId")?.as_str()?;
-
-        // Read theme library (full theme definitions)
-        let library_path = workspace_dir.join(".diaryx/themes/library.json");
-        let library_str = self.fs.read_to_string(&library_path).await.ok()?;
-        let library: Vec<serde_json::Value> = serde_json::from_str(&library_str).ok()?;
-
-        // Find the theme definition matching the preset ID
-        let theme_def = library.iter().find_map(|entry| {
-            let theme = entry.get("theme")?;
-            let id = theme.get("id")?.as_str()?;
-            if id == preset_id { Some(theme) } else { None }
-        })?;
-
-        // Extract light and dark palettes as HashMaps
-        let colors = theme_def.get("colors")?;
-        let light = Self::json_to_color_map(colors.get("light")?);
-        let dark = Self::json_to_color_map(colors.get("dark")?);
-
-        let mut theme = crate::publish::PublishTheme::from_app_palette(&light, &dark);
-
-        // Look for a user-provided favicon in .diaryx/themes/
-        theme.favicon = self.load_workspace_favicon(workspace_dir).await;
-
-        Some(theme)
-    }
-
-    /// Look for a favicon file in `.diaryx/themes/`.
-    ///
-    /// Checks for `favicon.svg`, `favicon.png`, and `favicon.ico` in order of
-    /// preference. Returns `None` if no favicon file is found — the theme will
-    /// then auto-generate an SVG from its accent color.
-    async fn load_workspace_favicon(
-        &self,
-        workspace_dir: &Path,
-    ) -> Option<crate::publish::types::FaviconAsset> {
-        let candidates = [
-            ("favicon.svg", "image/svg+xml"),
-            ("favicon.png", "image/png"),
-            ("favicon.ico", "image/x-icon"),
-        ];
-
-        let themes_dir = workspace_dir.join(".diaryx/themes");
-        for (filename, mime_type) in &candidates {
-            let path = themes_dir.join(filename);
-            if let Ok(data) = self.fs.read_binary(&path).await {
-                return Some(crate::publish::types::FaviconAsset {
-                    filename: filename.to_string(),
-                    mime_type: mime_type.to_string(),
-                    data,
-                });
-            }
-        }
-
-        None
-    }
-
-    /// Convert a JSON object of color keys to a HashMap.
-    fn json_to_color_map(palette: &serde_json::Value) -> std::collections::HashMap<String, String> {
-        let mut map = std::collections::HashMap::new();
-        if let Some(obj) = palette.as_object() {
-            for (key, value) in obj {
-                if let Some(v) = value.as_str() {
-                    map.insert(key.clone(), v.to_string());
-                }
-            }
-        }
-        map
     }
 }
 

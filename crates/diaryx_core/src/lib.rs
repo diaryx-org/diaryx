@@ -1,6 +1,9 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/README.md"))]
 #![warn(missing_docs)]
 
+/// Workspace appearance: theme colors, typography, and favicon resolution
+pub mod appearance;
+
 /// Authentication module for sync server
 pub mod auth;
 

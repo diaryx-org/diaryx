@@ -243,12 +243,6 @@ fn resolve_server_url(params: &JsonValue, config: &SyncExtismConfig) -> Option<S
         .map(|s| normalize_server_base(&s))
 }
 
-fn resolve_auth_token(params: &JsonValue, config: &SyncExtismConfig) -> Option<String> {
-    command_param_str(params, "auth_token")
-        .or_else(|| config.auth_token.clone())
-        .or_else(|| runtime_context_string("auth_token"))
-}
-
 fn runtime_context_string(key: &str) -> Option<String> {
     host::context::get()
         .ok()
@@ -309,6 +303,40 @@ fn provider_supported(params: &JsonValue) -> bool {
         .unwrap_or(true)
 }
 
+fn is_auth_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    [
+        "401",
+        "403",
+        "unauthorized",
+        "forbidden",
+        "not authenticated",
+        "authentication",
+        "sign in",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn summarize_sync_errors(prefix: &str, errors: &[String]) -> String {
+    const MAX_SHOWN: usize = 3;
+    let shown = errors
+        .iter()
+        .take(MAX_SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
+    let suffix = if errors.len() > MAX_SHOWN {
+        format!(
+            " (and {} more; see plugin logs for details)",
+            errors.len() - MAX_SHOWN
+        )
+    } else {
+        String::new()
+    };
+    format!("{prefix}: {shown}{suffix}")
+}
+
 fn handle_get_provider_status(params: &JsonValue) -> Result<JsonValue, String> {
     if !provider_supported(params) {
         return Ok(serde_json::json!({
@@ -321,27 +349,27 @@ fn handle_get_provider_status(params: &JsonValue) -> Result<JsonValue, String> {
     let has_server = resolve_server_url(params, &config)
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
-    let has_auth = resolve_auth_token(params, &config)
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
-
     if !has_server {
         return Ok(serde_json::json!({
             "ready": false,
             "message": "Sync server URL is not configured"
         }));
     }
-    if !has_auth {
-        return Ok(serde_json::json!({
+
+    match server_api::list_namespaces(params) {
+        Ok(_) => Ok(serde_json::json!({
+            "ready": true,
+            "message": JsonValue::Null
+        })),
+        Err(error) if is_auth_error(&error) => Ok(serde_json::json!({
             "ready": false,
             "message": "Sign in to enable sync"
-        }));
+        })),
+        Err(error) => Ok(serde_json::json!({
+            "ready": false,
+            "message": format!("Sync unavailable: {error}")
+        })),
     }
-
-    Ok(serde_json::json!({
-        "ready": true,
-        "message": JsonValue::Null
-    }))
 }
 
 fn handle_list_remote_workspaces(params: &JsonValue) -> Result<JsonValue, String> {
@@ -384,17 +412,34 @@ fn handle_link_workspace(params: &JsonValue) -> Result<JsonValue, String> {
     }
 
     let namespace_id = namespace_id.ok_or("Missing namespace_id")?;
+    let workspace_root = command_param_str(params, "workspace_root")
+        .or_else(|| resolve_workspace_root().ok())
+        .ok_or("Missing workspace_root")?;
+    let workspace_root = sync_engine::workspace_root_dir(&workspace_root);
+
+    // Run the initial sync before persisting the workspace link. That way a
+    // partial upload/download failure doesn't leave the workspace marked as
+    // linked when the remote snapshot is incomplete.
+    let mut manifest = sync_manifest::SyncManifest::new(namespace_id.clone());
+    let result = sync_engine::sync(params, &namespace_id, &workspace_root, &mut manifest);
+    if !result.errors.is_empty() {
+        host::log::log(
+            "warn",
+            &format!("LinkWorkspace errors: {:?}", result.errors),
+        );
+        return Err(summarize_sync_errors(
+            "LinkWorkspace initial sync failed",
+            &result.errors,
+        ));
+    }
 
     write_workspace_id_to_frontmatter(Some(&namespace_id));
     state::set_namespace_id(Some(namespace_id.clone()))?;
 
-    // Do an initial push
-    let result = handle_sync_full(params)?;
-
     Ok(serde_json::json!({
         "remote_id": namespace_id,
         "created_remote": created,
-        "snapshot_uploaded": result.get("pushed").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+        "snapshot_uploaded": result.pushed > 0,
         "sync": result,
     }))
 }
@@ -430,7 +475,7 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
     let plan = sync_engine::compute_diff(&manifest, &empty_local, &server_entries);
     let total_ops = (plan.pull.len() + plan.delete_local.len()).max(1);
 
-    let (pulled, errors) = sync_engine::execute_pull(
+    let (pulled, _deleted_local, errors) = sync_engine::execute_pull(
         params,
         &namespace_id,
         &workspace_root,
@@ -445,26 +490,12 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
 
     if !errors.is_empty() {
         host::log::log("warn", &format!("DownloadWorkspace errors: {:?}", errors));
-        const MAX_SHOWN: usize = 3;
-        let shown = errors
-            .iter()
-            .take(MAX_SHOWN)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("; ");
-        let suffix = if errors.len() > MAX_SHOWN {
-            format!(
-                " (and {} more; see plugin logs for details)",
-                errors.len() - MAX_SHOWN
-            )
-        } else {
-            String::new()
-        };
-        return Err(format!(
-            "DownloadWorkspace failed while writing {} file(s): {}{}",
-            errors.len(),
-            shown,
-            suffix
+        return Err(summarize_sync_errors(
+            &format!(
+                "DownloadWorkspace failed while writing {} file(s)",
+                errors.len()
+            ),
+            &errors,
         ));
     }
 
@@ -506,12 +537,13 @@ fn handle_upload_workspace_snapshot(params: &JsonValue) -> Result<JsonValue, Str
     let plan = sync_engine::compute_diff(&manifest, &local_scan, &server_entries);
     let total_ops = (plan.push.len() + plan.delete_remote.len()).max(1);
 
-    let (pushed, errors) = sync_engine::execute_push(
+    let (pushed, _deleted_remote, errors) = sync_engine::execute_push(
         params,
         &namespace_id,
         &workspace_root,
         &plan,
         &local_scan,
+        &server_entries,
         &mut manifest,
         15,
         80,
@@ -524,6 +556,13 @@ fn handle_upload_workspace_snapshot(params: &JsonValue) -> Result<JsonValue, Str
             "warn",
             &format!("UploadWorkspaceSnapshot errors: {:?}", errors),
         );
+        return Err(summarize_sync_errors(
+            &format!(
+                "UploadWorkspaceSnapshot failed while uploading {} file(s)",
+                errors.len()
+            ),
+            &errors,
+        ));
     }
 
     Ok(serde_json::json!({
@@ -547,12 +586,13 @@ fn handle_sync_push(params: &JsonValue) -> Result<JsonValue, String> {
         let server_entries = sync_engine::fetch_server_manifest(params, &namespace_id)?;
         let plan = sync_engine::compute_diff(manifest, &local_scan, &server_entries);
 
-        let (pushed, errors) = sync_engine::execute_push(
+        let (pushed, deleted_remote, errors) = sync_engine::execute_push(
             params,
             &namespace_id,
             &workspace_root,
             &plan,
             &local_scan,
+            &server_entries,
             manifest,
             15,
             80,
@@ -601,6 +641,7 @@ fn handle_sync_push(params: &JsonValue) -> Result<JsonValue, String> {
 
         Ok(serde_json::json!({
             "pushed": pushed,
+            "deleted_remote": deleted_remote,
             "errors": errors,
             "orphaned_cleaned": orphaned.len(),
         }))
@@ -621,7 +662,7 @@ fn handle_sync_pull(params: &JsonValue) -> Result<JsonValue, String> {
         let server_entries = sync_engine::fetch_server_manifest(params, &namespace_id)?;
         let plan = sync_engine::compute_diff(manifest, &local_scan, &server_entries);
 
-        let (pulled, errors) = sync_engine::execute_pull(
+        let (pulled, deleted_local, errors) = sync_engine::execute_pull(
             params,
             &namespace_id,
             &workspace_root,
@@ -655,6 +696,7 @@ fn handle_sync_pull(params: &JsonValue) -> Result<JsonValue, String> {
 
         Ok(serde_json::json!({
             "pulled": pulled,
+            "deleted_local": deleted_local,
             "errors": errors,
         }))
     })
@@ -735,8 +777,10 @@ fn resolve_workspace_root() -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 fn handle_ns_create_namespace(params: &JsonValue) -> Result<JsonValue, String> {
-    let ns_id = command_param_str(params, "namespace_id").ok_or("Missing namespace_id")?;
-    server_api::create_namespace(params, &ns_id)
+    let name = command_param_str(params, "name")
+        .or_else(|| command_param_str(params, "namespace_id"))
+        .ok_or("Missing name")?;
+    server_api::create_namespace(params, &name)
 }
 
 fn handle_ns_list_namespaces(params: &JsonValue) -> Result<JsonValue, String> {
@@ -1182,14 +1226,14 @@ pub fn execute_typed_command(input: String) -> FnResult<String> {
 // ============================================================================
 
 fn workspace_relative_path(path: &str) -> String {
+    let normalized_path = path.replace('\\', "/");
     let root = state::workspace_root().unwrap_or_default();
     let root = root.trim();
     if root.is_empty() || root == "." {
-        return path.replace('\\', "/");
+        return normalized_path;
     }
-    let normalized_root = root.replace('\\', "/");
+    let normalized_root = sync_engine::workspace_root_dir(root).replace('\\', "/");
     let normalized_root = normalized_root.trim_end_matches('/');
-    let normalized_path = path.replace('\\', "/");
 
     if let Some(stripped) = normalized_path.strip_prefix(&format!("{normalized_root}/")) {
         stripped.to_string()
@@ -1322,6 +1366,14 @@ mod tests {
         // Simulate state not initialized — falls back to returning path as-is
         let result = workspace_relative_path("/workspace/doc.md");
         assert_eq!(result, "/workspace/doc.md");
+    }
+
+    #[test]
+    fn workspace_relative_path_uses_workspace_directory_when_root_is_index_file() {
+        state::init_state(None, Some("/workspace/index.md".to_string()));
+        let result = workspace_relative_path("/workspace/docs/doc.md");
+        assert_eq!(result, "docs/doc.md");
+        state::shutdown_state();
     }
 
     #[test]

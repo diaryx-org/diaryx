@@ -278,14 +278,14 @@ pub enum Commands {
     },
 
     /// Open workspace in the web editor for rich editing
-    /// Starts a local sync server and opens the Diaryx web app
+    /// Starts a local server and opens the Diaryx web app
     #[cfg(feature = "edit")]
     Edit {
         /// URL of the web app to open (default: https://app.diaryx.org)
         #[arg(short, long, env = "DIARYX_EDIT_URL")]
         url: Option<String>,
 
-        /// Port to run the local sync server on (default: auto-select)
+        /// Port to run the local server on (default: auto-select)
         #[arg(short, long)]
         port: Option<u16>,
     },

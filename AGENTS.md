@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-04-10T18:32:30Z
+updated: 2026-04-14T14:34:53Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -40,8 +40,7 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Share - Legacy share/publish panel module - apps/web/src/lib/share/README.md
 │   │   │   │   ├── Sync - Host-side sync plugin integration services - apps/web/src/lib/sync/README.md
 │   │   │   │   ├── Storage - Storage abstraction layer - apps/web/src/lib/storage/README.md
-│   │   │   │   ├── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
-│   │   │   │   └── diaryx_wasm - WASM bindings for diaryx_core - apps/web/src/lib/wasm/README.md
+│   │   │   │   └── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
 │   │   │   ├── Models - Stores and services for application state - apps/web/src/models/README.md
 │   │   │   │   ├── Services - Business logic services - apps/web/src/models/services/README.md
 │   │   │   │   └── Stores - Svelte stores for reactive state - apps/web/src/models/stores/README.md

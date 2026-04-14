@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value as JsonValue;
+use serde_json::json;
 
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use diaryx_core::plugin::permissions::PermissionType;
@@ -120,6 +121,11 @@ impl RecordingStorage {
     pub fn ops(&self) -> Vec<StorageOp> {
         self.ops.lock().unwrap().clone()
     }
+
+    /// Snapshot the current in-memory contents.
+    pub fn data_snapshot(&self) -> HashMap<String, Vec<u8>> {
+        self.data.lock().unwrap().clone()
+    }
 }
 
 impl Default for RecordingStorage {
@@ -198,6 +204,24 @@ pub struct PluginTestHarnessBuilder {
     event_emitter: Option<Arc<dyn EventEmitter>>,
     permission_checker: Option<Arc<dyn PermissionChecker>>,
     workspace_root: Option<PathBuf>,
+    runtime_context_provider: Option<Arc<dyn RuntimeContextProvider>>,
+    namespace_provider: Option<Arc<dyn NamespaceProvider>>,
+}
+
+struct StaticRuntimeContextProvider {
+    value: JsonValue,
+}
+
+impl StaticRuntimeContextProvider {
+    fn new(value: JsonValue) -> Self {
+        Self { value }
+    }
+}
+
+impl RuntimeContextProvider for StaticRuntimeContextProvider {
+    fn get_context(&self, _plugin_id: &str) -> JsonValue {
+        self.value.clone()
+    }
 }
 
 impl PluginTestHarnessBuilder {
@@ -209,6 +233,8 @@ impl PluginTestHarnessBuilder {
             event_emitter: None,
             permission_checker: None,
             workspace_root: None,
+            runtime_context_provider: None,
+            namespace_provider: None,
         }
     }
 
@@ -236,9 +262,41 @@ impl PluginTestHarnessBuilder {
         self
     }
 
+    /// Use a custom runtime context provider.
+    pub fn with_runtime_context_provider(
+        mut self,
+        provider: Arc<dyn RuntimeContextProvider>,
+    ) -> Self {
+        self.runtime_context_provider = Some(provider);
+        self
+    }
+
+    /// Use a fixed runtime context JSON payload.
+    pub fn with_runtime_context(mut self, context: JsonValue) -> Self {
+        self.runtime_context_provider = Some(Arc::new(StaticRuntimeContextProvider::new(context)));
+        self
+    }
+
+    /// Use a custom namespace provider.
+    pub fn with_namespace_provider(mut self, provider: Arc<dyn NamespaceProvider>) -> Self {
+        self.namespace_provider = Some(provider);
+        self
+    }
+
     /// Build the test harness, loading the WASM plugin.
     pub fn build(self) -> Result<PluginTestHarness, String> {
         let fs = Arc::new(SyncToAsyncFs::new(RealFileSystem));
+        let runtime_context_provider = self.runtime_context_provider.unwrap_or_else(|| {
+            if let Some(root) = &self.workspace_root {
+                Arc::new(StaticRuntimeContextProvider::new(json!({
+                    "current_workspace": {
+                        "path": root.to_string_lossy(),
+                    }
+                }))) as Arc<dyn RuntimeContextProvider>
+            } else {
+                Arc::new(NoopRuntimeContextProvider)
+            }
+        });
         let host_context = Arc::new(HostContext {
             fs,
             storage: self.storage.unwrap_or_else(|| Arc::new(NoopStorage)),
@@ -255,8 +313,10 @@ impl PluginTestHarnessBuilder {
             file_provider: Arc::new(NoopFileProvider),
             ws_bridge: Arc::new(NoopWebSocketBridge),
             plugin_command_bridge: Arc::new(NoopPluginCommandBridge),
-            runtime_context_provider: Arc::new(NoopRuntimeContextProvider),
-            namespace_provider: Arc::new(crate::host_fns::NoopNamespaceProvider),
+            runtime_context_provider,
+            namespace_provider: self
+                .namespace_provider
+                .unwrap_or_else(|| Arc::new(crate::host_fns::NoopNamespaceProvider)),
             plugin_command_depth: 0,
             storage_quota_bytes: crate::host_fns::DEFAULT_STORAGE_QUOTA_BYTES,
         });

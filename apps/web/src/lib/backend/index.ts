@@ -144,7 +144,16 @@ async function initializeBackend(workspaceId?: string, workspaceName?: string, s
 
   try {
     let instance: Backend;
-    if (isTauri()) {
+
+    // Check for HTTP backend (used by `diaryx edit`)
+    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+    const httpApiUrl = params?.get("api_url");
+
+    if (params?.get("backend") === "http" && httpApiUrl) {
+      console.log("[Backend] Using HTTP backend:", httpApiUrl);
+      const { HttpBackend } = await import("./httpBackend");
+      instance = new HttpBackend(httpApiUrl);
+    } else if (isTauri()) {
       console.log("[Backend] Using Tauri backend");
       const { TauriBackend } = await import("./tauri");
       instance = new TauriBackend();

@@ -42,6 +42,7 @@ function closeBodySync(_path: string): void {}
 
 type EditorMarkdownRef = {
   getMarkdown?: () => string | undefined;
+  acknowledgeSavedContent?: (markdown: string) => void;
 } | null | undefined;
 
 const SAVE_RETRY_DELAYS_MS = [100, 200, 400, 800, 1600, 3200];
@@ -223,6 +224,9 @@ export async function saveEntry(
     // Note: saveEntry expects only the body content, not frontmatter.
     // Frontmatter is preserved by the backend's save_content() method.
     await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath);
+    // Pre-acknowledge so the Editor's content-sync effect won't re-apply
+    // the content we just read from it (which would reset the cursor).
+    editorRef?.acknowledgeSavedContent?.(markdown);
     entryStore.setDisplayContent(markdown);
     entryStore.markClean();
   } catch (e) {
@@ -726,6 +730,9 @@ export async function saveEntryWithSync(
     // until the user switches entries — and any later code path that re-syncs the
     // editor from displayContent (e.g. plugin-triggered editor rebuild) will
     // silently overwrite unsaved-since-load edits, causing data loss.
+    // Pre-acknowledge so the Editor's content-sync effect won't re-apply
+    // the content we just read from it (which would reset the cursor).
+    editorRef?.acknowledgeSavedContent?.(markdown);
     entryStore.setDisplayContent(markdown);
     entryStore.markClean();
 

@@ -110,6 +110,10 @@ impl SyncManifest {
         self.pending_deletes.clear();
     }
 
+    pub fn ack_delete(&mut self, path: &str) {
+        self.pending_deletes.retain(|delete| delete.path != path);
+    }
+
     pub fn dirty_count(&self) -> usize {
         self.files
             .values()

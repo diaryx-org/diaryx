@@ -51,7 +51,11 @@ mod namespace;
 /// Navigate workspace hierarchy with TUI
 mod nav;
 
-/// Web-based editing via local sync server
+/// REST server for web-based editing
+#[cfg(feature = "edit")]
+mod edit_server;
+
+/// Web-based editing via local REST server
 #[cfg(feature = "edit")]
 mod edit;
 

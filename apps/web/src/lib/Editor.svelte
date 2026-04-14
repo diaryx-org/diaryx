@@ -1629,6 +1629,15 @@
   /**
    * Set content from markdown
    */
+  /**
+   * Tell the editor that the given markdown was saved from its own content,
+   * so the content-sync $effect should not re-apply it (which would reset
+   * the cursor position).
+   */
+  export function acknowledgeSavedContent(markdown: string): void {
+    lastAppliedContentProp = markdown;
+  }
+
   export function setContent(markdown: string): void {
     if (!editor) return;
     lastAppliedContentProp = markdown;

@@ -67,6 +67,17 @@ describe("proxyFetch", () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
   });
 
+  it("respects explicit credentials from caller", async () => {
+    isTauriMock.mockReturnValue(false);
+    const fetchMock = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Caller explicitly passes "omit" for a non-CDN URL — proxyFetch should honour it.
+    await proxyFetch("https://unpkg.com/some-package/file.wasm", { credentials: "omit" });
+
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ credentials: "omit" });
+  });
+
   it("returns a null-body response for null-body statuses", async () => {
     isTauriMock.mockReturnValue(true);
     getCredentialMock.mockResolvedValue(null);

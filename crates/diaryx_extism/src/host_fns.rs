@@ -2084,7 +2084,12 @@ fn host_proxy_request(
         }
     }
     let mut response = response;
-    let body_bytes = match response.body_mut().read_to_vec() {
+    let body_bytes = match response
+        .body_mut()
+        .with_config()
+        .limit(128 * 1024 * 1024)
+        .read_to_vec()
+    {
         Ok(bytes) => bytes,
         Err(e) => {
             let msg = format!("host_proxy_request: read body: {e}");
@@ -2285,7 +2290,14 @@ fn host_http_request(
         }
     }
     let mut response = response;
-    let body_bytes = match response.body_mut().read_to_vec() {
+    // Raise the default 10 MB body limit so plugins can download large WASM
+    // binaries (e.g. pandoc.wasm ~58 MB).
+    let body_bytes = match response
+        .body_mut()
+        .with_config()
+        .limit(128 * 1024 * 1024)
+        .read_to_vec()
+    {
         Ok(bytes) => bytes,
         Err(e) => {
             let msg = format!("host_http_request: read body: {e}");

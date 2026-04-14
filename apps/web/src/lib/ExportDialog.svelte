@@ -111,23 +111,32 @@
     return value;
   }
 
-  async function executePublishCommand<T = any>(
+  async function executePluginCommand<T = any>(
+    pluginId: string,
     command: string,
     params: Record<string, any> = {},
   ): Promise<T> {
     if (!api) throw new Error("Export API unavailable");
 
-    const browserPublish = browserPlugins.getPlugin("diaryx.publish");
-    if (browserPublish) {
-      const result = await browserPlugins.dispatchCommand("diaryx.publish", command, params);
+    const browserPlugin = browserPlugins.getPlugin(pluginId);
+    if (browserPlugin) {
+      const result = await browserPlugins.dispatchCommand(pluginId, command, params);
       if (!result.success) {
-        throw new Error(result.error ?? `Publish command failed: ${command}`);
+        throw new Error(result.error ?? `Plugin command failed: ${pluginId}/${command}`);
       }
       return normalizeToObject(result.data) as T;
     }
 
-    const data = await api.executePluginCommand("diaryx.publish", command, params as any);
+    const data = await api.executePluginCommand(pluginId, command, params as any);
     return normalizeToObject(data) as T;
+  }
+
+  /** Dispatch a command to the pandoc converter plugin. */
+  async function executePandocCommand<T = any>(
+    command: string,
+    params: Record<string, any> = {},
+  ): Promise<T> {
+    return executePluginCommand<T>("diaryx.pandoc", command, params);
   }
 
   function normalizeFormatInfo(raw: any): FormatInfo | null {
@@ -150,7 +159,7 @@
 
   async function loadExportFormats() {
     try {
-      const rawFormats = await executePublishCommand<any[]>("GetExportFormats", {});
+      const rawFormats = await executePandocCommand<any[]>("GetExportFormats", {});
       const mapped = (rawFormats ?? [])
         .map(normalizeFormatInfo)
         .filter((entry): entry is FormatInfo => entry !== null);
@@ -253,7 +262,7 @@
         const convertedFiles: { path: string; data: Uint8Array | string }[] = [];
         for (let i = 0; i < files.length; i++) {
           converterProgress = `Converting ${i + 1}/${files.length}: ${files[i].path}`;
-          const result = await executePublishCommand<any>("ConvertFormat", {
+          const result = await executePandocCommand<any>("ConvertFormat", {
             content: files[i].content,
             from: "markdown",
             to: selectedFormat,

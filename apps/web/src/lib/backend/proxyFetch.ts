@@ -37,12 +37,17 @@ export async function proxyFetch(
   init?: ProxyFetchInit,
 ): Promise<Response> {
   if (!isTauri()) {
-    // Skip credentials for CDN requests — they're public assets and
-    // credentials: "include" breaks when the origin differs (e.g. localhost dev).
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const isCdn = url.startsWith("/cdn") || url.includes("/cdn/");
-    const credentials = isCdn ? "omit" as const : "include" as const;
-    return fetch(input, { ...init, credentials });
+    // Respect the caller's credentials setting when explicitly provided.
+    // Default to "include" for same-origin / server requests, but callers
+    // like host_http_request pass "omit" for third-party CDNs where
+    // credentials: "include" triggers a CORS rejection (wildcard origin).
+    if (!init?.credentials) {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const isCdn = url.startsWith("/cdn") || url.includes("/cdn/");
+      const credentials = isCdn ? "omit" as const : "include" as const;
+      return fetch(input, { ...init, credentials });
+    }
+    return fetch(input, init);
   }
 
   const { invoke } = await import("@tauri-apps/api/core");

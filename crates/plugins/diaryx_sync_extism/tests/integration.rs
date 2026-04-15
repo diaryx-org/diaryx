@@ -202,6 +202,31 @@ impl NamespaceProvider for MockNamespaceProvider {
         Ok(json!({ "ok": true }))
     }
 
+    fn get_objects_batch(
+        &self,
+        ns_id: &str,
+        keys: &[String],
+    ) -> Result<diaryx_extism::BatchGetResult, String> {
+        let mut result = diaryx_extism::BatchGetResult::default();
+        for key in keys {
+            match self.get_object(ns_id, key) {
+                Ok(bytes) => {
+                    result.objects.insert(
+                        key.clone(),
+                        diaryx_extism::BatchGetEntry {
+                            bytes,
+                            mime_type: "application/octet-stream".to_string(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    result.errors.insert(key.clone(), e);
+                }
+            }
+        }
+        Ok(result)
+    }
+
     fn list_namespaces(&self) -> Result<Vec<NamespaceEntry>, String> {
         if let Some(error) = self.list_namespaces_error.lock().unwrap().clone() {
             return Err(error);

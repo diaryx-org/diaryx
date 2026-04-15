@@ -96,6 +96,20 @@ pub struct NamespaceEntry {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// A single entry in a batch-get response.
+#[derive(Debug, Clone)]
+pub struct BatchGetEntry {
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+}
+
+/// Result of a batch object download.
+#[derive(Debug, Clone, Default)]
+pub struct BatchGetResult {
+    pub objects: std::collections::HashMap<String, BatchGetEntry>,
+    pub errors: std::collections::HashMap<String, String>,
+}
+
 /// Trait for namespace object operations (upload, delete, list, sync audience).
 ///
 /// Implementations talk to the sync server — via `proxyFetch` on browser,
@@ -131,6 +145,9 @@ pub trait NamespaceProvider: Send + Sync {
         subject: &str,
         reply_to: Option<&str>,
     ) -> Result<serde_json::Value, String>;
+
+    /// Download multiple objects in a single request.
+    fn get_objects_batch(&self, ns_id: &str, keys: &[String]) -> Result<BatchGetResult, String>;
 
     /// List all namespaces owned by the authenticated user.
     fn list_namespaces(&self) -> Result<Vec<NamespaceEntry>, String>;
@@ -366,6 +383,10 @@ impl NamespaceProvider for NoopNamespaceProvider {
         _subject: &str,
         _reply_to: Option<&str>,
     ) -> Result<serde_json::Value, String> {
+        Err("Namespace operations are not available".to_string())
+    }
+
+    fn get_objects_batch(&self, _ns_id: &str, _keys: &[String]) -> Result<BatchGetResult, String> {
         Err("Namespace operations are not available".to_string())
     }
 
@@ -715,6 +736,13 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_namespace_get_object,
+        )
+        .with_function(
+            "host_namespace_get_objects_batch",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_get_objects_batch,
         )
         .with_function(
             "host_namespace_list_objects",
@@ -2435,6 +2463,65 @@ fn host_namespace_get_object(
         Ok(bytes) => {
             let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
             serde_json::json!({ "data": encoded })
+        }
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_get_objects_batch(input: {ns_id, keys}) -> {objects: {key: {data, mime_type}}, errors: {key: msg}}`
+fn host_namespace_get_objects_batch(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    use base64::Engine as _;
+
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+        keys: Vec<String>,
+    }
+
+    let parsed: Input = serde_json::from_str(&input).map_err(|e| {
+        ExtismError::msg(format!(
+            "host_namespace_get_objects_batch: invalid input: {e}"
+        ))
+    })?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_get_objects_batch: lock: {e}")))?;
+
+    let result = ctx
+        .namespace_provider
+        .get_objects_batch(&parsed.ns_id, &parsed.keys);
+
+    let json = match result {
+        Ok(batch) => {
+            let objects: serde_json::Map<String, serde_json::Value> = batch
+                .objects
+                .into_iter()
+                .map(|(key, entry)| {
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&entry.bytes);
+                    let val = serde_json::json!({
+                        "data": encoded,
+                        "mime_type": entry.mime_type,
+                    });
+                    (key, val)
+                })
+                .collect();
+
+            let mut resp = serde_json::json!({ "objects": objects });
+            if !batch.errors.is_empty() {
+                resp["errors"] = serde_json::json!(batch.errors);
+            }
+            resp
         }
         Err(e) => serde_json::json!({ "error": e }),
     };

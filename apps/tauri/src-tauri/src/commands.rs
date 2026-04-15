@@ -1293,6 +1293,61 @@ impl<R: Runtime> diaryx_extism::NamespaceProvider for TauriNamespaceProvider<R> 
         self.request_bytes(url)
     }
 
+    fn get_objects_batch(
+        &self,
+        ns_id: &str,
+        keys: &[String],
+    ) -> Result<diaryx_extism::BatchGetResult, String> {
+        use base64::Engine as _;
+
+        let base = self.server_url()?;
+        let url = format!(
+            "{}/namespaces/{}/objects/batch",
+            base,
+            Self::encode_component(ns_id),
+        );
+        let body = serde_json::to_vec(&serde_json::json!({ "keys": keys }))
+            .map_err(|e| format!("Failed to serialize batch request: {e}"))?;
+
+        let resp: serde_json::Value = self
+            .request_json("POST", url, Some(body), Some("application/json"), None)?
+            .ok_or_else(|| "Batch get returned an empty response".to_string())?;
+
+        let mut result = diaryx_extism::BatchGetResult::default();
+
+        if let Some(objects) = resp.get("objects").and_then(|v| v.as_object()) {
+            for (key, entry) in objects {
+                let data = entry
+                    .get("data")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| format!("Missing data for key {key}"))?;
+                let mime_type = entry
+                    .get("mime_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|e| format!("Failed to decode base64 for {key}: {e}"))?;
+                result.objects.insert(
+                    key.clone(),
+                    diaryx_extism::BatchGetEntry { bytes, mime_type },
+                );
+            }
+        }
+
+        if let Some(errors) = resp.get("errors").and_then(|v| v.as_object()) {
+            for (key, msg) in errors {
+                result.errors.insert(
+                    key.clone(),
+                    msg.as_str().unwrap_or("unknown error").to_string(),
+                );
+            }
+        }
+
+        Ok(result)
+    }
+
     fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String> {
         let base = self.server_url()?;
         let url = format!(

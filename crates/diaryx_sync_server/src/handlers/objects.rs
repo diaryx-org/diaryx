@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
-    routing::{get, put},
+    routing::{get, post, put},
 };
 use diaryx_server::domain::{ObjectMeta, UsageTotals};
 use diaryx_server::ports::{BlobStore, NamespaceStore, ObjectMetaStore, ServerCoreError};
@@ -77,6 +77,24 @@ impl From<UsageTotals> for UsageResponse {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct BatchGetRequest {
+    keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchObjectEntry {
+    data: String,
+    mime_type: String,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchGetResponse {
+    objects: std::collections::HashMap<String, BatchObjectEntry>,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    errors: std::collections::HashMap<String, String>,
+}
+
 // ---------------------------------------------------------------------------
 // Router (mounted under /namespaces/{ns_id})
 // ---------------------------------------------------------------------------
@@ -84,6 +102,7 @@ impl From<UsageTotals> for UsageResponse {
 pub fn object_routes(state: ObjectState) -> Router {
     Router::new()
         .route("/objects", get(list_objects))
+        .route("/objects/batch", post(batch_get_objects))
         .route(
             "/objects/{*key}",
             put(put_object).get(get_object).delete(delete_object),
@@ -184,6 +203,41 @@ async fn get_object(
             result.bytes,
         )
             .into_response(),
+        Err(e) => core_error_response(e),
+    }
+}
+
+/// POST /namespaces/{ns_id}/objects/batch — retrieve multiple objects at once.
+async fn batch_get_objects(
+    State(state): State<ObjectState>,
+    RequireAuth(auth): RequireAuth,
+    Path(ns_id): Path<String>,
+    Json(body): Json<BatchGetRequest>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+
+    let service = make_service(&state);
+
+    match service.get_batch(&ns_id, &body.keys, &auth.user.id).await {
+        Ok(result) => {
+            let objects: std::collections::HashMap<String, BatchObjectEntry> = result
+                .objects
+                .into_iter()
+                .map(|(key, obj)| {
+                    let entry = BatchObjectEntry {
+                        data: base64::engine::general_purpose::STANDARD.encode(&obj.bytes),
+                        mime_type: obj.mime_type,
+                    };
+                    (key, entry)
+                })
+                .collect();
+
+            Json(BatchGetResponse {
+                objects,
+                errors: result.errors,
+            })
+            .into_response()
+        }
         Err(e) => core_error_response(e),
     }
 }

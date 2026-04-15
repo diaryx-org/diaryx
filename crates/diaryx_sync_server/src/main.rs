@@ -28,6 +28,7 @@ use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::signal;
 use tower_http::{
+    compression::CompressionLayer,
     cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
 };
@@ -362,6 +363,7 @@ async fn main() {
         // Add layers
         .layer(Extension(auth_extractor))
         .layer(cors)
+        .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
 
     // Create listener

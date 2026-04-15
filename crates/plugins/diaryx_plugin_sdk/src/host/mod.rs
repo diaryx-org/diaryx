@@ -70,6 +70,7 @@ extern "ExtismHost" {
 
     // Namespace
     pub fn host_namespace_get_object(input: String) -> String;
+    pub fn host_namespace_get_objects_batch(input: String) -> String;
     pub fn host_namespace_put_object(input: String) -> String;
     pub fn host_namespace_delete_object(input: String) -> String;
     pub fn host_namespace_list_objects(input: String) -> String;

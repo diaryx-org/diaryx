@@ -406,6 +406,47 @@ pub async fn delete_object(req: Request, ctx: RouteContext<()>) -> Result<Respon
     }
 }
 
+pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    use base64::Engine as _;
+
+    let user_id = require_auth!(&req, &ctx);
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
+
+    #[derive(Deserialize)]
+    struct BatchReq {
+        keys: Vec<String>,
+    }
+    let body: BatchReq = req.json().await?;
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
+    let blob_store = R2BlobStore::new(bucket(&ctx)?);
+    let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
+
+    match service.get_batch(&ns_id, &body.keys, &user_id).await {
+        Ok(result) => {
+            let objects: std::collections::HashMap<String, serde_json::Value> = result
+                .objects
+                .into_iter()
+                .map(|(key, obj)| {
+                    let entry = serde_json::json!({
+                        "data": base64::engine::general_purpose::STANDARD.encode(&obj.bytes),
+                        "mime_type": obj.mime_type,
+                    });
+                    (key, entry)
+                })
+                .collect();
+
+            let mut resp_json = serde_json::json!({ "objects": objects });
+            if !result.errors.is_empty() {
+                resp_json["errors"] = serde_json::json!(result.errors);
+            }
+            Response::from_json(&resp_json)
+        }
+        Err(e) => error_response(e),
+    }
+}
+
 pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let key = decode_param(ctx.param("key").ok_or_else(|| Error::from("missing key"))?);

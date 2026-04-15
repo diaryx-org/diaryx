@@ -17,6 +17,15 @@ pub struct GetObjectResult {
     pub bytes: Vec<u8>,
 }
 
+/// Result of a batch object get.
+#[derive(Debug)]
+pub struct BatchGetResult {
+    /// Successfully fetched objects keyed by their original key.
+    pub objects: HashMap<String, GetObjectResult>,
+    /// Per-key errors for objects that could not be fetched.
+    pub errors: HashMap<String, String>,
+}
+
 pub struct ObjectService<'a> {
     namespace_store: &'a dyn NamespaceStore,
     object_meta_store: &'a dyn ObjectMetaStore,
@@ -195,6 +204,86 @@ impl<'a> ObjectService<'a> {
             mime_type: meta.mime_type,
             bytes,
         })
+    }
+
+    /// Fetch multiple objects in a single call. Returns per-key results
+    /// so individual failures don't abort the whole batch.
+    pub async fn get_batch(
+        &self,
+        namespace_id: &str,
+        keys: &[String],
+        caller_user_id: &str,
+    ) -> Result<BatchGetResult, ServerCoreError> {
+        const MAX_BATCH_KEYS: usize = 500;
+
+        if keys.len() > MAX_BATCH_KEYS {
+            return Err(ServerCoreError::invalid_input(format!(
+                "batch request exceeds maximum of {} keys",
+                MAX_BATCH_KEYS
+            )));
+        }
+
+        self.require_namespace_owner(namespace_id, caller_user_id)
+            .await?;
+
+        let mut objects = HashMap::new();
+        let mut errors = HashMap::new();
+        let mut total_bytes_out: u64 = 0;
+
+        for key in keys {
+            let meta = match self
+                .object_meta_store
+                .get_object_meta(namespace_id, key)
+                .await
+            {
+                Ok(Some(m)) => m,
+                Ok(None) => {
+                    errors.insert(key.clone(), "Object not found".to_string());
+                    continue;
+                }
+                Err(e) => {
+                    errors.insert(key.clone(), e.to_string());
+                    continue;
+                }
+            };
+
+            let blob_key = meta
+                .blob_key
+                .unwrap_or_else(|| object_blob_key(namespace_id, key));
+
+            match self.blob_store.get(&blob_key).await {
+                Ok(Some(bytes)) => {
+                    total_bytes_out += bytes.len() as u64;
+                    objects.insert(
+                        key.clone(),
+                        GetObjectResult {
+                            mime_type: meta.mime_type,
+                            bytes,
+                        },
+                    );
+                }
+                Ok(None) => {
+                    errors.insert(key.clone(), "Object not found".to_string());
+                }
+                Err(e) => {
+                    errors.insert(key.clone(), e.to_string());
+                }
+            }
+        }
+
+        if total_bytes_out > 0 {
+            let _ = self
+                .object_meta_store
+                .record_usage(
+                    caller_user_id,
+                    "bytes_out",
+                    total_bytes_out,
+                    Some(namespace_id),
+                )
+                .await;
+        }
+
+        Ok(BatchGetResult { objects, errors })
     }
 
     pub async fn delete(

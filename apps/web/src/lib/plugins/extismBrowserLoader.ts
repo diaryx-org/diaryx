@@ -1645,6 +1645,26 @@ function buildHostFunctions(
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
         }
       },
+      async host_namespace_get_objects_batch(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { ns_id: string; keys: string[] }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+          const resp = await namespaceFetchText(
+            "POST",
+            `/namespaces/${encodeURIComponent(input.ns_id)}/objects/batch`,
+            {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ keys: input.keys }),
+            },
+          );
+          // Response is already JSON with base64-encoded data — pass through
+          return cp.store(resp);
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
       async host_namespace_put_object(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as

@@ -521,6 +521,69 @@ pub fn execute_push(
 }
 
 /// Pull remote files to the local workspace.
+/// Download and write a single file, updating manifest and error tracking.
+fn pull_single_file(
+    namespace_id: &str,
+    key: &str,
+    api_key: &str,
+    relative_path: &str,
+    root_dir: &str,
+    server_map: &BTreeMap<&str, &ServerEntry>,
+    manifest: &mut SyncManifest,
+    pulled: &mut usize,
+    errors: &mut Vec<String>,
+) {
+    match host::namespace::get_object(namespace_id, api_key) {
+        Ok(bytes) => {
+            let full_path = join_workspace_path(root_dir, relative_path);
+
+            // Ensure parent directories exist.
+            if let Some(parent_end) = full_path.rfind('/') {
+                let parent = &full_path[..parent_end];
+                let marker = format!("{parent}/.diaryx_sync_tmp");
+                let _ = host::fs::write_file(&marker, "");
+                let _ = host::fs::delete_file(&marker);
+            }
+
+            let write_result = if relative_path.ends_with(".md") {
+                let content = String::from_utf8_lossy(&bytes);
+                host::fs::write_file(&full_path, &content)
+            } else {
+                host::fs::write_binary(&full_path, &bytes)
+            };
+
+            match write_result {
+                Ok(()) => {
+                    *pulled += 1;
+                    let hash = server_map
+                        .get(key)
+                        .and_then(|se| se.content_hash.clone())
+                        .unwrap_or_default();
+                    let modified_at = host::fs::file_metadata(&full_path)
+                        .ok()
+                        .filter(|meta| meta.exists)
+                        .and_then(|meta| meta.modified_at_ms)
+                        .unwrap_or_else(|| host::time::timestamp_millis().unwrap_or(0) as i64)
+                        .max(0) as u64;
+                    manifest.mark_clean(key, &hash, bytes.len() as u64, modified_at);
+                }
+                Err(e) => errors.push(format!("write {key}: {e}")),
+            }
+        }
+        Err(e) => {
+            if is_not_found_error(&e) {
+                host::log::log(
+                    "info",
+                    &format!("pull {key}: object not found (ghost entry), cleaning up"),
+                );
+                let _ = host::namespace::delete_object(namespace_id, api_key);
+            } else {
+                errors.push(format!("pull {key}: {e}"));
+            }
+        }
+    }
+}
+
 pub fn execute_pull(
     _params: &JsonValue,
     namespace_id: &str,
@@ -550,9 +613,187 @@ pub fn execute_pull(
         );
     }
 
-    for (index, key) in plan.pull.iter().enumerate() {
+    // Partition files into small (batchable) and large (individual download).
+    const BATCH_SIZE_THRESHOLD: u64 = 1_048_576; // 1 MB
+    const BATCH_CHUNK_SIZE: usize = 100;
+
+    let mut small_keys: Vec<&String> = Vec::new();
+    let mut large_keys: Vec<&String> = Vec::new();
+
+    for key in &plan.pull {
+        let size = server_map
+            .get(key.as_str())
+            .map(|se| se.size_bytes)
+            .unwrap_or(0);
+        if size > BATCH_SIZE_THRESHOLD {
+            large_keys.push(key);
+        } else {
+            small_keys.push(key);
+        }
+    }
+
+    let mut files_completed: usize = 0;
+
+    // --- Batch-fetch small files in chunks ---
+    for chunk in small_keys.chunks(BATCH_CHUNK_SIZE) {
+        let chunk_start = files_completed;
+        let chunk_end = chunk_start + chunk.len();
+
+        emit_sync_progress(
+            staged_percent(
+                progress_base,
+                progress_span,
+                progress_offset + chunk_start,
+                progress_total,
+            ),
+            progress_offset + chunk_start,
+            progress_total,
+            "download",
+            &format!(
+                "Downloading batch (files {}-{} of {})",
+                chunk_start + 1,
+                chunk_end,
+                total_pull,
+            ),
+            None,
+        );
+
+        // Build the list of server-side keys for the batch request.
+        let batch_api_keys: Vec<String> = chunk
+            .iter()
+            .map(|key| {
+                server_map
+                    .get(key.as_str())
+                    .map(|se| se.server_key.clone())
+                    .unwrap_or_else(|| (*key).clone())
+            })
+            .collect();
+
+        // Map from server_key back to decoded key for result processing.
+        let api_key_to_key: BTreeMap<&str, &str> = chunk
+            .iter()
+            .zip(batch_api_keys.iter())
+            .map(|(key, api_key)| (api_key.as_str(), key.as_str()))
+            .collect();
+
+        let batch_result = host::namespace::get_objects_batch(namespace_id, &batch_api_keys);
+
+        match batch_result {
+            Ok(batch) => {
+                // Process successful downloads.
+                for (api_key, entry) in &batch.objects {
+                    let key = api_key_to_key
+                        .get(api_key.as_str())
+                        .copied()
+                        .unwrap_or(api_key);
+                    let relative_path = key.strip_prefix("files/").unwrap_or(key);
+                    let full_path = join_workspace_path(&root_dir, relative_path);
+
+                    // Ensure parent directories exist.
+                    if let Some(parent_end) = full_path.rfind('/') {
+                        let parent = &full_path[..parent_end];
+                        let marker = format!("{parent}/.diaryx_sync_tmp");
+                        let _ = host::fs::write_file(&marker, "");
+                        let _ = host::fs::delete_file(&marker);
+                    }
+
+                    let write_result = if relative_path.ends_with(".md") {
+                        let content = String::from_utf8_lossy(&entry.bytes);
+                        host::fs::write_file(&full_path, &content)
+                    } else {
+                        host::fs::write_binary(&full_path, &entry.bytes)
+                    };
+
+                    match write_result {
+                        Ok(()) => {
+                            pulled += 1;
+                            let hash = server_map
+                                .get(key)
+                                .and_then(|se| se.content_hash.clone())
+                                .unwrap_or_default();
+                            let modified_at = host::fs::file_metadata(&full_path)
+                                .ok()
+                                .filter(|meta| meta.exists)
+                                .and_then(|meta| meta.modified_at_ms)
+                                .unwrap_or_else(|| {
+                                    host::time::timestamp_millis().unwrap_or(0) as i64
+                                })
+                                .max(0) as u64;
+                            manifest.mark_clean(key, &hash, entry.bytes.len() as u64, modified_at);
+                        }
+                        Err(e) => errors.push(format!("write {key}: {e}")),
+                    }
+                }
+
+                // Process per-key errors from the batch.
+                for (api_key, err_msg) in &batch.errors {
+                    let key = api_key_to_key
+                        .get(api_key.as_str())
+                        .copied()
+                        .unwrap_or(api_key);
+                    if is_not_found_error(err_msg) {
+                        host::log::log(
+                            "info",
+                            &format!("pull {key}: object not found (ghost entry), cleaning up"),
+                        );
+                        let _ = host::namespace::delete_object(namespace_id, api_key);
+                    } else {
+                        errors.push(format!("pull {key}: {err_msg}"));
+                    }
+                }
+            }
+            Err(e) => {
+                // Batch call failed entirely — fall back to individual downloads.
+                host::log::log(
+                    "warn",
+                    &format!("Batch download failed, falling back to individual downloads: {e}"),
+                );
+                for key in chunk {
+                    let relative_path = key.strip_prefix("files/").unwrap_or(key);
+                    let api_key = server_map
+                        .get(key.as_str())
+                        .map(|se| se.server_key.as_str())
+                        .unwrap_or(key);
+                    pull_single_file(
+                        namespace_id,
+                        key,
+                        api_key,
+                        relative_path,
+                        &root_dir,
+                        &server_map,
+                        manifest,
+                        &mut pulled,
+                        &mut errors,
+                    );
+                }
+            }
+        }
+
+        files_completed = chunk_end;
+        emit_sync_progress(
+            staged_percent(
+                progress_base,
+                progress_span,
+                progress_offset + files_completed,
+                progress_total,
+            ),
+            progress_offset + files_completed,
+            progress_total,
+            "download",
+            &format!(
+                "Downloaded batch (files {}-{} of {})",
+                chunk_start + 1,
+                chunk_end,
+                total_pull,
+            ),
+            None,
+        );
+    }
+
+    // --- Individually fetch large files ---
+    for key in &large_keys {
         let relative_path = key.strip_prefix("files/").unwrap_or(key);
-        let completed = progress_offset + index;
+        let completed = progress_offset + files_completed;
         emit_sync_progress(
             staged_percent(progress_base, progress_span, completed, progress_total),
             completed,
@@ -561,79 +802,30 @@ pub fn execute_pull(
             &format!(
                 "Downloading {} ({}/{})",
                 relative_path,
-                index + 1,
+                files_completed + 1,
                 total_pull
             ),
             Some(relative_path),
         );
-        host::log::log(
-            "debug",
-            &format!(
-                "DownloadWorkspace pulling {}/{}: {}",
-                index + 1,
-                total_pull,
-                key
-            ),
-        );
-        // Use the original server key for the API call — the decoded key
-        // may differ from how the server stores it (e.g. `+` vs space).
+
         let api_key = server_map
             .get(key.as_str())
             .map(|se| se.server_key.as_str())
             .unwrap_or(key);
-        match host::namespace::get_object(namespace_id, api_key) {
-            Ok(bytes) => {
-                let full_path = join_workspace_path(&root_dir, relative_path);
+        pull_single_file(
+            namespace_id,
+            key,
+            api_key,
+            relative_path,
+            &root_dir,
+            &server_map,
+            manifest,
+            &mut pulled,
+            &mut errors,
+        );
 
-                // Ensure parent directories exist
-                if let Some(parent_end) = full_path.rfind('/') {
-                    let parent = &full_path[..parent_end];
-                    let marker = format!("{parent}/.diaryx_sync_tmp");
-                    let _ = host::fs::write_file(&marker, "");
-                    let _ = host::fs::delete_file(&marker);
-                }
-
-                let write_result = if relative_path.ends_with(".md") {
-                    let content = String::from_utf8_lossy(&bytes);
-                    host::fs::write_file(&full_path, &content)
-                } else {
-                    host::fs::write_binary(&full_path, &bytes)
-                };
-
-                match write_result {
-                    Ok(()) => {
-                        pulled += 1;
-                        let hash = server_map
-                            .get(key.as_str())
-                            .and_then(|se| se.content_hash.clone())
-                            .unwrap_or_default();
-                        let modified_at = host::fs::file_metadata(&full_path)
-                            .ok()
-                            .filter(|meta| meta.exists)
-                            .and_then(|meta| meta.modified_at_ms)
-                            .unwrap_or_else(|| host::time::timestamp_millis().unwrap_or(0) as i64)
-                            .max(0) as u64;
-                        manifest.mark_clean(key, &hash, bytes.len() as u64, modified_at);
-                    }
-                    Err(e) => errors.push(format!("write {key}: {e}")),
-                }
-            }
-            Err(e) => {
-                // If the server listing reported this key but the object
-                // can't actually be fetched (404), it's a ghost entry —
-                // clean it up so it doesn't recur on every sync.
-                if is_not_found_error(&e) {
-                    host::log::log(
-                        "info",
-                        &format!("pull {key}: object not found (ghost entry), cleaning up"),
-                    );
-                    let _ = host::namespace::delete_object(namespace_id, api_key);
-                } else {
-                    errors.push(format!("pull {key}: {e}"));
-                }
-            }
-        }
-        let completed = progress_offset + index + 1;
+        files_completed += 1;
+        let completed = progress_offset + files_completed;
         emit_sync_progress(
             staged_percent(progress_base, progress_span, completed, progress_total),
             completed,
@@ -641,9 +833,7 @@ pub fn execute_pull(
             "download",
             &format!(
                 "Downloaded {} ({}/{})",
-                relative_path,
-                index + 1,
-                total_pull
+                relative_path, files_completed, total_pull
             ),
             Some(relative_path),
         );

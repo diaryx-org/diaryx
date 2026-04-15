@@ -106,6 +106,68 @@ pub fn get_object(ns_id: &str, key: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to decode get_object response: {e}"))
 }
 
+/// A single entry in a batch-get response.
+#[derive(Debug, Clone)]
+pub struct BatchGetEntry {
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+}
+
+/// Result of a batch object download.
+#[derive(Debug, Clone, Default)]
+pub struct BatchGetResult {
+    pub objects: std::collections::HashMap<String, BatchGetEntry>,
+    pub errors: std::collections::HashMap<String, String>,
+}
+
+/// Download multiple objects from a namespace in a single request.
+pub fn get_objects_batch(ns_id: &str, keys: &[String]) -> Result<BatchGetResult, String> {
+    let input = serde_json::json!({
+        "ns_id": ns_id,
+        "keys": keys,
+    });
+    let result = unsafe { host_namespace_get_objects_batch(input.to_string()) }
+        .map_err(|e| format!("host_namespace_get_objects_batch failed: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse get_objects_batch response: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+
+    let mut batch = BatchGetResult::default();
+
+    if let Some(objects) = parsed.get("objects").and_then(|v| v.as_object()) {
+        for (key, entry) in objects {
+            let data = entry
+                .get("data")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("Missing data for key {key}"))?;
+            let mime_type = entry
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let bytes = BASE64
+                .decode(data)
+                .map_err(|e| format!("Failed to decode base64 for {key}: {e}"))?;
+            batch
+                .objects
+                .insert(key.clone(), BatchGetEntry { bytes, mime_type });
+        }
+    }
+
+    if let Some(errors) = parsed.get("errors").and_then(|v| v.as_object()) {
+        for (key, msg) in errors {
+            batch.errors.insert(
+                key.clone(),
+                msg.as_str().unwrap_or("unknown error").to_string(),
+            );
+        }
+    }
+
+    Ok(batch)
+}
+
 /// Upload an object to a namespace with an optional audience tag.
 pub fn put_object_with_audience(
     ns_id: &str,

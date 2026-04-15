@@ -54,6 +54,17 @@ async fn check_auth_rate_limit(ctx: &RouteContext<()>, key: &str) -> Result<bool
     }
 }
 
+/// Percent-decode a URL path parameter.
+///
+/// `workers-rs` `ctx.param()` returns raw (percent-encoded) values, unlike Axum
+/// which auto-decodes. This ensures D1 keys are stored decoded, matching the
+/// site-proxy worker's `decodeURIComponent` at serve time.
+fn decode_param(raw: &str) -> String {
+    urlencoding::decode(raw)
+        .unwrap_or(std::borrow::Cow::Borrowed(raw))
+        .into_owned()
+}
+
 fn error_response(err: ServerCoreError) -> Result<Response> {
     let (status, msg) = match &err {
         ServerCoreError::NotFound(m) => (404, m.as_str()),
@@ -323,10 +334,10 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?
         .to_string();
-    let key = ctx
-        .param("key")
-        .ok_or_else(|| Error::from("missing key"))?
-        .to_string();
+    let key = decode_param(
+        ctx.param("key")
+            .ok_or_else(|| Error::from("missing key"))?,
+    );
 
     let mime_type = req
         .headers()
@@ -363,14 +374,14 @@ pub async fn get_object(req: Request, ctx: RouteContext<()>) -> Result<Response>
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?;
-    let key = ctx.param("key").ok_or_else(|| Error::from("missing key"))?;
+    let key = decode_param(ctx.param("key").ok_or_else(|| Error::from("missing key"))?);
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
     let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
 
-    match service.get(ns_id, key, &user_id).await {
+    match service.get(ns_id, &key, &user_id).await {
         Ok(result) => {
             let mut resp = Response::from_bytes(result.bytes)?;
             resp.headers_mut().set("content-type", &result.mime_type)?;
@@ -385,14 +396,14 @@ pub async fn delete_object(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?;
-    let key = ctx.param("key").ok_or_else(|| Error::from("missing key"))?;
+    let key = decode_param(ctx.param("key").ok_or_else(|| Error::from("missing key"))?);
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
     let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
 
-    match service.delete(ns_id, key, &user_id).await {
+    match service.delete(ns_id, &key, &user_id).await {
         Ok(()) => Response::empty().map(|r| r.with_status(204)),
         Err(e) => error_response(e),
     }
@@ -402,14 +413,14 @@ pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Re
     let ns_id = ctx
         .param("ns_id")
         .ok_or_else(|| Error::from("missing ns_id"))?;
-    let key = ctx.param("key").ok_or_else(|| Error::from("missing key"))?;
+    let key = decode_param(ctx.param("key").ok_or_else(|| Error::from("missing key"))?);
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
     let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
 
-    let access = match service.resolve_public_access(ns_id, key).await {
+    let access = match service.resolve_public_access(ns_id, &key).await {
         Ok(a) => a,
         Err(e) => return error_response(e),
     };
@@ -440,7 +451,7 @@ pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Re
     }
 
     match service
-        .fetch_blob(ns_id, key, access.meta.blob_key.as_deref())
+        .fetch_blob(ns_id, &key, access.meta.blob_key.as_deref())
         .await
     {
         Ok(result) => {

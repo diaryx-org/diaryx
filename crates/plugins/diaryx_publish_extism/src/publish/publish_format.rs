@@ -120,19 +120,14 @@ pub trait PublishFormat: Send + Sync {
 
 /// Sanitize a single path component for safe use in URLs.
 ///
-/// Replaces spaces with `%20` and removes characters that are unsafe or
-/// problematic in URLs (e.g., `!`, `?`, `#`, `&`, etc.). Preserves dots,
-/// hyphens, underscores, and alphanumerics.
+/// Keeps spaces (R2 and the upload/serve pipeline handle them via
+/// percent-encoding/decoding), but strips characters that are unsafe or
+/// ambiguous in URLs: `!`, `?`, `#`, `&`, `=`, `+`, `%`, etc.
+/// Preserves alphanumerics, spaces, dots, hyphens, and underscores.
 fn sanitize_path_component(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            ' ' => result.push_str("%20"),
-            c if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' => result.push(c),
-            _ => {} // drop unsafe characters like !, ?, #, &, etc.
-        }
-    }
-    result
+    s.chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_' || *c == '.')
+        .collect()
 }
 
 #[cfg(test)]
@@ -141,8 +136,8 @@ mod tests {
 
     #[test]
     fn test_sanitize_path_component() {
-        assert_eq!(sanitize_path_component("hello world"), "hello%20world");
-        assert_eq!(sanitize_path_component("First post!"), "First%20post");
+        assert_eq!(sanitize_path_component("hello world"), "hello world");
+        assert_eq!(sanitize_path_component("First post!"), "First post");
         assert_eq!(sanitize_path_component("what?"), "what");
         assert_eq!(sanitize_path_component("a&b#c"), "abc");
         assert_eq!(

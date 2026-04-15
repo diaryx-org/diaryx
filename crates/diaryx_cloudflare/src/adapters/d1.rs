@@ -676,8 +676,8 @@ impl ObjectMetaStore for D1ObjectMetaStore {
             return Ok(Vec::new());
         }
 
-        // D1 limits bound parameters, so chunk the query.
-        const D1_CHUNK: usize = 50;
+        // D1 limits bound parameters to 100; reserve 1 for namespace_id.
+        const D1_CHUNK: usize = 99;
         let mut all_results = Vec::new();
 
         for chunk in keys.chunks(D1_CHUNK) {

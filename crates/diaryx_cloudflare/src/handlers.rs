@@ -439,10 +439,20 @@ pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Resul
                 .objects
                 .into_iter()
                 .map(|(key, obj)| {
-                    let entry = serde_json::json!({
-                        "data": base64::engine::general_purpose::STANDARD.encode(&obj.bytes),
-                        "mime_type": obj.mime_type,
-                    });
+                    let is_text = obj.mime_type.starts_with("text/");
+                    let entry = if is_text {
+                        serde_json::json!({
+                            "data": String::from_utf8_lossy(&obj.bytes),
+                            "mime_type": obj.mime_type,
+                            "encoding": "text",
+                        })
+                    } else {
+                        serde_json::json!({
+                            "data": base64::engine::general_purpose::STANDARD.encode(&obj.bytes),
+                            "mime_type": obj.mime_type,
+                            "encoding": "base64",
+                        })
+                    };
                     (key, entry)
                 })
                 .collect();

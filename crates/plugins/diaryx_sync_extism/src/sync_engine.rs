@@ -521,6 +521,91 @@ pub fn execute_push(
 }
 
 /// Pull remote files to the local workspace.
+/// Attempt a batch download for the given API keys. Returns `true` if the
+/// batch call succeeded (even if some individual keys had errors), `false`
+/// if the batch call itself failed entirely.
+fn try_batch_download(
+    namespace_id: &str,
+    api_keys: &[String],
+    api_key_to_key: &BTreeMap<&str, &str>,
+    root_dir: &str,
+    server_map: &BTreeMap<&str, &ServerEntry>,
+    manifest: &mut SyncManifest,
+    pulled: &mut usize,
+    errors: &mut Vec<String>,
+) -> bool {
+    match host::namespace::get_objects_batch(namespace_id, api_keys) {
+        Ok(batch) => {
+            // Process successful downloads.
+            for (api_key, entry) in &batch.objects {
+                let key = api_key_to_key
+                    .get(api_key.as_str())
+                    .copied()
+                    .unwrap_or(api_key);
+                let relative_path = key.strip_prefix("files/").unwrap_or(key);
+                let full_path = join_workspace_path(root_dir, relative_path);
+
+                if let Some(parent_end) = full_path.rfind('/') {
+                    let parent = &full_path[..parent_end];
+                    let marker = format!("{parent}/.diaryx_sync_tmp");
+                    let _ = host::fs::write_file(&marker, "");
+                    let _ = host::fs::delete_file(&marker);
+                }
+
+                let write_result = if relative_path.ends_with(".md") {
+                    let content = String::from_utf8_lossy(&entry.bytes);
+                    host::fs::write_file(&full_path, &content)
+                } else {
+                    host::fs::write_binary(&full_path, &entry.bytes)
+                };
+
+                match write_result {
+                    Ok(()) => {
+                        *pulled += 1;
+                        let hash = server_map
+                            .get(key)
+                            .and_then(|se| se.content_hash.clone())
+                            .unwrap_or_default();
+                        let modified_at = host::fs::file_metadata(&full_path)
+                            .ok()
+                            .filter(|meta| meta.exists)
+                            .and_then(|meta| meta.modified_at_ms)
+                            .unwrap_or_else(|| host::time::timestamp_millis().unwrap_or(0) as i64)
+                            .max(0) as u64;
+                        manifest.mark_clean(key, &hash, entry.bytes.len() as u64, modified_at);
+                    }
+                    Err(e) => errors.push(format!("write {key}: {e}")),
+                }
+            }
+
+            // Process per-key errors from the batch.
+            for (api_key, err_msg) in &batch.errors {
+                let key = api_key_to_key
+                    .get(api_key.as_str())
+                    .copied()
+                    .unwrap_or(api_key);
+                if is_not_found_error(err_msg) {
+                    host::log::log(
+                        "info",
+                        &format!("pull {key}: object not found (ghost entry), cleaning up"),
+                    );
+                    let _ = host::namespace::delete_object(namespace_id, api_key);
+                } else {
+                    errors.push(format!("pull {key}: {err_msg}"));
+                }
+            }
+            true
+        }
+        Err(e) => {
+            host::log::log(
+                "warn",
+                &format!("Batch download failed ({} keys): {e}", api_keys.len()),
+            );
+            false
+        }
+    }
+}
+
 /// Download and write a single file, updating manifest and error tracking.
 fn pull_single_file(
     namespace_id: &str,
@@ -613,29 +698,26 @@ pub fn execute_pull(
         );
     }
 
-    // Partition files into small (batchable) and large (individual download).
-    const BATCH_SIZE_THRESHOLD: u64 = 1_048_576; // 1 MB
+    // Partition files: markdown is batched (small, text, compresses well),
+    // everything else (images, PDFs, videos) is downloaded individually.
     const BATCH_CHUNK_SIZE: usize = 100;
 
-    let mut small_keys: Vec<&String> = Vec::new();
-    let mut large_keys: Vec<&String> = Vec::new();
+    let mut markdown_keys: Vec<&String> = Vec::new();
+    let mut binary_keys: Vec<&String> = Vec::new();
 
     for key in &plan.pull {
-        let size = server_map
-            .get(key.as_str())
-            .map(|se| se.size_bytes)
-            .unwrap_or(0);
-        if size > BATCH_SIZE_THRESHOLD {
-            large_keys.push(key);
+        let relative_path = key.strip_prefix("files/").unwrap_or(key);
+        if relative_path.ends_with(".md") {
+            markdown_keys.push(key);
         } else {
-            small_keys.push(key);
+            binary_keys.push(key);
         }
     }
 
     let mut files_completed: usize = 0;
 
     // --- Batch-fetch small files in chunks ---
-    for chunk in small_keys.chunks(BATCH_CHUNK_SIZE) {
+    for chunk in markdown_keys.chunks(BATCH_CHUNK_SIZE) {
         let chunk_start = files_completed;
         let chunk_end = chunk_start + chunk.len();
 
@@ -676,95 +758,62 @@ pub fn execute_pull(
             .map(|(key, api_key)| (api_key.as_str(), key.as_str()))
             .collect();
 
-        let batch_result = host::namespace::get_objects_batch(namespace_id, &batch_api_keys);
+        // Try batch download; on failure, retry with smaller sub-chunks
+        // before falling back to individual downloads.
+        let batch_ok = try_batch_download(
+            namespace_id,
+            &batch_api_keys,
+            &api_key_to_key,
+            &root_dir,
+            &server_map,
+            manifest,
+            &mut pulled,
+            &mut errors,
+        );
 
-        match batch_result {
-            Ok(batch) => {
-                // Process successful downloads.
-                for (api_key, entry) in &batch.objects {
-                    let key = api_key_to_key
-                        .get(api_key.as_str())
-                        .copied()
-                        .unwrap_or(api_key);
-                    let relative_path = key.strip_prefix("files/").unwrap_or(key);
-                    let full_path = join_workspace_path(&root_dir, relative_path);
+        if !batch_ok {
+            // Retry with two smaller sub-chunks (halved).
+            let mid = batch_api_keys.len() / 2;
+            let (first_half_keys, second_half_keys) = batch_api_keys.split_at(mid);
 
-                    // Ensure parent directories exist.
-                    if let Some(parent_end) = full_path.rfind('/') {
-                        let parent = &full_path[..parent_end];
-                        let marker = format!("{parent}/.diaryx_sync_tmp");
-                        let _ = host::fs::write_file(&marker, "");
-                        let _ = host::fs::delete_file(&marker);
-                    }
-
-                    let write_result = if relative_path.ends_with(".md") {
-                        let content = String::from_utf8_lossy(&entry.bytes);
-                        host::fs::write_file(&full_path, &content)
-                    } else {
-                        host::fs::write_binary(&full_path, &entry.bytes)
-                    };
-
-                    match write_result {
-                        Ok(()) => {
-                            pulled += 1;
-                            let hash = server_map
-                                .get(key)
-                                .and_then(|se| se.content_hash.clone())
-                                .unwrap_or_default();
-                            let modified_at = host::fs::file_metadata(&full_path)
-                                .ok()
-                                .filter(|meta| meta.exists)
-                                .and_then(|meta| meta.modified_at_ms)
-                                .unwrap_or_else(|| {
-                                    host::time::timestamp_millis().unwrap_or(0) as i64
-                                })
-                                .max(0) as u64;
-                            manifest.mark_clean(key, &hash, entry.bytes.len() as u64, modified_at);
-                        }
-                        Err(e) => errors.push(format!("write {key}: {e}")),
-                    }
+            for sub_keys in [first_half_keys, second_half_keys] {
+                if sub_keys.is_empty() {
+                    continue;
                 }
-
-                // Process per-key errors from the batch.
-                for (api_key, err_msg) in &batch.errors {
-                    let key = api_key_to_key
-                        .get(api_key.as_str())
-                        .copied()
-                        .unwrap_or(api_key);
-                    if is_not_found_error(err_msg) {
-                        host::log::log(
-                            "info",
-                            &format!("pull {key}: object not found (ghost entry), cleaning up"),
-                        );
-                        let _ = host::namespace::delete_object(namespace_id, api_key);
-                    } else {
-                        errors.push(format!("pull {key}: {err_msg}"));
-                    }
-                }
-            }
-            Err(e) => {
-                // Batch call failed entirely — fall back to individual downloads.
-                host::log::log(
-                    "warn",
-                    &format!("Batch download failed, falling back to individual downloads: {e}"),
+                let sub_ok = try_batch_download(
+                    namespace_id,
+                    sub_keys,
+                    &api_key_to_key,
+                    &root_dir,
+                    &server_map,
+                    manifest,
+                    &mut pulled,
+                    &mut errors,
                 );
-                for key in chunk {
-                    let relative_path = key.strip_prefix("files/").unwrap_or(key);
-                    let api_key = server_map
-                        .get(key.as_str())
-                        .map(|se| se.server_key.as_str())
-                        .unwrap_or(key);
-                    pull_single_file(
-                        namespace_id,
-                        key,
-                        api_key,
-                        relative_path,
-                        &root_dir,
-                        &server_map,
-                        manifest,
-                        &mut pulled,
-                        &mut errors,
+                if !sub_ok {
+                    // Sub-chunk also failed — fall back to individual downloads.
+                    host::log::log(
+                        "warn",
+                        "Sub-chunk batch also failed, falling back to individual downloads",
                     );
+                    for api_key in sub_keys {
+                        let key = api_key_to_key
+                            .get(api_key.as_str())
+                            .copied()
+                            .unwrap_or(api_key);
+                        let relative_path = key.strip_prefix("files/").unwrap_or(key);
+                        pull_single_file(
+                            namespace_id,
+                            key,
+                            api_key,
+                            relative_path,
+                            &root_dir,
+                            &server_map,
+                            manifest,
+                            &mut pulled,
+                            &mut errors,
+                        );
+                    }
                 }
             }
         }
@@ -791,7 +840,7 @@ pub fn execute_pull(
     }
 
     // --- Individually fetch large files ---
-    for key in &large_keys {
+    for key in &binary_keys {
         let relative_path = key.strip_prefix("files/").unwrap_or(key);
         let completed = progress_offset + files_completed;
         emit_sync_progress(

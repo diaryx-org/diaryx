@@ -84,8 +84,11 @@ struct BatchGetRequest {
 
 #[derive(Debug, Serialize)]
 struct BatchObjectEntry {
+    /// Base64-encoded bytes (for binary) or raw text content (for text).
     data: String,
     mime_type: String,
+    /// `"text"` if `data` is raw UTF-8 text, `"base64"` if base64-encoded.
+    encoding: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -224,9 +227,19 @@ async fn batch_get_objects(
                 .objects
                 .into_iter()
                 .map(|(key, obj)| {
+                    let is_text = obj.mime_type.starts_with("text/");
+                    let (data, encoding) = if is_text {
+                        (String::from_utf8_lossy(&obj.bytes).into_owned(), "text")
+                    } else {
+                        (
+                            base64::engine::general_purpose::STANDARD.encode(&obj.bytes),
+                            "base64",
+                        )
+                    };
                     let entry = BatchObjectEntry {
-                        data: base64::engine::general_purpose::STANDARD.encode(&obj.bytes),
+                        data,
                         mime_type: obj.mime_type,
+                        encoding,
                     };
                     (key, entry)
                 })

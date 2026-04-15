@@ -1326,9 +1326,17 @@ impl<R: Runtime> diaryx_extism::NamespaceProvider for TauriNamespaceProvider<R> 
                     .and_then(|v| v.as_str())
                     .unwrap_or("application/octet-stream")
                     .to_string();
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|e| format!("Failed to decode base64 for {key}: {e}"))?;
+                let encoding = entry
+                    .get("encoding")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("base64");
+                let bytes = if encoding == "text" {
+                    data.as_bytes().to_vec()
+                } else {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .map_err(|e| format!("Failed to decode base64 for {key}: {e}"))?
+                };
                 result.objects.insert(
                     key.clone(),
                     diaryx_extism::BatchGetEntry { bytes, mime_type },

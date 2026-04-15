@@ -2508,11 +2508,20 @@ fn host_namespace_get_objects_batch(
                 .objects
                 .into_iter()
                 .map(|(key, entry)| {
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(&entry.bytes);
-                    let val = serde_json::json!({
-                        "data": encoded,
-                        "mime_type": entry.mime_type,
-                    });
+                    let is_text = entry.mime_type.starts_with("text/");
+                    let val = if is_text {
+                        serde_json::json!({
+                            "data": String::from_utf8_lossy(&entry.bytes),
+                            "mime_type": entry.mime_type,
+                            "encoding": "text",
+                        })
+                    } else {
+                        serde_json::json!({
+                            "data": base64::engine::general_purpose::STANDARD.encode(&entry.bytes),
+                            "mime_type": entry.mime_type,
+                            "encoding": "base64",
+                        })
+                    };
                     (key, val)
                 })
                 .collect();

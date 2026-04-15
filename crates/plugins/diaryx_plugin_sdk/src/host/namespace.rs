@@ -147,9 +147,17 @@ pub fn get_objects_batch(ns_id: &str, keys: &[String]) -> Result<BatchGetResult,
                 .and_then(|v| v.as_str())
                 .unwrap_or("application/octet-stream")
                 .to_string();
-            let bytes = BASE64
-                .decode(data)
-                .map_err(|e| format!("Failed to decode base64 for {key}: {e}"))?;
+            let encoding = entry
+                .get("encoding")
+                .and_then(|v| v.as_str())
+                .unwrap_or("base64");
+            let bytes = if encoding == "text" {
+                data.as_bytes().to_vec()
+            } else {
+                BASE64
+                    .decode(data)
+                    .map_err(|e| format!("Failed to decode base64 for {key}: {e}"))?
+            };
             batch
                 .objects
                 .insert(key.clone(), BatchGetEntry { bytes, mime_type });

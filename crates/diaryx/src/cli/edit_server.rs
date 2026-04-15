@@ -41,6 +41,12 @@ struct AppState {
     workspace_root: PathBuf,
     /// Upstream web app URL to proxy (e.g. "https://app.diaryx.org").
     upstream_url: String,
+    /// Sync server URL (e.g. "https://sync.diaryx.org").
+    sync_server_url: Option<String>,
+    /// Bearer token for the sync server (from `diaryx login`).
+    sync_auth_token: Option<String>,
+    /// Cached `/auth/me` response from the sync server (fetched at startup).
+    auth_me_response: Option<serde_json::Value>,
     /// Loaded plugin adapters for render/component-HTML calls.
     /// Wrapped in RwLock so install/uninstall can mutate concurrently.
     #[cfg(feature = "plugins")]
@@ -48,7 +54,10 @@ struct AppState {
 }
 
 /// Build the axum router for the edit REST server.
-pub fn edit_router(workspace_root: PathBuf, upstream_url: String) -> Router {
+///
+/// Returns the router and the shared `Diaryx` instance so the caller can
+/// call `init_plugins()` before serving (plugins need async init).
+pub fn edit_router(workspace_root: PathBuf, upstream_url: String) -> (Router, SharedDiaryx) {
     let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
     let fs = SyncToAsyncFs::new(RealFileSystem);
     let mut diaryx = Diaryx::new(fs);
@@ -65,10 +74,39 @@ pub fn edit_router(workspace_root: PathBuf, upstream_url: String) -> Router {
         adapters
     };
 
+    // Load CLI auth context so we can proxy sync-server requests with the
+    // user's bearer token (from `diaryx login`).
+    let auth = {
+        use diaryx_core::auth::AuthenticatedClient;
+        super::auth_client::FsAuthenticatedClient::from_default_path(None).map(|client| {
+            let server_url = client.server_url().to_string();
+            let token = client.export_bearer_token();
+            (server_url, token)
+        })
+    };
+
+    // Fetch /auth/me at startup so the frontend can bootstrap auth state.
+    let auth_me_response = auth.as_ref().and_then(|(server_url, token)| {
+        let token = token.as_deref()?;
+        let url = format!("{}/auth/me", server_url.trim_end_matches('/'));
+        let resp = ureq::get(&url)
+            .header("Authorization", &format!("Bearer {token}"))
+            .call()
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body = resp.into_body().read_to_string().ok()?;
+        serde_json::from_str::<serde_json::Value>(&body).ok()
+    });
+
     let state = Arc::new(AppState {
         diaryx: Arc::new(diaryx),
         workspace_root,
         upstream_url: upstream_url.trim_end_matches('/').to_string(),
+        sync_server_url: auth.as_ref().map(|(url, _)| url.clone()),
+        sync_auth_token: auth.and_then(|(_, token)| token),
+        auth_me_response,
         #[cfg(feature = "plugins")]
         plugin_adapters: RwLock::new(plugin_adapters),
     });
@@ -79,7 +117,11 @@ pub fn edit_router(workspace_root: PathBuf, upstream_url: String) -> Router {
             "/api/binary/{*path}",
             get(handle_read_binary).post(handle_write_binary),
         )
-        .route("/api/workspace", get(handle_workspace_info));
+        .route("/api/workspace", get(handle_workspace_info))
+        // Sync server proxy — forwards requests to the real sync server with
+        // the CLI's bearer token injected. This lets the frontend auth flow
+        // work without cookies (the page is served from localhost).
+        .route("/api/sync/{*path}", axum::routing::any(handle_sync_proxy));
 
     // Plugin API endpoints — only when plugins feature is enabled.
     #[cfg(feature = "plugins")]
@@ -113,7 +155,8 @@ pub fn edit_router(workspace_root: PathBuf, upstream_url: String) -> Router {
         ));
     }
 
-    router.with_state(state)
+    let diaryx = state.diaryx.clone();
+    (router.with_state(state), diaryx)
 }
 
 // ============================================================================
@@ -177,11 +220,19 @@ async fn handle_workspace_info(State(state): State<Arc<AppState>>) -> Json<serde
 
     let abs_path = state.workspace_root.to_string_lossy().to_string();
 
-    Json(serde_json::json!({
+    let mut info = serde_json::json!({
         "workspace_path": abs_path,
         "workspace_name": name,
         "native_plugins": cfg!(feature = "plugins"),
-    }))
+    });
+
+    // Include the cached /auth/me response so the frontend can bootstrap
+    // auth state directly without cookies or localStorage.
+    if let Some(ref me) = state.auth_me_response {
+        info["auth"] = me.clone();
+    }
+
+    Json(info)
 }
 
 // ============================================================================
@@ -411,6 +462,96 @@ async fn handle_plugin_component_html(
 // ============================================================================
 // Proxy handler
 // ============================================================================
+
+/// Proxy requests to the sync server with the CLI's bearer token injected.
+///
+/// The frontend auth flow (authService, proxyFetch, etc.) normally talks to
+/// the sync server directly using HttpOnly cookies. When served from
+/// `http://localhost`, there are no cookies for the sync server's domain.
+/// Instead, the frontend sets its server URL to `http://localhost:PORT/api/sync`
+/// and all auth/sync requests are proxied here with the CLI-stored token.
+async fn handle_sync_proxy(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+    request: Request,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let sync_url = state
+        .sync_server_url
+        .as_deref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Not signed in".to_string()))?;
+
+    let query = request.uri().query().map(|q| q.to_string());
+    let method = request.method().to_string();
+    let req_content_type = request
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let req_body = axum::body::to_bytes(request.into_body(), 50 * 1024 * 1024)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    let upstream = if let Some(q) = query {
+        format!("{}/{}?{}", sync_url, path.trim_start_matches('/'), q)
+    } else {
+        format!("{}/{}", sync_url, path.trim_start_matches('/'))
+    };
+
+    let token = state.sync_auth_token.clone();
+
+    let mut resp = tokio::task::spawn_blocking(move || {
+        let agent = ureq::Agent::new_with_config(
+            ureq::config::Config::builder()
+                .timeout_global(Some(std::time::Duration::from_secs(30)))
+                .build(),
+        );
+        let mut builder = ureq::http::Request::builder()
+            .method(method.as_str())
+            .uri(&upstream);
+
+        if let Some(ref t) = token {
+            builder = builder.header("Authorization", format!("Bearer {t}"));
+        }
+        if let Some(ref ct) = req_content_type {
+            builder = builder.header("Content-Type", ct.as_str());
+        }
+
+        if req_body.is_empty() {
+            let req = builder
+                .body(())
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            agent.run(req)
+        } else {
+            let req = builder
+                .body(req_body.to_vec())
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            agent.run(req)
+        }
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Sync server error: {e}")))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    let body = resp
+        .body_mut()
+        .read_to_vec()
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Read error: {e}")))?;
+
+    Ok((
+        status,
+        [(axum::http::header::CONTENT_TYPE, content_type)],
+        body,
+    ))
+}
 
 /// Proxy non-API requests to the upstream web app.
 ///

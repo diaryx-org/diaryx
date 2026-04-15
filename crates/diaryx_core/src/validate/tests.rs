@@ -1915,3 +1915,79 @@ fn test_fix_invalid_attachment_ref_legacy_binary() {
         result.warnings
     );
 }
+
+/// Symlinks should be silently skipped during validation. A symlink that
+/// appears in a parent's `contents` list should not produce errors or
+/// warnings — the real file (the symlink target) is what matters.
+#[test]
+fn test_validate_workspace_skips_symlinks_in_contents() {
+    let fs = make_test_fs();
+
+    // Root index lists both the real file and a symlink to it
+    fs.write_file(
+        Path::new("index.md"),
+        "---\ntitle: Root\ncontents:\n  - real.md\n  - link.md\n---\n",
+    )
+    .unwrap();
+    fs.write_file(
+        Path::new("real.md"),
+        "---\ntitle: Real\npart_of: index.md\n---\n",
+    )
+    .unwrap();
+
+    // link.md is a symlink to real.md
+    fs.add_symlink(Path::new("link.md"), Path::new("real.md"));
+
+    let async_fs: TestFs = SyncToAsyncFs::new(fs);
+    let validator = Validator::new(async_fs);
+    let result = block_on_test(validator.validate_workspace(Path::new("index.md"), None)).unwrap();
+
+    assert!(
+        result.errors.is_empty(),
+        "symlink should not cause errors: {:?}",
+        result.errors
+    );
+    // The only files checked should be the root index and the real file (not the symlink)
+    assert_eq!(result.files_checked, 2);
+}
+
+/// A symlink in the workspace directory should not be flagged as an orphan.
+#[test]
+fn test_validate_workspace_skips_symlinks_in_orphan_scan() {
+    let fs = make_test_fs();
+
+    fs.write_file(
+        Path::new("index.md"),
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+    )
+    .unwrap();
+    fs.write_file(
+        Path::new("note.md"),
+        "---\ntitle: Note\npart_of: index.md\n---\n",
+    )
+    .unwrap();
+
+    // orphan-link.md is a symlink sitting in the directory but not in contents
+    fs.add_symlink(Path::new("orphan-link.md"), Path::new("note.md"));
+
+    let async_fs: TestFs = SyncToAsyncFs::new(fs);
+    let validator = Validator::new(async_fs);
+    let result = block_on_test(validator.validate_workspace(Path::new("index.md"), None)).unwrap();
+
+    assert!(
+        result.errors.is_empty(),
+        "symlink should not cause errors: {:?}",
+        result.errors
+    );
+    // Should not produce an OrphanFile warning for the symlink
+    let orphan_warnings: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| matches!(w, ValidationWarning::OrphanFile { .. }))
+        .collect();
+    assert!(
+        orphan_warnings.is_empty(),
+        "symlink should not be flagged as orphan: {:?}",
+        orphan_warnings
+    );
+}

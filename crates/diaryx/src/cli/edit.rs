@@ -11,8 +11,14 @@ use tokio::net::TcpListener;
 pub async fn handle_edit(workspace_root: &Path, url: Option<String>, port: Option<u16>) -> bool {
     let upstream_url = url.unwrap_or_else(|| "https://app.diaryx.org".to_string());
 
-    let router =
+    let (router, diaryx) =
         super::edit_server::edit_router(workspace_root.to_path_buf(), upstream_url.clone());
+
+    // Initialize all registered plugins (they need async init for lifecycle setup).
+    let failures = diaryx.init_plugins().await;
+    for (id, err) in &failures {
+        eprintln!("[edit-server] Plugin '{}' failed to init: {}", id.0, err);
+    }
 
     // Bind to the requested port (or auto-select)
     let addr = format!("127.0.0.1:{}", port.unwrap_or(0));

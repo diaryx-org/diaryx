@@ -25,6 +25,8 @@ export class HttpBackend implements Backend {
   private _ready = false;
   private workspacePath = "workspace";
   private _nativePlugins = false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _authInfo: any = null;
   private listeners = new Map<BackendEventType, Set<BackendEventListener>>();
 
   constructor(apiUrl: string) {
@@ -43,6 +45,12 @@ export class HttpBackend implements Backend {
         // Set the flag immediately so isNativePluginBackend() works before
         // the singleton is stored in globalThis by the backend factory.
         setNativePluginBackend(this._nativePlugins);
+
+        // Store auth info so it can be bootstrapped after backend init.
+        // Can't bootstrap here because initAuth() runs before backend init.
+        if (info.auth) {
+          this._authInfo = info.auth;
+        }
       }
     } catch (e) {
       console.warn("[HttpBackend] Could not fetch workspace info:", e);
@@ -54,6 +62,14 @@ export class HttpBackend implements Backend {
   /** Whether the server supports native plugin loading (plugins feature). */
   get nativePlugins(): boolean {
     return this._nativePlugins;
+  }
+
+  /**
+   * Server-provided `/auth/me` response, if the CLI user is signed in.
+   * Used by App.svelte to bootstrap auth state after backend init.
+   */
+  get authInfo(): unknown {
+    return this._authInfo;
   }
 
   isReady(): boolean {

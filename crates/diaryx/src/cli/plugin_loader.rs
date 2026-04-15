@@ -50,7 +50,7 @@ pub struct PluginAuthContext {
 impl PluginAuthContext {
     /// Load auth context from the default CLI auth storage. Returns `None`
     /// when the user is not logged in or the config directory is unavailable.
-    fn load_global() -> Option<Self> {
+    pub(super) fn load_global() -> Option<Self> {
         let client = FsAuthenticatedClient::from_default_path(None)?;
         let auth_token = client.export_bearer_token();
         let workspace_id =

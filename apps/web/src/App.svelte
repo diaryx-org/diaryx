@@ -1182,6 +1182,18 @@
       workspaceStore.setBackend(backendInstance);
       void checkForAppUpdatesInBackground(backendInstance);
 
+      // HTTP backend: bootstrap auth from server-provided user info.
+      // This runs AFTER initAuth() (which found nothing) so we directly
+      // populate the auth store from the CLI's cached /auth/me response.
+      if (isHttpBackend && 'authInfo' in backendInstance && backendInstance.authInfo) {
+        const { bootstrapAuthFromHttp } = await import("./lib/auth/authStore.svelte");
+        const apiUrl = httpParams?.get("api_url") ?? "";
+        bootstrapAuthFromHttp(
+          backendInstance.authInfo as import("./lib/auth/authService").MeResponse,
+          `${apiUrl.replace(/\/+$/, "")}/api/sync`,
+        );
+      }
+
       const apiInstance = createApi(backendInstance);
 
       // Initialize filesystem event subscription for automatic UI updates

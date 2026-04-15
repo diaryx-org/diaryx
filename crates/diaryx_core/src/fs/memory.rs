@@ -20,6 +20,9 @@ pub struct InMemoryFileSystem {
     binary_files: Arc<RwLock<HashMap<PathBuf, Vec<u8>>>>,
     /// Directories that exist (implicitly created when files are added)
     directories: Arc<RwLock<HashSet<PathBuf>>>,
+    /// Symlinks: source -> target. The source path is treated as a symlink
+    /// that points to target. Reading the source returns the target's content.
+    symlinks: Arc<RwLock<HashMap<PathBuf, PathBuf>>>,
 }
 
 impl InMemoryFileSystem {
@@ -29,6 +32,7 @@ impl InMemoryFileSystem {
             files: Arc::new(RwLock::new(HashMap::new())),
             binary_files: Arc::new(RwLock::new(HashMap::new())),
             directories: Arc::new(RwLock::new(HashSet::new())),
+            symlinks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -118,6 +122,34 @@ impl InMemoryFileSystem {
         dirs.clear();
     }
 
+    /// Add a symlink from `link` to `target`.
+    ///
+    /// The link path will appear to exist and its content will be read from
+    /// `target`, but `is_symlink(link)` will return `true`.
+    pub fn add_symlink(&self, link: &Path, target: &Path) {
+        let link = Self::normalize_path(link);
+        let target = Self::normalize_path(target);
+
+        // Ensure parent directories of the link exist
+        if let Some(parent) = link.parent() {
+            let mut dirs = self.directories.write().unwrap();
+            let mut current = parent;
+            loop {
+                if current.as_os_str().is_empty() {
+                    break;
+                }
+                dirs.insert(current.to_path_buf());
+                match current.parent() {
+                    Some(p) => current = p,
+                    None => break,
+                }
+            }
+        }
+
+        let mut symlinks = self.symlinks.write().unwrap();
+        symlinks.insert(link, target);
+    }
+
     /// Helper to normalize paths (remove . and .. components where possible)
     fn normalize_path(path: &Path) -> PathBuf {
         let mut components = Vec::new();
@@ -141,9 +173,16 @@ impl InMemoryFileSystem {
 impl FileSystem for InMemoryFileSystem {
     fn read_to_string(&self, path: &Path) -> Result<String> {
         let normalized = Self::normalize_path(path);
+
+        // Follow symlinks
+        let resolved = {
+            let symlinks = self.symlinks.read().unwrap();
+            symlinks.get(&normalized).cloned().unwrap_or(normalized)
+        };
+
         let files = self.files.read().unwrap();
         files
-            .get(&normalized)
+            .get(&resolved)
             .cloned()
             .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("File not found: {:?}", path)))
     }
@@ -232,9 +271,17 @@ impl FileSystem for InMemoryFileSystem {
         let files = self.files.read().unwrap();
         let binary_files = self.binary_files.read().unwrap();
         let dirs = self.directories.read().unwrap();
+        let symlinks = self.symlinks.read().unwrap();
         files.contains_key(&normalized)
             || binary_files.contains_key(&normalized)
             || dirs.contains(&normalized)
+            || symlinks.contains_key(&normalized)
+    }
+
+    fn is_symlink(&self, path: &Path) -> bool {
+        let normalized = Self::normalize_path(path);
+        let symlinks = self.symlinks.read().unwrap();
+        symlinks.contains_key(&normalized)
     }
 
     fn create_dir_all(&self, path: &Path) -> Result<()> {
@@ -454,6 +501,16 @@ impl FileSystem for InMemoryFileSystem {
             if let Some(parent) = path.parent()
                 && parent == normalized
                 && path != &normalized
+            {
+                result.push(path.clone());
+            }
+        }
+
+        // Check symlinks
+        let symlinks = self.symlinks.read().unwrap();
+        for path in symlinks.keys() {
+            if let Some(parent) = path.parent()
+                && parent == normalized
             {
                 result.push(path.clone());
             }

@@ -427,6 +427,37 @@ export async function initAuth(): Promise<void> {
 }
 
 /**
+ * Bootstrap the auth store from server-provided user info (HTTP backend).
+ *
+ * When the CLI is already authenticated (`diaryx login`), the edit server
+ * fetches `/auth/me` at startup and includes the result in the workspace
+ * info response. This function sets the auth state directly — no
+ * localStorage, no cookies, no `getMe()` round-trip needed.
+ *
+ * @param meResponse - The `/auth/me` response from the sync server.
+ * @param syncProxyUrl - The local sync proxy URL (`http://localhost:PORT/api/sync`).
+ */
+export function bootstrapAuthFromHttp(
+  meResponse: import("./authService").MeResponse,
+  syncProxyUrl: string,
+): void {
+  state.serverUrl = syncProxyUrl;
+  state.user = meResponse.user;
+  state.workspaces = meResponse.workspaces;
+  state.devices = meResponse.devices;
+  state.workspaceLimit = meResponse.workspace_limit;
+  state.tier = meResponse.tier;
+  state.publishedSiteLimit = meResponse.published_site_limit;
+  state.attachmentLimitBytes = meResponse.attachment_limit_bytes;
+  state.isAuthenticated = true;
+  state.isLoading = false;
+
+  // Create an authService for the sync proxy URL so subsequent calls
+  // (devices, workspaces, publish, etc.) go through the proxy too.
+  authService = createAuthService(syncProxyUrl);
+}
+
+/**
  * Set the sync server URL.
  *
  * Note: This only saves the URL - it does NOT start sync.

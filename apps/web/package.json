@@ -4,7 +4,7 @@
   "version": "1.4.3",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "portless diaryx vite",
     "dev:bun": "bun serve.ts",
     "build:bun": "bun run build:wasm && bun build.ts",
     "deploy": "bun run build && bunx wrangler deploy",
@@ -79,6 +79,7 @@
     "jsdom": "^29.0.2",
     "mode-watcher": "^1.1.0",
     "playwright": "^1.59.1",
+    "portless": "^0.10.2",
     "svelte": "^5.55.2",
     "svelte-check": "^4.4.6",
     "svelte-sonner": "^1.1.0",

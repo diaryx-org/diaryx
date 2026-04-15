@@ -65,6 +65,13 @@ fn decode_param(raw: &str) -> String {
         .into_owned()
 }
 
+/// Extract and percent-decode a required path parameter.
+fn require_decoded_param(ctx: &RouteContext<()>, name: &str) -> Result<String> {
+    ctx.param(name)
+        .map(|v| decode_param(v))
+        .ok_or_else(|| Error::from(format!("missing {name}")))
+}
+
 fn error_response(err: ServerCoreError) -> Result<Response> {
     let (status, msg) = match &err {
         ServerCoreError::NotFound(m) => (404, m.as_str()),
@@ -233,11 +240,11 @@ pub async fn list_namespaces(req: Request, ctx: RouteContext<()>) -> Result<Resp
 
 pub async fn get_namespace(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
+    let id = require_decoded_param(&ctx, "id")?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let service = NamespaceService::new(&ns_store);
 
-    match service.get(id, &user_id).await {
+    match service.get(&id, &user_id).await {
         Ok(ns) => Response::from_json(&NamespaceResponse::from(ns)),
         Err(e) => error_response(e),
     }
@@ -245,14 +252,14 @@ pub async fn get_namespace(req: Request, ctx: RouteContext<()>) -> Result<Respon
 
 pub async fn update_namespace(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
+    let id = require_decoded_param(&ctx, "id")?;
     let body: UpdateNamespaceRequest = req.json().await?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let service = NamespaceService::new(&ns_store);
     let metadata_str = body.metadata_str();
 
     match service
-        .update_metadata(id, &user_id, metadata_str.as_deref())
+        .update_metadata(&id, &user_id, metadata_str.as_deref())
         .await
     {
         Ok(ns) => Response::from_json(&NamespaceResponse::from(ns)),
@@ -262,13 +269,13 @@ pub async fn update_namespace(mut req: Request, ctx: RouteContext<()>) -> Result
 
 pub async fn delete_namespace(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let id = ctx.param("id").ok_or_else(|| Error::from("missing id"))?;
+    let id = require_decoded_param(&ctx, "id")?;
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let domain_cache = KvDomainMappingCache::new(domains_kv(&ctx)?);
     let service = NamespaceService::new(&ns_store);
 
     match service
-        .delete_with_cache(id, &user_id, Some(&domain_cache))
+        .delete_with_cache(&id, &user_id, Some(&domain_cache))
         .await
     {
         Ok(()) => Response::empty().map(|r| r.with_status(204)),
@@ -282,10 +289,7 @@ pub async fn delete_namespace(req: Request, ctx: RouteContext<()>) -> Result<Res
 
 pub async fn list_objects(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
 
     let url = req.url()?;
     let params: std::collections::HashMap<String, String> = url
@@ -330,10 +334,7 @@ pub async fn list_objects(req: Request, ctx: RouteContext<()>) -> Result<Respons
 
 pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let key = decode_param(
         ctx.param("key")
             .ok_or_else(|| Error::from("missing key"))?,
@@ -371,9 +372,7 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
 
 pub async fn get_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?;
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let key = decode_param(ctx.param("key").ok_or_else(|| Error::from("missing key"))?);
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
@@ -381,7 +380,7 @@ pub async fn get_object(req: Request, ctx: RouteContext<()>) -> Result<Response>
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
     let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
 
-    match service.get(ns_id, &key, &user_id).await {
+    match service.get(&ns_id, &key, &user_id).await {
         Ok(result) => {
             let mut resp = Response::from_bytes(result.bytes)?;
             resp.headers_mut().set("content-type", &result.mime_type)?;
@@ -393,9 +392,7 @@ pub async fn get_object(req: Request, ctx: RouteContext<()>) -> Result<Response>
 
 pub async fn delete_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?;
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let key = decode_param(ctx.param("key").ok_or_else(|| Error::from("missing key"))?);
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
@@ -403,16 +400,14 @@ pub async fn delete_object(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
     let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
 
-    match service.delete(ns_id, &key, &user_id).await {
+    match service.delete(&ns_id, &key, &user_id).await {
         Ok(()) => Response::empty().map(|r| r.with_status(204)),
         Err(e) => error_response(e),
     }
 }
 
 pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?;
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let key = decode_param(ctx.param("key").ok_or_else(|| Error::from("missing key"))?);
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
@@ -420,7 +415,7 @@ pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Re
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
     let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
 
-    let access = match service.resolve_public_access(ns_id, &key).await {
+    let access = match service.resolve_public_access(&ns_id, &key).await {
         Ok(a) => a,
         Err(e) => return error_response(e),
     };
@@ -440,7 +435,7 @@ pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Re
                 .as_deref()
                 .and_then(|t| validate_audience_token(&key_bytes, t))
                 .is_some_and(|claims| {
-                    claims.slug == *ns_id && claims.audience == access.audience_name
+                    claims.slug == ns_id && claims.audience == access.audience_name
                 });
 
             if !valid {
@@ -451,7 +446,7 @@ pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Re
     }
 
     match service
-        .fetch_blob(ns_id, &key, access.meta.blob_key.as_deref())
+        .fetch_blob(&ns_id, &key, access.meta.blob_key.as_deref())
         .await
     {
         Ok(result) => {
@@ -474,10 +469,7 @@ struct SetAudienceBody {
 
 pub async fn set_audience(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let name = ctx
         .param("name")
         .ok_or_else(|| Error::from("missing name"))?
@@ -496,15 +488,13 @@ pub async fn set_audience(mut req: Request, ctx: RouteContext<()>) -> Result<Res
 
 pub async fn list_audiences(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?;
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
     let service = AudienceService::new(&ns_store, &blob_store);
 
-    match service.list(ns_id, &user_id).await {
+    match service.list(&ns_id, &user_id).await {
         Ok(list) => Response::from_json(&list),
         Err(e) => error_response(e),
     }
@@ -512,10 +502,7 @@ pub async fn list_audiences(req: Request, ctx: RouteContext<()>) -> Result<Respo
 
 pub async fn delete_audience(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let name = ctx
         .param("name")
         .ok_or_else(|| Error::from("missing name"))?
@@ -620,10 +607,7 @@ async fn require_ns_owner(
 }
 
 pub async fn add_subscriber(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let audience_name = ctx
         .param("audience_name")
         .ok_or_else(|| Error::from("missing audience_name"))?
@@ -666,10 +650,7 @@ pub async fn add_subscriber(mut req: Request, ctx: RouteContext<()>) -> Result<R
 
 pub async fn list_subscribers(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let audience_name = ctx
         .param("audience_name")
         .ok_or_else(|| Error::from("missing audience_name"))?
@@ -711,10 +692,7 @@ pub async fn list_subscribers(req: Request, ctx: RouteContext<()>) -> Result<Res
 
 pub async fn remove_subscriber(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let audience_name = ctx
         .param("audience_name")
         .ok_or_else(|| Error::from("missing audience_name"))?
@@ -747,10 +725,7 @@ pub async fn remove_subscriber(req: Request, ctx: RouteContext<()>) -> Result<Re
 
 pub async fn bulk_import_subscribers(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let audience_name = ctx
         .param("audience_name")
         .ok_or_else(|| Error::from("missing audience_name"))?
@@ -790,10 +765,7 @@ pub async fn bulk_import_subscribers(mut req: Request, ctx: RouteContext<()>) ->
 
 pub async fn send_audience_email(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let audience_name = ctx
         .param("audience_name")
         .ok_or_else(|| Error::from("missing audience_name"))?
@@ -954,10 +926,7 @@ pub async fn send_audience_email(mut req: Request, ctx: RouteContext<()>) -> Res
 
 pub async fn list_domains(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let _user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     match ns_store.list_custom_domains(&ns_id).await {
@@ -987,10 +956,7 @@ struct RegisterDomainBody {
 
 pub async fn register_domain(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let _user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let domain = ctx
         .param("domain")
         .ok_or_else(|| Error::from("missing domain"))?
@@ -1060,10 +1026,7 @@ pub async fn register_domain(mut req: Request, ctx: RouteContext<()>) -> Result<
 
 pub async fn remove_domain(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let _user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let domain = ctx
         .param("domain")
         .ok_or_else(|| Error::from("missing domain"))?
@@ -1137,10 +1100,7 @@ struct ClaimSubdomainBody {
 
 pub async fn claim_subdomain(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let _user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
     let body: ClaimSubdomainBody = req.json().await?;
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
@@ -1162,10 +1122,7 @@ pub async fn claim_subdomain(mut req: Request, ctx: RouteContext<()>) -> Result<
 
 pub async fn release_subdomain(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let _user_id = require_auth!(&req, &ctx);
-    let ns_id = ctx
-        .param("ns_id")
-        .ok_or_else(|| Error::from("missing ns_id"))?
-        .to_string();
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let domain_cache = KvDomainMappingCache::new(domains_kv(&ctx)?);

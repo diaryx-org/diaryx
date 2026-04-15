@@ -285,6 +285,7 @@ pub fn compute_diff(
     manifest: &SyncManifest,
     local_scan: &BTreeMap<String, LocalFileInfo>,
     server_entries: &[ServerEntry],
+    workspace_root: &str,
 ) -> SyncPlan {
     let mut plan = SyncPlan::default();
 
@@ -362,16 +363,29 @@ pub fn compute_diff(
             match manifest_entry {
                 Some(_me) if _me.state == SyncState::Clean => {
                     // File was clean in our manifest but is no longer in the
-                    // local workspace_file_set.  This can happen legitimately
-                    // when the workspace tree structure changes (e.g. a parent
-                    // entry's `contents` list was edited) — the file still
-                    // exists on disk but isn't reachable via tree-walk.
+                    // local workspace_file_set.  Two possible reasons:
                     //
-                    // We must NOT delete from server here; explicit user
-                    // deletions are tracked via pending_deletes (handled
-                    // below).  Pulling is the safe default: worst case we
-                    // re-download a file that already exists locally.
-                    plan.pull.push(se.key.clone());
+                    // 1. Tree restructuring — the file still exists on disk
+                    //    but isn't reachable via tree-walk (e.g. a parent
+                    //    entry's `contents` list was edited).  Pull is safe.
+                    //
+                    // 2. Genuine deletion — the file was removed from disk
+                    //    (rm, CLI, or GUI).  We should delete from server.
+                    //
+                    // Disambiguate by checking whether the file still exists
+                    // on disk.
+                    let relative = se.key.strip_prefix("files/").unwrap_or(&se.key);
+                    let full_path =
+                        join_workspace_path(&workspace_root_dir(workspace_root), relative);
+                    let exists_on_disk = host::fs::file_exists(&full_path).unwrap_or(true);
+                    if exists_on_disk {
+                        // File exists on disk but isn't in tree-walk
+                        // (restructuring).  Pull is the safe default.
+                        plan.pull.push(se.key.clone());
+                    } else {
+                        // File is gone from disk → local deletion.
+                        plan.delete_remote.push(se.key.clone());
+                    }
                 }
                 Some(_) => {
                     // Was dirty but file is gone? Pull it back.
@@ -495,10 +509,12 @@ pub fn execute_push(
             Ok(()) => {
                 deleted_remote += 1;
                 manifest.ack_delete(key);
+                manifest.files.remove(key.as_str());
             }
             Err(e) if is_not_found_error(&e) => {
                 deleted_remote += 1;
                 manifest.ack_delete(key);
+                manifest.files.remove(key.as_str());
             }
             Err(e) => errors.push(format!("delete remote {key}: {e}")),
         }
@@ -966,7 +982,7 @@ pub fn sync(
         }
     };
 
-    let plan = compute_diff(manifest, &local_scan, &server_entries);
+    let plan = compute_diff(manifest, &local_scan, &server_entries, workspace_root);
     let total_ops =
         plan.push.len() + plan.pull.len() + plan.delete_remote.len() + plan.delete_local.len();
     emit_sync_progress(
@@ -1127,7 +1143,7 @@ mod tests {
         let mut local_scan = BTreeMap::new();
         local_scan.insert("files/new.md".to_string(), local("abc123", 100));
 
-        let plan = compute_diff(&manifest, &local_scan, &[]);
+        let plan = compute_diff(&manifest, &local_scan, &[], "");
         assert_eq!(plan.push, vec!["files/new.md"]);
         assert!(plan.pull.is_empty());
     }
@@ -1138,7 +1154,7 @@ mod tests {
         let local_scan = BTreeMap::new();
         let server = vec![server("files/remote.md", Some("xyz"), 1000)];
 
-        let plan = compute_diff(&manifest, &local_scan, &server);
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
         assert_eq!(plan.pull, vec!["files/remote.md"]);
         assert!(plan.push.is_empty());
     }
@@ -1154,7 +1170,7 @@ mod tests {
 
         let server = vec![server("files/doc.md", Some("old_hash"), 500)];
 
-        let plan = compute_diff(&manifest, &local_scan, &server);
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
         assert_eq!(plan.push, vec!["files/doc.md"]);
         assert!(plan.pull.is_empty());
     }
@@ -1169,7 +1185,7 @@ mod tests {
 
         let server = vec![server("files/doc.md", Some("hash_v2"), 600)];
 
-        let plan = compute_diff(&manifest, &local_scan, &server);
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
         assert_eq!(plan.pull, vec!["files/doc.md"]);
         assert!(plan.push.is_empty());
     }
@@ -1185,7 +1201,7 @@ mod tests {
 
         let server = vec![server("files/doc.md", Some("hash_v2_remote"), 600)];
 
-        let plan = compute_diff(&manifest, &local_scan, &server);
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
         assert_eq!(plan.push, vec!["files/doc.md"]);
         assert!(plan.pull.is_empty());
     }
@@ -1201,7 +1217,7 @@ mod tests {
 
         let server = vec![server("files/doc.md", Some("hash_v2_remote"), 600)];
 
-        let plan = compute_diff(&manifest, &local_scan, &server);
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
         assert_eq!(plan.pull, vec!["files/doc.md"]);
         assert!(plan.push.is_empty());
     }
@@ -1214,22 +1230,23 @@ mod tests {
         let mut local_scan = BTreeMap::new();
         local_scan.insert("files/gone.md".to_string(), local("hash", 100));
 
-        let plan = compute_diff(&manifest, &local_scan, &[]);
+        let plan = compute_diff(&manifest, &local_scan, &[], "");
         assert_eq!(plan.delete_local, vec!["files/gone.md"]);
     }
 
     #[test]
-    fn clean_file_gone_from_local_scan_pulls_instead_of_deleting() {
+    fn clean_file_gone_from_local_scan_pulls_when_still_on_disk() {
         let mut manifest = make_manifest();
         manifest.mark_clean("files/old-name.md", "hash", 100, 500);
 
         // File is gone from workspace_file_set (e.g. tree restructured)
-        // but still on server.  Should pull, not delete — explicit user
-        // deletions are tracked via pending_deletes.
+        // but still on server.  In production, compute_diff checks
+        // file_exists on disk to disambiguate restructuring vs deletion.
+        // In tests, file_exists errors and defaults to true (safe pull).
         let local_scan = BTreeMap::new();
         let server = vec![server("files/old-name.md", Some("hash"), 500)];
 
-        let plan = compute_diff(&manifest, &local_scan, &server);
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
         assert!(plan.delete_remote.is_empty());
         assert_eq!(plan.pull, vec!["files/old-name.md"]);
     }
@@ -1242,7 +1259,7 @@ mod tests {
         let local_scan = BTreeMap::new();
         let server = vec![server("files/deleted.md", Some("hash"), 500)];
 
-        let plan = compute_diff(&manifest, &local_scan, &server);
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
         assert_eq!(plan.delete_remote, vec!["files/deleted.md"]);
     }
 }

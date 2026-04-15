@@ -472,7 +472,7 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
     // Build a plan that pulls everything (empty manifest = all remote files are new)
     let empty_local = std::collections::BTreeMap::new();
     let mut manifest = sync_manifest::SyncManifest::new(namespace_id.clone());
-    let plan = sync_engine::compute_diff(&manifest, &empty_local, &server_entries);
+    let plan = sync_engine::compute_diff(&manifest, &empty_local, &server_entries, &workspace_root);
     let total_ops = (plan.pull.len() + plan.delete_local.len()).max(1);
 
     let (pulled, _deleted_local, errors) = sync_engine::execute_pull(
@@ -534,7 +534,7 @@ fn handle_upload_workspace_snapshot(params: &JsonValue) -> Result<JsonValue, Str
     // Build a plan that pushes everything (empty manifest = all local files are new)
     let mut manifest = sync_manifest::SyncManifest::new(namespace_id.clone());
     let server_entries = sync_engine::fetch_server_manifest(params, &namespace_id)?;
-    let plan = sync_engine::compute_diff(&manifest, &local_scan, &server_entries);
+    let plan = sync_engine::compute_diff(&manifest, &local_scan, &server_entries, &workspace_root);
     let total_ops = (plan.push.len() + plan.delete_remote.len()).max(1);
 
     let (pushed, _deleted_remote, errors) = sync_engine::execute_push(
@@ -584,7 +584,8 @@ fn handle_sync_push(params: &JsonValue) -> Result<JsonValue, String> {
         let local_scan =
             sync_engine::scan_local(&workspace_root, Some(manifest), Some(5), Some(10));
         let server_entries = sync_engine::fetch_server_manifest(params, &namespace_id)?;
-        let plan = sync_engine::compute_diff(manifest, &local_scan, &server_entries);
+        let plan =
+            sync_engine::compute_diff(manifest, &local_scan, &server_entries, &workspace_root);
 
         let (pushed, deleted_remote, errors) = sync_engine::execute_push(
             params,
@@ -660,7 +661,8 @@ fn handle_sync_pull(params: &JsonValue) -> Result<JsonValue, String> {
         let local_scan =
             sync_engine::scan_local(&workspace_root, Some(manifest), Some(5), Some(10));
         let server_entries = sync_engine::fetch_server_manifest(params, &namespace_id)?;
-        let plan = sync_engine::compute_diff(manifest, &local_scan, &server_entries);
+        let plan =
+            sync_engine::compute_diff(manifest, &local_scan, &server_entries, &workspace_root);
 
         let (pulled, deleted_local, errors) = sync_engine::execute_pull(
             params,
@@ -1147,13 +1149,19 @@ pub fn on_event(input: String) -> FnResult<String> {
         "file_saved" | "file_created" => {
             if let Some(path) = event.payload.get("path").and_then(|v| v.as_str()) {
                 let relative = workspace_relative_path(path);
-                state::with_manifest_mut(|m| m.mark_dirty(&format!("files/{relative}")));
+                state::with_manifest_mut(|m| {
+                    m.mark_dirty(&format!("files/{relative}"));
+                    m.save();
+                });
             }
         }
         "file_deleted" => {
             if let Some(path) = event.payload.get("path").and_then(|v| v.as_str()) {
                 let relative = workspace_relative_path(path);
-                state::with_manifest_mut(|m| m.record_delete(&format!("files/{relative}")));
+                state::with_manifest_mut(|m| {
+                    m.record_delete(&format!("files/{relative}"));
+                    m.save();
+                });
             }
         }
         "file_renamed" | "file_moved" => {
@@ -1165,6 +1173,7 @@ pub fn on_event(input: String) -> FnResult<String> {
                 state::with_manifest_mut(|m| {
                     m.record_delete(&format!("files/{old_relative}"));
                     m.mark_dirty(&format!("files/{new_relative}"));
+                    m.save();
                 });
             }
         }

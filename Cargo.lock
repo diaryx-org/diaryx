@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync_extism"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "base64 0.22.1",
  "diaryx_core",

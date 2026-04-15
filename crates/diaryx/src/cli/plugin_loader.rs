@@ -349,7 +349,7 @@ impl diaryx_extism::NamespaceProvider for CliNamespaceProvider {
         use base64::Engine as _;
 
         let url = format!(
-            "{}/namespaces/{}/objects/batch",
+            "{}/namespaces/{}/batch/objects",
             self.server_url,
             Self::encode_component(ns_id),
         );

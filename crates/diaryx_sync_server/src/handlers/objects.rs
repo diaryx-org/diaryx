@@ -102,7 +102,7 @@ struct BatchGetResponse {
 pub fn object_routes(state: ObjectState) -> Router {
     Router::new()
         .route("/objects", get(list_objects))
-        .route("/objects/batch", post(batch_get_objects))
+        .route("/batch/objects", post(batch_get_objects))
         .route(
             "/objects/{*key}",
             put(put_object).get(get_object).delete(delete_object),
@@ -207,7 +207,7 @@ async fn get_object(
     }
 }
 
-/// POST /namespaces/{ns_id}/objects/batch — retrieve multiple objects at once.
+/// POST /namespaces/{ns_id}/batch/objects — retrieve multiple objects at once.
 async fn batch_get_objects(
     State(state): State<ObjectState>,
     RequireAuth(auth): RequireAuth,

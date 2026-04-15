@@ -1653,7 +1653,7 @@ function buildHostFunctions(
           if (!input) return cp.store(JSON.stringify({ error: "no input" }));
           const resp = await namespaceFetchText(
             "POST",
-            `/namespaces/${encodeURIComponent(input.ns_id)}/objects/batch`,
+            `/namespaces/${encodeURIComponent(input.ns_id)}/batch/objects`,
             {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ keys: input.keys }),

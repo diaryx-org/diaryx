@@ -1302,7 +1302,7 @@ impl<R: Runtime> diaryx_extism::NamespaceProvider for TauriNamespaceProvider<R> 
 
         let base = self.server_url()?;
         let url = format!(
-            "{}/namespaces/{}/objects/batch",
+            "{}/namespaces/{}/batch/objects",
             base,
             Self::encode_component(ns_id),
         );

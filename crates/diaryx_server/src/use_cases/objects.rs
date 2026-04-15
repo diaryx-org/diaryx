@@ -24,6 +24,8 @@ pub struct BatchGetResult {
     pub objects: HashMap<String, GetObjectResult>,
     /// Per-key errors for objects that could not be fetched.
     pub errors: HashMap<String, String>,
+    /// Number of keys that had metadata (used for diagnostics).
+    pub meta_found: usize,
 }
 
 pub struct ObjectService<'a> {
@@ -298,7 +300,11 @@ impl<'a> ObjectService<'a> {
                 .await;
         }
 
-        Ok(BatchGetResult { objects, errors })
+        Ok(BatchGetResult {
+            objects,
+            errors,
+            meta_found: blob_requests.len(),
+        })
     }
 
     pub async fn delete(

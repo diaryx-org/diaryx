@@ -409,6 +409,7 @@ pub async fn delete_object(req: Request, ctx: RouteContext<()>) -> Result<Respon
 pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     use base64::Engine as _;
 
+    let t0 = js_sys::Date::now();
     let user_id = require_auth!(&req, &ctx);
     let ns_id = require_decoded_param(&ctx, "ns_id")?;
 
@@ -417,6 +418,8 @@ pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Resul
         keys: Vec<String>,
     }
     let body: BatchReq = req.json().await?;
+    let num_keys = body.keys.len();
+    let t1 = js_sys::Date::now();
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
@@ -425,6 +428,11 @@ pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Resul
 
     match service.get_batch(&ns_id, &body.keys, &user_id).await {
         Ok(result) => {
+            let t2 = js_sys::Date::now();
+            let num_objects = result.objects.len();
+            let num_errors = result.errors.len();
+            let total_bytes: usize = result.objects.values().map(|o| o.bytes.len()).sum();
+
             let objects: std::collections::HashMap<String, serde_json::Value> = result
                 .objects
                 .into_iter()
@@ -441,6 +449,14 @@ pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Resul
             if !result.errors.is_empty() {
                 resp_json["errors"] = serde_json::json!(result.errors);
             }
+            let t3 = js_sys::Date::now();
+
+            worker::console_log!(
+                "batch_get: keys={} meta_found={} fetched={} errors={} bytes={} | parse={:.0}ms service={:.0}ms encode={:.0}ms total={:.0}ms",
+                num_keys, result.meta_found, num_objects, num_errors, total_bytes,
+                t1 - t0, t2 - t1, t3 - t2, t3 - t0,
+            );
+
             Response::from_json(&resp_json)
         }
         Err(e) => error_response(e),

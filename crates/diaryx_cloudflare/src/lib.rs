@@ -31,7 +31,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         // Objects
         .get_async("/api/namespaces/:ns_id/objects", handlers::list_objects)
         .post_async(
-            "/api/namespaces/:ns_id/objects/batch",
+            "/api/namespaces/:ns_id/batch/objects",
             handlers::batch_get_objects,
         )
         .put_async("/api/namespaces/:ns_id/objects/*key", handlers::put_object)

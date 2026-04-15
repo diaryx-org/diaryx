@@ -12,7 +12,7 @@
   import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Progress } from "$lib/components/ui/progress";
-  import { ArrowLeft, LogIn, Loader2, Cloud, Download, HardDrive, Lock, Plus } from "@lucide/svelte";
+  import { ArrowLeft, Loader2, Cloud, Download, HardDrive, Lock } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
   import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
@@ -608,48 +608,23 @@
           </div>
 
           <div class="space-y-3 fade-in" style="animation-delay: 2.4s">
-            {#if isAuthenticated()}
-              <Button
-                class="w-full get-started-btn"
-                disabled={!animationDone || loadingWorkspaces}
-                onclick={() => handleSignInComplete()}
-              >
-                {#if loadingWorkspaces}
-                  <Loader2 class="size-4 animate-spin mr-2" />
-                  Looking for workspaces…
-                {:else}
-                  <Download class="size-4 mr-2" />
-                  Download remote workspace
-                {/if}
-              </Button>
+            <Button
+              class="w-full get-started-btn"
+              disabled={!animationDone}
+              onclick={() => navigateTo('bundles')}
+            >
+              Get Started
+            </Button>
 
-              <Button
-                variant="ghost"
-                class="w-full text-muted-foreground"
-                disabled={!animationDone || loading}
-                onclick={() => navigateTo('bundles')}
-              >
-                <Plus class="size-4 mr-2" />
-                Create new workspace
-              </Button>
-            {:else}
-              <Button
-                class="w-full get-started-btn"
+            {#if !isAuthenticated()}
+              <button
+                type="button"
+                class="w-full text-xs text-muted-foreground/70 hover:text-foreground transition-colors disabled:opacity-50"
                 disabled={!animationDone}
                 onclick={() => navigateTo('sign-in')}
               >
-                <LogIn class="size-4 mr-2" />
-                Sign in to get your workspace
-              </Button>
-
-              <Button
-                variant="ghost"
-                class="w-full text-muted-foreground"
-                disabled={!animationDone || loading}
-                onclick={() => navigateTo('bundles')}
-              >
-                Continue without an account
-              </Button>
+                Already have an account? Sign in
+              </button>
             {/if}
 
             {#if returnWorkspaceName && onReturn}

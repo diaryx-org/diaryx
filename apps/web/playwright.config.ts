@@ -51,6 +51,7 @@ export default defineConfig({
   ],
   webServer: {
     command: `bun run dev -- --host ${webHost} --port ${webPort} --strictPort`,
+    env: { ...process.env, PORTLESS: '0' },
     url: webServerUrl,
     reuseExistingServer,
     timeout: 120000,

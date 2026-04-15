@@ -1119,12 +1119,18 @@
       const httpParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
       const isHttpBackend = httpParams?.get("backend") === "http" && !!httpParams?.get("api_url");
 
+      // On Tauri mobile, the workspace lives at a fixed path (document_dir/Diaryx).
+      // Skip the registry entirely — just initialize the backend with the default
+      // path. The registry (localStorage) can be cleared by the OS independently
+      // of the actual workspace files, so we never rely on it for mobile startup.
+      const isTauriMobile = isTauri() && isIOS();
+
       // Check if any workspaces exist before proceeding
       let defaultWorkspace = getCurrentWorkspace();
       let localWsList = getLocalWorkspaces();
       let currentWsId = getCurrentWorkspaceId();
 
-      if (!isHttpBackend && !defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
+      if (!isTauriMobile && !isHttpBackend && !defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
         const dataJustCleared = sessionStorage.getItem('diaryx_data_cleared');
         if (dataJustCleared) {
           sessionStorage.removeItem('diaryx_data_cleared');
@@ -1151,10 +1157,15 @@
       }
 
       // Initialize the backend (auto-detects Tauri vs WASM)
-      // Pass workspace ID and name so the backend uses the correct OPFS directory
+      // Pass workspace ID and name so the backend uses the correct OPFS directory.
+      // On Tauri mobile, pass undefined — initialize_app resolves the fixed default path.
       let wsId: string | undefined;
       let wsName: string | undefined;
-      if (isHttpBackend) {
+      if (isTauriMobile) {
+        // Mobile: backend uses document_dir/Diaryx directly, no registry needed
+        wsId = currentWsId ?? undefined;
+        wsName = undefined;
+      } else if (isHttpBackend) {
         // HTTP backend doesn't use the workspace registry
         wsId = undefined;
         wsName = undefined;
@@ -1181,6 +1192,17 @@
       );
       workspaceStore.setBackend(backendInstance);
       void checkForAppUpdatesInBackground(backendInstance);
+
+      // On Tauri mobile, ensure the workspace is in the registry now that the
+      // backend is initialized. This back-fills the registry after we skipped
+      // the registry check above, so settings/sync/etc. still work correctly.
+      if (isTauriMobile && getLocalWorkspaces().length === 0) {
+        const ws = createLocalWorkspace(
+          localStorage.getItem('diaryx-workspace-name') || 'My Workspace',
+        );
+        setCurrentWorkspaceId(ws.id);
+        startupWorkspaceId = ws.id;
+      }
 
       // HTTP backend: bootstrap auth from server-provided user info.
       // This runs AFTER initAuth() (which found nothing) so we directly

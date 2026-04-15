@@ -206,8 +206,8 @@ impl<'a> ObjectService<'a> {
         })
     }
 
-    /// Fetch multiple objects in a single call. Returns per-key results
-    /// so individual failures don't abort the whole batch.
+    /// Fetch multiple objects in a single call. Uses a batch metadata query
+    /// and parallel blob fetches for performance.
     pub async fn get_batch(
         &self,
         namespace_id: &str,
@@ -228,36 +228,51 @@ impl<'a> ObjectService<'a> {
 
         let mut objects = HashMap::new();
         let mut errors = HashMap::new();
-        let mut total_bytes_out: u64 = 0;
 
+        // 1. Batch metadata query — single DB round-trip for all keys.
+        let meta_list = self
+            .object_meta_store
+            .get_objects_meta_batch(namespace_id, keys)
+            .await?;
+
+        let meta_map: HashMap<String, &ObjectMeta> =
+            meta_list.iter().map(|m| (m.key.clone(), m)).collect();
+
+        // Track which keys had no metadata.
+        let mut blob_requests: Vec<(String, String, String)> = Vec::new(); // (key, blob_key, mime_type)
         for key in keys {
-            let meta = match self
-                .object_meta_store
-                .get_object_meta(namespace_id, key)
-                .await
-            {
-                Ok(Some(m)) => m,
-                Ok(None) => {
+            match meta_map.get(key) {
+                Some(meta) => {
+                    let blob_key = meta
+                        .blob_key
+                        .clone()
+                        .unwrap_or_else(|| object_blob_key(namespace_id, key));
+                    blob_requests.push((key.clone(), blob_key, meta.mime_type.clone()));
+                }
+                None => {
                     errors.insert(key.clone(), "Object not found".to_string());
-                    continue;
                 }
-                Err(e) => {
-                    errors.insert(key.clone(), e.to_string());
-                    continue;
-                }
-            };
+            }
+        }
 
-            let blob_key = meta
-                .blob_key
-                .unwrap_or_else(|| object_blob_key(namespace_id, key));
+        // 2. Parallel blob fetches — all R2/disk reads run concurrently.
+        let blob_futures: Vec<_> = blob_requests
+            .iter()
+            .map(|(_, blob_key, _)| self.blob_store.get(blob_key))
+            .collect();
 
-            match self.blob_store.get(&blob_key).await {
+        let blob_results: Vec<_> = futures::future::join_all(blob_futures).await;
+
+        let mut total_bytes_out: u64 = 0;
+        for (i, result) in blob_results.into_iter().enumerate() {
+            let (key, _, mime_type) = &blob_requests[i];
+            match result {
                 Ok(Some(bytes)) => {
                     total_bytes_out += bytes.len() as u64;
                     objects.insert(
                         key.clone(),
                         GetObjectResult {
-                            mime_type: meta.mime_type,
+                            mime_type: mime_type.clone(),
                             bytes,
                         },
                     );
@@ -562,6 +577,21 @@ mod tests {
                 .unwrap()
                 .get(&(namespace_id.to_string(), key.to_string()))
                 .cloned())
+        }
+        async fn get_objects_meta_batch(
+            &self,
+            namespace_id: &str,
+            keys: &[String],
+        ) -> Result<Vec<ObjectMeta>, ServerCoreError> {
+            let store = self.objects.lock().unwrap();
+            Ok(keys
+                .iter()
+                .filter_map(|key| {
+                    store
+                        .get(&(namespace_id.to_string(), key.clone()))
+                        .cloned()
+                })
+                .collect())
         }
         async fn list_objects(
             &self,

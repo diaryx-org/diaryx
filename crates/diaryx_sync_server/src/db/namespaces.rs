@@ -220,6 +220,48 @@ impl NamespaceRepo {
         .unwrap_or(None)
     }
 
+    pub fn get_objects_meta_batch(
+        &self,
+        namespace_id: &str,
+        keys: &[String],
+    ) -> Vec<NamespaceObjectMeta> {
+        if keys.is_empty() {
+            return Vec::new();
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders: Vec<String> = (2..=keys.len() + 1).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience, content_hash
+             FROM namespace_objects WHERE namespace_id = ?1 AND key IN ({})",
+            placeholders.join(", ")
+        );
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(keys.len() + 1);
+        params.push(Box::new(namespace_id.to_string()));
+        for key in keys {
+            params.push(Box::new(key.clone()));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        stmt.query_map(param_refs.as_slice(), |row| {
+            Ok(NamespaceObjectMeta {
+                namespace_id: row.get(0)?,
+                key: row.get(1)?,
+                r2_key: row.get(2)?,
+                mime_type: row.get(3)?,
+                size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
+                updated_at: row.get(5)?,
+                audience: row.get(6)?,
+                content_hash: row.get(7)?,
+            })
+        })
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
     pub fn list_objects(
         &self,
         namespace_id: &str,

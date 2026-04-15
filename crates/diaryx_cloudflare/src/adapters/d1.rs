@@ -667,6 +667,64 @@ impl ObjectMetaStore for D1ObjectMetaStore {
         }))
     }
 
+    async fn get_objects_meta_batch(
+        &self,
+        namespace_id: &str,
+        keys: &[String],
+    ) -> Result<Vec<ObjectMeta>, ServerCoreError> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build `WHERE namespace_id = ?1 AND key IN (?2, ?3, ...)`
+        let placeholders: Vec<String> = (2..=keys.len() + 1)
+            .map(|i| format!("?{i}"))
+            .collect();
+        let sql = format!(
+            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience, content_hash \
+             FROM namespace_objects WHERE namespace_id = ?1 AND key IN ({})",
+            placeholders.join(", ")
+        );
+
+        let mut params: Vec<worker::wasm_bindgen::JsValue> = Vec::with_capacity(keys.len() + 1);
+        params.push(namespace_id.into());
+        for key in keys {
+            params.push(key.as_str().into());
+        }
+
+        let results = self
+            .db
+            .prepare(&sql)
+            .bind(&params)
+            .map_err(e)?
+            .all()
+            .await
+            .map_err(e)?;
+
+        let rows: Vec<serde_json::Value> =
+            results.results().map_err(e)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ObjectMeta {
+                namespace_id: row["namespace_id"].as_str().unwrap_or_default().to_string(),
+                key: row["key"].as_str().unwrap_or_default().to_string(),
+                blob_key: row["r2_key"].as_str().map(|s| s.to_string()),
+                mime_type: row["mime_type"].as_str().unwrap_or_default().to_string(),
+                size_bytes: row["size_bytes"].as_u64().unwrap_or_default(),
+                updated_at: row["updated_at"].as_i64().unwrap_or_default(),
+                audience: row["audience"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string()),
+                content_hash: row["content_hash"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string()),
+            })
+            .collect())
+    }
+
     async fn list_objects(
         &self,
         namespace_id: &str,

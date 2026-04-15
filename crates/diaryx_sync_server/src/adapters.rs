@@ -904,6 +904,19 @@ impl ObjectMetaStore for NativeObjectMetaStore {
         Ok(self.repo.get_object_meta(namespace_id, key).map(Into::into))
     }
 
+    async fn get_objects_meta_batch(
+        &self,
+        namespace_id: &str,
+        keys: &[String],
+    ) -> Result<Vec<CoreObjectMeta>, ServerCoreError> {
+        Ok(self
+            .repo
+            .get_objects_meta_batch(namespace_id, keys)
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
     async fn list_objects(
         &self,
         namespace_id: &str,

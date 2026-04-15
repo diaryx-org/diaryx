@@ -288,6 +288,12 @@ pub trait ObjectMetaStore: Send + Sync {
         namespace_id: &str,
         key: &str,
     ) -> Result<Option<ObjectMeta>, ServerCoreError>;
+    /// Fetch metadata for multiple keys in a single query.
+    async fn get_objects_meta_batch(
+        &self,
+        namespace_id: &str,
+        keys: &[String],
+    ) -> Result<Vec<ObjectMeta>, ServerCoreError>;
     async fn list_objects(
         &self,
         namespace_id: &str,

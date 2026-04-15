@@ -18,13 +18,23 @@ pub trait PublishFormat: Send + Sync {
 
     /// Convert a workspace-relative markdown path to an output filename.
     ///
-    /// Default: replaces `.md` extension with `output_extension()`.
+    /// Default: replaces `.md` extension with `output_extension()`,
+    /// and sanitizes each path component to be URL-safe.
     fn output_filename(&self, path: &Path, workspace_dir: &Path) -> String {
         let relative = path.strip_prefix(workspace_dir).unwrap_or(path);
-        relative
-            .with_extension(self.output_extension())
-            .to_string_lossy()
-            .into_owned()
+        let with_ext = relative.with_extension(self.output_extension());
+        // Sanitize each path component to be URL-safe
+        let sanitized: PathBuf = with_ext
+            .components()
+            .map(|c| match c {
+                std::path::Component::Normal(s) => {
+                    let s = s.to_string_lossy();
+                    std::ffi::OsString::from(sanitize_path_component(&s))
+                }
+                other => other.as_os_str().to_owned(),
+            })
+            .collect();
+        sanitized.to_string_lossy().into_owned()
     }
 
     /// Preprocess custom markdown syntax before body conversion.
@@ -105,5 +115,39 @@ pub trait PublishFormat: Send + Sync {
     /// Returns `(filename, content)` pairs. Default: no assets.
     fn static_assets(&self) -> Vec<(String, Vec<u8>)> {
         vec![]
+    }
+}
+
+/// Sanitize a single path component for safe use in URLs.
+///
+/// Replaces spaces with `%20` and removes characters that are unsafe or
+/// problematic in URLs (e.g., `!`, `?`, `#`, `&`, etc.). Preserves dots,
+/// hyphens, underscores, and alphanumerics.
+fn sanitize_path_component(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            ' ' => result.push_str("%20"),
+            c if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' => result.push(c),
+            _ => {} // drop unsafe characters like !, ?, #, &, etc.
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_path_component() {
+        assert_eq!(sanitize_path_component("hello world"), "hello%20world");
+        assert_eq!(sanitize_path_component("First post!"), "First%20post");
+        assert_eq!(sanitize_path_component("what?"), "what");
+        assert_eq!(sanitize_path_component("a&b#c"), "abc");
+        assert_eq!(
+            sanitize_path_component("normal-file_name.html"),
+            "normal-file_name.html"
+        );
     }
 }

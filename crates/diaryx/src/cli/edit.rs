@@ -31,7 +31,16 @@ pub async fn handle_edit(workspace_root: &Path, url: Option<String>, port: Optio
     };
 
     let bound_addr = listener.local_addr().unwrap();
-    let local_url = format!("http://localhost:{}", bound_addr.port());
+
+    // Use <workspace>.localhost as the hostname so the browser URL reflects
+    // the workspace name. All modern browsers resolve *.localhost → 127.0.0.1
+    // per RFC 6761, so no /etc/hosts changes are needed.
+    let workspace_name = workspace_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace");
+    let subdomain = sanitize_subdomain(workspace_name);
+    let local_url = format!("http://{}.localhost:{}", subdomain, bound_addr.port());
 
     // Open the local server URL — the SPA is proxied from the upstream,
     // and API calls hit our local handlers. Same origin, no mixed content.
@@ -68,4 +77,35 @@ async fn shutdown_signal() {
     tokio::signal::ctrl_c()
         .await
         .expect("Failed to install Ctrl+C handler");
+}
+
+/// Convert a workspace name into a valid DNS subdomain label.
+///
+/// Lowercases, replaces spaces/underscores with hyphens, strips anything
+/// that isn't alphanumeric or a hyphen, collapses consecutive hyphens, and
+/// trims leading/trailing hyphens. Falls back to "workspace" if the result
+/// is empty.
+fn sanitize_subdomain(name: &str) -> String {
+    let s: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c == ' ' || c == '_' { '-' } else { c })
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+
+    // Collapse consecutive hyphens and trim leading/trailing hyphens.
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c == '-' && result.ends_with('-') {
+            continue;
+        }
+        result.push(c);
+    }
+    let result = result.trim_matches('-').to_string();
+
+    if result.is_empty() {
+        "workspace".to_string()
+    } else {
+        result
+    }
 }

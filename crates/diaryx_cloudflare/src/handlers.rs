@@ -421,6 +421,8 @@ pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Resul
     let num_keys = body.keys.len();
     let t1 = js_sys::Date::now();
 
+    worker::console_log!("batch_get: starting with {} keys", num_keys);
+
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
@@ -459,7 +461,13 @@ pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Resul
 
             Response::from_json(&resp_json)
         }
-        Err(e) => error_response(e),
+        Err(e) => {
+            worker::console_log!(
+                "batch_get ERROR: keys={} err={:?}",
+                num_keys, e,
+            );
+            error_response(e)
+        }
     }
 }
 

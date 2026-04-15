@@ -676,35 +676,41 @@ impl ObjectMetaStore for D1ObjectMetaStore {
             return Ok(Vec::new());
         }
 
-        // Build `WHERE namespace_id = ?1 AND key IN (?2, ?3, ...)`
-        let placeholders: Vec<String> = (2..=keys.len() + 1)
-            .map(|i| format!("?{i}"))
-            .collect();
-        let sql = format!(
-            "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience, content_hash \
-             FROM namespace_objects WHERE namespace_id = ?1 AND key IN ({})",
-            placeholders.join(", ")
-        );
+        // D1 limits bound parameters, so chunk the query.
+        const D1_CHUNK: usize = 50;
+        let mut all_results = Vec::new();
 
-        let mut params: Vec<worker::wasm_bindgen::JsValue> = Vec::with_capacity(keys.len() + 1);
-        params.push(namespace_id.into());
-        for key in keys {
-            params.push(key.as_str().into());
+        for chunk in keys.chunks(D1_CHUNK) {
+            let placeholders: Vec<String> = (2..=chunk.len() + 1)
+                .map(|i| format!("?{i}"))
+                .collect();
+            let sql = format!(
+                "SELECT namespace_id, key, r2_key, mime_type, size_bytes, updated_at, audience, content_hash \
+                 FROM namespace_objects WHERE namespace_id = ?1 AND key IN ({})",
+                placeholders.join(", ")
+            );
+
+            let mut params: Vec<worker::wasm_bindgen::JsValue> =
+                Vec::with_capacity(chunk.len() + 1);
+            params.push(namespace_id.into());
+            for key in chunk {
+                params.push(key.as_str().into());
+            }
+
+            let results = self
+                .db
+                .prepare(&sql)
+                .bind(&params)
+                .map_err(e)?
+                .all()
+                .await
+                .map_err(e)?;
+
+            let rows: Vec<serde_json::Value> = results.results().map_err(e)?;
+            all_results.extend(rows);
         }
 
-        let results = self
-            .db
-            .prepare(&sql)
-            .bind(&params)
-            .map_err(e)?
-            .all()
-            .await
-            .map_err(e)?;
-
-        let rows: Vec<serde_json::Value> =
-            results.results().map_err(e)?;
-
-        Ok(rows
+        Ok(all_results
             .into_iter()
             .map(|row| ObjectMeta {
                 namespace_id: row["namespace_id"].as_str().unwrap_or_default().to_string(),

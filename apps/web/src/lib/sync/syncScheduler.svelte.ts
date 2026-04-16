@@ -71,24 +71,62 @@ let schedulerLifecycleToken = 0;
 async function dispatchSyncCommand(
   pluginId: string,
 ): Promise<{ success: boolean; error?: string }> {
+  let result: { success: boolean; error?: string; deferred?: string[] };
+
   if (isTauri()) {
     try {
       const { getBackend, createApi } = await import("$lib/backend");
       const backend = await getBackend();
       const api = createApi(backend);
-      await api.executePluginCommand(pluginId, "Sync", {
+      const raw = await api.executePluginCommand(pluginId, "Sync", {
         provider_id: pluginId,
       });
-      return { success: true };
+      const deferred = (raw as Record<string, unknown> | null)?.deferred as
+        | string[]
+        | undefined;
+      result = { success: true, deferred };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      return { success: false, error: message };
+      result = { success: false, error: message };
+    }
+  } else {
+    const cmdResult = await dispatchCommand(pluginId, "Sync", {
+      provider_id: pluginId,
+    });
+    const deferred = (cmdResult.data as Record<string, unknown> | null)
+      ?.deferred as string[] | undefined;
+    result = { ...cmdResult, deferred };
+  }
+
+  // Enqueue any deferred (non-markdown) files for background download.
+  if (result.deferred && result.deferred.length > 0) {
+    try {
+      const { getServerUrl, getToken } = await import("$lib/auth");
+      const { getBackend, createApi } = await import("$lib/backend");
+      const { initDeferredQueue, enqueueDeferredFiles } = await import(
+        "$lib/sync/deferredFileQueue"
+      );
+      const serverUrl = getServerUrl();
+      const token = getToken();
+      if (serverUrl && token) {
+        const backend = await getBackend();
+        initDeferredQueue(createApi(backend), serverUrl, token);
+        // Derive nsId from the provider link's remoteWorkspaceId.
+        const wsId = getCurrentWorkspaceId();
+        const link = wsId
+          ? getWorkspaceProviderLinks(wsId).find((l) => l.pluginId === pluginId)
+          : null;
+        const nsId = link?.remoteWorkspaceId;
+        if (nsId) {
+          enqueueDeferredFiles(nsId, result.deferred);
+        }
+      }
+    } catch (e) {
+      console.warn("[syncScheduler] Failed to enqueue deferred files:", e);
     }
   }
 
-  return await dispatchCommand(pluginId, "Sync", {
-    provider_id: pluginId,
-  });
+  return result;
 }
 
 async function triggerSync(): Promise<void> {

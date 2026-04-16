@@ -73,6 +73,9 @@ pub struct SyncResult {
     pub deleted_remote: usize,
     pub deleted_local: usize,
     pub errors: Vec<String>,
+    /// Non-markdown file keys deferred for background download.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred: Vec<String>,
 }
 
 pub fn emit_sync_status(status: &str, error: Option<&str>) {
@@ -724,7 +727,7 @@ pub fn execute_pull(
     // large files are downloaded individually to avoid huge batch responses.
     // When `skip_non_markdown` is true, non-.md files are deferred for
     // background download by the host.
-    const BATCH_CHUNK_SIZE: usize = 50;
+    const BATCH_CHUNK_SIZE: usize = 200;
     const BATCH_SIZE_LIMIT: u64 = 5 * 1024 * 1024; // 5MB
 
     let mut batchable_keys: Vec<&String> = Vec::new();
@@ -1005,6 +1008,7 @@ pub fn sync(
                 deleted_remote: 0,
                 deleted_local: 0,
                 errors: vec![format!("fetch server manifest: {e}")],
+                deferred: Vec::new(),
             };
         }
     };
@@ -1034,7 +1038,7 @@ pub fn sync(
         0,
         total_ops.max(1),
     );
-    let (pulled, deleted_local, pull_errors, _deferred) = execute_pull(
+    let (pulled, deleted_local, pull_errors, deferred) = execute_pull(
         params,
         namespace_id,
         &dir_root,
@@ -1045,7 +1049,7 @@ pub fn sync(
         25,
         plan.push.len() + plan.delete_remote.len(),
         total_ops.max(1),
-        false, // full sync downloads everything
+        true, // defer non-markdown for background download
     );
 
     push_errors.extend(pull_errors);
@@ -1077,6 +1081,7 @@ pub fn sync(
         deleted_remote,
         deleted_local,
         errors: push_errors,
+        deferred,
     }
 }
 

@@ -666,7 +666,7 @@ fn handle_sync_pull(params: &JsonValue) -> Result<JsonValue, String> {
         let plan =
             sync_engine::compute_diff(manifest, &local_scan, &server_entries, &workspace_root);
 
-        let (pulled, deleted_local, errors, _deferred) = sync_engine::execute_pull(
+        let (pulled, deleted_local, errors, deferred) = sync_engine::execute_pull(
             params,
             &namespace_id,
             &workspace_root,
@@ -677,7 +677,7 @@ fn handle_sync_pull(params: &JsonValue) -> Result<JsonValue, String> {
             80,
             0,
             (plan.pull.len() + plan.delete_local.len()).max(1),
-            false, // pull-only sync downloads everything
+            true, // defer non-markdown for background download
         );
 
         // Mark untracked local files as clean ONLY if the server also has
@@ -703,6 +703,7 @@ fn handle_sync_pull(params: &JsonValue) -> Result<JsonValue, String> {
             "pulled": pulled,
             "deleted_local": deleted_local,
             "errors": errors,
+            "deferred": deferred,
         }))
     })
     .unwrap_or_else(|| Err("Plugin state not initialized".to_string()))?;

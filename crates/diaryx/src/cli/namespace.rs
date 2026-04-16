@@ -1,6 +1,7 @@
 //! CLI handler for server namespace management (list, delete, objects).
 
 use diaryx_core::auth::AuthenticatedClient;
+use diaryx_core::namespace;
 use serde::Deserialize;
 use std::io::{self, Write};
 
@@ -193,36 +194,18 @@ fn handle_delete(id: &str, yes: bool) -> bool {
         }
     };
 
-    // Fetch namespace info first
-    let get_path = format!("/namespaces/{}", urlencoding::encode(id));
-    let resp = match block_on(client.get(&get_path)) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("✗ Namespace not found: {e}");
-            return false;
-        }
-    };
-    if !resp.is_success() {
-        eprintln!("✗ Namespace not found: HTTP {}", resp.status);
-        return false;
-    }
-    let ns: NamespaceResponse = match serde_json::from_str(&resp.body) {
+    // Fetch namespace info first so the prompt can show the user what
+    // they're about to nuke.
+    let ns = match block_on(namespace::get_namespace(&client, id)) {
         Ok(ns) => ns,
         Err(e) => {
-            eprintln!("✗ Failed to parse namespace: {e}");
+            eprintln!("✗ Namespace not found: {}", e.message);
             return false;
         }
     };
 
-    let name = ns
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("name"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("(no name)");
-
     println!("Namespace: {}", ns.id);
-    println!("Name:      {name}");
+    println!("Name:      {}", ns.display_name().unwrap_or("(no name)"));
     println!("Created:   {}", format_timestamp(ns.created_at));
     println!();
 
@@ -243,18 +226,13 @@ fn handle_delete(id: &str, yes: bool) -> bool {
         }
     }
 
-    let delete_path = format!("/namespaces/{}", urlencoding::encode(id));
-    match block_on(client.delete(&delete_path)) {
-        Ok(r) if r.status == 204 => {
+    match block_on(namespace::delete_namespace(&client, id)) {
+        Ok(()) => {
             println!("✓ Deleted namespace {id}");
             true
         }
-        Ok(r) => {
-            eprintln!("✗ Unexpected response: HTTP {}", r.status);
-            false
-        }
         Err(e) => {
-            eprintln!("✗ Failed to delete namespace: {e}");
+            eprintln!("✗ Failed to delete namespace: {}", e.message);
             false
         }
     }

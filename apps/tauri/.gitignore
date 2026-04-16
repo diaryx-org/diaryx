@@ -9,6 +9,9 @@ dist-ssr/
 src-tauri/target/
 src-tauri/gen/
 
+# Debug-only dev IPC discovery file (see src-tauri/src/dev_ipc.rs)
+.dev-ipc.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

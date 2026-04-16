@@ -14,6 +14,8 @@ mod auth_client;
 mod auth_commands;
 mod commands;
 mod credentials;
+#[cfg(debug_assertions)]
+mod dev_ipc;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_security_scoped;
@@ -128,6 +130,12 @@ pub fn run() {
 
             #[cfg(target_os = "ios")]
             setup_ios_edge_to_edge(app);
+
+            #[cfg(debug_assertions)]
+            if let Some(guard) = crate::dev_ipc::start(app.handle()) {
+                app.manage(guard);
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

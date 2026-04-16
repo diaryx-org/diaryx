@@ -107,6 +107,59 @@ first. This clears stale `swift-rs` module artifacts for Tauri and Tauri plugin
 build scripts under `target/` that can break builds after moving the repository
 to a new absolute path.
 
+## Debug IPC Listener
+
+For automated testing and scripted control of a running dev build (e.g.
+driving the app from CI, shell scripts, or an AI assistant), the Tauri
+backend exposes a minimal HTTP IPC surface on `127.0.0.1` behind three
+layers of gating:
+
+1. Compiled out entirely in release builds (`#[cfg(debug_assertions)]`
+   in `src-tauri/src/dev_ipc.rs` and `lib.rs`).
+2. Only starts when the `DIARYX_DEV_IPC=1` environment variable is set.
+3. Every endpoint except `GET /health` requires an
+   `X-Diaryx-Dev-Token` header matching a per-run random token written
+   to the discovery file.
+
+On startup the listener writes discovery JSON to
+`apps/tauri/.dev-ipc.json` (build-time manifest-relative path) and to
+`<app_data_dir>/.dev-ipc.json` as a fallback. Both files are deleted
+when the guard drops on graceful shutdown. The discovery file is also
+gitignored.
+
+```bash
+# Start dev build with the IPC listener enabled
+cd apps/tauri && bun run tauri:dev-ipc
+
+# From another terminal
+bash ./scripts/dev-ipc.sh GET /health
+bash ./scripts/dev-ipc.sh GET /state
+bash ./scripts/dev-ipc.sh GET "/log?tail=100"
+bash ./scripts/dev-ipc.sh POST /execute --data '{"type":"GetEntry","params":{"path":"README.md"}}'
+bash ./scripts/dev-ipc.sh POST /emit    --data '{"event": "my-event", "payload": {}}'
+bash ./scripts/dev-ipc.sh GET  /screenshot > /tmp/diaryx.png
+```
+
+### Endpoints
+
+| Method | Path        | Description                                                                |
+| ------ | ----------- | -------------------------------------------------------------------------- |
+| GET    | `/health`   | Returns `{ok, version, pid}`. No auth required.                            |
+| GET    | `/state`    | Workspace path, guest mode flag, app data dir, pid, version.               |
+| GET    | `/log`      | Log file contents. Query: `?tail=N` (last N lines), `?previous=1` (rotated). |
+| POST   | `/execute`  | Body is a `Command` JSON (`{"type":"X","params":{...}}`). Runs through the unified `commands::execute` pipeline. |
+| POST   | `/emit`     | Emits a `tauri::Emitter` event into the frontend.                          |
+| POST   | `/eval`     | Runs a JS string in the main webview. Extra-gated by `DIARYX_DEV_IPC_EVAL=1`. |
+| GET    | `/screenshot` | Captures the app's native window via `xcap`. Default returns `image/png` bytes. `?format=json` returns base64. `?pid=<n>` overrides PID filter. On first use, macOS prompts for Screen Recording permission. |
+
+The `/eval` escape hatch is intentionally separate: it can execute
+arbitrary JS in the webview, so it's off by default even when the IPC
+listener is running. Enable it explicitly when needed:
+
+```bash
+DIARYX_DEV_IPC=1 DIARYX_DEV_IPC_EVAL=1 bun run tauri dev
+```
+
 ## Tauri Commands
 
 All IPC commands are defined in `src-tauri/src/commands.rs` and registered in `src-tauri/src/lib.rs`.

@@ -6,7 +6,8 @@
    * to an available remote workspace namespace.
    */
   import { Button } from "$lib/components/ui/button";
-  import { Cloud, Loader2, Unlink, Link2 } from "@lucide/svelte";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import { AlertTriangle, Cloud, Loader2, Unlink, Link2, Trash2 } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import {
     getPrimaryWorkspaceProviderLink,
@@ -25,6 +26,7 @@
     getProviderDisplayLabel,
     isProviderAvailableHere,
   } from "$lib/sync/builtinProviders";
+  import { deleteNamespace } from "$lib/namespace/namespaceService";
 
   interface Props {
     workspaceId: string;
@@ -42,6 +44,11 @@
   let loadingNamespaces = $state(false);
   let linking = $state(false);
   let unlinking = $state(false);
+
+  // Disable-sync (delete remote + unlink) state
+  let showDisableDialog = $state(false);
+  let disabling = $state(false);
+  let disableError = $state<string | null>(null);
 
   function providerLabel(link: WorkspaceProviderLink): string {
     return getProviderDisplayLabel(link.pluginId) ?? link.pluginId;
@@ -106,6 +113,37 @@
       unlinking = false;
     }
   }
+
+  /**
+   * Delete the remote namespace first, then unlink locally.
+   *
+   * Ordering matters: if the namespace-delete HTTP call fails for any
+   * reason other than 404, we keep the local link intact so the user can
+   * retry — unlinking first would leave them in a half-state where the
+   * workspace is "unlinked" but server data still exists and is orphaned.
+   *
+   * `deleteNamespace` in the namespace service treats 404 as already-gone
+   * (idempotent), so repeat invocations after a transient network failure
+   * still complete the flow cleanly.
+   */
+  async function handleDisableSync() {
+    if (!providerLink) return;
+    disabling = true;
+    disableError = null;
+    try {
+      await deleteNamespace(providerLink.remoteWorkspaceId);
+      await unlinkWorkspace(providerLink.pluginId, workspaceId);
+      showDisableDialog = false;
+      toast.success("Sync disabled", {
+        description:
+          "Remote workspace deleted. Other devices will need to re-link.",
+      });
+    } catch (e) {
+      disableError = e instanceof Error ? e.message : "Failed to disable sync";
+    } finally {
+      disabling = false;
+    }
+  }
 </script>
 
 <div class="space-y-3">
@@ -132,7 +170,7 @@
       size="sm"
       class="w-full mx-1"
       onclick={handleUnlink}
-      disabled={unlinking}
+      disabled={unlinking || disabling}
     >
       {#if unlinking}
         <Loader2 class="size-3.5 mr-1.5 animate-spin" />
@@ -141,6 +179,16 @@
         <Unlink class="size-3.5 mr-1.5" />
         Unlink from remote
       {/if}
+    </Button>
+    <Button
+      variant="outline"
+      size="sm"
+      class="w-full mx-1 text-destructive hover:text-destructive"
+      onclick={() => { disableError = null; showDisableDialog = true; }}
+      disabled={unlinking || disabling}
+    >
+      <Trash2 class="size-3.5 mr-1.5" />
+      Disable sync (delete remote)
     </Button>
   {:else if !authState.isAuthenticated}
     <p class="text-xs text-muted-foreground px-1">
@@ -195,3 +243,59 @@
     </Button>
   {/if}
 </div>
+
+<!-- Disable-sync confirmation: destructive, so we surface the blast
+     radius explicitly before firing. -->
+<Dialog.Root bind:open={showDisableDialog}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title class="flex items-center gap-2 text-destructive">
+        <AlertTriangle class="size-5" />
+        Disable sync for this workspace?
+      </Dialog.Title>
+      <Dialog.Description>
+        This will permanently delete the remote workspace and all of its
+        files from the sync server.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <ul class="list-disc list-inside text-sm text-muted-foreground space-y-1 py-2">
+      <li>Server-side copy of your workspace files will be deleted.</li>
+      <li>Other devices linked to this workspace will stop syncing and need to re-link.</li>
+      <li>Your local files are not touched — the workspace stays on this device.</li>
+    </ul>
+
+    <p class="text-sm font-medium text-destructive">
+      This cannot be undone. You can re-enable sync afterwards by linking
+      to a new or existing remote workspace.
+    </p>
+
+    {#if disableError}
+      <p class="text-sm text-destructive bg-destructive/10 p-2 rounded">
+        {disableError}
+      </p>
+    {/if}
+
+    <Dialog.Footer class="gap-2 sm:gap-0">
+      <Button
+        variant="outline"
+        onclick={() => (showDisableDialog = false)}
+        disabled={disabling}
+      >
+        Cancel
+      </Button>
+      <Button
+        variant="destructive"
+        onclick={handleDisableSync}
+        disabled={disabling}
+      >
+        {#if disabling}
+          <Loader2 class="size-4 mr-2 animate-spin" />
+          Disabling...
+        {:else}
+          Delete remote and unlink
+        {/if}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

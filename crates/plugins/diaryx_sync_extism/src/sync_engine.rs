@@ -302,6 +302,12 @@ pub fn compute_diff(
 
         match (manifest_entry, server_entry) {
             // File exists locally and on server
+            (Some(me), Some(_se)) if me.state == SyncState::PullFailed => {
+                // Last pull failed; local bytes (if any) are stale. Re-pull
+                // instead of diffing — never push, which would overwrite
+                // the good server version with whatever was sitting on disk.
+                plan.pull.push(key.clone());
+            }
             (Some(me), Some(se)) => {
                 let local_changed = me.state == SyncState::Dirty
                     || me.content_hash.is_empty()
@@ -329,7 +335,10 @@ pub fn compute_diff(
             }
             // File exists locally but not on server
             (Some(me), None) => {
-                if me.state == SyncState::Dirty || me.content_hash.is_empty() {
+                if me.state == SyncState::PullFailed {
+                    // Nothing to pull and we never confirmed local is good —
+                    // leave untouched.
+                } else if me.state == SyncState::Dirty || me.content_hash.is_empty() {
                     // New local file → push
                     plan.push.push(key.clone());
                 } else {
@@ -564,37 +573,15 @@ fn try_batch_download(
                 let relative_path = key.strip_prefix("files/").unwrap_or(key);
                 let full_path = join_workspace_path(root_dir, relative_path);
 
-                if let Some(parent_end) = full_path.rfind('/') {
-                    let parent = &full_path[..parent_end];
-                    let marker = format!("{parent}/.diaryx_sync_tmp");
-                    let _ = host::fs::write_file(&marker, "");
-                    let _ = host::fs::delete_file(&marker);
-                }
-
-                let write_result = if relative_path.ends_with(".md") {
-                    let content = String::from_utf8_lossy(&entry.bytes);
-                    host::fs::write_file(&full_path, &content)
-                } else {
-                    host::fs::write_binary(&full_path, &entry.bytes)
-                };
-
-                match write_result {
-                    Ok(()) => {
-                        *pulled += 1;
-                        let hash = server_map
-                            .get(key)
-                            .and_then(|se| se.content_hash.clone())
-                            .unwrap_or_default();
-                        let modified_at = host::fs::file_metadata(&full_path)
-                            .ok()
-                            .filter(|meta| meta.exists)
-                            .and_then(|meta| meta.modified_at_ms)
-                            .unwrap_or_else(|| host::time::timestamp_millis().unwrap_or(0) as i64)
-                            .max(0) as u64;
-                        manifest.mark_clean(key, &hash, entry.bytes.len() as u64, modified_at);
-                    }
-                    Err(e) => errors.push(format!("write {key}: {e}")),
-                }
+                write_pulled_bytes(
+                    key,
+                    &full_path,
+                    &entry.bytes,
+                    server_map,
+                    manifest,
+                    pulled,
+                    errors,
+                );
             }
 
             // Process per-key errors from the batch.
@@ -610,6 +597,7 @@ fn try_batch_download(
                     );
                     let _ = host::namespace::delete_object(namespace_id, api_key);
                 } else {
+                    manifest.mark_pull_failed(key);
                     errors.push(format!("pull {key}: {err_msg}"));
                 }
             }
@@ -621,6 +609,66 @@ fn try_batch_download(
                 &format!("Batch download failed ({} keys): {e}", api_keys.len()),
             );
             false
+        }
+    }
+}
+
+/// Write downloaded bytes to disk and update the manifest.
+///
+/// On success, marks the entry clean with the hash of what actually landed
+/// on disk (via `host::hash::hash_file`), so a server-provided hash that is
+/// missing or differs from the post-write bytes doesn't leave the manifest
+/// in a state that triggers spurious pushes on the next sync.
+///
+/// On failure, marks the entry `PullFailed` so `compute_diff` forces a
+/// re-pull next time instead of pushing whatever stale bytes happen to be
+/// sitting on disk.
+fn write_pulled_bytes(
+    key: &str,
+    full_path: &str,
+    bytes: &[u8],
+    server_map: &BTreeMap<&str, &ServerEntry>,
+    manifest: &mut SyncManifest,
+    pulled: &mut usize,
+    errors: &mut Vec<String>,
+) {
+    // Ensure parent directories exist.
+    if let Some(parent_end) = full_path.rfind('/') {
+        let parent = &full_path[..parent_end];
+        let marker = format!("{parent}/.diaryx_sync_tmp");
+        let _ = host::fs::write_file(&marker, "");
+        let _ = host::fs::delete_file(&marker);
+    }
+
+    // Always write raw bytes — String::from_utf8_lossy on `.md` would
+    // silently replace invalid UTF-8 with U+FFFD and desync local content
+    // from what the server has.
+    match host::fs::write_binary(full_path, bytes) {
+        Ok(()) => {
+            *pulled += 1;
+
+            // Prefer the hash of what we actually wrote to disk over the
+            // server-reported hash: the two should agree, but if the server
+            // omits `content_hash` (legacy rows) or our write goes through
+            // some host-side transform, we want the manifest to reflect
+            // ground truth.
+            let hash = host::hash::hash_file(full_path).unwrap_or_else(|| {
+                server_map
+                    .get(key)
+                    .and_then(|se| se.content_hash.clone())
+                    .unwrap_or_default()
+            });
+            let modified_at = host::fs::file_metadata(full_path)
+                .ok()
+                .filter(|meta| meta.exists)
+                .and_then(|meta| meta.modified_at_ms)
+                .unwrap_or_else(|| host::time::timestamp_millis().unwrap_or(0) as i64)
+                .max(0) as u64;
+            manifest.mark_clean(key, &hash, bytes.len() as u64, modified_at);
+        }
+        Err(e) => {
+            manifest.mark_pull_failed(key);
+            errors.push(format!("write {key}: {e}"));
         }
     }
 }
@@ -640,39 +688,9 @@ fn pull_single_file(
     match host::namespace::get_object(namespace_id, api_key) {
         Ok(bytes) => {
             let full_path = join_workspace_path(root_dir, relative_path);
-
-            // Ensure parent directories exist.
-            if let Some(parent_end) = full_path.rfind('/') {
-                let parent = &full_path[..parent_end];
-                let marker = format!("{parent}/.diaryx_sync_tmp");
-                let _ = host::fs::write_file(&marker, "");
-                let _ = host::fs::delete_file(&marker);
-            }
-
-            let write_result = if relative_path.ends_with(".md") {
-                let content = String::from_utf8_lossy(&bytes);
-                host::fs::write_file(&full_path, &content)
-            } else {
-                host::fs::write_binary(&full_path, &bytes)
-            };
-
-            match write_result {
-                Ok(()) => {
-                    *pulled += 1;
-                    let hash = server_map
-                        .get(key)
-                        .and_then(|se| se.content_hash.clone())
-                        .unwrap_or_default();
-                    let modified_at = host::fs::file_metadata(&full_path)
-                        .ok()
-                        .filter(|meta| meta.exists)
-                        .and_then(|meta| meta.modified_at_ms)
-                        .unwrap_or_else(|| host::time::timestamp_millis().unwrap_or(0) as i64)
-                        .max(0) as u64;
-                    manifest.mark_clean(key, &hash, bytes.len() as u64, modified_at);
-                }
-                Err(e) => errors.push(format!("write {key}: {e}")),
-            }
+            write_pulled_bytes(
+                key, &full_path, &bytes, server_map, manifest, pulled, errors,
+            );
         }
         Err(e) => {
             if is_not_found_error(&e) {
@@ -682,6 +700,7 @@ fn pull_single_file(
                 );
                 let _ = host::namespace::delete_object(namespace_id, api_key);
             } else {
+                manifest.mark_pull_failed(key);
                 errors.push(format!("pull {key}: {e}"));
             }
         }
@@ -1294,5 +1313,53 @@ mod tests {
 
         let plan = compute_diff(&manifest, &local_scan, &server, "");
         assert_eq!(plan.delete_remote, vec!["files/deleted.md"]);
+    }
+
+    #[test]
+    fn pull_failed_entry_is_re_pulled_not_pushed() {
+        // Regression: after a download write-failure, the file sits on disk
+        // with stale content. The dangerous path was (Some(Dirty), Some(se))
+        // hashing the stale local bytes and uploading them. Now the failed
+        // pull is tracked as PullFailed and compute_diff always plan.pulls
+        // it, never plan.pushes.
+        let mut manifest = make_manifest();
+        manifest.mark_pull_failed("files/stale.md");
+
+        // Local scan sees the old bytes on disk with a hash that differs
+        // from the server's authoritative content_hash.
+        let mut local_scan = BTreeMap::new();
+        local_scan.insert("files/stale.md".to_string(), local("stale_hash", 100));
+
+        let server = vec![server("files/stale.md", Some("fresh_server_hash"), 600)];
+
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
+        assert_eq!(
+            plan.pull,
+            vec!["files/stale.md"],
+            "PullFailed entry must be re-pulled"
+        );
+        assert!(
+            plan.push.is_empty(),
+            "PullFailed must never push stale local content. push={:?}",
+            plan.push
+        );
+    }
+
+    #[test]
+    fn pull_failed_entry_missing_from_server_is_left_alone() {
+        // If the server no longer has it, don't push (could corrupt) and
+        // don't delete (we never confirmed local was good). Leave it for
+        // manual intervention or a future successful pull elsewhere.
+        let mut manifest = make_manifest();
+        manifest.mark_pull_failed("files/stale.md");
+
+        let mut local_scan = BTreeMap::new();
+        local_scan.insert("files/stale.md".to_string(), local("stale_hash", 100));
+
+        let plan = compute_diff(&manifest, &local_scan, &[], "");
+        assert!(plan.push.is_empty());
+        assert!(plan.pull.is_empty());
+        assert!(plan.delete_local.is_empty());
+        assert!(plan.delete_remote.is_empty());
     }
 }

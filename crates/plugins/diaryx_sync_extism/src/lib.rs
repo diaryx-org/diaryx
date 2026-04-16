@@ -490,6 +490,11 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
     );
 
     if !errors.is_empty() {
+        // Persist whatever we managed to pull plus any PullFailed markers,
+        // so a subsequent Sync doesn't see the failed-pull files as
+        // "untracked local" and push stale disk bytes back to the server.
+        manifest.save();
+
         host::log::log("warn", &format!("DownloadWorkspace errors: {:?}", errors));
         return Err(summarize_sync_errors(
             &format!(
@@ -506,6 +511,10 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if link {
+        // Save before switching state so set_namespace_id's reload picks up
+        // the Clean entries we just wrote, rather than loading an empty
+        // manifest and forcing every subsequent sync to re-discover them.
+        manifest.save();
         write_workspace_id_to_frontmatter(Some(&namespace_id));
         state::set_namespace_id(Some(namespace_id))?;
     }

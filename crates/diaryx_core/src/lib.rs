@@ -47,6 +47,10 @@ pub mod visibility;
 /// Metadata-to-frontmatter conversion and file writing utilities
 pub mod metadata_writer;
 
+/// Server-namespace management (metadata lookup, deletion) shared across
+/// CLI, Tauri, and Web hosts
+pub mod namespace;
+
 /// Validate (check workspace link integrity)
 pub mod validate;
 

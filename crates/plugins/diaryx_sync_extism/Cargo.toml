@@ -1,6 +1,6 @@
 [package]
 name = "diaryx_sync_extism"
-version = "0.2.24"
+version = "0.2.25"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "LICENSE.md"

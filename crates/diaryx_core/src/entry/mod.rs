@@ -38,6 +38,27 @@ use crate::yaml_value::YamlValue;
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
 
+/// Compute a dedup key for an attachment reference.
+///
+/// Diaryx's current attachment model stores `attachments:` entries as
+/// markdown links pointing at *attachment note* files — e.g. a reference
+/// `path/to/file.pdf.md` wraps the binary at `path/to/file.pdf`. Historical
+/// (Obsidian-style) workspaces and some migration paths stored entries
+/// that pointed directly at the binary instead.
+///
+/// These two forms refer to the same logical attachment, so `add_attachment`
+/// must treat them as equal when deduping. We normalise by stripping a
+/// single trailing `.md` from the canonical path, collapsing note-form and
+/// binary-form references to the same key.
+fn attachment_dedup_key(raw_link: &str, from_path: &Path) -> String {
+    let parsed = link_parser::parse_link(raw_link);
+    let canonical = link_parser::to_canonical(&parsed, from_path);
+    canonical
+        .strip_suffix(".md")
+        .map(String::from)
+        .unwrap_or(canonical)
+}
+
 /// Async-first Diaryx entry operations.
 ///
 /// This is the main entry API going forward.
@@ -347,8 +368,8 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     /// Creates the attachments property if it doesn't exist.
     pub async fn add_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
         let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path).await?;
-        let parsed_target = link_parser::parse_link(attachment_path);
-        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
+        let from_path = Path::new(path);
+        let target_key = attachment_dedup_key(attachment_path, from_path);
 
         let attachments = frontmatter
             .entry("attachments".to_string())
@@ -357,11 +378,10 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         if let YamlValue::Sequence(list) = attachments {
             let exists = list.iter().any(|item| {
                 if let YamlValue::String(existing) = item {
-                    let parsed_existing = link_parser::parse_link(existing);
-                    return link_parser::to_canonical(&parsed_existing, Path::new(path))
-                        == target_canonical;
+                    attachment_dedup_key(existing, from_path) == target_key
+                } else {
+                    false
                 }
-                false
             });
 
             if !exists {
@@ -380,14 +400,13 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
             Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
             Err(e) => return Err(e),
         };
-        let parsed_target = link_parser::parse_link(attachment_path);
-        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
+        let from_path = Path::new(path);
+        let target_key = attachment_dedup_key(attachment_path, from_path);
 
         if let Some(YamlValue::Sequence(list)) = frontmatter.get_mut("attachments") {
             list.retain(|item| {
                 if let YamlValue::String(s) = item {
-                    let parsed_existing = link_parser::parse_link(s);
-                    link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
+                    attachment_dedup_key(s, from_path) != target_key
                 } else {
                     true
                 }
@@ -675,8 +694,8 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     /// Creates the attachments property if it doesn't exist.
     pub fn add_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
         let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
-        let parsed_target = link_parser::parse_link(attachment_path);
-        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
+        let from_path = Path::new(path);
+        let target_key = attachment_dedup_key(attachment_path, from_path);
 
         let attachments = frontmatter
             .entry("attachments".to_string())
@@ -685,11 +704,10 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         if let YamlValue::Sequence(list) = attachments {
             let exists = list.iter().any(|item| {
                 if let YamlValue::String(existing) = item {
-                    let parsed_existing = link_parser::parse_link(existing);
-                    return link_parser::to_canonical(&parsed_existing, Path::new(path))
-                        == target_canonical;
+                    attachment_dedup_key(existing, from_path) == target_key
+                } else {
+                    false
                 }
-                false
             });
 
             if !exists {
@@ -708,14 +726,13 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
             Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
             Err(e) => return Err(e),
         };
-        let parsed_target = link_parser::parse_link(attachment_path);
-        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
+        let from_path = Path::new(path);
+        let target_key = attachment_dedup_key(attachment_path, from_path);
 
         if let Some(YamlValue::Sequence(list)) = frontmatter.get_mut("attachments") {
             list.retain(|item| {
                 if let YamlValue::String(s) = item {
-                    let parsed_existing = link_parser::parse_link(s);
-                    link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
+                    attachment_dedup_key(s, from_path) != target_key
                 } else {
                     true
                 }
@@ -1068,5 +1085,67 @@ mod tests {
         assert!(content.starts_with("# Title"));
         assert!(content.contains("Line 1"));
         assert!(content.contains("Line 2"));
+    }
+
+    #[test]
+    fn test_add_attachment_dedups_note_and_binary_forms() {
+        // Seed an index that already references the attachment in note form
+        // (markdown link to the `.md` wrapper note). A subsequent call with
+        // the bare binary path must be recognised as a duplicate and not
+        // appended.
+        let existing = "---\n\
+             title: Index\n\
+             attachments:\n\
+             - '[photo.jpg](</folder/photo.jpg.md>)'\n\
+             ---\n\
+             body\n";
+        let fs = MockFileSystem::new().with_file("folder/index.md", existing);
+        let app = DiaryxApp::new(SyncToAsyncFs::new(fs.clone()));
+
+        crate::fs::block_on_test(app.add_attachment("folder/index.md", "photo.jpg")).unwrap();
+
+        let result = fs.get_content("folder/index.md").unwrap();
+        // Should still have exactly one attachment entry.
+        assert_eq!(
+            result.matches("photo.jpg").count(),
+            2, // once in the link title, once in the link target
+            "add_attachment duplicated a note-form reference when given the binary form. Got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_add_attachment_dedups_repeated_binary_form() {
+        let fs = MockFileSystem::new().with_file("folder/index.md", "---\ntitle: Index\n---\n");
+        let app = DiaryxApp::new(SyncToAsyncFs::new(fs.clone()));
+
+        crate::fs::block_on_test(app.add_attachment("folder/index.md", "photo.jpg")).unwrap();
+        crate::fs::block_on_test(app.add_attachment("folder/index.md", "photo.jpg")).unwrap();
+
+        let result = fs.get_content("folder/index.md").unwrap();
+        assert_eq!(
+            result.matches("photo.jpg").count(),
+            1,
+            "add_attachment appended the same binary path twice. Got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_remove_attachment_matches_either_form() {
+        let existing = "---\n\
+             title: Index\n\
+             attachments:\n\
+             - '[photo.jpg](</folder/photo.jpg.md>)'\n\
+             ---\n";
+        let fs = MockFileSystem::new().with_file("folder/index.md", existing);
+        let app = DiaryxApp::new(SyncToAsyncFs::new(fs.clone()));
+
+        // Remove via the binary path — should strip the note-form entry.
+        crate::fs::block_on_test(app.remove_attachment("folder/index.md", "photo.jpg")).unwrap();
+
+        let result = fs.get_content("folder/index.md").unwrap();
+        assert!(
+            !result.contains("photo.jpg"),
+            "remove_attachment didn't strip the note-form entry when given binary path. Got: {result}"
+        );
     }
 }

@@ -20,7 +20,8 @@ crates/tauri-plugin-*/permissions/schemas
 *.provisionprofile
 apps/web/upload.sh
 apps/web/test.sh
-.claude
+.claude/*
+!.claude/skills/
 **/blobs/**
 .playwright-mcp
 .diaryx

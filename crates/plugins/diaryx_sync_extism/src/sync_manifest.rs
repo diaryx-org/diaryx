@@ -31,6 +31,12 @@ pub struct FileEntry {
 pub enum SyncState {
     Clean,
     Dirty,
+    /// Last download attempt for this key failed to write to disk.
+    /// Whatever bytes are on disk (if any) must be treated as stale —
+    /// compute_diff must re-pull from the server and never push the
+    /// local copy, which would overwrite the good server version with
+    /// whatever old content happened to be sitting on disk.
+    PullFailed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +97,23 @@ impl SyncManifest {
                 size_bytes: size,
                 modified_at,
                 state: SyncState::Clean,
+            },
+        );
+    }
+
+    /// Record that we tried to pull this key but the write failed.
+    /// Stores size/modified_at as 0 and an empty hash — the entry's sole
+    /// purpose is the PullFailed state flag, which compute_diff uses to
+    /// force a re-pull on the next sync instead of pushing the stale
+    /// local file.
+    pub fn mark_pull_failed(&mut self, path: &str) {
+        self.files.insert(
+            path.to_string(),
+            FileEntry {
+                content_hash: String::new(),
+                size_bytes: 0,
+                modified_at: host::time::timestamp_millis().unwrap_or(0) as u64,
+                state: SyncState::PullFailed,
             },
         );
     }

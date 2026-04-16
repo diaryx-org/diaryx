@@ -2444,6 +2444,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx_cloudflare_e2e"
+version = "1.4.4"
+dependencies = [
+ "diaryx_server",
+ "reqwest 0.12.28",
+ "tokio",
+]
+
+[[package]]
 name = "diaryx_core"
 version = "1.4.4"
 dependencies = [
@@ -2651,6 +2660,7 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",

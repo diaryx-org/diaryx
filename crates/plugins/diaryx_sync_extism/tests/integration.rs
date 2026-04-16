@@ -1201,3 +1201,100 @@ async fn ns_create_namespace_accepts_name_parameter() {
         Some("Project Space")
     );
 }
+
+// ============================================================================
+// Category: Multi-Device Sync
+// ============================================================================
+//
+// These tests drive two independent `PluginTestHarness` instances — one per
+// "device" — that share a single `Arc<MockNamespaceProvider>` standing in for
+// the sync server. Each harness has its own workspace directory and its own
+// `RecordingStorage` (storage is device-local), but every push/pull lands in
+// the same namespace object store.
+//
+// The shared mock is the whole point: it simulates multi-device sync without
+// spawning a real `diaryx_sync_server`, so tests stay in-process and fast.
+// Coverage of HTTP/SQLite/magic-link/URL-encoding behavior belongs in a
+// separate e2e layer that spawns the real server.
+
+#[tokio::test]
+async fn two_devices_share_namespace_via_link_and_download() {
+    require_wasm!();
+
+    // Shared "server": one namespace provider used by both devices.
+    let shared_ns = Arc::new(MockNamespaceProvider::new());
+    shared_ns.seed_namespace("ns-shared", "Shared workspace");
+
+    // --- Device A: workspace with one note. Links and pushes it. ---
+    let workspace_a = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents:\n  - hello.md\n---\n\n# Root\n",
+        &[(
+            "hello.md",
+            "---\ntitle: Hello\npart_of: index.md\n---\n\n# Hello from A\n",
+        )],
+    );
+    let storage_a = Arc::new(RecordingStorage::new());
+    let harness_a =
+        load_with_storage_workspace_and_namespace(storage_a, &workspace_a, shared_ns.clone(), None);
+    harness_a.init().await.expect("init A");
+
+    let link_result = harness_a
+        .command("LinkWorkspace", json!({ "remote_id": "ns-shared" }))
+        .await
+        .expect("LinkWorkspace should return Some")
+        .expect("LinkWorkspace should succeed");
+    assert_eq!(
+        link_result.get("remote_id").and_then(|v| v.as_str()),
+        Some("ns-shared"),
+        "Link should report the namespace it linked to. Got: {link_result}"
+    );
+
+    // --- Device B: empty workspace. Downloads from shared namespace. ---
+    let workspace_b = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents: []\n---\n\n# Root B\n",
+        &[],
+    );
+    let storage_b = Arc::new(RecordingStorage::new());
+    let harness_b =
+        load_with_storage_workspace_and_namespace(storage_b, &workspace_b, shared_ns.clone(), None);
+    harness_b.init().await.expect("init B");
+
+    let download_result = harness_b
+        .command(
+            "DownloadWorkspace",
+            json!({
+                "remote_id": "ns-shared",
+                "workspace_root": workspace_b.to_string_lossy(),
+                "link": true,
+            }),
+        )
+        .await
+        .expect("DownloadWorkspace should return Some")
+        .expect("DownloadWorkspace should succeed");
+
+    let files_imported = download_result
+        .get("files_imported")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert!(
+        files_imported > 0,
+        "Device B should have imported at least one file from A. Got: {download_result}"
+    );
+
+    // Device B's disk should now contain the note A pushed.
+    let workspace_b_dir = workspace_b
+        .parent()
+        .expect("workspace B should have a parent dir");
+    let hello_on_b = workspace_b_dir.join("hello.md");
+    assert!(
+        hello_on_b.exists(),
+        "Device B should have hello.md on disk at {hello_on_b:?}"
+    );
+    let contents = std::fs::read_to_string(&hello_on_b).expect("hello.md should be readable on B");
+    assert!(
+        contents.contains("Hello from A"),
+        "Device B's hello.md should contain content from A:\n{contents}"
+    );
+}

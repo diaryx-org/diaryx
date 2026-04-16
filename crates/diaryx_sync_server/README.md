@@ -570,4 +570,31 @@ The `tests/e2e_sync.rs` file contains comprehensive end-to-end integration tests
 - **test_empty_update_detection**: Ensures no unnecessary updates when state is identical
 - **test_concurrent_modifications**: Verifies CRDT merging with concurrent changes
 
+#### HTTP Handler Tests
+
+`tests/http_smoke.rs` + `tests/support/mod.rs` provide an in-process HTTP
+harness: the real `axum::Router` is built against `:memory:` SQLite (no
+network, no fixture server) and driven via `tower::ServiceExt::oneshot`.
+
+- `build_test_router()` returns a `TestApp` wrapping the router plus
+  handles to the `AuthRepo` and `Config` so follow-up assertions can inspect
+  state directly.
+- `TestApp::get` / `TestApp::post_json` are thin helpers for the common
+  request shapes.
+- Status: seed — mounts `/api/health` and `/api/auth/*` only. Extend
+  `build_test_router` by wiring additional handler states (object,
+  audience, namespace) as coverage grows.
+
+#### Shared Contract Suite
+
+`tests/contract.rs` wires this adapter up to the
+[`diaryx_server::contract`](../diaryx_server/src/contract/mod.rs) test
+harness — a set of dispatcher-agnostic assertions that any server adapter
+must pass. The sibling
+[`diaryx_cloudflare_e2e`](../diaryx_cloudflare_e2e) crate runs the same
+suite against `wrangler dev --local`, so changes to any contract test
+automatically exercise both adapters, catching URL-encoding and routing
+drift. The shared URL-encoding corpus lives at
+`diaryx_server::contract::URL_KEY_CORPUS`.
+
 &nbsp;

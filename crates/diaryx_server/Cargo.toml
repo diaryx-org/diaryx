@@ -9,6 +9,12 @@ homepage.workspace = true
 readme = "README.md"
 license-file.workspace = true
 
+[features]
+# Pulls in `reqwest` to provide a reusable `ReqwestDispatcher` in
+# `contract::http`. Off by default; consumers that want to run the contract
+# suite against a live HTTP server enable this feature in their dev-deps.
+reqwest-dispatcher = ["dep:reqwest"]
+
 [dependencies]
 async-trait = "0.1"
 chrono = { workspace = true }
@@ -23,6 +29,7 @@ uuid = { version = "1", features = ["v4", "v5"] }
 webauthn_rp = { version = "0.3", default-features = false, features = ["bin", "custom", "serde", "serde_relaxed", "serializable_server_state"] }
 base64 = "0.22"
 futures = "0.3"
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

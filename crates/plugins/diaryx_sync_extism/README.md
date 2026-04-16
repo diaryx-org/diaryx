@@ -201,3 +201,31 @@ Two layers:
 - **Safe manifest updates** — The catch-all that marks untracked files as
   `Clean` only applies to files confirmed present on the server, preventing
   phantom entries that could cause incorrect local deletions.
+
+## Testing
+
+Integration tests live in [tests/integration.rs](tests/integration.rs) and
+load the real built WASM via `PluginTestHarness` from `diaryx_extism::testing`,
+with in-process mocks for host APIs (`MockNamespaceProvider`,
+`RecordingStorage`, `RecordingEventEmitter`).
+
+Run:
+
+```bash
+cargo build -p diaryx_sync_extism --target wasm32-unknown-unknown --release
+cargo test -p diaryx_sync_extism --test integration
+```
+
+Multi-device scenarios share a single `Arc<MockNamespaceProvider>` across two
+harnesses — each harness has its own workspace directory and storage, but
+every push/pull lands in the same namespace object store. See
+`two_devices_share_namespace_via_link_and_download` for the pattern.
+
+### Out of scope here
+
+The mock layer does **not** cover HTTP transport, SQLite persistence,
+magic-link auth, URL-encoding edge cases, or `diaryx_cloudflare`-specific
+behavior (Durable Objects, Worker runtime differences). Those belong in a
+separate e2e layer that spawns the real `diaryx_sync_server` — or,
+eventually, runs `wrangler dev` against `diaryx_cloudflare` — and drives it
+through the CLI or HTTP directly.

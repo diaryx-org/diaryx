@@ -71,6 +71,11 @@ pub enum AuthError {
         devices: Vec<DeviceLimitDevice>,
     },
     InvalidReplaceDevice,
+    /// The caller's input failed a shared-service invariant (e.g. email
+    /// format). Lives in the core so every adapter surfaces identical
+    /// 4xx behavior — previously each adapter validated separately and
+    /// diverged (caught by the contract suite).
+    InvalidInput(String),
     Internal(ServerCoreError),
 }
 
@@ -85,6 +90,7 @@ impl std::fmt::Display for AuthError {
             AuthError::InvalidReplaceDevice => {
                 write!(f, "The device to replace was not found on this account")
             }
+            AuthError::InvalidInput(msg) => write!(f, "{}", msg),
             AuthError::Internal(e) => write!(f, "{}", e),
         }
     }
@@ -131,6 +137,15 @@ impl<'a> AuthenticationService<'a> {
     /// Returns (token, verification_code).
     pub async fn request_magic_link(&self, email: &str) -> Result<(String, String), AuthError> {
         let email = email.trim().to_lowercase();
+
+        // Validate — single source of truth across adapters. Previously each
+        // adapter ran (or didn't run) its own check at the HTTP handler
+        // layer, and the Cloudflare worker would happily mint magic tokens
+        // for obvious garbage like "nope". Caught by the shared contract
+        // suite (`test_magic_link_rejects_invalid_email`).
+        if !email.contains('@') || email.len() < 5 {
+            return Err(AuthError::InvalidInput("Invalid email address".to_string()));
+        }
 
         // Rate limiting
         let one_hour_ago = (Utc::now() - Duration::hours(1)).timestamp();

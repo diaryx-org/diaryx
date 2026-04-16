@@ -194,18 +194,14 @@ async fn request_magic_link(
 ) -> impl IntoResponse {
     let email = body.email.trim().to_lowercase();
 
-    // Validate email format
-    if !email.contains('@') || email.len() < 5 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new("Invalid email address")),
-        )
-            .into_response();
-    }
-
-    // Request magic link
+    // Email validation lives in `AuthenticationService::request_magic_link`
+    // so every adapter enforces the same rule. The handler only maps the
+    // typed error back to an HTTP status.
     let (token, code) = match state.magic_link_service.request_magic_link(&email).await {
         Ok(result) => result,
+        Err(crate::auth::MagicLinkError::InvalidInput(msg)) => {
+            return (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(msg))).into_response();
+        }
         Err(crate::auth::MagicLinkError::RateLimited) => {
             warn!("Rate limited magic link request for {}", email);
             return (

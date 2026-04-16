@@ -32,6 +32,7 @@ pub enum MagicLinkError {
         devices: Vec<DeviceLimitDevice>,
     },
     InvalidReplaceDevice,
+    InvalidInput(String),
     DatabaseError(String),
     EmailError(String),
 }
@@ -49,6 +50,7 @@ impl std::fmt::Display for MagicLinkError {
             MagicLinkError::InvalidReplaceDevice => {
                 write!(f, "The device to replace was not found on this account")
             }
+            MagicLinkError::InvalidInput(msg) => write!(f, "{}", msg),
             MagicLinkError::DatabaseError(e) => write!(f, "Database error: {}", e),
             MagicLinkError::EmailError(e) => write!(f, "Email error: {}", e),
         }
@@ -66,6 +68,7 @@ impl From<AuthError> for MagicLinkError {
                 MagicLinkError::DeviceLimitReached { limit, devices }
             }
             AuthError::InvalidReplaceDevice => MagicLinkError::InvalidReplaceDevice,
+            AuthError::InvalidInput(msg) => MagicLinkError::InvalidInput(msg),
             AuthError::Internal(e) => MagicLinkError::DatabaseError(e.to_string()),
         }
     }

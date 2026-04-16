@@ -27,7 +27,8 @@ members = [
     "crates/plugins/diaryx_storage_gdrive_extism",
     "crates/plugins/diaryx_storage_s3_extism",
     "crates/plugins/diaryx_templating_extism",
-    "apps/tauri/src-tauri"
+    "apps/tauri/src-tauri",
+    "crates/diaryx_cloudflare_e2e",
 ]
 exclude = [
     "crates/diaryx_cloudflare",

@@ -31,6 +31,17 @@ pub mod proxy;
 pub mod schema;
 pub mod use_cases;
 
+// The contract + testing helpers are native-only. Their trait impls assume
+// `Send` futures (via plain `#[async_trait]`), which is incompatible with the
+// `?Send` trait definitions `cfg_async_trait!` produces on `wasm32`. Since
+// the Cloudflare worker never drives the contract suite from inside itself
+// — `diaryx_cloudflare_e2e` does that from the native host — gating these
+// off on wasm32 is the right call.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod contract;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod testing;
+
 pub use domain::{
     AudienceInfo, AuthContext, AuthSessionInfo, CurrentUserContext, CustomDomainInfo, DeviceInfo,
     NamespaceInfo, NamespaceSessionInfo, ObjectMeta, PasskeyChallengeInfo, PasskeyCredentialInfo,

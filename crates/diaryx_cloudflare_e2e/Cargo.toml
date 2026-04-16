@@ -1,0 +1,28 @@
+[package]
+name = "diaryx_cloudflare_e2e"
+description = "End-to-end contract tests that drive `diaryx_cloudflare` through `wrangler dev`"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+publish = false
+
+# This crate exists solely to host native-target tests that spawn
+# `bunx wrangler dev` in `../diaryx_cloudflare` and drive the worker over
+# HTTP via the shared `diaryx_server::contract` suite. `diaryx_cloudflare`
+# itself is a `wasm32-unknown-unknown` crate and is excluded from the
+# workspace build graph — so the test code can't live alongside its source.
+#
+# There is no library or binary target; all content lives in `tests/`.
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+diaryx_server = { workspace = true, features = ["reqwest-dispatcher"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

@@ -714,26 +714,30 @@ pub fn execute_pull(
         );
     }
 
-    // Partition files: markdown is batched (small, text, compresses well),
-    // everything else (images, PDFs, videos) is downloaded individually.
-    const BATCH_CHUNK_SIZE: usize = 100;
+    // Partition files by size: small files (<5MB) are batched via multipart,
+    // large files are downloaded individually to avoid huge batch responses.
+    const BATCH_CHUNK_SIZE: usize = 50;
+    const BATCH_SIZE_LIMIT: u64 = 5 * 1024 * 1024; // 5MB
 
-    let mut markdown_keys: Vec<&String> = Vec::new();
-    let mut binary_keys: Vec<&String> = Vec::new();
+    let mut batchable_keys: Vec<&String> = Vec::new();
+    let mut large_keys: Vec<&String> = Vec::new();
 
     for key in &plan.pull {
-        let relative_path = key.strip_prefix("files/").unwrap_or(key);
-        if relative_path.ends_with(".md") {
-            markdown_keys.push(key);
+        let size = server_map
+            .get(key.as_str())
+            .map(|se| se.size_bytes)
+            .unwrap_or(0);
+        if size < BATCH_SIZE_LIMIT {
+            batchable_keys.push(key);
         } else {
-            binary_keys.push(key);
+            large_keys.push(key);
         }
     }
 
     let mut files_completed: usize = 0;
 
-    // --- Batch-fetch small files in chunks ---
-    for chunk in markdown_keys.chunks(BATCH_CHUNK_SIZE) {
+    // --- Batch-fetch small files (<5MB) in chunks ---
+    for chunk in batchable_keys.chunks(BATCH_CHUNK_SIZE) {
         let chunk_start = files_completed;
         let chunk_end = chunk_start + chunk.len();
 
@@ -855,8 +859,8 @@ pub fn execute_pull(
         );
     }
 
-    // --- Individually fetch large files ---
-    for key in &binary_keys {
+    // --- Individually fetch large files (>=5MB) ---
+    for key in &large_keys {
         let relative_path = key.strip_prefix("files/").unwrap_or(key);
         let completed = progress_offset + files_completed;
         emit_sync_progress(

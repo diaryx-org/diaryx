@@ -153,6 +153,185 @@ pub trait NamespaceProvider: Send + Sync {
     fn list_namespaces(&self) -> Result<Vec<NamespaceEntry>, String>;
 }
 
+/// Parse a `multipart/mixed` response body into a [`BatchGetResult`].
+///
+/// Each part is identified by its `Content-Disposition: attachment; filename="<key>"`
+/// header. Parts with an `X-Batch-Error: true` header are treated as per-key errors.
+pub fn parse_multipart_batch(body: &[u8], boundary: &str) -> BatchGetResult {
+    let mut result = BatchGetResult::default();
+    let delim = format!("--{boundary}");
+    let closing = format!("--{boundary}--");
+
+    // Split body on boundary markers.
+    let delim_bytes = delim.as_bytes();
+    let mut parts: Vec<&[u8]> = Vec::new();
+    let mut start = 0;
+
+    while let Some(pos) = memmem(body, start, delim_bytes) {
+        if start > 0 {
+            // Trim trailing \r\n before boundary.
+            let end = if pos >= 2 && body[pos - 2] == b'\r' && body[pos - 1] == b'\n' {
+                pos - 2
+            } else {
+                pos
+            };
+            parts.push(&body[start..end]);
+        }
+        start = pos + delim_bytes.len();
+        // Skip \r\n after boundary line.
+        if start < body.len() && body[start] == b'\r' {
+            start += 1;
+        }
+        if start < body.len() && body[start] == b'\n' {
+            start += 1;
+        }
+        // Check for closing boundary (--boundary--).
+        if start >= 2 && body[start - 2..start].starts_with(b"--") {
+            break;
+        }
+    }
+
+    for part in parts {
+        // Split headers from body at the first \r\n\r\n.
+        let header_end = match memmem(part, 0, b"\r\n\r\n") {
+            Some(pos) => pos,
+            None => continue,
+        };
+        let header_section = &part[..header_end];
+        let body_section = &part[header_end + 4..];
+
+        let headers_str = String::from_utf8_lossy(header_section);
+        let mut filename: Option<String> = None;
+        let mut content_type = "application/octet-stream".to_string();
+        let mut is_error = false;
+
+        for line in headers_str.split("\r\n") {
+            let lower = line.to_ascii_lowercase();
+            if lower.starts_with("content-disposition:") {
+                if let Some(pos) = line.find("filename=\"") {
+                    let start = pos + 10;
+                    if let Some(end) = line[start..].find('\"') {
+                        filename = Some(line[start..start + end].replace("\\\"", "\""));
+                    }
+                }
+            } else if lower.starts_with("content-type:") {
+                content_type = line["content-type:".len()..].trim().to_string();
+            } else if lower.starts_with("x-batch-error:") {
+                is_error = lower.contains("true");
+            }
+        }
+
+        if let Some(key) = filename {
+            if is_error {
+                let msg = String::from_utf8_lossy(body_section).to_string();
+                result.errors.insert(key, msg);
+            } else {
+                result.objects.insert(
+                    key,
+                    BatchGetEntry {
+                        bytes: body_section.to_vec(),
+                        mime_type: content_type,
+                    },
+                );
+            }
+        }
+    }
+
+    result
+}
+
+/// Find the first occurrence of `needle` in `haystack` starting from `offset`.
+fn memmem(haystack: &[u8], offset: usize, needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || offset + needle.len() > haystack.len() {
+        return None;
+    }
+    haystack[offset..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| p + offset)
+}
+
+#[cfg(test)]
+mod multipart_tests {
+    use super::*;
+
+    fn build_multipart(boundary: &str, parts: &[(&str, &str, &[u8], bool)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for (key, mime, body, is_error) in parts {
+            buf.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            buf.extend_from_slice(
+                format!("Content-Disposition: attachment; filename=\"{key}\"\r\n").as_bytes(),
+            );
+            if *is_error {
+                buf.extend_from_slice(b"X-Batch-Error: true\r\n");
+            }
+            buf.extend_from_slice(format!("Content-Type: {mime}\r\n").as_bytes());
+            buf.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+            buf.extend_from_slice(b"\r\n");
+            buf.extend_from_slice(body);
+            buf.extend_from_slice(b"\r\n");
+        }
+        buf.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        buf
+    }
+
+    #[test]
+    fn parses_text_and_binary_parts() {
+        let boundary = "test-boundary-123";
+        let body = build_multipart(
+            boundary,
+            &[
+                ("files/readme.md", "text/markdown", b"# Hello", false),
+                (
+                    "files/image.png",
+                    "image/png",
+                    &[0x89, 0x50, 0x4E, 0x47],
+                    false,
+                ),
+            ],
+        );
+        let result = parse_multipart_batch(&body, boundary);
+        assert_eq!(result.objects.len(), 2);
+        assert!(result.errors.is_empty());
+
+        let md = result.objects.get("files/readme.md").unwrap();
+        assert_eq!(md.bytes, b"# Hello");
+        assert_eq!(md.mime_type, "text/markdown");
+
+        let img = result.objects.get("files/image.png").unwrap();
+        assert_eq!(img.bytes, &[0x89, 0x50, 0x4E, 0x47]);
+        assert_eq!(img.mime_type, "image/png");
+    }
+
+    #[test]
+    fn parses_error_parts() {
+        let boundary = "err-boundary";
+        let body = build_multipart(
+            boundary,
+            &[
+                ("files/ok.md", "text/markdown", b"content", false),
+                ("files/missing.md", "text/plain", b"Object not found", true),
+            ],
+        );
+        let result = parse_multipart_batch(&body, boundary);
+        assert_eq!(result.objects.len(), 1);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(
+            result.errors.get("files/missing.md").unwrap(),
+            "Object not found"
+        );
+    }
+
+    #[test]
+    fn handles_empty_batch() {
+        let boundary = "empty";
+        let body = format!("--{boundary}--\r\n").into_bytes();
+        let result = parse_multipart_batch(&body, boundary);
+        assert!(result.objects.is_empty());
+        assert!(result.errors.is_empty());
+    }
+}
+
 /// No-op implementation of [`PluginStorage`] for plugins that don't need persistence.
 pub struct NoopStorage;
 

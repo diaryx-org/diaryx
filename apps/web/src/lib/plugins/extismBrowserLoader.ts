@@ -948,6 +948,110 @@ function buildHostFunctions(
     return new TextDecoder().decode(bytes);
   }
 
+  /**
+   * Parse a multipart/mixed response into the JSON format expected by the
+   * WASM guest SDK: `{ objects: { key: { data, mime_type, encoding } }, errors: { key: msg } }`.
+   * Binary data is base64-encoded for the WASM FFI boundary.
+   */
+  function parseMultipartBatch(
+    body: Uint8Array,
+    boundary: string,
+  ): {
+    objects: Record<string, { data: string; mime_type: string; encoding: string }>;
+    errors: Record<string, string>;
+  } {
+    const objects: Record<string, { data: string; mime_type: string; encoding: string }> = {};
+    const errors: Record<string, string> = {};
+    const decoder = new TextDecoder();
+    const delimBytes = new TextEncoder().encode(`--${boundary}`);
+
+    // Find all boundary positions.
+    const positions: number[] = [];
+    for (let i = 0; i <= body.length - delimBytes.length; i++) {
+      let match = true;
+      for (let j = 0; j < delimBytes.length; j++) {
+        if (body[i + j] !== delimBytes[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) positions.push(i);
+    }
+
+    // Each part is between consecutive boundary positions.
+    for (let p = 0; p < positions.length - 1; p++) {
+      // Skip past the boundary line and its trailing \r\n.
+      let partStart = positions[p] + delimBytes.length;
+      if (body[partStart] === 0x0d) partStart++;
+      if (body[partStart] === 0x0a) partStart++;
+
+      // Part ends just before the next boundary (trim trailing \r\n).
+      let partEnd = positions[p + 1];
+      if (partEnd >= 2 && body[partEnd - 2] === 0x0d && body[partEnd - 1] === 0x0a) {
+        partEnd -= 2;
+      }
+
+      // Split headers from body at \r\n\r\n.
+      let headerEnd = -1;
+      for (let i = partStart; i < partEnd - 3; i++) {
+        if (
+          body[i] === 0x0d &&
+          body[i + 1] === 0x0a &&
+          body[i + 2] === 0x0d &&
+          body[i + 3] === 0x0a
+        ) {
+          headerEnd = i;
+          break;
+        }
+      }
+      if (headerEnd === -1) continue;
+
+      const headersStr = decoder.decode(body.subarray(partStart, headerEnd));
+      const bodyBytes = body.subarray(headerEnd + 4, partEnd);
+
+      let filename: string | null = null;
+      let contentType = "application/octet-stream";
+      let isError = false;
+
+      for (const line of headersStr.split("\r\n")) {
+        const lower = line.toLowerCase();
+        if (lower.startsWith("content-disposition:")) {
+          const match = line.match(/filename="([^"\\]*(?:\\.[^"\\]*)*)"/);
+          if (match) filename = match[1].replace(/\\"/g, '"');
+        } else if (lower.startsWith("content-type:")) {
+          contentType = line.slice("content-type:".length).trim();
+        } else if (lower.startsWith("x-batch-error:") && lower.includes("true")) {
+          isError = true;
+        }
+      }
+
+      if (filename !== null) {
+        if (isError) {
+          errors[filename] = decoder.decode(bodyBytes);
+        } else {
+          const isText = contentType.startsWith("text/");
+          let data: string;
+          let encoding: string;
+          if (isText) {
+            data = decoder.decode(bodyBytes);
+            encoding = "text";
+          } else {
+            // Base64-encode for the WASM FFI boundary.
+            let binary = "";
+            for (let i = 0; i < bodyBytes.length; i++) {
+              binary += String.fromCharCode(bodyBytes[i]);
+            }
+            data = btoa(binary);
+            encoding = "base64";
+          }
+          objects[filename] = { data, mime_type: contentType, encoding };
+        }
+      }
+    }
+
+    return { objects, errors };
+  }
+
   return {
     "extism:host/user": {
       host_log(cp: CallContext, offs: bigint) {
@@ -1651,6 +1755,34 @@ function buildHostFunctions(
             | { ns_id: string; keys: string[] }
             | undefined;
           if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+
+          // Try multipart endpoint first (no base64 overhead on wire).
+          try {
+            const serverBase = await getNamespaceServerBase();
+            const multipartResp = await fetch(
+              `${serverBase}/namespaces/${encodeURIComponent(input.ns_id)}/batch/objects/multipart`,
+              {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ keys: input.keys }),
+              },
+            );
+            if (multipartResp.ok) {
+              const contentType = multipartResp.headers.get("content-type") ?? "";
+              const boundaryMatch = contentType.match(/boundary=(.+)/);
+              if (boundaryMatch) {
+                const boundary = boundaryMatch[1].trim();
+                const buffer = new Uint8Array(await multipartResp.arrayBuffer());
+                const parsed = parseMultipartBatch(buffer, boundary);
+                return cp.store(JSON.stringify(parsed));
+              }
+            }
+            // Non-ok or no boundary — fall through to JSON endpoint.
+          } catch {
+            // Multipart failed — fall through to JSON endpoint.
+          }
+
           const resp = await namespaceFetchText(
             "POST",
             `/namespaces/${encodeURIComponent(input.ns_id)}/batch/objects`,

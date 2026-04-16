@@ -138,6 +138,50 @@ impl CliNamespaceProvider {
             .map_err(|e| format!("Failed to read namespace response: {e}"))
     }
 
+    /// POST a batch request to a multipart endpoint and parse the response.
+    fn request_multipart_batch(
+        &self,
+        url: String,
+        body: Vec<u8>,
+    ) -> Result<diaryx_extism::BatchGetResult, String> {
+        let agent = Self::agent();
+        let mut builder = ureq::http::Request::builder()
+            .method("POST")
+            .uri(url.as_str())
+            .header("Content-Type", "application/json");
+        if let Some(token) = &self.auth_token {
+            builder = builder.header("Authorization", format!("Bearer {token}"));
+        }
+        let request = builder
+            .body(body)
+            .map_err(|e| format!("Failed to build multipart batch request: {e}"))?;
+        let response = agent
+            .run(request)
+            .map_err(|e| format!("Multipart batch request failed: {e}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!(
+                "Multipart batch request failed with status {status}"
+            ));
+        }
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let boundary = content_type
+            .split("boundary=")
+            .nth(1)
+            .ok_or_else(|| "Missing boundary in multipart response".to_string())?
+            .trim()
+            .to_string();
+        let resp_bytes = response
+            .into_body()
+            .read_to_vec()
+            .map_err(|e| format!("Failed to read multipart response: {e}"))?;
+        Ok(diaryx_extism::parse_multipart_batch(&resp_bytes, &boundary))
+    }
+
     fn request_json<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
@@ -346,15 +390,27 @@ impl diaryx_extism::NamespaceProvider for CliNamespaceProvider {
         ns_id: &str,
         keys: &[String],
     ) -> Result<diaryx_extism::BatchGetResult, String> {
-        use base64::Engine as _;
+        let body = serde_json::to_vec(&serde_json::json!({ "keys": keys }))
+            .map_err(|e| format!("Failed to serialize batch request: {e}"))?;
 
+        // Try multipart endpoint first (no base64 overhead).
+        let multipart_url = format!(
+            "{}/namespaces/{}/batch/objects/multipart",
+            self.server_url,
+            Self::encode_component(ns_id),
+        );
+        match self.request_multipart_batch(multipart_url, body.clone()) {
+            Ok(result) => return Ok(result),
+            Err(_) => { /* fall through to JSON endpoint */ }
+        }
+
+        // Fallback: JSON+base64 batch endpoint.
+        use base64::Engine as _;
         let url = format!(
             "{}/namespaces/{}/batch/objects",
             self.server_url,
             Self::encode_component(ns_id),
         );
-        let body = serde_json::to_vec(&serde_json::json!({ "keys": keys }))
-            .map_err(|e| format!("Failed to serialize batch request: {e}"))?;
 
         let resp: serde_json::Value = self
             .request_json("POST", url, Some(body), Some("application/json"), None)?

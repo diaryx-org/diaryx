@@ -4,10 +4,10 @@ use crate::auth::RequireAuth;
 use crate::tokens::validate_signed_token;
 use axum::{
     Router,
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
+    response::{IntoResponse, Json, Response},
     routing::{get, post, put},
 };
 use diaryx_server::domain::{ObjectMeta, UsageTotals};
@@ -106,6 +106,10 @@ pub fn object_routes(state: ObjectState) -> Router {
     Router::new()
         .route("/objects", get(list_objects))
         .route("/batch/objects", post(batch_get_objects))
+        .route(
+            "/batch/objects/multipart",
+            post(batch_get_objects_multipart),
+        )
         .route(
             "/objects/{*key}",
             put(put_object).get(get_object).delete(delete_object),
@@ -253,6 +257,79 @@ async fn batch_get_objects(
         }
         Err(e) => core_error_response(e),
     }
+}
+
+/// POST /namespaces/{ns_id}/batch/objects/multipart — retrieve multiple objects
+/// as a multipart/mixed response with raw binary parts (no base64 overhead).
+async fn batch_get_objects_multipart(
+    State(state): State<ObjectState>,
+    RequireAuth(auth): RequireAuth,
+    Path(ns_id): Path<String>,
+    Json(body): Json<BatchGetRequest>,
+) -> Response {
+    let service = make_service(&state);
+
+    let result = match service.get_batch(&ns_id, &body.keys, &auth.user.id).await {
+        Ok(r) => r,
+        Err(e) => return core_error_response(e),
+    };
+
+    // Build the full multipart body in memory. Each part is small enough that
+    // this is fine — the 5MB per-file size gate on the client keeps total
+    // payload bounded.
+    let boundary = format!("diaryx-batch-{:016x}", rand::random::<u64>());
+    let mut buf: Vec<u8> = Vec::new();
+
+    for (key, obj) in &result.objects {
+        buf.extend_from_slice(b"--");
+        buf.extend_from_slice(boundary.as_bytes());
+        buf.extend_from_slice(b"\r\n");
+        buf.extend_from_slice(
+            format!(
+                "Content-Disposition: attachment; filename=\"{}\"\r\n",
+                key.replace('\"', "\\\""),
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(format!("Content-Type: {}\r\n", obj.mime_type).as_bytes());
+        buf.extend_from_slice(format!("Content-Length: {}\r\n", obj.bytes.len()).as_bytes());
+        buf.extend_from_slice(b"\r\n");
+        buf.extend_from_slice(&obj.bytes);
+        buf.extend_from_slice(b"\r\n");
+    }
+
+    // Errors as parts with X-Batch-Error header.
+    for (key, err_msg) in &result.errors {
+        buf.extend_from_slice(b"--");
+        buf.extend_from_slice(boundary.as_bytes());
+        buf.extend_from_slice(b"\r\n");
+        buf.extend_from_slice(
+            format!(
+                "Content-Disposition: attachment; filename=\"{}\"\r\n",
+                key.replace('\"', "\\\""),
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(b"X-Batch-Error: true\r\n");
+        buf.extend_from_slice(b"Content-Type: text/plain\r\n");
+        buf.extend_from_slice(b"\r\n");
+        buf.extend_from_slice(err_msg.as_bytes());
+        buf.extend_from_slice(b"\r\n");
+    }
+
+    // Closing boundary.
+    buf.extend_from_slice(b"--");
+    buf.extend_from_slice(boundary.as_bytes());
+    buf.extend_from_slice(b"--\r\n");
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            "Content-Type",
+            format!("multipart/mixed; boundary={boundary}"),
+        )
+        .body(Body::from(buf))
+        .unwrap()
 }
 
 /// DELETE /namespaces/{ns_id}/objects/{*key} — delete an object.

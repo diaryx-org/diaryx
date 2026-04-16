@@ -685,6 +685,11 @@ fn pull_single_file(
     }
 }
 
+/// Execute the pull phase of a sync.
+///
+/// When `skip_non_markdown` is `true`, only `.md` files are downloaded.
+/// Non-markdown files are collected into the returned `deferred` list so the
+/// host can enqueue them for background download.
 pub fn execute_pull(
     _params: &JsonValue,
     namespace_id: &str,
@@ -696,7 +701,8 @@ pub fn execute_pull(
     progress_span: u64,
     progress_offset: usize,
     progress_total: usize,
-) -> (usize, usize, Vec<String>) {
+    skip_non_markdown: bool,
+) -> (usize, usize, Vec<String>, Vec<String>) {
     let root_dir = workspace_root_dir(workspace_root);
 
     let server_map: BTreeMap<&str, &ServerEntry> =
@@ -716,13 +722,20 @@ pub fn execute_pull(
 
     // Partition files by size: small files (<5MB) are batched via multipart,
     // large files are downloaded individually to avoid huge batch responses.
+    // When `skip_non_markdown` is true, non-.md files are deferred for
+    // background download by the host.
     const BATCH_CHUNK_SIZE: usize = 50;
     const BATCH_SIZE_LIMIT: u64 = 5 * 1024 * 1024; // 5MB
 
     let mut batchable_keys: Vec<&String> = Vec::new();
     let mut large_keys: Vec<&String> = Vec::new();
+    let mut deferred_keys: Vec<String> = Vec::new();
 
     for key in &plan.pull {
+        if skip_non_markdown && !key.ends_with(".md") {
+            deferred_keys.push(key.clone());
+            continue;
+        }
         let size = server_map
             .get(key.as_str())
             .map(|se| se.size_bytes)
@@ -732,6 +745,16 @@ pub fn execute_pull(
         } else {
             large_keys.push(key);
         }
+    }
+
+    if skip_non_markdown && !deferred_keys.is_empty() {
+        host::log::log(
+            "info",
+            &format!(
+                "Deferring {} non-markdown file(s) for background download",
+                deferred_keys.len()
+            ),
+        );
     }
 
     let mut files_completed: usize = 0;
@@ -944,7 +967,7 @@ pub fn execute_pull(
         );
     }
 
-    (pulled, deleted_local, errors)
+    (pulled, deleted_local, errors, deferred_keys)
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,7 +1034,7 @@ pub fn sync(
         0,
         total_ops.max(1),
     );
-    let (pulled, deleted_local, pull_errors) = execute_pull(
+    let (pulled, deleted_local, pull_errors, _deferred) = execute_pull(
         params,
         namespace_id,
         &dir_root,
@@ -1022,6 +1045,7 @@ pub fn sync(
         25,
         plan.push.len() + plan.delete_remote.len(),
         total_ops.max(1),
+        false, // full sync downloads everything
     );
 
     push_errors.extend(pull_errors);

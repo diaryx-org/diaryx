@@ -475,7 +475,7 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
     let plan = sync_engine::compute_diff(&manifest, &empty_local, &server_entries, &workspace_root);
     let total_ops = (plan.pull.len() + plan.delete_local.len()).max(1);
 
-    let (pulled, _deleted_local, errors) = sync_engine::execute_pull(
+    let (pulled, _deleted_local, errors, deferred) = sync_engine::execute_pull(
         params,
         &namespace_id,
         &workspace_root,
@@ -486,6 +486,7 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
         80,
         0,
         total_ops,
+        true, // defer non-markdown for background download
     );
 
     if !errors.is_empty() {
@@ -511,6 +512,7 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
 
     Ok(serde_json::json!({
         "files_imported": pulled,
+        "deferred_files": deferred,
     }))
 }
 
@@ -664,7 +666,7 @@ fn handle_sync_pull(params: &JsonValue) -> Result<JsonValue, String> {
         let plan =
             sync_engine::compute_diff(manifest, &local_scan, &server_entries, &workspace_root);
 
-        let (pulled, deleted_local, errors) = sync_engine::execute_pull(
+        let (pulled, deleted_local, errors, _deferred) = sync_engine::execute_pull(
             params,
             &namespace_id,
             &workspace_root,
@@ -675,6 +677,7 @@ fn handle_sync_pull(params: &JsonValue) -> Result<JsonValue, String> {
             80,
             0,
             (plan.pull.len() + plan.delete_local.len()).max(1),
+            false, // pull-only sync downloads everything
         );
 
         // Mark untracked local files as clean ONLY if the server also has

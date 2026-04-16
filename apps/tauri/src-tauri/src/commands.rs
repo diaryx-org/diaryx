@@ -1167,6 +1167,8 @@ impl<R: Runtime> TauriNamespaceProvider<R> {
         }
         response
             .into_body()
+            .with_config()
+            .limit(100 * 1024 * 1024) // 100MB — individual objects can be large
             .read_to_vec()
             .map_err(|e| format!("Failed to read namespace response: {e}"))
     }
@@ -1218,6 +1220,8 @@ impl<R: Runtime> TauriNamespaceProvider<R> {
 
         let resp_bytes = response
             .into_body()
+            .with_config()
+            .limit(100 * 1024 * 1024) // 100MB — batch responses can be large
             .read_to_vec()
             .map_err(|e| format!("Failed to read multipart response: {e}"))?;
 

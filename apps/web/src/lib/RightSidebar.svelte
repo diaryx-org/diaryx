@@ -506,6 +506,13 @@
       mimeType: meta.mimeType,
       sizeBytes: meta.sizeBytes,
     });
+    // Also bump this file to the front of the deferred download queue
+    // (in case it was deferred during initial workspace download).
+    try {
+      import("$lib/sync/deferredFileQueue").then(({ prioritizeFile }) => {
+        prioritizeFile(`files/${attachPath}`);
+      }).catch(() => {});
+    } catch { /* deferred queue may not be initialized */ }
   }
 
   function downloadAllRemoteAttachments(): void {

@@ -134,6 +134,8 @@ impl CliNamespaceProvider {
         }
         response
             .into_body()
+            .with_config()
+            .limit(100 * 1024 * 1024)
             .read_to_vec()
             .map_err(|e| format!("Failed to read namespace response: {e}"))
     }
@@ -177,6 +179,8 @@ impl CliNamespaceProvider {
             .to_string();
         let resp_bytes = response
             .into_body()
+            .with_config()
+            .limit(100 * 1024 * 1024)
             .read_to_vec()
             .map_err(|e| format!("Failed to read multipart response: {e}"))?;
         Ok(diaryx_extism::parse_multipart_batch(&resp_bytes, &boundary))

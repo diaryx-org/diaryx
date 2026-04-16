@@ -882,6 +882,19 @@
     // Start debounced sync scheduler — runs full provider sync on startup,
     // after a quiet period following file mutations, and when the tab resumes.
     startSyncScheduler();
+
+    // Resume any pending deferred file downloads from a previous session.
+    try {
+      const { getServerUrl, getToken } = await import("$lib/auth");
+      const serverUrl = getServerUrl();
+      const token = getToken();
+      if (serverUrl && token) {
+        const { initDeferredQueue } = await import("$lib/sync/deferredFileQueue");
+        initDeferredQueue(createApi(activeBackend), serverUrl, token);
+      }
+    } catch (e) {
+      console.warn("[App] Failed to resume deferred file queue:", e);
+    }
   }
 
 

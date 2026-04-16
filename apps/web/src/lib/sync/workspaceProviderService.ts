@@ -73,6 +73,8 @@ interface LinkWorkspaceResponse {
 
 interface DownloadWorkspaceResponse {
   files_imported: number;
+  /** Non-markdown file keys deferred for background download. */
+  deferred_files?: string[];
 }
 
 function toPluginBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -637,6 +639,23 @@ export async function downloadWorkspace(
   }
 
   onProgress?.({ percent: 100, message: "Done." });
+
+  // Enqueue deferred (non-markdown) files for background download.
+  const deferredFiles = result?.deferred_files;
+  if (deferredFiles && deferredFiles.length > 0 && params.remoteId) {
+    try {
+      const { getServerUrl, getToken } = await import("$lib/auth");
+      const { initDeferredQueue, enqueueDeferredFiles } = await import("./deferredFileQueue");
+      const deferredServerUrl = getServerUrl();
+      const deferredToken = getToken();
+      if (deferredServerUrl && deferredToken) {
+        initDeferredQueue(workspaceApi, deferredServerUrl, deferredToken);
+        enqueueDeferredFiles(params.remoteId, deferredFiles);
+      }
+    } catch (e) {
+      console.warn("[workspaceProviderService] Failed to enqueue deferred files:", e);
+    }
+  }
 
   return {
     localId: localWs.id,

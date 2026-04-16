@@ -45,11 +45,12 @@
     Copy,
     CircleHelp,
   } from "@lucide/svelte";
-  import { Cloud, CloudOff, Loader2 as CloudSpinner } from "@lucide/svelte";
+  import { Cloud, CloudOff, CloudDownload, Loader2 as CloudSpinner } from "@lucide/svelte";
   import { getAuthState } from "./auth";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import SyncDialog from "./components/SyncDialog.svelte";
   import { getSyncState } from "$lib/sync/syncScheduler.svelte";
+  import { onDeferredQueueProgress } from "$lib/sync/deferredFileQueue";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
@@ -187,6 +188,14 @@
 
   let showSyncDialog = $state(false);
   const syncState = getSyncState();
+  let deferredDownloading = $state(false);
+
+  $effect(() => {
+    const unsub = onDeferredQueueProgress((p) => {
+      deferredDownloading = p.total > 0 && p.completed < p.total;
+    });
+    return unsub;
+  });
 
   const syncIndicatorColor = $derived.by(() => {
     const s = collaborationStore.effectiveSyncStatus;
@@ -1398,6 +1407,8 @@
               <CloudSpinner class="size-4 animate-spin text-amber-500" />
             {:else if collaborationStore.serverOffline}
               <CloudOff class={`size-4 ${syncIndicatorColor}`} />
+            {:else if deferredDownloading}
+              <CloudDownload class="size-4 text-amber-500 animate-pulse" />
             {:else}
               <Cloud class={`size-4 ${syncIndicatorColor}`} />
             {/if}

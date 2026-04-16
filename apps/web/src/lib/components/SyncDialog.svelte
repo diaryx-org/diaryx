@@ -13,6 +13,10 @@
   } from "@lucide/svelte";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import { getSyncState } from "$lib/sync/syncScheduler.svelte";
+  import {
+    onDeferredQueueProgress,
+    type DeferredQueueProgress,
+  } from "$lib/sync/deferredFileQueue";
 
   interface Props {
     open: boolean;
@@ -28,6 +32,14 @@
   const syncState = getSyncState();
 
   let refreshing = $state(false);
+  let deferredProgress: DeferredQueueProgress | null = $state(null);
+
+  $effect(() => {
+    const unsub = onDeferredQueueProgress((p) => {
+      deferredProgress = p.total > 0 && p.completed < p.total ? p : null;
+    });
+    return unsub;
+  });
 
   // Fetch current status from the plugin whenever the dialog opens.
   $effect(() => {
@@ -139,6 +151,24 @@
         />
       </Button>
     </div>
+
+    <!-- Deferred attachment download progress -->
+    {#if deferredProgress}
+      <div class="flex items-center gap-3 rounded-lg border border-dashed p-3">
+        <Loader2 class="size-4 animate-spin text-muted-foreground shrink-0" />
+        <div class="flex-1 min-w-0">
+          <p class="text-xs text-muted-foreground">
+            Downloading attachments: {deferredProgress.completed}/{deferredProgress.total}
+          </p>
+          <div class="mt-1.5 h-1 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              class="h-full rounded-full bg-primary transition-all duration-300"
+              style="width: {Math.round((deferredProgress.completed / deferredProgress.total) * 100)}%"
+            ></div>
+          </div>
+        </div>
+      </div>
+    {/if}
 
     <!-- Action buttons -->
     <div class="flex gap-2">

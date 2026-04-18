@@ -1139,6 +1139,36 @@ function buildHostFunctions(
           return cp.store(JSON.stringify({ error: `host_list_files: ${msg}` }));
         }
       },
+      async host_list_dir(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as { path: string } | undefined;
+          if (!input) return cp.store("[]");
+          const path = normalizeExtismHostPath(
+            typeof input.path === "string" ? input.path : "",
+          );
+          await requirePermission(opts, "read_files", path);
+          const backend = getBackendSync();
+          const response: any = await backend.execute({
+            type: "GetFilesystemTree",
+            params: {
+              path: path.length > 0 ? path : ".",
+              show_hidden: true,
+              depth: 1,
+            },
+          } as any);
+          if (response.type !== "Tree") {
+            return cp.store("[]");
+          }
+          const children = Array.isArray(response.data?.children) ? response.data.children : [];
+          const paths = children
+            .map((child: any) => (typeof child?.path === "string" ? child.path.replace(/\\/g, "/") : null))
+            .filter((p: string | null): p is string => !!p);
+          return cp.store(JSON.stringify(paths));
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return cp.store(JSON.stringify({ error: `host_list_dir: ${msg}` }));
+        }
+      },
       async host_workspace_file_set(cp: CallContext, _offs: bigint) {
         try {
           const runtime = await getRuntimeContextSnapshot();

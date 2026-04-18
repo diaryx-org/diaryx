@@ -155,18 +155,34 @@ impl PluginRegistry {
     /// (empty means all plugins initialized successfully).
     pub async fn init_all(&self, ctx: &PluginContext) -> Vec<(PluginId, PluginError)> {
         let mut errors = Vec::new();
+        let total = self.plugins.len();
+        log::info!("[plugin-registry] Initializing {} plugin(s)", total);
         for plugin in &self.plugins {
+            let id = plugin.id();
+            log::debug!("[plugin-registry] Init start: {}", id);
             match plugin.init(ctx).await {
                 Ok(()) => {
-                    self.set_health(plugin.id(), PluginHealth::Healthy);
+                    log::info!("[plugin-registry] Init OK: {}", id);
+                    self.set_health(id, PluginHealth::Healthy);
                 }
                 Err(e) => {
-                    let id = plugin.id();
-                    log::error!("Plugin {} failed to init: {}", id, e);
+                    log::error!("[plugin-registry] Init FAILED: {}: {}", id, e);
                     self.set_health(id.clone(), PluginHealth::Failed(e.to_string()));
                     errors.push((id, e));
                 }
             }
+        }
+        let healthy = total - errors.len();
+        if errors.is_empty() {
+            log::info!("[plugin-registry] Init complete: {} healthy", healthy);
+        } else {
+            let failed_ids: Vec<String> = errors.iter().map(|(id, _)| id.to_string()).collect();
+            log::error!(
+                "[plugin-registry] Init complete: {} healthy, {} failed: {}",
+                healthy,
+                errors.len(),
+                failed_ids.join(", ")
+            );
         }
         errors
     }

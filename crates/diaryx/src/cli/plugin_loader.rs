@@ -830,24 +830,64 @@ fn find_plugin_wasm_exact(plugin_id: &str) -> Result<PathBuf, String> {
     Err(format!("Plugin '{}' not found", plugin_id))
 }
 
-/// Return workspace-local plugin directories by walking up from cwd looking for `.diaryx/plugins/`.
-pub fn workspace_plugin_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        let mut dir = cwd.as_path();
-        loop {
-            let candidate = dir.join(".diaryx").join("plugins");
-            if candidate.is_dir() {
-                dirs.push(candidate);
-                break;
-            }
-            match dir.parent() {
-                Some(parent) => dir = parent,
-                None => break,
-            }
+/// Resolve the CLI's active workspace root using the same precedence as Tauri:
+/// explicit `--workspace` / `-w` flag, then cwd-based detection, then the
+/// configured default workspace. Returns `None` if none resolve.
+///
+/// This runs before clap parses (plugin discovery augments the clap command
+/// with dynamic subcommands), so the flag is extracted manually from argv.
+pub fn resolve_cli_workspace_root() -> Option<PathBuf> {
+    if let Some(path) = extract_workspace_flag_from_argv() {
+        return Some(path);
+    }
+
+    let ws = diaryx_core::workspace::Workspace::new(SyncToAsyncFs::new(RealFileSystem));
+
+    if let Ok(cwd) = std::env::current_dir()
+        && let Ok(Some(root)) = futures_lite::future::block_on(ws.detect_workspace(&cwd))
+    {
+        return Some(root);
+    }
+
+    if let Ok(cfg) = Config::load()
+        && let Ok(Some(root)) =
+            futures_lite::future::block_on(ws.find_root_index_in_dir(&cfg.default_workspace))
+    {
+        return Some(root);
+    }
+
+    None
+}
+
+fn extract_workspace_flag_from_argv() -> Option<PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--workspace" || arg == "-w" {
+            return args.next().map(PathBuf::from);
+        }
+        if let Some(rest) = arg.strip_prefix("--workspace=") {
+            return Some(PathBuf::from(rest));
         }
     }
-    dirs
+    None
+}
+
+/// Return the workspace-local plugin directory (`<workspace_root>/.diaryx/plugins`).
+///
+/// Returns at most one path — the directory under the resolved workspace root.
+/// This matches the Tauri host, which only scans `<workspace_root>/.diaryx/plugins`.
+pub fn workspace_plugin_dirs() -> Vec<PathBuf> {
+    match resolve_cli_workspace_root() {
+        Some(root) => {
+            let candidate = root.join(".diaryx").join("plugins");
+            if candidate.is_dir() {
+                vec![candidate]
+            } else {
+                Vec::new()
+            }
+        }
+        None => Vec::new(),
+    }
 }
 
 /// Find plugin.wasm using the canonical plugin ID.

@@ -2910,6 +2910,12 @@ pub async fn pick_workspace_folder<R: Runtime>(
             let app_state = app.state::<AppState>();
             *acquire_lock(&app_state.workspace_path)? = Some(actual_workspace.clone());
             *acquire_lock(&app_state.diaryx)? = None;
+            #[cfg(feature = "extism-plugins")]
+            if let Some(plugin_adapters) = app.try_state::<PluginAdapters>()
+                && let Ok(mut guard) = plugin_adapters.adapters.lock()
+            {
+                guard.clear();
+            }
             #[cfg(target_os = "macos")]
             {
                 *acquire_lock(&app_state.workspace_access)? = active_access;

@@ -1286,8 +1286,14 @@
     class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''}"
     bind:this={scrollContainer}
   >
-    <!-- Sticky spacer: keeps content from scrolling behind macOS traffic lights -->
-    <div class="sticky top-0 z-10 bg-sidebar shrink-0 h-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]"></div>
+    <!-- Sticky spacer: keeps content from scrolling behind macOS traffic lights.
+         onmousedown forwards drags to the window because this div's z-10 sits above
+         the global titlebar drag region (z-5) in App.svelte. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="sticky top-0 z-10 bg-sidebar shrink-0 h-[calc(env(safe-area-inset-top)+var(--titlebar-area-height))]"
+      onmousedown={maybeStartWindowDrag}
+    ></div>
     {#if leftTab === "files"}
       {#if workspaceMissing}
         <!-- Workspace Missing State -->

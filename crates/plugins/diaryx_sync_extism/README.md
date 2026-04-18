@@ -221,11 +221,112 @@ harnesses — each harness has its own workspace directory and storage, but
 every push/pull lands in the same namespace object store. See
 `two_devices_share_namespace_via_link_and_download` for the pattern.
 
-### Out of scope here
+### End-to-end layer: [tests/sync_e2e.rs](tests/sync_e2e.rs)
 
-The mock layer does **not** cover HTTP transport, SQLite persistence,
-magic-link auth, URL-encoding edge cases, or `diaryx_cloudflare`-specific
-behavior (Durable Objects, Worker runtime differences). Those belong in a
-separate e2e layer that spawns the real `diaryx_sync_server` — or,
-eventually, runs `wrangler dev` against `diaryx_cloudflare` — and drives it
-through the CLI or HTTP directly.
+Complements the mocks with real-HTTP coverage. Spawns
+`diaryx_sync_server::testing::TestServer` on `127.0.0.1:0`, signs in via
+the dev-mode magic-link flow, and drives plugin WASM instances through
+`diaryx_extism::HttpNamespaceProvider` (sync `ureq` impl of
+`NamespaceProvider`).
+
+All scenarios run against a real TCP listener + in-memory SQLite. They're
+fast (full suite is ~5s) because there's no external process boot — but
+they exercise every plugin code path that uses the HTTP transport.
+
+Scenarios (13 total, all passing, none `#[ignore]`d):
+
+**Core happy paths**
+- `two_devices_sync_via_real_http_server` — A links, B downloads;
+  byte-exact content, manifest hash parity, server listing.
+- `edit_on_a_propagates_to_b_via_sync` — A edits a file, Syncs; B's next
+  Sync pulls the edit. Validates incremental delta (not just first sync).
+- `delete_on_a_propagates_to_b_via_sync` — A removes a file, Syncs; B's
+  next Sync removes it locally. Validates delete propagation.
+
+**Conflict resolution**
+- `lww_resolves_conflict_in_favor_of_later_mtime` — both devices edit
+  the same file independently; the one with the strictly-later mtime
+  wins. Found and fixed a units-mismatch bug in `sync_engine::compute_diff`
+  (local mtime in ms was compared against server mtime in s — biased
+  ~1000× toward push). See the regression unit test
+  `conflict_lww_does_not_confuse_ms_and_s` in `sync_engine.rs`.
+- `bidirectional_edits_converge` — A and B edit non-overlapping files
+  concurrently; after a round-trip of Syncs both devices have both edits.
+- `concurrent_syncs_from_two_devices_converge` — A and B call `Sync`
+  *simultaneously* via `tokio::join!`; both succeed, the server doesn't
+  drop either write, and a final catch-up Sync converges. Meaningful
+  mostly against cloudflare (D1 can genuinely interleave) — sync_server's
+  `Arc<Mutex<Connection>>` serialises internally.
+
+**Idempotence / state preservation**
+- `sync_with_no_changes_is_noop` — a second Sync with no local/remote
+  changes reports `pushed=pulled=deleted_*=0`. (First post-link Sync is
+  expected to push 1 — the frontmatter rewrite — so the assertion uses
+  a flush pattern.)
+- `sync_state_survives_harness_reconstruction` — session 1 links + flushes
+  then drops the harness; session 2 rebuilds with the same
+  `RecordingStorage` and a Sync returns a full no-op. Guards against
+  manifest-persistence regressions.
+- `multi_change_catchup_in_single_sync` — A makes 3 independent changes
+  (edit a, edit b, add c + update index); B's *single* Sync pulls them
+  all.
+
+**Authorization**
+- `bob_cannot_access_alices_namespace` — two distinct users; Bob's token
+  must not see Alice's namespace in listings and is denied on direct
+  list/get. Server-side authz test.
+
+**Payload / encoding fuzz**
+- `url_corpus_keys_roundtrip_via_plugin_ns_api` — the safe subset of
+  `diaryx_server::contract::URL_KEY_CORPUS` through `NsPutObject` /
+  `NsGetObject`, asserting byte-exact body + server listing. Sibling of
+  the contract-level fuzz.
+- `binary_file_roundtrip_via_plugin` — small non-UTF-8 payload (PNG
+  signature + assorted high bytes) via base64; proves the encode/decode
+  chain doesn't assume UTF-8.
+- `large_binary_file_roundtrips_via_plugin` — 512 KiB deterministic
+  pseudorandom bytes through the full stack, plus `list_objects`
+  `size_bytes` parity check. Stresses R2/SQLite blob paths that might
+  only bite for real-attachment-sized payloads.
+
+Run:
+
+```bash
+cargo build -p diaryx_sync_extism --target wasm32-unknown-unknown --release
+cargo test -p diaryx_sync_extism --test sync_e2e
+```
+
+### Cloudflare variant: [`diaryx_cloudflare_e2e` / `tests/sync_plugin_e2e.rs`](../../diaryx_cloudflare_e2e)
+
+Every scenario above mirrored into a single multi-scenario `#[ignore]`-gated
+runner (`cloudflare_sync_plugin_suite`) that boots `bunx wrangler dev --env
+dev --local` once, executes each scenario under `catch_unwind` so a single
+drift doesn't abort the rest, and panics at the end with a summary.
+Amortises the ~60s wrangler boot across all scenarios.
+
+Run:
+
+```bash
+cargo test -p diaryx_cloudflare_e2e --test sync_plugin_e2e -- --ignored --nocapture
+```
+
+This layer catches adapter-specific bugs (URL routing in worker-rs, D1
+persistence, R2 vs SQLite blob semantics) that the sync_server E2E can't
+see. It already surfaced:
+
+- Missing `/batch/objects/multipart` endpoint on cloudflare (fixed — now
+  mirrors the sync_server implementation byte-for-byte).
+- `list_objects` dropping `content_hash` from its JSON response —
+  silently broke cross-device pulls because `sync_engine::compute_diff`
+  treats a missing hash as "server unchanged". Fixed + added a
+  contract-level regression assertion so any future drop is caught at
+  the faster layer.
+
+### Gotcha: WASM path
+
+Both test files use an absolute `WASM_PATH` built via
+`concat!(env!("CARGO_MANIFEST_DIR"), "/../../../target/...")`. Earlier
+versions used a path relative to cargo's run-time CWD — which defaults to
+the package dir, not the workspace root, so `require_wasm!()` silently
+returned "skip" and the tests reported as passing without actually
+exercising the WASM. Keep the absolute form.

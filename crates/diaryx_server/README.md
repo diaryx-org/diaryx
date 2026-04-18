@@ -44,6 +44,27 @@ Two public modules exist for cross-adapter testing:
 The `testing` module compiles unconditionally. The `contract::http` submodule
 requires the `reqwest-dispatcher` feature.
 
-Current status is **seed**: one in-process `ObjectService` test suite and
-three contract tests (health + two magic-link flows). Extend the modules in
-place; downstream adapters pick up new checks automatically.
+Current contract suite covers 12 scenarios:
+
+- **Health + auth**: `health_endpoint_returns_200_ok`,
+  `magic_link_dev_mode_returns_dev_credentials`,
+  `magic_link_rejects_invalid_email`,
+  `magic_link_verify_returns_session`, `me_without_auth_returns_401`.
+- **Namespace lifecycle**: `namespace_create_list_get_lifecycle`,
+  `namespace_access_forbidden_for_other_users`.
+- **Object CRUD + URL fuzz**: `object_put_get_delete_roundtrip`,
+  `object_list_returns_uploaded_keys` (asserts every entry carries
+  `content_hash` — the sync plugin's `compute_diff` needs it to detect
+  remote changes; omitting it silently breaks cross-device pull),
+  `url_corpus_keys_roundtrip_through_http`.
+- **Batch**: `batch_objects_json_returns_all_keys`,
+  `batch_objects_multipart_returns_all_keys`. Both endpoints now exist
+  on both adapters.
+
+All authenticated tests share a `sign_in_via_magic_link(dispatcher, email)`
+helper that does the dev-mode magic-link → verify dance against whatever
+base URL the dispatcher talks to. Add new contract tests to
+[`src/contract/mod.rs`](src/contract/mod.rs); both adapter wrappers pick
+them up automatically once invocations land in
+`diaryx_sync_server/tests/contract.rs` and
+`diaryx_cloudflare_e2e/tests/contract.rs`.

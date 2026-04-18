@@ -4,6 +4,7 @@
 [cargo]
 # Analyze only the native target (skips wasm32 analysis)
 target = "aarch64-apple-darwin"
+targetDir = true
 
 # Build scripts (wasm-bindgen, ts-rs) are expensive; disable if not needed
 # buildScripts.enable = false
@@ -11,3 +12,4 @@ target = "aarch64-apple-darwin"
 [check]
 # Only check the current target, not all targets
 allTargets = false
+workspace = false

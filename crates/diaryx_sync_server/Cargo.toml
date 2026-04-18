@@ -90,3 +90,7 @@ diaryx_core = { path = "../diaryx_core" }
 [dev-dependencies]
 tokio-tungstenite = "0.26"
 tower = { version = "0.5", features = ["util"] }
+# Enables `diaryx_server::contract::http::ReqwestDispatcher` for
+# tests/contract.rs, which runs the shared suite against a live
+# `TestServer` on 127.0.0.1:0.
+diaryx_server = { workspace = true, features = ["reqwest-dispatcher"] }

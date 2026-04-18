@@ -597,4 +597,16 @@ automatically exercise both adapters, catching URL-encoding and routing
 drift. The shared URL-encoding corpus lives at
 `diaryx_server::contract::URL_KEY_CORPUS`.
 
+#### `testing` module (real-TCP test server)
+
+[`src/testing.rs`](src/testing.rs) exposes `TestServer::start()`, which
+binds an OS-assigned port on `127.0.0.1` and serves the full router with
+`:memory:` SQLite + `InMemoryBlobStore`. Unlike the `oneshot`-based
+harness in `tests/support/mod.rs`, this one is reachable by real HTTP
+clients — required for plugin E2E tests that drive the sync plugin's
+`ureq`-based `NamespaceProvider` through the network. Includes a
+`sign_in_dev(email)` helper that performs the dev-mode magic-link dance
+and returns a session token. Used by
+[`crates/plugins/diaryx_sync_extism/tests/sync_e2e.rs`](../plugins/diaryx_sync_extism/tests/sync_e2e.rs).
+
 &nbsp;

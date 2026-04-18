@@ -22,6 +22,7 @@ pub mod handlers;
 pub mod proxy_adapters;
 pub mod rate_limit;
 pub mod sync_v2;
+pub mod testing;
 pub mod tokens;
 
 pub use config::Config;

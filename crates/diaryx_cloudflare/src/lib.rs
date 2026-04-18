@@ -34,6 +34,10 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "/api/namespaces/:ns_id/batch/objects",
             handlers::batch_get_objects,
         )
+        .post_async(
+            "/api/namespaces/:ns_id/batch/objects/multipart",
+            handlers::batch_get_objects_multipart,
+        )
         .put_async("/api/namespaces/:ns_id/objects/*key", handlers::put_object)
         .get_async("/api/namespaces/:ns_id/objects/*key", handlers::get_object)
         .delete_async(

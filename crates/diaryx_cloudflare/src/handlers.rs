@@ -312,18 +312,35 @@ pub async fn list_objects(req: Request, ctx: RouteContext<()>) -> Result<Respons
 
     match service.list(&ns_id, limit, offset, &user_id).await {
         Ok(objects) => {
+            // Must match `diaryx_sync_server::handlers::objects::ObjectMetaResponse`:
+            // both adapters feed the same `HttpNamespaceProvider` deserializer
+            // (`NamespaceObjectMeta`), which the sync engine uses to diff
+            // local vs. remote. In particular, `content_hash` MUST be present
+            // — without it, `sync_engine::compute_diff` treats every server
+            // entry as unchanged (`server_changed = false`) and never pulls
+            // remote edits. That was the bug caught by
+            // `edit_on_a_propagates_to_b_via_sync` in the cloudflare
+            // sync-plugin suite.
+            //
+            // `audience` and `content_hash` are elided when `None` to mirror
+            // sync_server's `skip_serializing_if = "Option::is_none"`.
             let response: Vec<serde_json::Value> = objects
                 .into_iter()
                 .map(|m| {
-                    serde_json::json!({
-                        "namespace_id": m.namespace_id,
-                        "key": m.key,
-                        "r2_key": m.blob_key,
-                        "mime_type": m.mime_type,
-                        "size_bytes": m.size_bytes,
-                        "updated_at": m.updated_at,
-                        "audience": m.audience,
-                    })
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("namespace_id".into(), serde_json::json!(m.namespace_id));
+                    obj.insert("key".into(), serde_json::json!(m.key));
+                    obj.insert("r2_key".into(), serde_json::json!(m.blob_key));
+                    obj.insert("mime_type".into(), serde_json::json!(m.mime_type));
+                    obj.insert("size_bytes".into(), serde_json::json!(m.size_bytes));
+                    obj.insert("updated_at".into(), serde_json::json!(m.updated_at));
+                    if let Some(aud) = m.audience {
+                        obj.insert("audience".into(), serde_json::json!(aud));
+                    }
+                    if let Some(hash) = m.content_hash {
+                        obj.insert("content_hash".into(), serde_json::json!(hash));
+                    }
+                    serde_json::Value::Object(obj)
                 })
                 .collect();
             Response::from_json(&response)
@@ -479,6 +496,86 @@ pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Resul
             error_response(e)
         }
     }
+}
+
+/// POST /namespaces/{ns_id}/batch/objects/multipart — retrieve multiple objects
+/// as a `multipart/mixed` response with raw binary parts (no base64 overhead).
+///
+/// Must match the `diaryx_sync_server` multipart shape byte-for-byte so clients
+/// parsing the boundary/headers work identically on both adapters.
+pub async fn batch_get_objects_multipart(
+    mut req: Request,
+    ctx: RouteContext<()>,
+) -> Result<Response> {
+    let user_id = require_auth!(&req, &ctx);
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
+
+    #[derive(Deserialize)]
+    struct BatchReq {
+        keys: Vec<String>,
+    }
+    let body: BatchReq = req.json().await?;
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
+    let blob_store = R2BlobStore::new(bucket(&ctx)?);
+    let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
+
+    let result = match service.get_batch(&ns_id, &body.keys, &user_id).await {
+        Ok(r) => r,
+        Err(e) => return error_response(e),
+    };
+
+    // Use a UUID-derived boundary. getrandom 0.4 via `rand::random::<u64>()`
+    // doesn't compile for wasm32-unknown-unknown in Workers, so we hash the
+    // v4 UUID (which uses our JS-backed `crypto.randomUUID`).
+    let boundary = format!("diaryx-batch-{}", js_uuid_v4().replace('-', ""));
+    let mut buf: Vec<u8> = Vec::new();
+
+    for (key, obj) in &result.objects {
+        buf.extend_from_slice(b"--");
+        buf.extend_from_slice(boundary.as_bytes());
+        buf.extend_from_slice(b"\r\n");
+        buf.extend_from_slice(
+            format!(
+                "Content-Disposition: attachment; filename=\"{}\"\r\n",
+                key.replace('\"', "\\\""),
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(format!("Content-Type: {}\r\n", obj.mime_type).as_bytes());
+        buf.extend_from_slice(format!("Content-Length: {}\r\n", obj.bytes.len()).as_bytes());
+        buf.extend_from_slice(b"\r\n");
+        buf.extend_from_slice(&obj.bytes);
+        buf.extend_from_slice(b"\r\n");
+    }
+
+    for (key, err_msg) in &result.errors {
+        buf.extend_from_slice(b"--");
+        buf.extend_from_slice(boundary.as_bytes());
+        buf.extend_from_slice(b"\r\n");
+        buf.extend_from_slice(
+            format!(
+                "Content-Disposition: attachment; filename=\"{}\"\r\n",
+                key.replace('\"', "\\\""),
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(b"X-Batch-Error: true\r\n");
+        buf.extend_from_slice(b"Content-Type: text/plain\r\n");
+        buf.extend_from_slice(b"\r\n");
+        buf.extend_from_slice(err_msg.as_bytes());
+        buf.extend_from_slice(b"\r\n");
+    }
+
+    buf.extend_from_slice(b"--");
+    buf.extend_from_slice(boundary.as_bytes());
+    buf.extend_from_slice(b"--\r\n");
+
+    let mut resp = Response::from_bytes(buf)?;
+    resp.headers_mut()
+        .set("content-type", &format!("multipart/mixed; boundary={boundary}"))?;
+    Ok(resp)
 }
 
 pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -1289,12 +1386,24 @@ pub async fn get_current_user(req: Request, ctx: RouteContext<()>) -> Result<Res
     let cookie = req.headers().get("Cookie")?;
     let query = req.url()?.query().map(|s| s.to_string());
 
-    let token = extract_token(
+    // Missing token → 401 (not a 500). Returning `Err(Error::from(...))?`
+    // here would bubble up to the Workers runtime as a generic 500 —
+    // caught by `test_me_without_auth_returns_401` in the shared contract
+    // suite. Matches the pattern already used in the auth-required
+    // extractor higher in this file.
+    let token = match extract_token(
         authorization.as_deref(),
         cookie.as_deref(),
         query.as_deref(),
-    )
-    .ok_or_else(|| Error::from("Authentication required"))?;
+    ) {
+        Some(t) => t,
+        None => {
+            return Response::from_json(
+                &serde_json::json!({ "error": "Authentication required" }),
+            )
+            .map(|r| r.with_status(401));
+        }
+    };
 
     let validation = SessionValidationService::new(&auth_store, &session_store);
     let auth = validation
@@ -1345,12 +1454,20 @@ pub async fn logout(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let cookie = req.headers().get("Cookie")?;
     let query = req.url()?.query().map(|s| s.to_string());
 
-    let token = extract_token(
+    // Missing token → 401, not 500 (same rationale as `get_current_user`).
+    let token = match extract_token(
         authorization.as_deref(),
         cookie.as_deref(),
         query.as_deref(),
-    )
-    .ok_or_else(|| Error::from("Authentication required"))?;
+    ) {
+        Some(t) => t,
+        None => {
+            return Response::from_json(
+                &serde_json::json!({ "error": "Authentication required" }),
+            )
+            .map(|r| r.with_status(401));
+        }
+    };
 
     let service = SessionValidationService::new(&auth_store, &session_store);
     service

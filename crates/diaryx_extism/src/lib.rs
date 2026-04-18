@@ -70,6 +70,8 @@ pub(crate) fn platform_wasmtime_config() -> Option<wasmtime::Config> {
 pub mod adapter;
 pub mod binary_protocol;
 pub mod host_fns;
+#[cfg(feature = "http")]
+pub mod http_namespace_provider;
 pub mod loader;
 pub mod permission_checker;
 pub mod plugin_fs;
@@ -80,6 +82,9 @@ pub mod testing;
 pub mod wasi_runner;
 #[cfg(feature = "ws-transport")]
 pub mod ws_transport;
+
+#[cfg(feature = "http")]
+pub use http_namespace_provider::HttpNamespaceProvider;
 
 pub use adapter::ExtismPluginAdapter;
 pub use host_fns::{

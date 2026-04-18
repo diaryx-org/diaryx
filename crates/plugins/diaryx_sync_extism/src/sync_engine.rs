@@ -320,9 +320,23 @@ pub fn compute_diff(
 
                 match (local_changed, server_changed) {
                     (true, true) => {
-                        // Conflict: LWW by modified_at
-                        let local_ts = me.modified_at as i64;
-                        if local_ts >= se.updated_at {
+                        // Conflict: last-writer-wins by wall-clock time.
+                        //
+                        // Units trap: `me.modified_at` comes from the host's
+                        // filesystem metadata via `FileMetadata.modified_at_ms`
+                        // — it's **milliseconds** since the Unix epoch. But
+                        // `se.updated_at` comes from the server, which
+                        // persists Unix timestamps in **seconds** (both
+                        // `diaryx_sync_server`'s rusqlite `upsert_object` and
+                        // `diaryx_cloudflare`'s D1 schema use
+                        // `chrono::Utc::now().timestamp()`). Without this
+                        // conversion the raw `local_ts >= se.updated_at`
+                        // comparison is biased ~1000× in favour of push —
+                        // the local side always "wins" and pulls never
+                        // happen. Surfaced by the `lww_resolves_conflict…`
+                        // E2E test once it was un-ignored.
+                        let local_ts_secs = (me.modified_at / 1000) as i64;
+                        if local_ts_secs >= se.updated_at {
                             plan.push.push(key.clone());
                         } else {
                             plan.pull.push(key.clone());
@@ -1242,10 +1256,17 @@ mod tests {
         assert!(plan.push.is_empty());
     }
 
+    // Units convention (see `compute_diff` LWW branch):
+    //   - `FileEntry.modified_at` / `LocalFileInfo.modified_at` — milliseconds
+    //     (mirrors `FileMetadata.modified_at_ms` from the host fs API).
+    //   - `ServerEntry.updated_at` — seconds (mirrors the server's
+    //     `chrono::Utc::now().timestamp()`).
+    // LWW compares them in seconds by scaling the manifest side down.
     #[test]
     fn conflict_lww_local_newer_pushes() {
         let mut manifest = make_manifest();
-        manifest.mark_clean("files/doc.md", "hash_v1", 100, 700);
+        // Local mtime = 700_000 ms = 700 s. Server mtime = 600 s. Local wins.
+        manifest.mark_clean("files/doc.md", "hash_v1", 100, 700_000);
         manifest.mark_dirty("files/doc.md");
 
         let mut local_scan = BTreeMap::new();
@@ -1261,7 +1282,8 @@ mod tests {
     #[test]
     fn conflict_lww_remote_newer_pulls() {
         let mut manifest = make_manifest();
-        manifest.mark_clean("files/doc.md", "hash_v1", 100, 400);
+        // Local mtime = 400_000 ms = 400 s. Server mtime = 600 s. Server wins.
+        manifest.mark_clean("files/doc.md", "hash_v1", 100, 400_000);
         manifest.mark_dirty("files/doc.md");
 
         let mut local_scan = BTreeMap::new();
@@ -1271,6 +1293,40 @@ mod tests {
 
         let plan = compute_diff(&manifest, &local_scan, &server, "");
         assert_eq!(plan.pull, vec!["files/doc.md"]);
+        assert!(plan.push.is_empty());
+    }
+
+    /// Regression guard for the unit-mismatch LWW bug: if local mtime is
+    /// compared in ms against server mtime in s, the raw comparison biases
+    /// ~1000× toward push. Here both sides' wall-clock is "now-ish"
+    /// (~1.76e12 ms / ~1.76e9 s); the local side is strictly *older* than
+    /// the server side in wall-clock terms, so the plan must be a pull.
+    ///
+    /// Before the fix, `1_760_000_000_000 >= 1_760_000_001` collapsed to
+    /// "local wins" and the client would overwrite the newer remote.
+    #[test]
+    fn conflict_lww_does_not_confuse_ms_and_s() {
+        let mut manifest = make_manifest();
+        manifest.mark_clean("files/doc.md", "hash_v1", 100, 1_760_000_000_000); // ms
+        manifest.mark_dirty("files/doc.md");
+
+        let mut local_scan = BTreeMap::new();
+        local_scan.insert("files/doc.md".to_string(), local("hash_v2_local", 120));
+
+        // Server mtime is 1 second newer (in seconds). 1_760_000_000 ms
+        // < 1_760_000_001 s when compared in seconds.
+        let server = vec![server(
+            "files/doc.md",
+            Some("hash_v2_remote"),
+            1_760_000_001,
+        )];
+
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
+        assert_eq!(
+            plan.pull,
+            vec!["files/doc.md"],
+            "server (newer by 1s) must win; previously lost to unit-mismatch"
+        );
         assert!(plan.push.is_empty());
     }
 

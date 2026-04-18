@@ -91,6 +91,39 @@ bun run tauri dev
 bun run tauri build
 ```
 
+### macOS: suppressing keychain prompts on every `tauri dev` rebuild
+
+The Tauri app stores auth credentials in the macOS keychain (see
+`src-tauri/src/credentials.rs` and `auth_client.rs`). macOS binds keychain
+ACLs to the binary's code signature. Ad-hoc-signed cargo debug builds (the
+default on Apple Silicon) use an untrusted signature, so keychain "Always
+Allow" grants don't persist across rebuilds — each rebuild re-prompts.
+
+The fix is to sign debug builds with an Apple-anchored identity (the same
+thing Xcode does by default). The free "Apple Development" identity works.
+
+```bash
+# One-time: validates your identity + authorizes codesign to use its key.
+./scripts/setup-macos-dev-signing.sh
+
+# Enable signing for dev builds
+export DIARYX_DEV_SIGN=1
+bun tauri dev
+```
+
+On the first keychain prompt after signing, click "Always Allow" once.
+Subsequent rebuilds re-sign with the same identity, so the grant persists.
+
+By default the scripts auto-detect the first `Apple Development: ...` identity
+in your login keychain. To use a different one, set
+`DIARYX_DEV_SIGN_IDENTITY` to the exact identity name before running setup
+and/or `tauri dev`. Unset `DIARYX_DEV_SIGN` to fall back to normal ad-hoc
+signing.
+
+If you don't have an Apple Development identity yet, get one via Xcode →
+Settings → Accounts → your Apple ID → Manage Certificates → + "Apple
+Development" (free with any Apple ID).
+
 Tauri dev now ignores markdown edits under repo code directories
 (`apps/**`, `crates/**`, `workers/**`, `scripts/**`) via the workspace
 `.taurignore`, and the shared Vite dev server also ignores `**/*.md`.

@@ -46,9 +46,16 @@ impl NamespaceStore for D1NamespaceStore {
         &self,
         namespace_id: &str,
     ) -> Result<Option<NamespaceInfo>, ServerCoreError> {
+        // `metadata` was missing from this SELECT (even though `list_namespaces`
+        // included it), so `row["metadata"]` came back undefined and the
+        // response had no `metadata` field — caught by
+        // `test_namespace_create_list_get_lifecycle` in the shared contract
+        // suite.
         let stmt = self
             .db
-            .prepare("SELECT id, owner_user_id, created_at FROM namespaces WHERE id = ?1")
+            .prepare(
+                "SELECT id, owner_user_id, created_at, metadata FROM namespaces WHERE id = ?1",
+            )
             .bind(&[namespace_id.into()])
             .map_err(e)?;
 

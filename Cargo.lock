@@ -2447,8 +2447,13 @@ dependencies = [
 name = "diaryx_cloudflare_e2e"
 version = "1.4.4"
 dependencies = [
+ "base64 0.22.1",
+ "diaryx_extism",
  "diaryx_server",
+ "diaryx_sync_extism",
+ "futures",
  "reqwest 0.12.28",
+ "serde_json",
  "tokio",
 ]
 
@@ -2535,6 +2540,7 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "ureq",
  "url",
+ "urlencoding",
  "wasi-common",
  "wasmtime",
 ]
@@ -2762,6 +2768,7 @@ dependencies = [
  "diaryx_core",
  "diaryx_extism",
  "diaryx_plugin_sdk",
+ "diaryx_sync_server",
  "extism-pdk",
  "indexmap 2.13.1",
  "log",

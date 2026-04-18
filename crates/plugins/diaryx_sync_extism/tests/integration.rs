@@ -16,7 +16,14 @@ use diaryx_extism::{NamespaceEntry, NamespaceObjectMeta, NamespaceProvider};
 use diaryx_sync_extism::sync_manifest::SyncManifest;
 use serde_json::{Value as JsonValue, json};
 
-const WASM_PATH: &str = "target/wasm32-unknown-unknown/release/diaryx_sync_extism.wasm";
+/// Absolute path to the built sync-plugin WASM. Resolved at compile time
+/// relative to this crate's manifest so tests find the workspace-root
+/// `target/` dir regardless of cargo's run-time CWD (which defaults to the
+/// package dir and broke earlier runs — 34 tests were silently skipping).
+const WASM_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/wasm32-unknown-unknown/release/diaryx_sync_extism.wasm"
+);
 
 /// Early-return if the WASM file hasn't been built.
 macro_rules! require_wasm {

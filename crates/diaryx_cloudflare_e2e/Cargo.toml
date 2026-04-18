@@ -21,8 +21,24 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+# The `WranglerDev` fixture + `sign_in_dev` helper live in this crate's lib
+# so test binaries can share them. They use `tokio` + `reqwest` at runtime,
+# so they're regular deps here (not dev-only).
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 diaryx_server = { workspace = true, features = ["reqwest-dispatcher"] }
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Needed by `tests/sync_plugin_e2e.rs` to drive the sync plugin WASM against
+# wrangler dev. Mirrors the deps used by `crates/plugins/diaryx_sync_extism`
+# for its own sync_server-based E2E.
+diaryx_extism = { workspace = true, features = ["testing", "http"] }
+diaryx_sync_extism = { path = "../plugins/diaryx_sync_extism" }
+# FutureExt::catch_unwind in tests/contract.rs so a single failed assertion
+# doesn't abort the rest of the suite (wrangler startup is 60s+; we want to
+# see every drift in one run, not one-at-a-time).
+futures = "0.3"
+# The URL-corpus fuzz scenario in tests/sync_plugin_e2e.rs decodes bodies
+# returned as base64 by the plugin's NsGetObject command.
+base64 = "0.22"

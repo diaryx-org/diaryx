@@ -11,7 +11,7 @@ publish = true
 
 [features]
 default = []
-http = ["ureq"]
+http = ["dep:ureq", "dep:urlencoding"]
 pulley = ["wasmtime/pulley"]
 testing = []
 wasi-runner = ["dep:wasi-common", "dep:tempfile"]
@@ -31,6 +31,7 @@ futures-lite = "2"
 base64 = "0.22"
 sha2 = "0.10"
 ureq = { version = "3", optional = true }
+urlencoding = { version = "2", optional = true }
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"], optional = true }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }

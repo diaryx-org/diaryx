@@ -144,15 +144,18 @@ to a new absolute path.
 
 For automated testing and scripted control of a running dev build (e.g.
 driving the app from CI, shell scripts, or an AI assistant), the Tauri
-backend exposes a minimal HTTP IPC surface on `127.0.0.1` behind three
+backend exposes a minimal HTTP IPC surface on `127.0.0.1` behind two
 layers of gating:
 
-1. Compiled out entirely in release builds (`#[cfg(debug_assertions)]`
-   in `src-tauri/src/dev_ipc.rs` and `lib.rs`).
-2. Only starts when the `DIARYX_DEV_IPC=1` environment variable is set.
-3. Every endpoint except `GET /health` requires an
+1. Compiled out entirely unless the `dev-ipc` Cargo feature is enabled
+   (off by default, so release builds and stock CI don't pay the cost
+   of `tiny_http`, `xcap`, or `image`).
+2. Every endpoint except `GET /health` requires an
    `X-Diaryx-Dev-Token` header matching a per-run random token written
    to the discovery file.
+
+> On Linux, enabling `dev-ipc` pulls in `xcap`, which requires the
+> `libpipewire-0.3-dev` system headers (`apt install libpipewire-0.3-dev`).
 
 On startup the listener writes discovery JSON to
 `apps/tauri/.dev-ipc.json` (build-time manifest-relative path) and to
@@ -190,7 +193,7 @@ arbitrary JS in the webview, so it's off by default even when the IPC
 listener is running. Enable it explicitly when needed:
 
 ```bash
-DIARYX_DEV_IPC=1 DIARYX_DEV_IPC_EVAL=1 bun run tauri dev
+DIARYX_DEV_IPC_EVAL=1 bun run tauri dev -- --features dev-ipc
 ```
 
 ## Tauri Commands

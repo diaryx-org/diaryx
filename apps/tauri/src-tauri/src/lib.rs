@@ -14,7 +14,7 @@ mod auth_client;
 mod auth_commands;
 mod commands;
 mod credentials;
-#[cfg(debug_assertions)]
+#[cfg(feature = "dev-ipc")]
 mod dev_ipc;
 mod logging;
 #[cfg(target_os = "macos")]
@@ -131,7 +131,7 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             setup_ios_edge_to_edge(app);
 
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "dev-ipc")]
             if let Some(guard) = crate::dev_ipc::start(app.handle()) {
                 app.manage(guard);
             }

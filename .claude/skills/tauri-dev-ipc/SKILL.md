@@ -19,7 +19,7 @@ cat apps/tauri/.dev-ipc.json
 If it's missing:
 
 - App isn't running, OR
-- App was started without `DIARYX_DEV_IPC=1`, OR
+- App was built without the `dev-ipc` Cargo feature, OR
 - App crashed ungracefully and left no file.
 
 Tell the user: "Start the app with `cd apps/tauri && bun run tauri:dev-ipc`". Don't guess the port.

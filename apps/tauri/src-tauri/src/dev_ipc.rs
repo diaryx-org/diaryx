@@ -1,12 +1,11 @@
-//! Debug-only HTTP IPC listener for driving a running Tauri instance
+//! Dev-only HTTP IPC listener for driving a running Tauri instance
 //! without the native webview.
 //!
-//! Compiled out entirely in release builds via `#[cfg(debug_assertions)]`.
-//! At runtime, only starts when `DIARYX_DEV_IPC=1`. Every endpoint except
-//! `/health` requires an `X-Diaryx-Dev-Token` header matching a per-run
-//! random token written to the discovery file. The `/eval` endpoint
-//! additionally requires `DIARYX_DEV_IPC_EVAL=1` since it runs arbitrary
-//! JS in the main webview.
+//! Compiled out entirely unless the `dev-ipc` Cargo feature is enabled.
+//! Every endpoint except `/health` requires an `X-Diaryx-Dev-Token`
+//! header matching a per-run random token written to the discovery file.
+//! The `/eval` endpoint additionally requires `DIARYX_DEV_IPC_EVAL=1`
+//! since it runs arbitrary JS in the main webview.
 //!
 //! Discovery file is written to `apps/tauri/.dev-ipc.json` (build-time
 //! manifest path) and to `<app_data_dir>/.dev-ipc.json` as fallback.
@@ -62,13 +61,8 @@ impl Drop for DevIpcGuard {
     }
 }
 
-/// Start the listener when `DIARYX_DEV_IPC=1`. Returns `None` otherwise
-/// or on bind failure.
+/// Start the listener. Returns `None` on bind failure.
 pub fn start<R: Runtime>(app: &AppHandle<R>) -> Option<DevIpcGuard> {
-    if std::env::var("DIARYX_DEV_IPC").ok().as_deref() != Some("1") {
-        return None;
-    }
-
     let server = match Server::http("127.0.0.1:0") {
         Ok(s) => s,
         Err(err) => {

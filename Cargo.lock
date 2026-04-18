@@ -2377,7 +2377,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -2445,7 +2445,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_cloudflare_e2e"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "base64 0.22.1",
  "diaryx_extism",
@@ -2459,7 +2459,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_core"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2482,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_daily"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "chrono",
  "chrono-english",
@@ -2520,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_extism"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2626,7 +2626,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_plugin_sdk"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "base64 0.22.1",
  "extism-pdk",
@@ -2658,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_server"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2729,7 +2729,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync_server"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "async-stripe",
  "async-trait",
@@ -2831,7 +2831,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_tauri"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2890,7 +2890,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_wasm"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "async-trait",
  "chrono",

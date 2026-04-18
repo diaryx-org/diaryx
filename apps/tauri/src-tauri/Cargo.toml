@@ -49,11 +49,14 @@ url = "2"
 percent-encoding = "2"
 dotenvy = "0.15"
 
-# Debug-only HTTP IPC listener (see src/dev_ipc.rs). Gated in source by
-# `#[cfg(debug_assertions)]` and at runtime by `DIARYX_DEV_IPC=1`.
-tiny_http = "0.12"
-xcap = "0.6"
-image = { version = "0.25", default-features = false, features = ["png"] }
+# Dev-only HTTP IPC listener for driving the app from outside the webview
+# (see src/dev_ipc.rs). All three crates are gated behind the `dev-ipc`
+# feature — off by default so release builds (and Linux CI) don't pay the
+# cost. On Linux `xcap` transitively requires the `libpipewire-0.3-dev`
+# system headers.
+tiny_http = { version = "0.12", optional = true }
+xcap = { version = "0.6", optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 # Optional: Extism third-party plugin runtime
 diaryx_extism = { path = "../../../crates/diaryx_extism", optional = true }
@@ -77,6 +80,10 @@ iap = ["dep:tauri-plugin-iap"]
 icloud = ["dep:tauri-plugin-icloud"]
 apple = ["iap", "icloud", "diaryx_extism/pulley"]
 extism-plugins = ["dep:diaryx_extism", "dep:dirs", "dep:futures-lite", "diaryx_extism/wasi-runner", "diaryx_extism/http", "diaryx_extism/ws-transport"]
+# Compile in the dev HTTP IPC listener (src/dev_ipc.rs). Off by default;
+# intended for local development and integration testing only. The `/eval`
+# endpoint additionally requires `DIARYX_DEV_IPC_EVAL=1` at runtime.
+dev-ipc = ["dep:tiny_http", "dep:xcap", "dep:image"]
 
 [dev-dependencies]
 tempfile = "3"

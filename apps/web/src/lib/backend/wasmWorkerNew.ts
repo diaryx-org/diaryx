@@ -167,6 +167,45 @@ async function loadWasmModule(): Promise<any> {
   return wasmModulePromise;
 }
 
+// ============================================================================
+// Auth (WASM AuthClient for diaryx_core::auth)
+//
+// The main thread routes all `AuthClient` calls through the worker so WASM is
+// only instantiated once, here. HTTP + localStorage callbacks are passed in
+// via `Comlink.proxy` and executed back on the main thread.
+// ============================================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let authClient: any = null;
+let authClientServerUrl: string | null = null;
+
+async function buildAuthClient(
+  serverUrl: string,
+  callbacks: unknown,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any> {
+  const wasm = await loadWasmModule();
+  const normalized = serverUrl.replace(/\/+$/, "");
+  const Ctor = (
+    wasm as {
+      AuthClient: new (url: string, callbacks: unknown) => unknown;
+    }
+  ).AuthClient;
+  authClient = new Ctor(normalized, callbacks);
+  authClientServerUrl = normalized;
+  return authClient;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function requireAuthClient(): any {
+  if (!authClient) {
+    throw new Error(
+      "Auth client not initialized — call authSetServerUrl first",
+    );
+  }
+  return authClient;
+}
+
 /**
  * Migrate legacy OPFS workspace directories into the stable workspace ID root.
  * Copies files from legacy name-based roots into the target ID directory.
@@ -479,6 +518,90 @@ export const workerApi = {
 
   isCrdtEnabled(): boolean {
     return getBackend().isCrdtEnabled();
+  },
+
+  // =========================================================================
+  // Auth (WASM AuthClient)
+  // =========================================================================
+
+  async authSetServerUrl(serverUrl: string, callbacks: unknown): Promise<void> {
+    await buildAuthClient(serverUrl, callbacks);
+  },
+
+  async authReset(): Promise<void> {
+    authClient = null;
+    authClientServerUrl = null;
+  },
+
+  authGetServerUrl(): string | null {
+    return authClientServerUrl;
+  },
+
+  async authIsAuthenticated(): Promise<boolean> {
+    return requireAuthClient().isAuthenticated();
+  },
+  async authGetMetadata(): Promise<unknown> {
+    return requireAuthClient().getMetadata();
+  },
+  async authRequestMagicLink(email: string): Promise<unknown> {
+    return requireAuthClient().requestMagicLink(email);
+  },
+  async authVerifyMagicLink(
+    token: string,
+    deviceName: string | null,
+    replaceDeviceId: string | null,
+  ): Promise<unknown> {
+    return requireAuthClient().verifyMagicLink(
+      token,
+      deviceName,
+      replaceDeviceId,
+    );
+  },
+  async authVerifyCode(
+    code: string,
+    email: string,
+    deviceName: string | null,
+    replaceDeviceId: string | null,
+  ): Promise<unknown> {
+    return requireAuthClient().verifyCode(
+      code,
+      email,
+      deviceName,
+      replaceDeviceId,
+    );
+  },
+  async authGetMe(): Promise<unknown> {
+    return requireAuthClient().getMe();
+  },
+  async authRefreshToken(): Promise<unknown> {
+    return requireAuthClient().refreshToken();
+  },
+  async authLogout(): Promise<void> {
+    return requireAuthClient().logout();
+  },
+  async authGetDevices(): Promise<unknown> {
+    return requireAuthClient().getDevices();
+  },
+  async authRenameDevice(deviceId: string, newName: string): Promise<void> {
+    return requireAuthClient().renameDevice(deviceId, newName);
+  },
+  async authDeleteDevice(deviceId: string): Promise<void> {
+    return requireAuthClient().deleteDevice(deviceId);
+  },
+  async authDeleteAccount(): Promise<void> {
+    return requireAuthClient().deleteAccount();
+  },
+  async authCreateWorkspace(name: string): Promise<unknown> {
+    return requireAuthClient().createWorkspace(name);
+  },
+  async authRenameWorkspace(
+    workspaceId: string,
+    newName: string,
+  ): Promise<void> {
+    return requireAuthClient().renameWorkspace(workspaceId, newName);
+  },
+  async authDeleteWorkspace(workspaceId: string): Promise<void> {
+    return requireAuthClient().deleteWorkspace(workspaceId);
   },
 
   // =========================================================================

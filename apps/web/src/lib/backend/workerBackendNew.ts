@@ -438,6 +438,16 @@ export class WorkerBackendNew implements Backend {
     return this._ready;
   }
 
+  /**
+   * Return the Comlink-wrapped worker API so main-thread callers that need to
+   * reuse the worker's WASM instance (currently just `wasmAuthService`) can
+   * talk to it directly. Returns `null` if the backend hasn't finished
+   * initializing yet.
+   */
+  getWorkerApi(): Comlink.Remote<WorkerApi> | null {
+    return this.remote;
+  }
+
   setGuestMode(guestMode: boolean): void {
     this.guestMode = guestMode;
   }

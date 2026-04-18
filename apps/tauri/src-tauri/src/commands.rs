@@ -2255,7 +2255,7 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
     // entries, config) while plugins compile in the background.
     let base_fs = SyncToAsyncFs::new(RealFileSystem);
     let basic_diaryx = {
-        let mut d = Diaryx::new(base_fs);
+        let d = Diaryx::new(base_fs);
         if let Some(ref ws_path) = workspace_path {
             log::info!("[get_or_init] Setting workspace root: {:?}", ws_path);
             d.set_workspace_root(ws_path.clone());

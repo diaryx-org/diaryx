@@ -1,24 +1,36 @@
 /**
- * wasmAuthService — TypeScript wrapper around the wasm-bindgen `AuthClient`.
+ * wasmAuthService — TypeScript wrapper around the wasm-bindgen `AuthClient`,
+ * routed through the backend Web Worker.
  *
- * Runs diaryx_core's `AuthService` inside WASM and delegates HTTP and
- * credential persistence back to JS via the `AuthCallbacks` interface:
+ * The WASM module is only instantiated inside the worker (see
+ * `wasmWorkerNew.ts`). Calling `AuthClient` methods on the main thread would
+ * require a second, separately-initialized WASM instance — which previously
+ * caused the production `undefined is not an object (_.__wbindgen_malloc)`
+ * crash because `wasm.default(...)` was never invoked on the main thread.
  *
- * - `fetch` issues each request through `proxyFetch` with
- *   `credentials: 'include'` so the browser's HttpOnly session cookie is
- *   attached automatically. The raw session token never touches JS.
- * - `loadMetadata` / `saveMetadata` persist the non-secret `{email,
- *   workspace_id}` pair to localStorage.
- * - `hasSession` / `storeSessionToken` / `clearSession` mirror a boolean flag
- *   in localStorage so the core service knows whether a session exists (the
- *   real cookie is invisible to JS).
+ * So instead, this service:
  *
- * The module exposes a lazy singleton keyed by server URL and a narrow
- * `CoreAuthService` interface that tauriAuthService also implements so the
- * two can be swapped behind an `isTauri()` router.
+ * - Gets the Comlink-wrapped worker remote via `WorkerBackendNew.getWorkerApi()`.
+ * - Sends the HTTP + localStorage callbacks to the worker as `Comlink.proxy`'d
+ *   functions so the raw session cookie and localStorage keys stay on the main
+ *   thread.
+ * - Forwards every AuthClient method to the worker as `remote.authXxx(...)`.
+ *
+ * Callback responsibilities remain unchanged:
+ * - `fetch` issues each request through `proxyFetch` with `credentials: 'include'`
+ *   so the browser's HttpOnly session cookie is attached automatically.
+ * - `loadMetadata` / `saveMetadata` persist the non-secret `{email, workspace_id}`
+ *   pair to localStorage.
+ * - `hasSession` / `storeSessionToken` / `clearSession` mirror a boolean flag in
+ *   localStorage so the core service knows whether a session exists (the real
+ *   cookie is invisible to JS).
  */
 
+import * as Comlink from "comlink";
 import { proxyFetch } from "$lib/backend/proxyFetch";
+import { getBackend } from "$lib/backend";
+import type { WorkerBackendNew } from "$lib/backend/workerBackendNew";
+import type { WorkerApi } from "$lib/backend/wasmWorkerNew";
 import type {
   CoreAuthService,
   CoreAuthMetadata,
@@ -33,34 +45,6 @@ import { AuthError } from "./coreAuthTypes";
 // localStorage keys — private to this module.
 const META_KEY = "diaryx_auth_metadata";
 const HAS_SESSION_KEY = "diaryx_has_session";
-
-type WasmAuthClientCtor = new (serverUrl: string, callbacks: unknown) => {
-  readonly serverUrl: string;
-  isAuthenticated(): Promise<boolean>;
-  getMetadata(): Promise<unknown>;
-  requestMagicLink(email: string): Promise<unknown>;
-  verifyMagicLink(
-    token: string,
-    deviceName?: string | null,
-    replaceDeviceId?: string | null,
-  ): Promise<unknown>;
-  verifyCode(
-    code: string,
-    email: string,
-    deviceName?: string | null,
-    replaceDeviceId?: string | null,
-  ): Promise<unknown>;
-  getMe(): Promise<unknown>;
-  refreshToken(): Promise<unknown>;
-  logout(): Promise<void>;
-  getDevices(): Promise<unknown>;
-  renameDevice(deviceId: string, newName: string): Promise<void>;
-  deleteDevice(deviceId: string): Promise<void>;
-  deleteAccount(): Promise<void>;
-  createWorkspace(name: string): Promise<unknown>;
-  renameWorkspace(workspaceId: string, newName: string): Promise<void>;
-  deleteWorkspace(workspaceId: string): Promise<void>;
-};
 
 interface AuthCallbacks {
   fetch(
@@ -180,33 +164,62 @@ function wrapError(err: unknown): AuthError {
 }
 
 // ============================================================================
-// Singleton wiring — the wasm AuthClient is lazy-constructed per server URL
+// Worker remote wiring — the wasm AuthClient lives in the backend worker,
+// so we just keep track of which (remote, serverUrl) pair has been set up
+// so we don't pay the round-trip to reinstall callbacks on every call.
 // ============================================================================
 
+type WorkerRemote = Comlink.Remote<WorkerApi>;
+
 let cached: {
+  remote: WorkerRemote;
   serverUrl: string;
-  client: InstanceType<WasmAuthClientCtor>;
+  setupPromise: Promise<void>;
 } | null = null;
 
-async function loadAuthClientClass(): Promise<WasmAuthClientCtor> {
-  const wasm = await import("$wasm");
-  return (wasm as unknown as { AuthClient: WasmAuthClientCtor }).AuthClient;
+async function getWorkerRemote(): Promise<WorkerRemote> {
+  const backend = await getBackend();
+  const maybeWorkerBackend = backend as unknown as Partial<WorkerBackendNew>;
+  const getWorkerApi = maybeWorkerBackend.getWorkerApi?.bind(backend);
+  const remote = getWorkerApi ? getWorkerApi() : null;
+  if (!remote) {
+    throw new AuthError(
+      "Browser backend is not using the WASM worker — auth is unavailable.",
+      0,
+    );
+  }
+  return remote;
 }
 
-async function getClient(
-  serverUrl: string,
-): Promise<InstanceType<WasmAuthClientCtor>> {
+async function ensureClient(serverUrl: string): Promise<WorkerRemote> {
+  const remote = await getWorkerRemote();
   const normalized = serverUrl.replace(/\/+$/, "");
-  if (cached && cached.serverUrl === normalized) {
-    return cached.client;
+
+  if (cached?.remote === remote && cached.serverUrl === normalized) {
+    await cached.setupPromise;
+    return remote;
   }
-  const AuthClientCtor = await loadAuthClientClass();
-  const client = new AuthClientCtor(
-    normalized,
-    makeCallbacks(normalized),
-  ) as InstanceType<WasmAuthClientCtor>;
-  cached = { serverUrl: normalized, client };
-  return client;
+
+  const callbacks = Comlink.proxy(makeCallbacks(normalized));
+  const entry: {
+    remote: WorkerRemote;
+    serverUrl: string;
+    setupPromise: Promise<void>;
+  } = {
+    remote,
+    serverUrl: normalized,
+    setupPromise: undefined as unknown as Promise<void>,
+  };
+  entry.setupPromise = remote
+    .authSetServerUrl(normalized, callbacks as unknown as unknown)
+    .catch((e: unknown) => {
+      // Invalidate the cache on setup failure so the next call retries.
+      if (cached === entry) cached = null;
+      throw e;
+    });
+  cached = entry;
+  await entry.setupPromise;
+  return remote;
 }
 
 /**
@@ -214,7 +227,19 @@ async function getClient(
  * (e.g. the user switches sync servers) so the next request uses the new URL.
  */
 export function resetWasmAuthClient(): void {
+  const prev = cached;
   cached = null;
+  if (!prev) return;
+  // Fire-and-forget: tell the worker to drop its AuthClient too. We wait on
+  // the setup promise first so we don't race with an in-flight install.
+  Promise.resolve(prev.setupPromise)
+    .catch(() => {
+      /* install failure already propagated to the original caller */
+    })
+    .then(() => prev.remote.authReset())
+    .catch(() => {
+      /* best-effort */
+    });
 }
 
 // ============================================================================
@@ -222,7 +247,8 @@ export function resetWasmAuthClient(): void {
 // ============================================================================
 
 /**
- * Create a `CoreAuthService` backed by the wasm `AuthClient`.
+ * Create a `CoreAuthService` backed by the wasm `AuthClient` running inside
+ * the backend worker.
  *
  * @param getServerUrl — invoked lazily on each call so the router can pick up
  * live changes to the user-configured server URL without reconstructing.
@@ -230,19 +256,19 @@ export function resetWasmAuthClient(): void {
 export function createWasmAuthService(
   getServerUrl: () => string | null,
 ): CoreAuthService {
-  async function client(): Promise<InstanceType<WasmAuthClientCtor>> {
+  async function remote(): Promise<WorkerRemote> {
     const url = getServerUrl();
     if (!url) {
       throw new AuthError("Server URL not configured", 0);
     }
-    return getClient(url);
+    return ensureClient(url);
   }
 
   return {
     async isAuthenticated() {
       try {
-        const c = await client();
-        return await c.isAuthenticated();
+        const r = await remote();
+        return await r.authIsAuthenticated();
       } catch {
         return false;
       }
@@ -250,8 +276,8 @@ export function createWasmAuthService(
 
     async getMetadata() {
       try {
-        const c = await client();
-        return parseNullableJson<CoreAuthMetadata>(await c.getMetadata());
+        const r = await remote();
+        return parseNullableJson<CoreAuthMetadata>(await r.authGetMetadata());
       } catch {
         return null;
       }
@@ -259,8 +285,10 @@ export function createWasmAuthService(
 
     async requestMagicLink(email) {
       try {
-        const c = await client();
-        return parseJson<MagicLinkResponse>(await c.requestMagicLink(email));
+        const r = await remote();
+        return parseJson<MagicLinkResponse>(
+          await r.authRequestMagicLink(email),
+        );
       } catch (err) {
         throw wrapError(err);
       }
@@ -268,9 +296,9 @@ export function createWasmAuthService(
 
     async verifyMagicLink(token, deviceName, replaceDeviceId) {
       try {
-        const c = await client();
+        const r = await remote();
         return parseJson<VerifyResponse>(
-          await c.verifyMagicLink(
+          await r.authVerifyMagicLink(
             token,
             deviceName ?? null,
             replaceDeviceId ?? null,
@@ -283,9 +311,9 @@ export function createWasmAuthService(
 
     async verifyCode(code, email, deviceName, replaceDeviceId) {
       try {
-        const c = await client();
+        const r = await remote();
         return parseJson<VerifyResponse>(
-          await c.verifyCode(
+          await r.authVerifyCode(
             code,
             email,
             deviceName ?? null,
@@ -299,8 +327,8 @@ export function createWasmAuthService(
 
     async getMe() {
       try {
-        const c = await client();
-        return parseJson<MeResponse>(await c.getMe());
+        const r = await remote();
+        return parseJson<MeResponse>(await r.authGetMe());
       } catch (err) {
         throw wrapError(err);
       }
@@ -308,8 +336,8 @@ export function createWasmAuthService(
 
     async refreshToken() {
       try {
-        const c = await client();
-        return parseJson<MeResponse>(await c.refreshToken());
+        const r = await remote();
+        return parseJson<MeResponse>(await r.authRefreshToken());
       } catch (err) {
         throw wrapError(err);
       }
@@ -317,8 +345,8 @@ export function createWasmAuthService(
 
     async logout() {
       try {
-        const c = await client();
-        await c.logout();
+        const r = await remote();
+        await r.authLogout();
       } catch (err) {
         throw wrapError(err);
       }
@@ -326,8 +354,8 @@ export function createWasmAuthService(
 
     async getDevices() {
       try {
-        const c = await client();
-        return parseJson<Device[]>(await c.getDevices());
+        const r = await remote();
+        return parseJson<Device[]>(await r.authGetDevices());
       } catch (err) {
         throw wrapError(err);
       }
@@ -335,8 +363,8 @@ export function createWasmAuthService(
 
     async renameDevice(deviceId, newName) {
       try {
-        const c = await client();
-        await c.renameDevice(deviceId, newName);
+        const r = await remote();
+        await r.authRenameDevice(deviceId, newName);
       } catch (err) {
         throw wrapError(err);
       }
@@ -344,8 +372,8 @@ export function createWasmAuthService(
 
     async deleteDevice(deviceId) {
       try {
-        const c = await client();
-        await c.deleteDevice(deviceId);
+        const r = await remote();
+        await r.authDeleteDevice(deviceId);
       } catch (err) {
         throw wrapError(err);
       }
@@ -353,8 +381,8 @@ export function createWasmAuthService(
 
     async deleteAccount() {
       try {
-        const c = await client();
-        await c.deleteAccount();
+        const r = await remote();
+        await r.authDeleteAccount();
       } catch (err) {
         throw wrapError(err);
       }
@@ -362,8 +390,8 @@ export function createWasmAuthService(
 
     async createWorkspace(name) {
       try {
-        const c = await client();
-        return parseJson<Workspace>(await c.createWorkspace(name));
+        const r = await remote();
+        return parseJson<Workspace>(await r.authCreateWorkspace(name));
       } catch (err) {
         throw wrapError(err);
       }
@@ -371,8 +399,8 @@ export function createWasmAuthService(
 
     async renameWorkspace(workspaceId, newName) {
       try {
-        const c = await client();
-        await c.renameWorkspace(workspaceId, newName);
+        const r = await remote();
+        await r.authRenameWorkspace(workspaceId, newName);
       } catch (err) {
         throw wrapError(err);
       }
@@ -380,8 +408,8 @@ export function createWasmAuthService(
 
     async deleteWorkspace(workspaceId) {
       try {
-        const c = await client();
-        await c.deleteWorkspace(workspaceId);
+        const r = await remote();
+        await r.authDeleteWorkspace(workspaceId);
       } catch (err) {
         throw wrapError(err);
       }

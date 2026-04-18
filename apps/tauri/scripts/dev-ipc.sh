@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Tiny curl wrapper for the debug-only Tauri IPC listener (see
-# src-tauri/src/dev_ipc.rs). Requires the app to be running with
-# DIARYX_DEV_IPC=1 (use `bun run tauri:dev-ipc`).
+# Tiny curl wrapper for the dev-only Tauri IPC listener (see
+# src-tauri/src/dev_ipc.rs). Requires the app to be built with the
+# `dev-ipc` Cargo feature (use `bun run tauri:dev-ipc`).
 #
 # Usage:
 #   ./scripts/dev-ipc.sh GET /health

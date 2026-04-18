@@ -19,7 +19,7 @@ Authentication services and stores for sync server login.
 | `authStore.svelte.ts` | Svelte 5 reactive auth state. Routes the 12 core endpoints through `coreAuthService` and keeps the legacy `authService` wired for everything else |
 | `coreAuthTypes.ts`    | Narrow `CoreAuthService` interface mirroring `diaryx_core::auth::AuthService`'s 12 public methods |
 | `coreAuthRouter.ts`   | Runtime router: picks `wasmAuthService` in the browser and `tauriAuthService` on Tauri |
-| `wasmAuthService.ts`  | Browser impl — wraps the wasm-bindgen `AuthClient` class from `diaryx_wasm`; delegates HTTP via `proxyFetch` with HttpOnly cookies |
+| `wasmAuthService.ts`  | Browser impl — routes every `AuthClient` call through the backend worker (see `lib/backend/wasmWorkerNew.ts`) so WASM is only instantiated once; HTTP + localStorage callbacks are passed in via `Comlink.proxy` and run on the main thread |
 | `tauriAuthService.ts` | Tauri impl — thin typed wrappers around the `auth_*` IPC commands in `apps/tauri/src-tauri/src/auth_commands.rs` |
 
 ## coreAuthService

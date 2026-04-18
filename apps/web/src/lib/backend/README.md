@@ -116,6 +116,24 @@ of logging transient OPFS discovery warnings on every startup.
 worker path. This avoids WebKit/dev fallback failures where wasm-pack's implicit
 `import.meta.url` resolution can fail to fetch the `.wasm` binary.
 
+## Auth Routing Through The Worker
+
+`wasmWorkerNew.ts` owns the only main-thread-visible WASM `AuthClient`
+instance. The worker exposes `authSetServerUrl` plus forwarding wrappers for
+every `AuthClient` method (`authRequestMagicLink`, `authVerifyMagicLink`,
+`authGetMe`, …), and `WorkerBackendNew.getWorkerApi()` surfaces the Comlink
+remote so `lib/auth/wasmAuthService.ts` can route every call through it.
+
+The HTTP + localStorage callbacks (`fetch`, `loadMetadata`, `saveMetadata`,
+`hasSession`, `storeSessionToken`, `clearSession`) are installed with
+`Comlink.proxy` so the raw session cookie and localStorage keys stay on the
+main thread while the wasm AuthClient runs inside the worker.
+
+This replaces an earlier design that instantiated `AuthClient` on the main
+thread via `await import("$wasm")`, which crashed in production with
+`undefined is not an object (_.__wbindgen_malloc)` because `wasm.default(...)`
+was never invoked outside the worker.
+
 ## Preview Mock Backend
 
 `mockBackend.ts` backs preview/onboarding iframe flows with an in-memory

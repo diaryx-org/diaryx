@@ -1,5 +1,7 @@
 mod build_plugin;
 mod build_wasm;
+mod publish_ios;
+mod publish_macos;
 mod release_plugin;
 mod sync_bindings;
 mod sync_marketplace;
@@ -20,6 +22,8 @@ fn main() -> ExitCode {
     let result = match sub.as_str() {
         "build-wasm" => build_wasm::run(rest),
         "build-plugin" => build_plugin::run(rest),
+        "publish-ios" => publish_ios::run(rest),
+        "publish-macos" => publish_macos::run(rest),
         "release-plugin" => release_plugin::run(rest),
         "sync-bindings" => sync_bindings::run(rest),
         "sync-marketplace" => sync_marketplace::run(rest),
@@ -53,6 +57,12 @@ fn print_help() {
     );
     eprintln!(
         "  build-plugin <name>          Build a plugin WASM (pass --release for size-optimized output)"
+    );
+    eprintln!(
+        "  publish-ios                  Build the iOS App Store export and upload via altool (macOS only)"
+    );
+    eprintln!(
+        "  publish-macos <build>        Build, sign, package, and upload the macOS App Store .pkg (macOS only)"
     );
     eprintln!("  release-plugin <name> [--upload]");
     eprintln!(

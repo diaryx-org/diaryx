@@ -17,6 +17,8 @@ Build and maintenance tasks live in `xtask/src/` and are invoked as `cargo xtask
 
 - `cargo xtask build-wasm`: Builds `crates/diaryx_wasm` for the web app via wasm-pack, runs `wasm-opt -Oz`, and trims trailing whitespace from the ts-rs generated bindings. Used in `apps/web/package.json`'s build script. On macOS it exports `DEVELOPER_DIR`/`SDKROOT` from Xcode tools to reduce host-toolchain SDK warnings.
 - `cargo xtask build-plugin <crate> [--release]`: Builds a plugin WASM binary. On `--release`, also runs `wasm-opt -Oz`. Run without args to list available plugins.
+- `cargo xtask publish-ios`: macOS-only. Builds the iOS App Store export with the Tauri `apple` feature enabled, then uploads the IPA to App Store Connect. Reads credentials from the environment, falling back to `scripts/.env.publish` for local runs. Required vars: `API_KEY`, `API_ISSUER`, `API_KEY_PATH`. Also wired up in `.github/workflows/appstore-release.yml` for CI publishing.
+- `cargo xtask publish-macos <build-number>`: macOS-only. Builds the macOS App Store bundle with the Tauri `apple` feature, signs it, embeds the provisioning profile, packages a `.pkg`, and uploads to App Store Connect. Build number must increase monotonically. Reads credentials from the environment, falling back to `scripts/.env.publish` for local runs. Required vars: `API_KEY`, `API_ISSUER`, `APPLE_TEAM_ID`, `APP_SIGN_IDENTITY`, `PKG_SIGN_IDENTITY`. Also wired up in `.github/workflows/appstore-release.yml` for CI publishing.
 - `cargo xtask release-plugin <crate> [--upload]`: Builds a release WASM and prepares a versioned artifact in `dist/plugins/<crate>/`. The GitHub Release asset keeps the crate WASM filename, with a local `plugin.wasm` copy retained for manual installs. With `--upload`, it also creates a GitHub Release on `diaryx-org/diaryx` and opens a PR against the plugin-registry repo. Requires `gh` CLI with push access.
 - `cargo xtask sync-bindings`: Syncs ts-rs bindings from `crates/diaryx_core/bindings/` into `apps/web/src/lib/backend/generated/` as symlinks and auto-generates the barrel `index.ts`. Idempotent — correct existing symlinks are left in place.
 - `cargo xtask sync-marketplace`: Fetches marketplace registry files from the production CDN into `apps/web/marketplace-dist/`. Run once after cloning to populate plugin, template, and starter workspace registries for local development. WASM artifacts are not downloaded — they are fetched at install time from the CDN. Override the source with `CDN_ORIGIN`.
@@ -24,11 +26,6 @@ Build and maintenance tasks live in `xtask/src/` and are invoked as `cargo xtask
 - `cargo xtask update-agents-index`: Updates the workspace index in `AGENTS.md` using `diaryx workspace info`. Bumps the `updated` frontmatter timestamp only when the tree actually changes.
 
 ## Shell scripts
-
-App Store publishing (in `scripts/`, macOS-only):
-
-- `publish-ios.sh`: Builds the iOS App Store export with the Tauri `apple` feature enabled, then uploads the IPA to App Store Connect using credentials from `scripts/.env.publish`.
-- `publish-macos.sh`: Builds the macOS App Store bundle with the Tauri `apple` feature enabled, then signs, packages, and uploads the `.pkg` to App Store Connect using credentials from `scripts/.env.publish`.
 
 Tauri dev signing (in `apps/tauri/scripts/`):
 

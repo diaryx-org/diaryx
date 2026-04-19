@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -80,4 +81,59 @@ pub fn run_checked(cmd: &mut Command, what: &str) -> Result<(), String> {
 
 pub fn diaryx_app() -> diaryx_core::entry::DiaryxAppSync<diaryx_core::fs::RealFileSystem> {
     diaryx_core::entry::DiaryxAppSync::new(diaryx_core::fs::RealFileSystem)
+}
+
+/// Load simple `KEY=VALUE` pairs from a dotenv-style file into the current
+/// process environment. Existing env vars are NOT overwritten, so secrets
+/// injected by CI take precedence over any checked-out local file.
+///
+/// Supports `#` comments, blank lines, and optional single or double quotes
+/// around values. Does NOT support shell interpolation — unlike `source`, this
+/// is a pure parser, so `.env.publish` files must use literal values.
+pub fn load_env_file(path: &Path) -> Result<(), String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    for (i, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let rest = line.strip_prefix("export ").unwrap_or(line);
+        let Some((key, value)) = rest.split_once('=') else {
+            return Err(format!(
+                "{}:{}: expected KEY=VALUE",
+                path.display(),
+                i + 1
+            ));
+        };
+        let key = key.trim();
+        let value = strip_quotes(value.trim());
+        if env::var_os(key).is_none() {
+            // SAFETY: xtask is single-threaded at this point.
+            unsafe { env::set_var(key, value) };
+        }
+    }
+    Ok(())
+}
+
+fn strip_quotes(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return &s[1..s.len() - 1];
+        }
+    }
+    s
+}
+
+/// Read a required env var, returning a descriptive error that hints at the
+/// dotenv file it usually lives in.
+pub fn require_env(key: &str) -> Result<String, String> {
+    env::var(key).map_err(|_| {
+        format!(
+            "missing env var {key} (set it directly or in scripts/.env.publish)"
+        )
+    })
 }

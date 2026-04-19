@@ -28,20 +28,27 @@ Create these at [developer.apple.com/account/resources/certificates](https://dev
 3. Note the **Key ID**, **Issuer ID**, and download the `.p8` file
 4. Place the `.p8` at `~/.private_keys/AuthKey_<KEY_ID>.p8`
 
-## Publish Scripts
+## Publish Tasks
 
-Gitignored scripts that contain signing identities and API keys:
+App Store publishing is handled by `xtask` commands that run locally or in CI:
 
 ```bash
 # iOS — builds, exports, and uploads to App Store Connect
-./scripts/publish-ios.sh
+cargo xtask publish-ios
 
 # macOS — builds, signs, packages, and uploads to App Store Connect
 # Requires a build number argument (must be higher than last upload)
-./scripts/publish-macos.sh <build-number>
+cargo xtask publish-macos <build-number>
 ```
 
-Configuration (API keys, signing identities) is at the top of each script.
+Both tasks read credentials from the process environment, falling back to the
+gitignored `scripts/.env.publish` when present for local runs. Required
+variables are listed in each task's `--help` output.
+
+For one-click publishing, dispatch `.github/workflows/appstore-release.yml`
+from GitHub Actions — the workflow imports certificates into an ephemeral
+keychain, decodes the API key and provisioning profile from secrets, and
+invokes the same xtasks.
 
 ## iOS (Manual Steps)
 

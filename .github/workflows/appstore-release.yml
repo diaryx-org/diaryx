@@ -1,0 +1,135 @@
+name: App Store Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Which platforms to publish"
+        required: true
+        type: choice
+        default: both
+        options:
+          - ios
+          - macos
+          - both
+      build_number:
+        description: "CFBundleVersion for macOS (must increase monotonically). Defaults to github.run_number."
+        required: false
+        type: string
+
+concurrency:
+  group: appstore-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish (${{ matrix.platform }})
+    runs-on: macos-latest
+    environment: appstore
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ (inputs.platforms == 'both' && fromJSON('["ios","macos"]')) || fromJSON(format('["{0}"]', inputs.platforms)) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'ios' && 'aarch64-apple-ios' || 'aarch64-apple-darwin,x86_64-apple-darwin' }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tauri/src-tauri
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install web dependencies
+        run: cd apps/web && bun install
+
+      - name: Create WASM stub for Tauri build
+        run: |
+          mkdir -p apps/web/src/lib/wasm
+          cp apps/web/src/lib/wasm-stub.js apps/web/src/lib/wasm/diaryx_wasm.js
+          touch apps/web/src/lib/wasm/diaryx_wasm_bg.wasm
+
+      - name: Write App Store Connect API key
+        id: asc-key
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          set -euo pipefail
+          KEY_DIR="$RUNNER_TEMP/app-store-connect"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -d > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          # altool discovers the key automatically when placed here.
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          cp "$KEY_PATH" "$HOME/.appstoreconnect/private_keys/"
+          echo "key_path=$KEY_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Import signing certificates
+        if: matrix.platform == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          MACOS_INSTALLER_CERTIFICATE: ${{ secrets.MACOS_INSTALLER_CERTIFICATE }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/appstore.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+          APP_CERT="$RUNNER_TEMP/app.p12"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -d > "$APP_CERT"
+          security import "$APP_CERT" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          INSTALLER_CERT="$RUNNER_TEMP/installer.p12"
+          printf '%s' "$MACOS_INSTALLER_CERTIFICATE" | base64 -d > "$INSTALLER_CERT"
+          security import "$INSTALLER_CERT" -P "$MACOS_INSTALLER_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+
+      - name: Install macOS provisioning profile
+        if: matrix.platform == 'macos'
+        env:
+          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MACOS_PROVISIONING_PROFILE_BASE64" | base64 -d \
+            > apps/tauri/src-tauri/embedded.provisionprofile
+
+      - name: Publish iOS
+        if: matrix.platform == 'ios'
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          API_KEY_PATH: ${{ steps.asc-key.outputs.key_path }}
+        run: cargo xtask publish-ios
+
+      - name: Publish macOS
+        if: matrix.platform == 'macos'
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_SIGN_IDENTITY: ${{ secrets.APP_SIGN_IDENTITY }}
+          PKG_SIGN_IDENTITY: ${{ secrets.PKG_SIGN_IDENTITY }}
+        run: cargo xtask publish-macos "${{ inputs.build_number || github.run_number }}"

@@ -830,13 +830,27 @@ fn find_plugin_wasm_exact(plugin_id: &str) -> Result<PathBuf, String> {
     Err(format!("Plugin '{}' not found", plugin_id))
 }
 
-/// Resolve the CLI's active workspace root using the same precedence as Tauri:
-/// explicit `--workspace` / `-w` flag, then cwd-based detection, then the
-/// configured default workspace. Returns `None` if none resolve.
+/// Resolve the CLI's active workspace root directory using the same precedence
+/// as Tauri: explicit `--workspace` / `-w` flag, then cwd-based detection, then
+/// the configured default workspace. Returns `None` if none resolve.
+///
+/// `Workspace::detect_workspace` / `find_root_index_in_dir` return the root
+/// *index file* path, not the directory — we normalize to the containing
+/// directory here so callers (e.g. `workspace_plugin_dirs`) can treat the
+/// result as a workspace directory.
 ///
 /// This runs before clap parses (plugin discovery augments the clap command
 /// with dynamic subcommands), so the flag is extracted manually from argv.
 pub fn resolve_cli_workspace_root() -> Option<PathBuf> {
+    let candidate = resolve_cli_workspace_candidate()?;
+    if candidate.is_file() {
+        candidate.parent().map(Path::to_path_buf)
+    } else {
+        Some(candidate)
+    }
+}
+
+fn resolve_cli_workspace_candidate() -> Option<PathBuf> {
     if let Some(path) = extract_workspace_flag_from_argv() {
         return Some(path);
     }

@@ -81,3 +81,8 @@ pub fn run_checked(cmd: &mut Command, what: &str) -> Result<(), String> {
 pub fn diaryx_app() -> diaryx_core::entry::DiaryxAppSync<diaryx_core::fs::RealFileSystem> {
     diaryx_core::entry::DiaryxAppSync::new(diaryx_core::fs::RealFileSystem)
 }
+
+/// Read a required env var, with a clear error message if missing.
+pub fn require_env(key: &str) -> Result<String, String> {
+    env::var(key).map_err(|_| format!("missing required env var: {key}"))
+}

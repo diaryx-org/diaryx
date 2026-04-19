@@ -83,7 +83,6 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   ├── Sync - Real-time multi-device sync across Diaryx workspaces - crates/plugins/diaryx_sync_extism/README.md
 │   └── Publish - Export and publish content with optional format conversion - crates/plugins/diaryx_publish_extism/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
-├── Scripts - scripts/scripts.md
 ├── TESTING - TESTING.md
 └── Terms of Service - Terms of Service for Diaryx - terms.md
 ```

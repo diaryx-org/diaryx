@@ -1358,6 +1358,7 @@
           pluginId={activePluginTab.pluginId}
           component={activePluginTab.component}
           {api}
+          entry={currentEntry}
           onHostAction={onPluginHostAction}
         />
       {:else}

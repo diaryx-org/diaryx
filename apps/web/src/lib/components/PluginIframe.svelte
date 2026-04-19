@@ -44,6 +44,10 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let iframeReady = $state(false);
+  // Guest-reported content height. When non-null, the iframe is sized to the
+  // guest's content and the parent (e.g. sidebar column) scrolls. When null,
+  // the iframe uses flex-1 and fills its container.
+  let contentHeight = $state<number | null>(null);
   const COMPONENT_LOAD_TIMEOUT_MS = 20000;
   type PluginCommandResult = {
     success: boolean;
@@ -512,6 +516,14 @@
       return;
     }
 
+    if (data.type === "content-size") {
+      const rawHeight = (data as { height?: unknown }).height;
+      if (typeof rawHeight === "number" && Number.isFinite(rawHeight) && rawHeight > 0) {
+        contentHeight = Math.ceil(rawHeight);
+      }
+      return;
+    }
+
     if (data.type === "host-action") {
       const { action, requestId } = data;
       Promise.resolve()
@@ -567,7 +579,8 @@
       bind:this={iframeEl}
       src={blobUrl}
       sandbox="allow-scripts"
-      class="flex-1 w-full border-0"
+      class="w-full border-0 block {contentHeight == null ? 'flex-1' : ''}"
+      style={contentHeight == null ? undefined : `height: ${contentHeight}px;`}
       title="Plugin: {componentId}"
       onload={handleIframeLoad}
     ></iframe>

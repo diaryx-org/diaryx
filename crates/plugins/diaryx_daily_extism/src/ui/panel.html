@@ -32,13 +32,17 @@
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
+  html, body {
+    width: 100%;
+  }
+
   body {
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg);
     color: var(--fg);
-    height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
 
   .panel {
@@ -47,7 +51,7 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-width: 260px;
+    min-width: 0;
   }
 
   /* Calendar header */
@@ -551,8 +555,32 @@
   document.getElementById("prevBtn").addEventListener("click", function() { navigate("prev"); });
   document.getElementById("nextBtn").addEventListener("click", function() { navigate("next"); });
 
+  // Report content height to host so the iframe element is sized to our
+  // rendered content (no dead gutter, no spurious scrollbars). Host listens
+  // for messages of shape { type: "content-size", height }.
+  var lastReportedHeight = 0;
+  function reportContentSize() {
+    var panel = document.querySelector(".panel");
+    // Use the panel's offsetHeight (which includes its padding) as the
+    // authoritative content height — body defers to content.
+    var h = panel ? panel.offsetHeight : document.documentElement.scrollHeight;
+    if (h && h !== lastReportedHeight) {
+      lastReportedHeight = h;
+      parent.postMessage({ type: "content-size", height: h }, "*");
+    }
+  }
+
+  if (typeof ResizeObserver !== "undefined") {
+    var ro = new ResizeObserver(function() { reportContentSize(); });
+    ro.observe(document.querySelector(".panel"));
+  } else {
+    window.addEventListener("resize", reportContentSize);
+  }
+
   // Initial render
   renderCalendar();
+  // Report after layout settles.
+  requestAnimationFrame(reportContentSize);
 </script>
 </body>
 </html>

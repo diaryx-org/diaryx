@@ -13,7 +13,6 @@ contents:
 - '[README](/apps/README.md)'
 - '[README](/crates/README.md)'
 - '[ROADMAP](/ROADMAP.md)'
-- '[Scripts](/scripts/scripts.md)'
 - '[TESTING](/TESTING.md)'
 - '[Terms of Service](/terms.md)'
 audience:

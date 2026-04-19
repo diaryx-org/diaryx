@@ -72,8 +72,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
 │   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
 │   └── diaryx_sync - crates/diaryx_sync/README.md
-├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
-└── Scripts - scripts/scripts.md
+└── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 ```
 
 ## Entry Points

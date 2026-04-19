@@ -41,9 +41,10 @@ cargo xtask publish-ios
 cargo xtask publish-macos <build-number>
 ```
 
-Both tasks read credentials from the process environment, falling back to the
-gitignored `scripts/.env.publish` when present for local runs. Required
-variables are listed in each task's `--help` output.
+Both tasks read credentials from the process environment. Required variables
+are listed in each task's `--help` output. For local runs, use any dotenv tool
+or shell sourcing pattern you prefer — the xtask no longer reads any specific
+file.
 
 For one-click publishing, dispatch `.github/workflows/appstore-release.yml`
 from GitHub Actions — the workflow imports certificates into an ephemeral

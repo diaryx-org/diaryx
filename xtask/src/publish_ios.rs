@@ -1,11 +1,10 @@
-use crate::util::{load_env_file, require_env, run_checked, workspace_root};
+use crate::util::{require_env, run_checked, workspace_root};
 use std::process::Command;
 
 const USAGE: &str = "Usage: cargo xtask publish-ios\n\n\
 Builds the iOS App Store export (Tauri `apple` feature) and uploads the IPA to\n\
 App Store Connect.\n\n\
-Reads credentials from the current environment, falling back to scripts/.env.publish\n\
-for local runs. Required variables:\n  \
+Required environment variables:\n  \
   API_KEY         App Store Connect API key ID\n  \
   API_ISSUER      App Store Connect issuer UUID\n  \
   API_KEY_PATH    Absolute path to the AuthKey_<ID>.p8 file\n";
@@ -29,10 +28,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     let root = workspace_root();
-    let env_file = root.join("scripts/.env.publish");
-    if env_file.is_file() {
-        load_env_file(&env_file)?;
-    }
 
     let api_key = require_env("API_KEY")?;
     let api_issuer = require_env("API_ISSUER")?;

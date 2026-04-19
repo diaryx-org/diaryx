@@ -20,7 +20,3 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "std"
 indexmap = { version = "2", features = ["serde"] }
 base64 = "0.22"
 handlebars = "6"
-
-[profile.release]
-lto = "fat"
-codegen-units = 1

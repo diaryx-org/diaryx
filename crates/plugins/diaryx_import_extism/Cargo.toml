@@ -26,7 +26,3 @@ base64 = "0.22"
 chrono = { workspace = true }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 mailparse = { version = "0.16", optional = true }
-
-[profile.release]
-lto = "fat"
-codegen-units = 1

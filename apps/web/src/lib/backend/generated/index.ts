@@ -1,5 +1,5 @@
 // Auto-generated barrel file — do not edit manually.
-// Run scripts/sync-bindings.sh to regenerate.
+// Run `cargo xtask sync-bindings` to regenerate.
 
 export type { AncestorAttachmentEntry } from './AncestorAttachmentEntry';
 export type { AncestorAttachmentsResult } from './AncestorAttachmentsResult';

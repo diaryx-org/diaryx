@@ -30,7 +30,7 @@ Backend abstraction layer supporting both WASM and Tauri environments.
 The `generated/` directory contains TypeScript types generated from Rust.
 Plugin manifest/editor-extension bindings are generated from `diaryx_core`, so
 after Rust-side manifest changes the repo should refresh them via
-`cargo test -p diaryx_core` followed by `scripts/sync-bindings.sh`.
+`cargo test -p diaryx_core` followed by `cargo xtask sync-bindings`.
 
 ## Tauri Runtime Detection
 

@@ -8,10 +8,10 @@
 #
 # To override with a different identity:
 #   export DIARYX_DEV_SIGN_IDENTITY="Some Other Identity Name"
-#   bash scripts/setup-macos-dev-signing.sh
+#   bash apps/tauri/scripts/setup-macos-dev-signing.sh
 #
-# The runner (scripts/macos-dev-sign.sh) reads the same env var, so dev builds
-# use whatever you set here.
+# The runner (apps/tauri/scripts/macos-dev-sign.sh) reads the same env var, so
+# dev builds use whatever you set here.
 
 set -euo pipefail
 
@@ -40,7 +40,7 @@ Options:
 
   2. Use a different identity you already have:
        export DIARYX_DEV_SIGN_IDENTITY="Name as it appears below"
-       bash scripts/setup-macos-dev-signing.sh
+       bash apps/tauri/scripts/setup-macos-dev-signing.sh
 
 Available code-signing identities right now:
 EOF

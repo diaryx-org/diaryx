@@ -1,0 +1,19 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+diaryx_core = { workspace = true }
+chrono = { workspace = true }
+futures-lite = "2"
+indexmap = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = "0.10"
+toml_edit = "0.22"
+ureq = "3"

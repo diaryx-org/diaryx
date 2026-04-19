@@ -120,7 +120,7 @@ cargo build --target wasm32-unknown-unknown -p diaryx_publish_extism --release
 When vendored into the Diaryx monorepo, you can still use the monorepo helper:
 
 ```bash
-cd ../diaryx && ./scripts/build-wasm.sh
+cd ../diaryx && cargo xtask build-wasm
 ```
 
 which copies the artifact to `apps/web/public/plugins/diaryx_publish.wasm`.

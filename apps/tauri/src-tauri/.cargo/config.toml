@@ -4,10 +4,10 @@
 # stable self-signed identity so the macOS keychain's "Always Allow" grant
 # persists across rebuilds. Without the env var, the runner is a no-op passthrough.
 #
-# See scripts/macos-dev-sign.sh and scripts/setup-macos-dev-signing.sh.
+# See apps/tauri/scripts/macos-dev-sign.sh and apps/tauri/scripts/setup-macos-dev-signing.sh.
 #
 # Note: cargo resolves relative `runner` paths from the crate root (src-tauri/),
-# not from this config file's directory. So only three `..` segments are needed.
+# not from this config file's directory.
 
 [target.'cfg(target_os = "macos")']
-runner = "../../../scripts/macos-dev-sign.sh"
+runner = "../scripts/macos-dev-sign.sh"

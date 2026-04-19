@@ -38,7 +38,9 @@ pub fn handle_property_command(app: &CliDiaryxAppSync, operation: PropertyComman
             yes,
             dry_run,
         } => handle_rename_command(app, &config, &path, &old_key, &new_key, yes, dry_run),
-        PropertyCommands::List { path, yes } => handle_list_command(app, &config, &path, yes),
+        PropertyCommands::List { path, yes, yaml } => {
+            handle_list_command(app, &config, &path, yes, yaml)
+        }
         PropertyCommands::Append {
             path,
             key,
@@ -330,6 +332,7 @@ fn handle_list_command(
     config: &diaryx_core::config::Config,
     path: &str,
     _yes: bool,
+    yaml: bool,
 ) -> bool {
     let paths = resolve_paths(path, config, app);
     if paths.is_empty() {
@@ -342,7 +345,7 @@ fn handle_list_command(
 
     for file_path in paths {
         let path_str = file_path.to_string_lossy();
-        let prefix = if multiple_files {
+        let prefix = if multiple_files && !yaml {
             format!("{}:   ", file_path.display())
         } else {
             String::new()
@@ -353,7 +356,19 @@ fn handle_list_command(
                 if multiple_files {
                     println!("{}:", file_path.display());
                 }
-                if frontmatter.is_empty() {
+                if yaml {
+                    if frontmatter.is_empty() {
+                        println!("{{}}");
+                    } else {
+                        match serde_yaml::to_string(&frontmatter) {
+                            Ok(s) => print!("{}", s),
+                            Err(e) => {
+                                eprintln!("✗ Error serializing YAML: {}", e);
+                                had_error = true;
+                            }
+                        }
+                    }
+                } else if frontmatter.is_empty() {
                     println!("{}No properties", prefix);
                 } else {
                     for (key, value) in frontmatter {

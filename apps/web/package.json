@@ -9,7 +9,7 @@
     "build:bun": "bun run build:wasm && bun build.ts",
     "deploy": "bun run build && bunx wrangler deploy",
     "build": "bun run build:wasm && vite build",
-    "build:wasm": "bash ../../scripts/build-wasm.sh",
+    "build:wasm": "cargo xtask build-wasm",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest",

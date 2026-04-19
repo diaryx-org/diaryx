@@ -22,7 +22,3 @@ diaryx_plugin_sdk = { path = "../diaryx_plugin_sdk", features = ["core"] }
 base64 = "0.22"
 pathdiff = "0.2"
 thiserror = "2"
-
-[profile.release]
-lto = "fat"
-codegen-units = 1

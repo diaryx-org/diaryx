@@ -10,7 +10,7 @@
 #
 # Otherwise, just execs the binary unchanged.
 #
-# Setup: run scripts/setup-macos-dev-signing.sh once to create the identity.
+# Setup: run apps/tauri/scripts/setup-macos-dev-signing.sh once to create the identity.
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ To sign and run dev builds, use:
   DIARYX_DEV_SIGN=1 bun tauri dev
 
 See apps/tauri/README.md (macOS dev signing section) and
-scripts/setup-macos-dev-signing.sh for setup.
+apps/tauri/scripts/setup-macos-dev-signing.sh for setup.
 EOF
   exit 64
 fi
@@ -46,7 +46,7 @@ if [ "${DIARYX_DEV_SIGN:-}" = "1" ] && [ "$(uname)" = "Darwin" ]; then
     fi
   else
     echo "WARN: DIARYX_DEV_SIGN=1 but no signing identity found." >&2
-    echo "      Set DIARYX_DEV_SIGN_IDENTITY or run scripts/setup-macos-dev-signing.sh." >&2
+    echo "      Set DIARYX_DEV_SIGN_IDENTITY or run apps/tauri/scripts/setup-macos-dev-signing.sh." >&2
   fi
 fi
 

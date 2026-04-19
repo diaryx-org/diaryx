@@ -76,9 +76,9 @@ cargo build --target wasm32-unknown-unknown -p diaryx_sync_extism --release
 wasm-opt -Oz target/wasm32-unknown-unknown/release/diaryx_sync_extism.wasm -o dist/diaryx_sync.wasm
 ```
 
-Or via the build script:
+Or via the workspace xtask:
 ```bash
-./scripts/build-wasm.sh
+cargo xtask build-wasm
 ```
 
 ## Exports

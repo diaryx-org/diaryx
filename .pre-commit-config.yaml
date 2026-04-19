@@ -13,7 +13,7 @@ repos:
       # Sync version from README.md to all project files
       - id: sync-versions
         name: Sync versions
-        entry: ./scripts/sync-versions.sh
+        entry: cargo xtask sync-versions
         language: system
         files: ^README\.md$
         pass_filenames: false
@@ -45,7 +45,7 @@ repos:
       # Update AGENTS.md workspace index when READMEs change
       - id: update-agents-index
         name: Update AGENTS.md index
-        entry: ./scripts/update-agents-index.sh
+        entry: cargo xtask update-agents-index
         language: system
         files: ^(crates|apps)/.*README\.md$|^README\.md$
         pass_filenames: false

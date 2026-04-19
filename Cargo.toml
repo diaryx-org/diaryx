@@ -29,6 +29,7 @@ members = [
     "crates/plugins/diaryx_templating_extism",
     "apps/tauri/src-tauri",
     "crates/diaryx_cloudflare_e2e",
+    "xtask",
 ]
 exclude = [
     "crates/diaryx_cloudflare",

@@ -18,7 +18,3 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 diaryx_plugin_sdk = { workspace = true, features = ["core", "http", "secrets"] }
-
-[profile.release]
-lto = "fat"
-codegen-units = 1

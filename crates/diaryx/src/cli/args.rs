@@ -465,6 +465,10 @@ pub enum PropertyCommands {
         /// Skip confirmation prompts for multi-file operations
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Emit the entire frontmatter as a raw YAML document
+        #[arg(long)]
+        yaml: bool,
     },
 
     /// Append a value to a list property

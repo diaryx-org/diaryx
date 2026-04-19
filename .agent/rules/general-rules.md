@@ -107,8 +107,8 @@ cargo test
 cargo run --bin diaryx -- <args>
 
 # Build WASM
-./scripts/build-wasm.sh
-# Or, since this script is included in package.json...
+cargo xtask build-wasm
+# Or, since this command is included in package.json...
 cd apps/web && bun run build
 
 # Web dev server

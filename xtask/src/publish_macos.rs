@@ -53,9 +53,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     println!("==> Building Diaryx.app...");
     let mut build = Command::new("cargo");
-    build
-        .current_dir(&tauri_dir)
-        .args(["tauri", "build", "--bundles", "app", "--", "--features", "apple"]);
+    build.current_dir(&tauri_dir).args([
+        "tauri",
+        "build",
+        "--bundles",
+        "app",
+        "--",
+        "--features",
+        "apple",
+    ]);
     run_checked(&mut build, "cargo tauri build")?;
 
     let binary = app_bundle.join("Contents/MacOS/diaryx_tauri");
@@ -156,13 +162,9 @@ fn rewrite_nix_dylibs(binary: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn write_resolved_entitlements(
-    source: &Path,
-    dest: &Path,
-    team_id: &str,
-) -> Result<(), String> {
-    let content = fs::read_to_string(source)
-        .map_err(|e| format!("read {}: {e}", source.display()))?;
+fn write_resolved_entitlements(source: &Path, dest: &Path, team_id: &str) -> Result<(), String> {
+    let content =
+        fs::read_to_string(source).map_err(|e| format!("read {}: {e}", source.display()))?;
     let injection = format!(
         "    <key>com.apple.application-identifier</key>\n    <string>{team_id}.org.diaryx.desktop</string>\n</dict>"
     );
@@ -174,11 +176,9 @@ fn write_resolved_entitlements(
     };
     let resolved = format!("{head}{injection}{tail}");
     if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    let mut f = fs::File::create(dest)
-        .map_err(|e| format!("create {}: {e}", dest.display()))?;
+    let mut f = fs::File::create(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
     f.write_all(resolved.as_bytes())
         .map_err(|e| format!("write {}: {e}", dest.display()))?;
     Ok(())

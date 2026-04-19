@@ -60,13 +60,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     println!("==> Uploading to App Store Connect...");
     let mut upload = Command::new("xcrun");
-    upload.args([
-        "altool",
-        "--upload-app",
-        "--type",
-        "ios",
-        "--file",
-    ]);
+    upload.args(["altool", "--upload-app", "--type", "ios", "--file"]);
     upload
         .arg(&ipa)
         .args(["--apiKey", &api_key, "--apiIssuer", &api_issuer]);
@@ -85,9 +79,7 @@ fn find_ipa(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
     }
     let mut stack = vec![dir.to_path_buf()];
     while let Some(p) = stack.pop() {
-        for entry in std::fs::read_dir(&p)
-            .map_err(|e| format!("read_dir {}: {e}", p.display()))?
-        {
+        for entry in std::fs::read_dir(&p).map_err(|e| format!("read_dir {}: {e}", p.display()))? {
             let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
             let path = entry.path();
             if path.is_dir() {

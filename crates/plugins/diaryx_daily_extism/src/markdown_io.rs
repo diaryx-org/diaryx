@@ -22,7 +22,10 @@ pub fn write_markdown(
     host::fs::write_file(fs_path, &serialized)
 }
 
-pub fn ensure_sequence(frontmatter_map: &mut IndexMap<String, YamlValue>, key: &str) -> Vec<String> {
+pub fn ensure_sequence(
+    frontmatter_map: &mut IndexMap<String, YamlValue>,
+    key: &str,
+) -> Vec<String> {
     match frontmatter_map.get(key) {
         Some(YamlValue::Sequence(seq)) => seq
             .iter()

@@ -6,7 +6,9 @@ use chrono::{Datelike, Duration};
 use diaryx_plugin_sdk::prelude::*;
 use serde_json::Value as JsonValue;
 
-use crate::daily_logic::{DailyDirection, adjacent_daily_entry_path, parse_date_input, path_to_date};
+use crate::daily_logic::{
+    DailyDirection, adjacent_daily_entry_path, parse_date_input, path_to_date,
+};
 use crate::indices::{
     add_to_contents, dates_from_month_index, ensure_daily_entry_for_date,
     find_month_index_via_tree, infer_entry_date, set_part_of,

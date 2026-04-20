@@ -132,8 +132,8 @@ cd apps/web && bun run build
 # Web dev server
 cd apps/web && bun run dev
 
-# Tauri dev
-cd apps/tauri && cargo tauri dev
+# Tauri dev (macOS desktop; use `ios` for iOS, `--dev-ipc` for the debug HTTP listener)
+cargo xtask tauri macos
 ```
 
 ## Not Documented

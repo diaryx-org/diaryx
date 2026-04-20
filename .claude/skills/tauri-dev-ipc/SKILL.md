@@ -5,7 +5,7 @@ description: Drive a running Diaryx Tauri dev build over its debug HTTP IPC — 
 
 # tauri-dev-ipc
 
-Programmatic control of a running `bun run tauri:dev-ipc` session. The listener lives in `apps/tauri/src-tauri/src/dev_ipc.rs` and binds on `127.0.0.1:<ephemeral>`. Every endpoint except `/health` requires a per-run random token from the discovery file.
+Programmatic control of a running `cargo xtask tauri macos --dev-ipc` session. The listener lives in `apps/tauri/src-tauri/src/dev_ipc.rs` and binds on `127.0.0.1:<ephemeral>`. Every endpoint except `/health` requires a per-run random token from the discovery file.
 
 ## 1. Is the app running?
 
@@ -22,7 +22,7 @@ If it's missing:
 - App was built without the `dev-ipc` Cargo feature, OR
 - App crashed ungracefully and left no file.
 
-Tell the user: "Start the app with `cd apps/tauri && bun run tauri:dev-ipc`". Don't guess the port.
+Tell the user: "Start the app with `cargo xtask tauri macos --dev-ipc`". Don't guess the port.
 
 Second sanity check once you have the port/token: `GET /health` returns `{"ok":true,"pid":<n>,"version":"<v>"}` with no token required. If this fails, the listener isn't bound.
 
@@ -132,7 +132,7 @@ For heavier UI work, prefer driving the web frontend at `apps/web` with Playwrig
 
 ## 8. Lifecycle notes
 
-- Source changes to `dev_ipc.rs` or `commands.rs` need a full `bun run tauri:dev-ipc` restart. Vite HMR only touches the frontend.
+- Source changes to `dev_ipc.rs` or `commands.rs` need a full `cargo xtask tauri macos --dev-ipc` restart. Vite HMR only touches the frontend.
 - Each restart generates a fresh token + port. Re-read `.dev-ipc.json` after any restart.
 - If requests start 401-ing with the correct token, the app restarted and the discovery file is stale. Re-read it.
 - The listener is compiled out entirely in release builds. Any instructions here apply only to debug dev builds.

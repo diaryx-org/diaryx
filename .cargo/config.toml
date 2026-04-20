@@ -1,5 +1,12 @@
 [alias]
-xtask = "run --package xtask --"
+# `--target-dir target/xtask` isolates xtask's own dep graph from the main
+# workspace's `target/`. Without this, running `cargo xtask tauri macos` forces
+# cargo to resolve features across BOTH xtask (workspace-default scope) and
+# diaryx_tauri (the --no-default-features --features extism-plugins scope that
+# cargo-tauri injects for `dev`). Shared deps (serde/libc/etc.) land on a
+# different feature set in each scope, so every alternation re-invalidates ~700
+# fingerprints. A separate target dir keeps the two caches independent.
+xtask = "run --target-dir target/xtask --package xtask --"
 
 # Use custom getrandom backend for wasm32-unknown-unknown.
 # This tells getrandom 0.4 to call `__getrandom_v03_custom` (defined in
@@ -19,3 +26,24 @@ linker = "/usr/bin/clang"
 rustflags = [
   "-C", "link-arg=-fuse-ld=/usr/bin/ld"
 ]
+
+# Pin /usr/bin/clang and MACOSX_DEPLOYMENT_TARGET for Apple targets so the outer
+# `cargo xtask ...` compile and the inner `cargo tauri` it spawns share identical
+# fingerprints. Without force = true the Nix dev shell's CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/cc
+# (and unset MACOSX_DEPLOYMENT_TARGET) leak into the outer compile, while the inner
+# sees /usr/bin/clang + 13.0 — every dep rebuilds and the codesign cd hash changes
+# so the keychain "Always Allow" grant is never honored.
+[env]
+CC_aarch64_apple_darwin = { value = "/usr/bin/clang", force = true }
+CXX_aarch64_apple_darwin = { value = "/usr/bin/clang++", force = true }
+AR_aarch64_apple_darwin = { value = "/usr/bin/ar", force = true }
+CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER = { value = "/usr/bin/clang", force = true }
+CC_aarch64_apple_ios = { value = "/usr/bin/clang", force = true }
+CXX_aarch64_apple_ios = { value = "/usr/bin/clang++", force = true }
+AR_aarch64_apple_ios = { value = "/usr/bin/ar", force = true }
+CARGO_TARGET_AARCH64_APPLE_IOS_LINKER = { value = "/usr/bin/clang", force = true }
+CC_aarch64_apple_ios_sim = { value = "/usr/bin/clang", force = true }
+CXX_aarch64_apple_ios_sim = { value = "/usr/bin/clang++", force = true }
+AR_aarch64_apple_ios_sim = { value = "/usr/bin/ar", force = true }
+CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER = { value = "/usr/bin/clang", force = true }
+MACOSX_DEPLOYMENT_TARGET = { value = "13.0", force = true }

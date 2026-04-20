@@ -18,8 +18,8 @@ Diaryx is still in its infancy. It aims to solve the audience filtering problem 
 
 **One-click website publishing**
 
-- [ ] Onboarding screen shows only logo, tagline, and "Get Started" (plus a subtle advanced menu)
-- [ ] "Get Started" creates an anonymous user in the database. Gives them access to free tier functionality.
+- [x] Onboarding screen shows only logo, tagline, and "Get Started" (plus a subtle advanced menu)
+- [ ] ~~"Get Started" creates an anonymous user in the database. Gives them access to free tier functionality.~~
 - [ ] Sets up workspace with default bundle. Automatically publishes their workspace as a website. Workspace contains 2-3 audience demo.
 
 Overhaul audience filtering UI.
@@ -30,7 +30,7 @@ Overhaul audience filtering UI.
 **Publish plugin**
 
 - [ ] Phone number/SMS support
-- [ ] Alternative theming support for website publishing
+- [ ] (partially implemented) Alternative theming support for website publishing
 - [x] Support rich interactive content in websites (like Ammon's demo)
 
 **Other**

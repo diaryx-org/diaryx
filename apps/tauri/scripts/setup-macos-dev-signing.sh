@@ -11,7 +11,8 @@
 #   bash apps/tauri/scripts/setup-macos-dev-signing.sh
 #
 # The runner (apps/tauri/scripts/macos-dev-sign.sh) reads the same env var, so
-# dev builds use whatever you set here.
+# dev builds launched with `DIARYX_DEV_SIGN=1 cargo xtask tauri macos` use
+# whatever you set here.
 
 set -euo pipefail
 
@@ -76,7 +77,7 @@ echo "  export DIARYX_DEV_SIGN=1"
 if [ -z "${DIARYX_DEV_SIGN_IDENTITY:-}" ]; then
   echo "  # (identity was auto-detected; set DIARYX_DEV_SIGN_IDENTITY to override)"
 fi
-echo "  bun tauri dev"
+echo "  cargo xtask tauri macos"
 echo ""
 echo "On the first keychain prompt after signing, click 'Always Allow' once."
 echo "Subsequent rebuilds will stay silent as long as the same identity is used."

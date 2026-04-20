@@ -6,6 +6,7 @@ mod release_plugin;
 mod sync_bindings;
 mod sync_marketplace;
 mod sync_versions;
+mod tauri;
 mod update_agents_index;
 mod util;
 
@@ -28,6 +29,7 @@ fn main() -> ExitCode {
         "sync-bindings" => sync_bindings::run(rest),
         "sync-marketplace" => sync_marketplace::run(rest),
         "sync-versions" => sync_versions::run(rest),
+        "tauri" => tauri::run(rest),
         "update-agents-index" => update_agents_index::run(rest),
         "help" | "-h" | "--help" => {
             print_help();
@@ -77,6 +79,10 @@ fn print_help() {
     );
     eprintln!(
         "  sync-versions                Propagate README.md version → Cargo.toml / tauri.conf.json / package.json / flake.nix"
+    );
+    eprintln!("  tauri <subcommand>           Run Diaryx Tauri builds. Subcommands: macos, ios,");
+    eprintln!(
+        "                               render-updater-config. See `cargo xtask tauri --help`."
     );
     eprintln!("  update-agents-index          Refresh the workspace tree in AGENTS.md");
 }

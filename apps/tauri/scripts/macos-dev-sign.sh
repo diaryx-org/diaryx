@@ -6,7 +6,8 @@
 # When DIARYX_DEV_SIGN=1 is set, re-signs the debug binary with a stable
 # self-signed identity (default "Diaryx Dev") before executing it. A stable
 # signature means the macOS keychain's "Always Allow" grant persists across
-# rebuilds, so `bun tauri dev` stops prompting for keychain access every run.
+# rebuilds, so `cargo xtask tauri macos` stops prompting for keychain access
+# every run.
 #
 # Otherwise, just execs the binary unchanged.
 #
@@ -20,7 +21,7 @@ $(basename "$0") is a cargo \`runner\` — not meant to be invoked directly.
 Cargo calls it as: $(basename "$0") <binary> [args...]
 
 To sign and run dev builds, use:
-  DIARYX_DEV_SIGN=1 bun tauri dev
+  DIARYX_DEV_SIGN=1 cargo xtask tauri macos
 
 See apps/tauri/README.md (macOS dev signing section) and
 apps/tauri/scripts/setup-macos-dev-signing.sh for setup.

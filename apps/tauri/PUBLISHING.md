@@ -127,9 +127,9 @@ gh workflow run cli-release.yml   -f tag=v0.0.0-dryrun -f dry_run=true
 ```
 
 The release workflow renders `apps/tauri/src-tauri/tauri.updater.conf.json`
-with `apps/tauri/scripts/render-updater-config.mjs`, enables the
-`desktop-updater` feature, and signs the generated updater artifacts before
-uploading them to the GitHub Release draft.
+with `cargo xtask tauri render-updater-config`, enables the `desktop-updater`
+feature, and signs the generated updater artifacts before uploading them to
+the GitHub Release draft.
 
 For signing, notarization, and updater metadata, set these GitHub Secrets:
 

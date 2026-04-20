@@ -90,9 +90,7 @@ jobs:
           bun install
 
       - name: Render updater config
-        run: |
-          cd apps/tauri
-          bun run tauri:render-updater-config
+        run: cargo xtask tauri render-updater-config
         env:
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
 

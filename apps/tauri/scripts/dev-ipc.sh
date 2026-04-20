@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tiny curl wrapper for the dev-only Tauri IPC listener (see
 # src-tauri/src/dev_ipc.rs). Requires the app to be built with the
-# `dev-ipc` Cargo feature (use `bun run tauri:dev-ipc`).
+# `dev-ipc` Cargo feature (use `cargo xtask tauri macos --dev-ipc`).
 #
 # Usage:
 #   ./scripts/dev-ipc.sh GET /health
@@ -24,7 +24,7 @@ DISC="$HERE/.dev-ipc.json"
 
 if [ ! -f "$DISC" ]; then
   echo "error: no discovery file at $DISC" >&2
-  echo "       start the app with: bun run tauri:dev-ipc" >&2
+  echo "       start the app with: cargo xtask tauri macos --dev-ipc" >&2
   exit 2
 fi
 

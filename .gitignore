@@ -26,3 +26,4 @@ apps/web/test.sh
 .playwright-mcp
 .diaryx
 apps/web/src/LICENSE.md
+.zed

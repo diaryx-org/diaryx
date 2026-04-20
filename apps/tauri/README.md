@@ -82,14 +82,23 @@ The Tauri app shares the same Svelte frontend as the web app (`apps/web`), but i
 ## Building
 
 ```bash
-# Development
-cd apps/tauri
-bun install
-bun run tauri dev
+# Development (macOS desktop)
+cargo xtask tauri macos            # == cargo xtask tauri macos dev
+# With the dev-ipc HTTP listener compiled in:
+cargo xtask tauri macos --dev-ipc
 
-# Production build
-bun run tauri build
+# iOS dev (cleans stale swift-rs artifacts, adds --features apple)
+cargo xtask tauri ios
+
+# Production build (desktop)
+cargo xtask tauri macos build
 ```
+
+All `cargo xtask tauri <platform>` args after the platform name pass through
+to `cargo tauri` unchanged, so `cargo xtask tauri macos build --bundles dmg`
+works. The xtask pins system clang/ar/linker for Apple targets and sets
+`MACOSX_DEPLOYMENT_TARGET=13.0` so Nix-provided toolchains do not leak into
+the build.
 
 ### macOS: suppressing keychain prompts on every `tauri dev` rebuild
 
@@ -108,7 +117,7 @@ thing Xcode does by default). The free "Apple Development" identity works.
 
 # Enable signing for dev builds
 export DIARYX_DEV_SIGN=1
-bun tauri dev
+cargo xtask tauri macos
 ```
 
 On the first keychain prompt after signing, click "Always Allow" once.
@@ -117,8 +126,8 @@ Subsequent rebuilds re-sign with the same identity, so the grant persists.
 By default the scripts auto-detect the first `Apple Development: ...` identity
 in your login keychain. To use a different one, set
 `DIARYX_DEV_SIGN_IDENTITY` to the exact identity name before running setup
-and/or `tauri dev`. Unset `DIARYX_DEV_SIGN` to fall back to normal ad-hoc
-signing.
+and/or before running `cargo xtask tauri macos`. Unset `DIARYX_DEV_SIGN` to
+fall back to normal ad-hoc signing.
 
 If you don't have an Apple Development identity yet, get one via Xcode →
 Settings → Accounts → your Apple ID → Manage Certificates → + "Apple
@@ -135,10 +144,11 @@ best-effort during dev reloads: `initialize_app` / `reinitialize_workspace`
 have a frontend timeout plus a short dev-only retry window so transient
 custom-protocol fallback issues can recover after the webview remounts.
 
-For iOS dev builds, `bun run tauri:ios` now runs `bun run clean:ios-swift-cache`
-first. This clears stale `swift-rs` module artifacts for Tauri and Tauri plugin
-build scripts under `target/` that can break builds after moving the repository
-to a new absolute path.
+For iOS dev builds, `cargo xtask tauri ios` cleans stale `swift-rs` module
+artifacts for Tauri and Tauri plugin build scripts under `target/` before
+invoking `cargo tauri ios dev -- --features apple`. That clears module cache
+path mismatches that otherwise break iOS builds after the repository moves to
+a new absolute path.
 
 ## Debug IPC Listener
 
@@ -165,15 +175,15 @@ gitignored.
 
 ```bash
 # Start dev build with the IPC listener enabled
-cd apps/tauri && bun run tauri:dev-ipc
+cargo xtask tauri macos --dev-ipc
 
 # From another terminal
-bash ./scripts/dev-ipc.sh GET /health
-bash ./scripts/dev-ipc.sh GET /state
-bash ./scripts/dev-ipc.sh GET "/log?tail=100"
-bash ./scripts/dev-ipc.sh POST /execute --data '{"type":"GetEntry","params":{"path":"README.md"}}'
-bash ./scripts/dev-ipc.sh POST /emit    --data '{"event": "my-event", "payload": {}}'
-bash ./scripts/dev-ipc.sh GET  /screenshot > /tmp/diaryx.png
+bash apps/tauri/scripts/dev-ipc.sh GET /health
+bash apps/tauri/scripts/dev-ipc.sh GET /state
+bash apps/tauri/scripts/dev-ipc.sh GET "/log?tail=100"
+bash apps/tauri/scripts/dev-ipc.sh POST /execute --data '{"type":"GetEntry","params":{"path":"README.md"}}'
+bash apps/tauri/scripts/dev-ipc.sh POST /emit    --data '{"event": "my-event", "payload": {}}'
+bash apps/tauri/scripts/dev-ipc.sh GET  /screenshot > /tmp/diaryx.png
 ```
 
 ### Endpoints
@@ -193,7 +203,7 @@ arbitrary JS in the webview, so it's off by default even when the IPC
 listener is running. Enable it explicitly when needed:
 
 ```bash
-DIARYX_DEV_IPC_EVAL=1 bun run tauri dev -- --features dev-ipc
+DIARYX_DEV_IPC_EVAL=1 cargo xtask tauri macos --dev-ipc
 ```
 
 ## Tauri Commands
@@ -314,7 +324,7 @@ Direct-distribution desktop builds can include `tauri-plugin-updater` so the
 installed app can download GitHub Release updates from inside Diaryx.
 
 - **Feature flag**: `desktop-updater` for Windows, Linux, and non-App-Store macOS builds
-- **Config source**: `apps/tauri/scripts/render-updater-config.mjs` writes the merged
+- **Config source**: `cargo xtask tauri render-updater-config` writes the merged
 `src-tauri/tauri.updater.conf.json` file from `TAURI_UPDATER_PUBLIC_KEY`
 - **Release endpoint**: `https://github.com/diaryx-org/diaryx/releases/latest/download/latest.json`
 - **Frontend behavior**: `App.svelte` kicks off a background update check through
@@ -343,13 +353,13 @@ The frontend detects the billing provider at runtime (`$lib/billing/platform.ts`
 
 ```bash
 # Normal dev (no IAP)
-bun run tauri dev
+cargo xtask tauri macos
 
 # iOS dev with Apple/App Store feature flags
-bun run tauri:ios
+cargo xtask tauri ios
 
 # App Store release build
-cargo tauri build -- --features apple
+cargo xtask tauri macos build -- --features apple
 ```
 
 Testing requires a StoreKit configuration file (`.storekit`) in Xcode for sandbox testing. For local sync-server testing with simulator mock transactions, set `APPLE_IAP_SKIP_SIGNATURE_VERIFY=1` on the server so mock JWS payloads can be decoded.

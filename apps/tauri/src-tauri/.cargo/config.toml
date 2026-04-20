@@ -1,4 +1,4 @@
-# Opt-in macOS dev signing for `bun tauri dev`.
+# Opt-in macOS dev signing for `cargo xtask tauri macos`.
 #
 # When DIARYX_DEV_SIGN=1 is set, the runner re-signs the debug binary with a
 # stable self-signed identity so the macOS keychain's "Always Allow" grant

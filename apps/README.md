@@ -87,8 +87,9 @@ Uses WASM backend with IndexedDB for persistence.
 ### Tauri App (desktop)
 
 ```bash
-cd apps/tauri
-bun tauri dev
+cargo xtask tauri macos            # desktop dev (macOS)
+cargo xtask tauri macos --dev-ipc  # with the dev HTTP IPC listener
+cargo xtask tauri ios              # iOS dev (cleans swift-rs cache)
 ```
 
 Uses Tauri IPC backend with real filesystem.
@@ -105,8 +106,7 @@ bun run build    # Output: apps/web/dist/
 ### Tauri App
 
 ```bash
-cd apps/tauri
-bun tauri build
+cargo xtask tauri macos build
 ```
 
 ## Adding New Backend Operations

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use clap::ArgMatches;
 use diaryx_core::config::Config;
 use diaryx_core::plugin::{CliArgType, CliCommand, PluginManifest};
+use diaryx_native::NativeConfigExt;
 use serde_json::Value as JsonValue;
 
 use crate::editor::launch_editor;
@@ -186,7 +187,7 @@ fn handle_plugin_cli_action(data: &JsonValue, workspace_root: Option<&Path>) -> 
                 return true;
             }
 
-            let config = Config::load().unwrap_or_default();
+            let config = Config::load().unwrap_or_else(|_| Config::default_native());
             if let Err(e) = launch_editor(&resolved, &config) {
                 eprintln!("✗ Error launching editor for {}: {}", resolved.display(), e);
             }

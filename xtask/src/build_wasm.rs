@@ -2,11 +2,19 @@ use crate::util::{apply_macos_env, run_checked, which, workspace_root};
 use std::path::Path;
 use std::process::Command;
 
-pub fn run(_args: &[String]) -> Result<(), String> {
+pub fn run(args: &[String]) -> Result<(), String> {
     let root = workspace_root();
     let out_dir = root.join("apps/web/src/lib/wasm");
 
+    // `--panic-hook` (or `--debug` shorthand) enables `console_error_panic_hook`
+    // for readable browser-console panics. Off by default because the panic
+    // infrastructure adds a small but non-trivial amount of WASM code.
+    let enable_panic_hook = args.iter().any(|a| a == "--panic-hook" || a == "--debug");
+
     println!("Building WASM from workspace: {}", root.display());
+    if enable_panic_hook {
+        println!("Enabling diaryx_wasm `panic-hook` feature for this build");
+    }
 
     let wasm_pack = which("wasm-pack").ok_or_else(|| {
         "wasm-pack not found on PATH. Install it with: cargo install wasm-pack".to_string()
@@ -27,6 +35,9 @@ pub fn run(_args: &[String]) -> Result<(), String> {
             "--out-dir",
         ])
         .arg(&out_dir);
+    if enable_panic_hook {
+        cmd.args(["--", "--features", "panic-hook"]);
+    }
     apply_macos_env(&mut cmd);
     run_checked(&mut cmd, "wasm-pack")?;
 

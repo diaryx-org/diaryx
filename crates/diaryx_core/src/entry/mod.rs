@@ -12,8 +12,8 @@
 //!
 //! ```ignore
 //! use diaryx_core::entry::DiaryxApp;
-//! use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
-//! use futures_lite::future::block_on;
+//! use diaryx_core::fs::SyncToAsyncFs;
+//! use diaryx_native::{RealFileSystem, block_on};
 //!
 //! // Use async-first API even in sync contexts
 //! let fs = SyncToAsyncFs::new(RealFileSystem);

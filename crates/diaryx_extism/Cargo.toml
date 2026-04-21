@@ -19,6 +19,7 @@ ws-transport = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:u
 
 [dependencies]
 diaryx_core = { path = "../diaryx_core", version = "1.3.1", default-features = false }
+diaryx_native = { workspace = true }
 chrono.workspace = true
 extism = "1.21"
 serde.workspace = true

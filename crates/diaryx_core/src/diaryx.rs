@@ -8,8 +8,8 @@
 //!
 //! ```ignore
 //! use diaryx_core::diaryx::Diaryx;
-//! use diaryx_core::fs::RealFileSystem;
 //! use diaryx_core::fs::SyncToAsyncFs;
+//! use diaryx_native::RealFileSystem;
 //!
 //! let fs = SyncToAsyncFs::new(RealFileSystem);
 //! let diaryx = Diaryx::new(fs);
@@ -655,7 +655,6 @@ impl<'a, FS: AsyncFileSystem + Clone> ExportOps<'a, FS> {
     }
 
     /// Execute an export plan.
-    #[cfg(not(target_arch = "wasm32"))]
     pub async fn execute_export(
         &self,
         plan: &crate::export::ExportPlan,

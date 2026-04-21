@@ -17,22 +17,26 @@ This is the `diaryx_core` library! It contains shared code for the Diaryx client
 
 This library uses an **async-first** design. All core modules (`Workspace`, `Validator`, `Exporter`, `Searcher`, `Publisher`) use the `AsyncFileSystem` trait for filesystem operations.
 
-**For CLI/native code:** Wrap a sync filesystem with `SyncToAsyncFs` and use `futures_lite::future::block_on()`:
+`diaryx_core` is platform-agnostic — the only `FileSystem` implementation it ships is the portable `InMemoryFileSystem`. Platform-specific implementations live in sibling crates:
+
+- Native (`std::fs`): [`diaryx_native::RealFileSystem`](../diaryx_native/README.md)
+- Browser (OPFS / IndexedDB / File System Access): `diaryx_wasm`
+
+**For CLI/native code:** use [`diaryx_native`](../diaryx_native/README.md). It provides `RealFileSystem`, a `block_on` re-export, and a `NativeConfigExt` trait that restores `Config::load()` / `save()` / `init()` on native.
 
 ```rust,ignore
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::workspace::Workspace;
+use diaryx_native::{RealFileSystem, block_on};
 
 let fs = SyncToAsyncFs::new(RealFileSystem);
 let workspace = Workspace::new(fs);
 
 // Use block_on for sync contexts
-let tree = futures_lite::future::block_on(
-    workspace.build_tree(Path::new("README.md"))
-);
+let tree = block_on(workspace.build_tree(Path::new("README.md")));
 ```
 
-**For WASM:** Implement `AsyncFileSystem` directly using JS promises/IndexedDB.
+**For WASM:** Implement `AsyncFileSystem` directly using JS promises/IndexedDB. See `diaryx_wasm` for the browser-side storage backends.
 
 ## Quick overview
 
@@ -127,7 +131,8 @@ Search frontmatter or content separately:
 
 ```rust,ignore
 use diaryx_core::export::{ExportOptions, ExportPlan, Exporter};
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
+use diaryx_native::RealFileSystem;
 use std::path::Path;
 
 let workspace_root = Path::new("./workspace");
@@ -173,7 +178,8 @@ The `Validator` struct checks `part_of` and `contents` references within a works
 
 ```rust,ignore
 use diaryx_core::validate::Validator;
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
+use diaryx_native::RealFileSystem;
 use std::path::Path;
 
 let fs = SyncToAsyncFs::new(RealFileSystem);
@@ -251,7 +257,8 @@ The `ValidationFixer` struct provides methods to automatically fix validation is
 
 ```rust,ignore
 use diaryx_core::validate::{Validator, ValidationFixer};
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
+use diaryx_native::RealFileSystem;
 use std::path::Path;
 
 let fs = SyncToAsyncFs::new(RealFileSystem);
@@ -617,7 +624,8 @@ Workspaces organize entries into a tree structure using `part_of` and `contents`
 
 ```rust,ignore
 use diaryx_core::workspace::Workspace;
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
+use diaryx_native::RealFileSystem;
 use std::path::Path;
 
 let fs = SyncToAsyncFs::new(RealFileSystem);
@@ -702,6 +710,7 @@ Diaryx uses a two-layer configuration model plus a separate native auth store:
 
 ```rust,ignore
 use diaryx_core::config::Config;
+use diaryx_native::NativeConfigExt; // brings Config::load() into scope
 use std::path::PathBuf;
 
 let config = Config::load()?;
@@ -746,7 +755,7 @@ The `fs` module provides filesystem abstraction through two traits: `FileSystem`
 
 The synchronous `FileSystem` trait provides basic implementations:
 
-- `RealFileSystem` - Native filesystem using `std::fs` (not available on WASM)
+- [`diaryx_native::RealFileSystem`](../diaryx_native/README.md) - Native filesystem using `std::fs` (lives in the `diaryx_native` crate; not available on WASM)
 - `InMemoryFileSystem` - In-memory implementation, useful for WASM and testing
 
 ```rust,ignore
@@ -795,7 +804,8 @@ let tree = futures_lite::future::block_on(
 The `SyncToAsyncFs` struct wraps any synchronous `FileSystem` implementation to provide an `AsyncFileSystem` interface. This is the recommended way to use the async-first API in synchronous contexts:
 
 ```rust,ignore
-use diaryx_core::fs::{InMemoryFileSystem, SyncToAsyncFs, RealFileSystem};
+use diaryx_core::fs::{InMemoryFileSystem, SyncToAsyncFs};
+use diaryx_native::RealFileSystem;
 use diaryx_core::workspace::Workspace;
 
 // For native code

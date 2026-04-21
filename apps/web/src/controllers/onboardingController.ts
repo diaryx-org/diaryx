@@ -45,7 +45,7 @@ import {
   updateNamespaceMetadata,
 } from '$lib/namespace/namespaceService';
 import { isAuthenticated } from '$lib/auth/authStore.svelte';
-import { getWorkspaceDirectoryPath as getWorkspaceDirectoryPathFromRoot } from '$lib/workspace/rootPath';
+import { getWorkspaceDirectoryPath as getWorkspaceDirectoryPathFromRoot } from '$lib/utils/path';
 import { generateUUID } from '$lib/utils';
 
 // ---------------------------------------------------------------------------

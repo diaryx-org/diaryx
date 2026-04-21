@@ -944,10 +944,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     // Use SyncToAsyncFs wrapper which provides AsyncFileSystem for any SyncFileSystem
-    type TestFs = SyncToAsyncFs<diaryx_core::fs::RealFileSystem>;
+    type TestFs = SyncToAsyncFs<diaryx_native::RealFileSystem>;
 
     fn create_test_handler() -> SyncHandler<TestFs> {
-        SyncHandler::new(SyncToAsyncFs::new(diaryx_core::fs::RealFileSystem))
+        SyncHandler::new(SyncToAsyncFs::new(diaryx_native::RealFileSystem))
     }
 
     #[test]

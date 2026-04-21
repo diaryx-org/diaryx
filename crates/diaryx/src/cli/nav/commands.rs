@@ -11,6 +11,7 @@ use diaryx_core::YamlValue;
 use diaryx_core::config::Config;
 use diaryx_core::entry::{DiaryxApp, slugify_title, sync_h1_in_body};
 use diaryx_core::workspace::{Workspace, prepare_delete_plan, selection_includes_descendants};
+use diaryx_native::NativeConfigExt;
 
 use crate::cli::{CliWorkspace, block_on};
 

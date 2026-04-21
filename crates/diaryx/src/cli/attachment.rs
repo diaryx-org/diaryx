@@ -1,6 +1,7 @@
 //! Attachment command handlers
 
 use diaryx_core::config::Config;
+use diaryx_native::NativeConfigExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 

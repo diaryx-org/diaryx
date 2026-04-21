@@ -12,9 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{BinaryFileInfo, ExportedFile};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::error::DiaryxError;
-use crate::error::Result;
+use crate::error::{DiaryxError, Result};
 use crate::fs::AsyncFileSystem;
 use crate::workspace::{IndexFrontmatter, Workspace};
 
@@ -355,9 +353,11 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         ExclusionReason::NoAudienceDefined
     }
 
-    /// Execute an export plan
-    /// Only available on native platforms (not WASM) since it writes to the filesystem
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Execute an export plan.
+    ///
+    /// Uses only `AsyncFileSystem` operations, so this works on any platform
+    /// that can provide a writable filesystem (native, WASM with OPFS/File
+    /// System Access, in-memory for tests, etc.).
     pub async fn execute_export(
         &self,
         plan: &ExportPlan,
@@ -417,7 +417,6 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
     }
 
     /// Filter out excluded children from a file's contents array.
-    #[cfg(not(target_arch = "wasm32"))]
     fn filter_contents_in_file(
         &self,
         content: &str,
@@ -472,7 +471,6 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
     }
 
     /// Remove audience property from a file.
-    #[cfg(not(target_arch = "wasm32"))]
     fn remove_audience_property(&self, content: &str) -> Result<String> {
         if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
             return Ok(content.to_string());

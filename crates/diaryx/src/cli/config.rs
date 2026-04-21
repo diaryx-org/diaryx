@@ -2,6 +2,7 @@
 
 use diaryx_core::config::Config;
 use diaryx_core::link_parser::LinkFormat;
+use diaryx_native::NativeConfigExt;
 use std::path::PathBuf;
 
 use crate::cli::args::ConfigCommands;

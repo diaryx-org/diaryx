@@ -4,10 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use diaryx_core::fs::{
-    AsyncFileSystem, EventEmittingFs, InMemoryFileSystem, RealFileSystem, SyncToAsyncFs,
-};
+use diaryx_core::fs::{AsyncFileSystem, EventEmittingFs, InMemoryFileSystem, SyncToAsyncFs};
 use diaryx_core::path_utils::normalize_sync_path;
+use diaryx_native::RealFileSystem;
 use diaryx_sync::{
     BodyDocManager, CrdtFs, DecoratedFsBuilder, FileMetadata, WorkspaceCrdt,
     parse_snapshot_markdown,

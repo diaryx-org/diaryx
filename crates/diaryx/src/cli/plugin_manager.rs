@@ -7,9 +7,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::plugin::manifest::{MarketplaceEntry, MarketplaceRegistry};
 use diaryx_extism::{HostContext, inspect_plugin_wasm_manifest, load_plugin_from_wasm};
+use diaryx_native::RealFileSystem;
 use sha2::{Digest, Sha256};
 
 use crate::cli::args::PluginCommands;

@@ -12,57 +12,39 @@ import {
   isMoveNodeVisible,
 } from "./moveEntryDialog";
 
-const tree: TreeNode = {
+function createNode(overrides: Partial<TreeNode> & Pick<TreeNode, "path" | "name">): TreeNode {
+  return {
+    description: null,
+    is_index: false,
+    audience: [],
+    children: [],
+    properties: undefined,
+    ...overrides,
+  };
+}
+
+const tree: TreeNode = createNode({
   path: "README.md",
   name: "README.md",
-  description: null,
   is_index: true,
-  audience: [],
   children: [
-    {
+    createNode({
       path: "projects",
       name: "projects",
-      description: null,
-      is_index: false,
-      audience: [],
       children: [
-        {
-          path: "projects/alpha.md",
-          name: "alpha.md",
-          description: null,
-          is_index: false,
-          audience: [],
-          children: [],
-        },
-        {
-          path: "projects/beta.md",
-          name: "beta.md",
-          description: null,
-          is_index: false,
-          audience: [],
-          children: [],
-        },
+        createNode({ path: "projects/alpha.md", name: "alpha.md" }),
+        createNode({ path: "projects/beta.md", name: "beta.md" }),
       ],
-    },
-    {
+    }),
+    createNode({
       path: "journal",
       name: "journal",
-      description: null,
-      is_index: false,
-      audience: [],
       children: [
-        {
-          path: "journal/day-one.md",
-          name: "day-one.md",
-          description: null,
-          is_index: false,
-          audience: [],
-          children: [],
-        },
+        createNode({ path: "journal/day-one.md", name: "day-one.md" }),
       ],
-    },
+    }),
   ],
-};
+});
 
 describe("moveEntryDialog helpers", () => {
   it("collects descendants of the entry being moved as disabled paths", () => {

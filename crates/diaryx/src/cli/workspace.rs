@@ -3,10 +3,11 @@
 use diaryx_core::YamlValue;
 use diaryx_core::config::Config;
 use diaryx_core::entry::{prettify_filename, slugify};
-use diaryx_core::fs::{FileSystem, RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::{FileSystem, SyncToAsyncFs};
 use diaryx_core::link_parser::LinkFormat;
 use diaryx_core::validate::ValidationFixer;
 use diaryx_core::workspace::Workspace;
+use diaryx_native::{NativeConfigExt, RealFileSystem};
 use std::path::{Path, PathBuf};
 
 use crate::cli::args::WorkspaceCommands;
@@ -275,8 +276,8 @@ fn handle_validate(
     search_build_folders: bool,
     verbose: bool,
 ) -> bool {
-    use diaryx_core::fs::RealFileSystem as CoreRealFileSystem;
     use diaryx_core::validate::{ValidationFixer, ValidationResult, Validator};
+    use diaryx_native::RealFileSystem as CoreRealFileSystem;
 
     let async_fs = SyncToAsyncFs::new(CoreRealFileSystem);
     let validator = Validator::new(async_fs.clone());

@@ -174,10 +174,13 @@ pub enum DiaryxError {
     #[error("CRDT error: {0}")]
     Crdt(String),
 
-    /// Error from SQLite database operations
-    #[cfg(all(not(target_arch = "wasm32"), feature = "database"))]
+    /// Error from database operations.
+    ///
+    /// Stored as a string so `diaryx_core` stays free of any specific database
+    /// driver dependency. Callers in `diaryx_sync` (SQLite), Cloudflare D1
+    /// adapters, etc. convert their native error types into this variant.
     #[error("Database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    Database(String),
 
     /// Error from git operations
     #[error("Git error: {0}")]
@@ -223,7 +226,6 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::Validation(_) => "Validation",
             DiaryxError::Plugin(_) => "Plugin",
             DiaryxError::Crdt(_) => "Crdt",
-            #[cfg(all(not(target_arch = "wasm32"), feature = "database"))]
             DiaryxError::Database(_) => "Database",
             DiaryxError::Git(_) => "Git",
         }

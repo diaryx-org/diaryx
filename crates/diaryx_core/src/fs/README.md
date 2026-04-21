@@ -16,17 +16,23 @@ This module provides filesystem abstraction through `FileSystem` (synchronous) a
 | File | Purpose |
 |------|---------|
 | `async_fs.rs` | Async filesystem trait and `SyncToAsyncFs` adapter |
-| `memory.rs` | In-memory filesystem (used by WASM/web client) |
-| `native.rs` | Native filesystem using `std::fs` (CLI/Tauri) |
+| `memory.rs` | In-memory filesystem (portable; used by tests, WASM, and web client) |
 | `crdt_fs.rs` | CRDT-aware filesystem decorator |
 | `event_fs.rs` | Event-emitting filesystem decorator |
 | `events.rs` | Filesystem event types |
 | `callback_registry.rs` | Callback management for events |
 | `decorator_stack.rs` | Composable filesystem decorators |
 
+Platform-specific backends live in sibling crates:
+
+| Crate            | Backend                                                    |
+|------------------|------------------------------------------------------------|
+| `diaryx_native`  | `RealFileSystem` — `std::fs` (CLI/Tauri desktop + mobile)  |
+| `diaryx_wasm`    | OPFS / IndexedDB / File System Access (browser)            |
+
 ## Backend Parity
 
-`InMemoryFileSystem` and `RealFileSystem` now both auto-create missing parent
+`InMemoryFileSystem` and `diaryx_native::RealFileSystem` now both auto-create missing parent
 directories for `write_file`, `write_binary`, and `create_new` operations. This
 keeps behavior consistent across web/native backends for nested path writes,
 including attachment/media uploads.

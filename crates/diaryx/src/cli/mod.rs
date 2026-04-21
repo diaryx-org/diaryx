@@ -92,8 +92,9 @@ use std::path::PathBuf;
 
 use diaryx_core::config::Config;
 use diaryx_core::entry::{DiaryxApp, DiaryxAppSync};
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::workspace::Workspace;
+use diaryx_native::{NativeConfigExt, RealFileSystem};
 
 /// Type alias for the async filesystem used throughout the CLI.
 /// Wraps RealFileSystem with SyncToAsyncFs for use with async-first core APIs.

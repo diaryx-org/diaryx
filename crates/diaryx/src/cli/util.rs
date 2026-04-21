@@ -3,9 +3,10 @@
 use diaryx_core::YamlValue;
 use diaryx_core::config::Config;
 use diaryx_core::entry::prettify_filename;
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::link_parser::{self, LinkFormat};
 use diaryx_core::workspace::Workspace;
+use diaryx_native::{NativeConfigExt, RealFileSystem};
 use glob::glob;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};

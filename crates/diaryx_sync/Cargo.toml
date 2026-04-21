@@ -62,8 +62,11 @@ browser-js = ["diaryx_core/browser-js"]
 # TypeScript binding generation (build-time only).
 typescript = ["dep:ts-rs", "diaryx_core/typescript"]
 
-# SQLite CRDT storage (native only)
-sqlite = ["dep:rusqlite", "diaryx_core/database"]
+# SQLite CRDT storage (native only).
+# `diaryx_core` no longer carries a `rusqlite` dependency; the `RusqliteResultExt`
+# helper in `src/sqlite_storage.rs` converts rusqlite errors into
+# `DiaryxError::Database(String)`.
+sqlite = ["dep:rusqlite"]
 
 # Sync protocol types (wasm-compatible, no tokio). Used by Cloudflare adapter.
 protocol = []
@@ -83,3 +86,4 @@ git = ["sqlite", "dep:git2"]
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "macros"] }
+diaryx_native = { workspace = true }

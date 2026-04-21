@@ -78,8 +78,8 @@ pub fn run_checked(cmd: &mut Command, what: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn diaryx_app() -> diaryx_core::entry::DiaryxAppSync<diaryx_core::fs::RealFileSystem> {
-    diaryx_core::entry::DiaryxAppSync::new(diaryx_core::fs::RealFileSystem)
+pub fn diaryx_app() -> diaryx_core::entry::DiaryxAppSync<diaryx_native::RealFileSystem> {
+    diaryx_core::entry::DiaryxAppSync::new(diaryx_native::RealFileSystem)
 }
 
 /// Read a required env var, with a clear error message if missing.

@@ -1,7 +1,8 @@
 use crate::util::{diaryx_app, workspace_root};
 use chrono::Utc;
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::workspace::Workspace;
+use diaryx_native::RealFileSystem;
 use std::fs;
 
 pub fn run(_args: &[String]) -> Result<(), String> {

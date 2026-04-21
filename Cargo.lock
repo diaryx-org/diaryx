@@ -2386,6 +2386,7 @@ dependencies = [
  "crossterm",
  "diaryx_core",
  "diaryx_extism",
+ "diaryx_native",
  "dirs 6.0.0",
  "futures-lite 2.6.1",
  "glob",
@@ -2463,12 +2464,11 @@ version = "1.4.5"
 dependencies = [
  "async-trait",
  "chrono",
- "dirs 6.0.0",
  "futures-lite 2.6.1",
  "indexmap 2.13.1",
  "log",
  "pathdiff",
- "rusqlite",
+ "ryu",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2526,6 +2526,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "diaryx_core",
+ "diaryx_native",
  "extism",
  "futures-lite 2.6.1",
  "futures-util",
@@ -2604,6 +2605,17 @@ dependencies = [
  "pulldown-latex",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "diaryx_native"
+version = "1.4.5"
+dependencies = [
+ "diaryx_core",
+ "dirs 6.0.0",
+ "futures-lite 2.6.1",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -2737,6 +2749,7 @@ dependencies = [
  "chrono",
  "diaryx-siphonophore",
  "diaryx_core",
+ "diaryx_native",
  "futures",
  "futures-lite 2.6.1",
  "futures-util",
@@ -2838,6 +2851,7 @@ dependencies = [
  "chrono",
  "diaryx_core",
  "diaryx_extism",
+ "diaryx_native",
  "dirs 6.0.0",
  "dotenvy",
  "env_logger",
@@ -12573,6 +12587,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "diaryx_core",
+ "diaryx_native",
  "futures-lite 2.6.1",
  "indexmap 2.13.1",
  "serde_yaml",

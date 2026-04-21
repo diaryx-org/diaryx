@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-04-14T22:01:50Z
+updated: 2026-04-21T02:44:49Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -96,6 +96,7 @@ Read the root README.md first. For specific projects, use these entry points:
 | ---------------- | ----------------------------------- |
 | Entire workspace | README.md                           |
 | Core library     | crates/diaryx_core/README.md        |
+| Native adapters  | crates/diaryx_native/README.md      |
 | Daily domain     | crates/diaryx_daily/README.md       |
 | Templating       | crates/diaryx_templating/README.md  |
 | CLI              | crates/diaryx/README.md             |

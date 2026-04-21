@@ -45,41 +45,59 @@ fn normalize_path(path: &Path) -> PathBuf {
     normalized.iter().collect()
 }
 
-/// Deserializes a value that should be a string, but may be an array or other type.
+/// Deserializes a value that should be a string, tolerating a single-element
+/// string array.
+///
 /// - String: returned as-is
-/// - Array: takes the first element if it's a string
-/// - Number/Bool: converted to string
+/// - Array: takes the first string element (skipping non-string entries)
 /// - Null/None: returns None
+/// - Integer: coerced via `i64::to_string` (no `f64` formatting pulled in)
+/// - Anything else (float, bool, mapping): treated as absent (`None`)
+///
+/// Non-string scalars were previously stringified via `to_string()`, which
+/// in the float/bool arms pulled in `core::fmt::float` + the Dragon4
+/// formatter (~11 KB of WASM). Frontmatter titles/descriptions/etc. are
+/// always written as strings by our own code, so permissive float/bool
+/// coercion is not worth the binary-size cost. Integer coercion is kept
+/// for users who hand-write `title: 2025` — `i64::Display` uses the
+/// integer path and does not pull in the float formatter.
 fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let value: Option<YamlValue> = Option::deserialize(deserializer)?;
     match value {
-        None => Ok(None),
+        None | Some(YamlValue::Null) => Ok(None),
         Some(YamlValue::String(s)) => Ok(Some(s)),
         Some(YamlValue::Int(n)) => Ok(Some(n.to_string())),
-        Some(YamlValue::Float(f)) => Ok(Some(f.to_string())),
-        Some(YamlValue::Bool(b)) => Ok(Some(b.to_string())),
-        Some(YamlValue::Null) => Ok(None),
         Some(YamlValue::Sequence(seq)) => {
-            // Take the first string element from the array
+            // Take the first string-shaped element from the array
             for item in seq {
-                if let YamlValue::String(s) = item {
-                    return Ok(Some(s));
+                match item {
+                    YamlValue::String(s) => return Ok(Some(s)),
+                    YamlValue::Int(n) => return Ok(Some(n.to_string())),
+                    _ => continue,
                 }
             }
             Ok(None)
         }
-        Some(YamlValue::Mapping(_)) => Ok(None), // Can't convert a mapping to string
-                                                 // No Tagged variant in YamlValue; catch-all below handles unknown shapes
+        // Float / Bool / Mapping: treat as absent to avoid pulling in the
+        // float formatter / extra stringification code paths into WASM.
+        _ => Ok(None),
     }
 }
 
-/// Deserializes a value that should be a Vec<String>, but may be a bare string.
-/// - Array of strings: returned as-is
-/// - String: wrapped in a single-element vec
+/// Deserializes a value that should be a `Vec<String>`, tolerating a bare
+/// string.
+///
+/// - Array of strings (with optional integer elements): returned as-is
+/// - Bare string: wrapped in a single-element vec
+/// - Bare integer: wrapped as `[stringified]`
 /// - Null/None: returns None
+/// - Anything else (float, bool, mapping, tagged): treated as absent
+///
+/// As with `deserialize_string_lenient`, we deliberately do not coerce
+/// float/bool values to avoid pulling the float formatter into WASM.
 fn deserialize_vec_string_lenient<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: Deserializer<'de>,
@@ -88,22 +106,20 @@ where
     match value {
         None | Some(YamlValue::Null) => Ok(None),
         Some(YamlValue::String(s)) => Ok(Some(vec![s])),
+        Some(YamlValue::Int(n)) => Ok(Some(vec![n.to_string()])),
         Some(YamlValue::Sequence(seq)) => {
             let strings = seq
                 .into_iter()
                 .filter_map(|v| match v {
                     YamlValue::String(s) => Some(s),
                     YamlValue::Int(n) => Some(n.to_string()),
-                    YamlValue::Float(f) => Some(f.to_string()),
-                    YamlValue::Bool(b) => Some(b.to_string()),
+                    // Floats / bools / nested shapes are silently dropped
+                    // (see module-level note).
                     _ => None,
                 })
                 .collect();
             Ok(Some(strings))
         }
-        Some(YamlValue::Int(n)) => Ok(Some(vec![n.to_string()])),
-        Some(YamlValue::Float(f)) => Ok(Some(vec![f.to_string()])),
-        Some(YamlValue::Bool(b)) => Ok(Some(vec![b.to_string()])),
         _ => Ok(None),
     }
 }

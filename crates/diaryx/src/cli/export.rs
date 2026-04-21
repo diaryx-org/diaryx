@@ -3,8 +3,9 @@
 use std::path::PathBuf;
 
 use diaryx_core::export::{ExportOptions, ExportPlan, Exporter};
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::workspace::Workspace;
+use diaryx_native::{NativeConfigExt, RealFileSystem};
 use std::path::Path;
 
 #[cfg(feature = "plugins")]

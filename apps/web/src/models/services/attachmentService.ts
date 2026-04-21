@@ -8,6 +8,7 @@
 import type { Api } from '$lib/backend/api';
 import { isTauri } from '$lib/backend/interface';
 import { parseLinkDisplay } from '$lib/utils/linkParser';
+import { normalizeSlashes } from '$lib/utils/path';
 import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from '$lib/sync/attachmentSyncService';
 
 // ============================================================================
@@ -328,10 +329,6 @@ export function formatMarkdownDestination(path: string): string {
     return path;
   }
   return /\s/u.test(path) ? `<${path}>` : path;
-}
-
-function normalizeSlashes(path: string): string {
-  return path.replace(/\\/g, '/');
 }
 
 export function stripWorkspacePrefixFromAttachmentPath(

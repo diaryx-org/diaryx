@@ -15,6 +15,11 @@ chrono.workspace = true
 indexmap.workspace = true
 log = "0.4"
 pathdiff = "0.2"
+# ryu is already a transitive dep via serde_json. Depending on it directly
+# lets us format f64 values for user-visible display (YamlValue::Display)
+# without pulling in `core::num::flt2dec` — Rust's stdlib Dragon4/Grisu
+# float formatter is ~15 KB of WASM code, which we avoid this way.
+ryu = "1"
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -27,23 +32,9 @@ uuid = { version = "1", features = ["v4", "rng-getrandom"], optional = true }
 # Optional dependencies
 ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"], optional = true }
 
-# Native-only dependencies (not available in WASM)
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-dirs = "6.0"
-futures-lite = "2"
-rusqlite = { version = "0.34", features = ["bundled"], optional = true }
-
-# WASM-specific dependencies
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# Add wasm-bindgen when we need JS interop
-# wasm-bindgen = "0.2"
-
 [features]
 # TypeScript binding generation (build-time only, not needed in WASM)
 typescript = ["dep:ts-rs"]
-
-# SQLite database support (enables Database error variant with rusqlite From impl)
-database = ["dep:rusqlite"]
 
 # UUID generation for workspace registry IDs
 uuid = ["dep:uuid"]
@@ -62,4 +53,4 @@ publish = true
 
 [dev-dependencies]
 tempfile = "3"
-async-trait = "0.1"
+futures-lite = "2"

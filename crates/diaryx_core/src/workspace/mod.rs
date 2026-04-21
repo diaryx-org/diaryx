@@ -2099,7 +2099,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 _ => match self.get_frontmatter_property(path, name).await {
                     Ok(Some(YamlValue::String(s))) => Some(s),
                     Ok(Some(YamlValue::Int(n))) => Some(n.to_string()),
-                    Ok(Some(YamlValue::Float(f))) => Some(f.to_string()),
+                    // Format floats via ryu to avoid pulling `core::num::flt2dec`
+                    // (~15 KB of WASM) for what is only a display-time path.
+                    Ok(Some(YamlValue::Float(f))) => {
+                        let mut buf = ryu::Buffer::new();
+                        Some(buf.format(f).to_string())
+                    }
                     Ok(Some(YamlValue::Bool(b))) => Some(b.to_string()),
                     Ok(Some(YamlValue::Sequence(seq))) => {
                         // Join sequence values with ", "
@@ -2108,7 +2113,10 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                             .filter_map(|v| match v {
                                 YamlValue::String(s) => Some(s.clone()),
                                 YamlValue::Int(n) => Some(n.to_string()),
-                                YamlValue::Float(f) => Some(f.to_string()),
+                                YamlValue::Float(f) => {
+                                    let mut buf = ryu::Buffer::new();
+                                    Some(buf.format(*f).to_string())
+                                }
                                 YamlValue::Bool(b) => Some(b.to_string()),
                                 _ => None,
                             })

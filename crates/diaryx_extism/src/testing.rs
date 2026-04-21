@@ -24,12 +24,13 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::plugin::permissions::PermissionType;
 use diaryx_core::plugin::{
     FileCreatedEvent, FileDeletedEvent, FileMovedEvent, FilePlugin, FileSavedEvent, Plugin,
     PluginContext, PluginError, PluginId, PluginManifest, WorkspaceOpenedEvent, WorkspacePlugin,
 };
+use diaryx_native::RealFileSystem;
 
 use crate::host_fns::*;
 use crate::loader::load_plugin_from_wasm;

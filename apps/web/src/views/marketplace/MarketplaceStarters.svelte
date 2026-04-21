@@ -25,7 +25,7 @@
     fetchStarterWorkspaceZip,
   } from "$lib/marketplace/starterWorkspaceApply";
   import { getBackend } from "$lib/backend";
-  import { getWorkspaceDirectoryPath } from "$lib/workspace/rootPath";
+  import { getWorkspaceDirectoryPath } from "$lib/utils/path";
   import { useMarketplacePanel, isRecord } from "./useMarketplacePanel.svelte";
 
   interface DisplayStarter extends StarterWorkspaceRegistryEntry {

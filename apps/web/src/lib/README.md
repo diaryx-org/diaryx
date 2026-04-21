@@ -57,10 +57,11 @@ Commands (`ValidateWorkspaceName`, `ValidatePublishingSlug`,
 `backend/api.ts`. Frontend components call these instead of duplicating
 validation logic locally.
 
-Workspace-root normalization for Tauri now also lives in
-`workspace/rootPath.ts`. Callers that need the workspace directory or the
-actual root index file should use those helpers or `api.resolveWorkspaceRootIndexPath(...)`
-instead of hardcoding `README.md` / `index.md` filename assumptions.
+Workspace-root normalization for Tauri lives in `utils/path.ts` (the
+canonical TS mirror of `diaryx_core::path_utils`). Callers that need the
+workspace directory or the actual root index file should use those helpers
+or `api.resolveWorkspaceRootIndexPath(...)` instead of hardcoding
+`README.md` / `index.md` filename assumptions.
 
 Workspace switches now also refresh `pluginStore` against the newly-created
 backend in `workspace/switchWorkspace.ts`, so marketplace/settings/sidebar

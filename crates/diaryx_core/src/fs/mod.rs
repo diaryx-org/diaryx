@@ -5,15 +5,26 @@
 //!
 //! For async operations, see the `AsyncFileSystem` trait and `SyncToAsyncFs` adapter.
 //!
+//! # Platform-specific implementations
+//!
+//! Platform-specific `FileSystem` implementations live in sibling crates:
+//!
+//! - Native (`std::fs`): [`diaryx_native::RealFileSystem`]
+//! - Browser (OPFS / IndexedDB / File System Access): see `diaryx_wasm`
+//!
+//! For in-process / portable use cases, [`InMemoryFileSystem`] is always
+//! available here.
+//!
 //! # Migration Note
 //!
 //! The synchronous [`FileSystem`] trait is being phased out in favor of
 //! [`AsyncFileSystem`]. New code should use `AsyncFileSystem` directly.
-//! For synchronous contexts, wrap with [`SyncToAsyncFs`] and use `block_on()`:
+//! For synchronous contexts, wrap with [`SyncToAsyncFs`] and use
+//! `diaryx_native::block_on()`:
 //!
 //! ```ignore
-//! use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
-//! use futures_lite::future::block_on;
+//! use diaryx_core::fs::SyncToAsyncFs;
+//! use diaryx_native::{RealFileSystem, block_on};
 //!
 //! let fs = SyncToAsyncFs::new(RealFileSystem);
 //! block_on(fs.read_to_string(path))?;
@@ -32,8 +43,6 @@
 
 mod async_fs;
 mod memory;
-#[cfg(not(target_arch = "wasm32"))]
-mod native;
 
 // Decorator modules
 mod callback_registry;
@@ -45,8 +54,6 @@ pub use async_fs::{AsyncFileSystem, BoxFuture, SyncToAsyncFs};
 #[cfg(test)]
 pub(crate) use async_fs::block_on_test;
 pub use memory::InMemoryFileSystem;
-#[cfg(not(target_arch = "wasm32"))]
-pub use native::RealFileSystem;
 
 // Export event types and callback registry (always available)
 pub use callback_registry::{CallbackRegistry, EventCallback, SubscriptionId};

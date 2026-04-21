@@ -12,8 +12,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::plugin::Plugin;
+use diaryx_native::RealFileSystem;
 use extism::{Manifest as ExtismManifest, PluginBuilder, UserData, Wasm};
 use thiserror::Error;
 

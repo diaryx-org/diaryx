@@ -2,8 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::workspace::Workspace;
+use diaryx_native::{NativeConfigExt, RealFileSystem};
 
 use crate::cli::plugin_loader::CliPublishContext;
 

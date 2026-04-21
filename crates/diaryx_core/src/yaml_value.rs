@@ -269,7 +269,14 @@ impl std::fmt::Display for YamlValue {
             YamlValue::Null => write!(f, "null"),
             YamlValue::Bool(b) => write!(f, "{b}"),
             YamlValue::Int(i) => write!(f, "{i}"),
-            YamlValue::Float(v) => write!(f, "{v}"),
+            // Format floats via ryu (already a transitive dep of serde_json)
+            // rather than the stdlib `Display` impl. Avoids pulling
+            // `core::num::flt2dec` (the Dragon4/Grisu float formatter,
+            // ~15 KB of WASM code) into the binary.
+            YamlValue::Float(v) => {
+                let mut buf = ryu::Buffer::new();
+                f.write_str(buf.format(*v))
+            }
             YamlValue::String(s) => write!(f, "{s}"),
             YamlValue::Sequence(_) | YamlValue::Mapping(_) => match serde_yaml::to_string(self) {
                 Ok(s) => write!(f, "{}", s.trim()),

@@ -16,6 +16,22 @@ use diaryx_core::error::DiaryxError;
 /// Row type for file index queries: (path, title, part_of)
 type FileIndexRow = (String, Option<String>, Option<String>);
 
+/// Convert a rusqlite error to `DiaryxError::Database` (stringified).
+///
+/// `diaryx_core` no longer carries a `rusqlite` dependency, so the conversion
+/// from `rusqlite::Error` lives here as a local extension trait. Every `?` on a
+/// rusqlite call in this module goes through `.db()?`.
+trait RusqliteResultExt<T> {
+    fn db(self) -> StorageResult<T>;
+}
+
+impl<T> RusqliteResultExt<T> for Result<T, rusqlite::Error> {
+    #[inline]
+    fn db(self) -> StorageResult<T> {
+        self.map_err(|e| DiaryxError::Database(e.to_string()))
+    }
+}
+
 /// SQLite-backed CRDT storage.
 ///
 /// This implementation persists CRDT state and updates to a SQLite database,
@@ -39,7 +55,7 @@ impl SqliteStorage {
     /// Returns an error if the database cannot be opened or if schema
     /// initialization fails.
     pub fn open<P: AsRef<Path>>(path: P) -> StorageResult<Self> {
-        let conn = Connection::open(path)?;
+        let conn = Connection::open(path).db()?;
         let storage = Self {
             conn: Mutex::new(conn),
         };
@@ -51,7 +67,7 @@ impl SqliteStorage {
     ///
     /// Data is lost when the storage is dropped.
     pub fn in_memory() -> StorageResult<Self> {
-        let conn = Connection::open_in_memory()?;
+        let conn = Connection::open_in_memory().db()?;
         let storage = Self {
             conn: Mutex::new(conn),
         };
@@ -99,7 +115,8 @@ impl SqliteStorage {
             -- Index for querying non-deleted files
             CREATE INDEX IF NOT EXISTS idx_file_index_deleted ON file_index(deleted);
             "#,
-        )?;
+        )
+        .db()?;
         Ok(())
     }
 
@@ -135,9 +152,11 @@ impl SqliteStorage {
 
         // Get updates up to the specified ID
         let mut stmt = conn
-            .prepare("SELECT data FROM updates WHERE doc_name = ? AND id <= ? ORDER BY id ASC")?;
+            .prepare("SELECT data FROM updates WHERE doc_name = ? AND id <= ? ORDER BY id ASC")
+            .db()?;
         let updates: Vec<Vec<u8>> = stmt
-            .query_map(params![name, up_to_id], |row| row.get(0))?
+            .query_map(params![name, up_to_id], |row| row.get(0))
+            .db()?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -187,16 +206,17 @@ impl SqliteStorage {
             "INSERT OR REPLACE INTO file_index (path, title, part_of, deleted, modified_at)
              VALUES (?, ?, ?, ?, ?)",
             params![path, title, part_of, deleted as i32, modified_at],
-        )?;
+        )
+        .db()?;
         Ok(())
     }
 
     /// Query active (non-deleted) files from the index.
     pub fn query_active_files(&self) -> StorageResult<Vec<FileIndexRow>> {
         let conn = self.lock_conn();
-        let mut stmt = conn.prepare(
-            "SELECT path, title, part_of FROM file_index WHERE deleted = 0 ORDER BY path",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT path, title, part_of FROM file_index WHERE deleted = 0 ORDER BY path")
+            .db()?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((
@@ -204,7 +224,8 @@ impl SqliteStorage {
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
                 ))
-            })?
+            })
+            .db()?
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
@@ -213,7 +234,8 @@ impl SqliteStorage {
     /// Remove a file from the index entirely.
     pub fn remove_from_file_index(&self, path: &str) -> StorageResult<()> {
         let conn = self.lock_conn();
-        conn.execute("DELETE FROM file_index WHERE path = ?", params![path])?;
+        conn.execute("DELETE FROM file_index WHERE path = ?", params![path])
+            .db()?;
         Ok(())
     }
 
@@ -222,7 +244,7 @@ impl SqliteStorage {
     /// Used during Replace mode snapshot imports to remove stale entries.
     pub fn clear_file_index(&self) -> StorageResult<()> {
         let conn = self.lock_conn();
-        conn.execute("DELETE FROM file_index", [])?;
+        conn.execute("DELETE FROM file_index", []).db()?;
         Ok(())
     }
 }
@@ -245,7 +267,7 @@ impl CrdtStorage for SqliteStorage {
         match result {
             Ok(state) => Ok(Some(state)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(DiaryxError::Database(e)),
+            Err(e) => Err(DiaryxError::Database(e.to_string())),
         }
     }
 
@@ -270,23 +292,29 @@ impl CrdtStorage for SqliteStorage {
             "INSERT OR REPLACE INTO documents (name, state, state_vector, updated_at)
              VALUES (?, ?, ?, ?)",
             params![name, state, state_vector, now],
-        )?;
+        )
+        .db()?;
         Ok(())
     }
 
     fn delete_doc(&self, name: &str) -> StorageResult<()> {
         let conn = self.lock_conn();
         // Delete updates first (foreign key)
-        conn.execute("DELETE FROM updates WHERE doc_name = ?", params![name])?;
-        conn.execute("DELETE FROM documents WHERE name = ?", params![name])?;
+        conn.execute("DELETE FROM updates WHERE doc_name = ?", params![name])
+            .db()?;
+        conn.execute("DELETE FROM documents WHERE name = ?", params![name])
+            .db()?;
         Ok(())
     }
 
     fn list_docs(&self) -> StorageResult<Vec<String>> {
         let conn = self.lock_conn();
-        let mut stmt = conn.prepare("SELECT name FROM documents ORDER BY name")?;
+        let mut stmt = conn
+            .prepare("SELECT name FROM documents ORDER BY name")
+            .db()?;
         let names = stmt
-            .query_map([], |row| row.get(0))?
+            .query_map([], |row| row.get(0))
+            .db()?
             .filter_map(|r| r.ok())
             .collect();
         Ok(names)
@@ -307,18 +335,21 @@ impl CrdtStorage for SqliteStorage {
         conn.execute(
             "INSERT INTO updates (doc_name, data, origin, timestamp, device_id, device_name) VALUES (?, ?, ?, ?, ?, ?)",
             params![name, update, origin_str, now, device_id, device_name],
-        )?;
+        )
+        .db()?;
 
         Ok(conn.last_insert_rowid())
     }
 
     fn get_updates_since(&self, name: &str, since_id: i64) -> StorageResult<Vec<CrdtUpdate>> {
         let conn = self.lock_conn();
-        let mut stmt = conn.prepare(
-            "SELECT id, data, origin, timestamp, device_id, device_name FROM updates
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, data, origin, timestamp, device_id, device_name FROM updates
              WHERE doc_name = ? AND id > ?
              ORDER BY id ASC",
-        )?;
+            )
+            .db()?;
 
         let updates = stmt
             .query_map(params![name, since_id], |row| {
@@ -332,7 +363,8 @@ impl CrdtStorage for SqliteStorage {
                     device_id: row.get(4)?,
                     device_name: row.get(5)?,
                 })
-            })?
+            })
+            .db()?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -363,10 +395,12 @@ impl CrdtStorage for SqliteStorage {
                 .ok();
 
             // Get all updates
-            let mut stmt =
-                conn.prepare("SELECT data FROM updates WHERE doc_name = ? ORDER BY id ASC")?;
+            let mut stmt = conn
+                .prepare("SELECT data FROM updates WHERE doc_name = ? ORDER BY id ASC")
+                .db()?;
             let updates: Vec<Vec<u8>> = stmt
-                .query_map(params![name], |row| row.get(0))?
+                .query_map(params![name], |row| row.get(0))
+                .db()?
                 .filter_map(|r| r.ok())
                 .collect();
 
@@ -395,11 +429,13 @@ impl CrdtStorage for SqliteStorage {
         };
 
         // Count updates
-        let update_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM updates WHERE doc_name = ?",
-            params![name],
-            |row| row.get(0),
-        )?;
+        let update_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM updates WHERE doc_name = ?",
+                params![name],
+                |row| row.get(0),
+            )
+            .db()?;
 
         if update_count as usize <= keep_updates {
             return Ok(());
@@ -436,7 +472,7 @@ impl CrdtStorage for SqliteStorage {
 
         // Use a transaction to ensure atomicity of delete + update
         // This prevents data loss if the process crashes mid-operation
-        let tx = conn.transaction()?;
+        let tx = conn.transaction().db()?;
 
         // IMPORTANT: Save the new snapshot FIRST, then delete old updates
         // This ensures we never lose data even if the transaction is interrupted
@@ -444,20 +480,23 @@ impl CrdtStorage for SqliteStorage {
             "INSERT OR REPLACE INTO documents (name, state, state_vector, updated_at)
              VALUES (?, ?, ?, ?)",
             params![name, full_state, state_vector, now],
-        )?;
+        )
+        .db()?;
 
         // Now safe to delete old updates since snapshot is saved.
         if let Some(cutoff_id) = cutoff_id {
             tx.execute(
                 "DELETE FROM updates WHERE doc_name = ? AND id < ?",
                 params![name, cutoff_id],
-            )?;
+            )
+            .db()?;
         } else {
-            tx.execute("DELETE FROM updates WHERE doc_name = ?", params![name])?;
+            tx.execute("DELETE FROM updates WHERE doc_name = ?", params![name])
+                .db()?;
         }
 
         // Commit the transaction - either both operations succeed or neither
-        tx.commit()?;
+        tx.commit().db()?;
 
         Ok(())
     }
@@ -474,22 +513,25 @@ impl CrdtStorage for SqliteStorage {
         let now = crate::time::now_timestamp_millis();
 
         // Use a SQL transaction for atomicity
-        let tx = conn.transaction()?;
+        let tx = conn.transaction().db()?;
         let mut ids = Vec::with_capacity(updates.len());
 
         {
-            let mut stmt = tx.prepare(
-                "INSERT INTO updates (doc_name, data, origin, timestamp) VALUES (?, ?, ?, ?)",
-            )?;
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO updates (doc_name, data, origin, timestamp) VALUES (?, ?, ?, ?)",
+                )
+                .db()?;
 
             for (name, update, origin) in updates {
                 let origin_str = origin.to_string();
-                stmt.execute(params![*name, *update, origin_str, now])?;
+                stmt.execute(params![*name, *update, origin_str, now])
+                    .db()?;
                 ids.push(tx.last_insert_rowid());
             }
         }
 
-        tx.commit()?;
+        tx.commit().db()?;
         Ok(ids)
     }
 
@@ -504,7 +546,7 @@ impl CrdtStorage for SqliteStorage {
         match result {
             Ok(id) => Ok(id),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
-            Err(e) => Err(DiaryxError::Database(e)),
+            Err(e) => Err(DiaryxError::Database(e.to_string())),
         }
     }
 
@@ -514,48 +556,57 @@ impl CrdtStorage for SqliteStorage {
         }
 
         let mut conn = self.lock_conn();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction().db()?;
 
         // No-op if source doesn't exist in either snapshot or update log.
-        let old_doc_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM documents WHERE name = ?",
-            params![old_name],
-            |row| row.get(0),
-        )?;
-        let old_update_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM updates WHERE doc_name = ?",
-            params![old_name],
-            |row| row.get(0),
-        )?;
+        let old_doc_count: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM documents WHERE name = ?",
+                params![old_name],
+                |row| row.get(0),
+            )
+            .db()?;
+        let old_update_count: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM updates WHERE doc_name = ?",
+                params![old_name],
+                |row| row.get(0),
+            )
+            .db()?;
         if old_doc_count == 0 && old_update_count == 0 {
-            tx.commit()?;
+            tx.commit().db()?;
             return Ok(());
         }
 
         // Destination may already exist (e.g., stale empty body doc). Old-name
         // state should win for rename migration semantics.
-        tx.execute("DELETE FROM updates WHERE doc_name = ?", params![new_name])?;
-        tx.execute("DELETE FROM documents WHERE name = ?", params![new_name])?;
+        tx.execute("DELETE FROM updates WHERE doc_name = ?", params![new_name])
+            .db()?;
+        tx.execute("DELETE FROM documents WHERE name = ?", params![new_name])
+            .db()?;
 
         // Rename document snapshot
         tx.execute(
             "UPDATE documents SET name = ? WHERE name = ?",
             params![new_name, old_name],
-        )?;
+        )
+        .db()?;
 
         // Rename updates to point to new doc_name
         tx.execute(
             "UPDATE updates SET doc_name = ? WHERE doc_name = ?",
             params![new_name, old_name],
-        )?;
+        )
+        .db()?;
 
-        tx.commit()?;
+        tx.commit().db()?;
         Ok(())
     }
 
     fn clear_updates(&self, name: &str) -> StorageResult<()> {
         let conn = self.lock_conn();
-        conn.execute("DELETE FROM updates WHERE doc_name = ?", params![name])?;
+        conn.execute("DELETE FROM updates WHERE doc_name = ?", params![name])
+            .db()?;
         Ok(())
     }
 }

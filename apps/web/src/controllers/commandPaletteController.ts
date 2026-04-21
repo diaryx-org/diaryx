@@ -11,7 +11,7 @@
  */
 
 import type { TreeNode, Api, EntryData } from '../lib/backend';
-import { resolveWorkspaceValidationRootPath } from '../lib/workspace/rootPath';
+import { resolveWorkspaceValidationRootPath } from '../lib/utils/path';
 import { workspaceStore } from '../models/stores';
 import { reverseBlobUrlsToAttachmentPaths } from '../models/services';
 import { toast } from 'svelte-sonner';

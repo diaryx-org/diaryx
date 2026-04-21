@@ -3,8 +3,33 @@
 // Import generated types from Rust
 import type { Command, Response } from './generated';
 
-// Re-export generated types for consumers
+// Re-export generated types for consumers.
+//
+// The data shapes below all come from Rust via ts-rs — DO NOT hand-maintain
+// duplicates here. Add new types to `crates/diaryx_core/src/command.rs`
+// (or the appropriate crate), then run `cargo xtask sync-bindings`.
 export type { Command, Response } from './generated';
+export type {
+  EntryData,
+  TreeNode,
+  SearchMatch,
+  FileSearchResult,
+  SearchResults,
+  ValidationResult,
+  ValidationResultWithMeta,
+  ValidationError,
+  ValidationErrorWithMeta,
+  ValidationWarning,
+  ValidationWarningWithMeta,
+  FixResult,
+  FixSummary,
+  ExportedFile,
+  BinaryExportFile,
+} from './generated';
+
+// Back-compat aliases (from when we re-exported generated types under a
+// different name). Prefer the unprefixed names above; these remain so
+// existing imports continue to resolve during the TS→Rust migration.
 export type {
   EntryData as GeneratedEntryData,
   TreeNode as GeneratedTreeNode,
@@ -15,7 +40,7 @@ export type {
 } from './generated';
 
 // ============================================================================
-// Types (legacy - these will eventually be replaced by generated types)
+// Host-only types (no Rust equivalent yet — these live only in the web host)
 // ============================================================================
 
 export interface Config {
@@ -23,90 +48,43 @@ export interface Config {
   editor?: string;
 }
 
-export interface TreeNode {
-  name: string;
-  description: string | null;
-  path: string;
-  /** Whether this node has a `contents` property (even if empty) */
-  is_index: boolean;
-  children: TreeNode[];
-  /** Audience tags from frontmatter (empty if not set) */
-  audience: string[];
-}
-
-// Note: For full type compatibility with generated types, use import type { EntryData } from './generated'
-export interface EntryData {
-  path: string;
-  title: string | null;
-  frontmatter: { [key: string]: unknown };
-  content: string;
-}
-
-export interface SearchMatch {
-  line_number: number;
-  line_content: string;
-  match_start: number;
-  match_end: number;
-}
-
-export interface FileSearchResult {
-  path: string;
-  title: string | null;
-  matches: SearchMatch[];
-}
-
-export interface SearchResults {
-  files: FileSearchResult[];
-  files_searched: number;
-}
-
-// Validation types — re-exported from ts-rs generated bindings so they stay
-// in sync with `crates/diaryx_core/src/validate/` automatically. Do not
-// hand-maintain a parallel declaration here.
-export type {
-  ValidationResult,
-  ValidationResultWithMeta,
-  ValidationError,
-  ValidationErrorWithMeta,
-  ValidationWarning,
-  ValidationWarningWithMeta,
-} from './generated';
-
-// Fix types
-export interface FixResult {
-  success: boolean;
-  message: string;
-}
-
-export interface FixSummary {
-  error_fixes: FixResult[];
-  warning_fixes: FixResult[];
-  total_fixed: number;
-  total_failed: number;
-}
-
 export interface AppUpdateInfo {
   version: string;
   body: string | null;
 }
 
-// Export types
+// ============================================================================
+// Legacy host-side types that diverge from the generated Rust equivalents.
+// These should eventually be reconciled — each is flagged below with the
+// specific drift vs. Rust. DO NOT add new fields here; extend the Rust
+// source of truth instead.
+// ============================================================================
+
+/**
+ * Simplified export plan used by the host's in-TS planner.
+ *
+ * Diverges from the generated `ExportPlan` (which uses `ExportFile` /
+ * `ExcludedFile` / `ExclusionReason` with richer structure). See
+ * `api.planExport` — that function builds the simple host shape directly
+ * from `getWorkspaceTree`, rather than round-tripping through Rust.
+ *
+ * TODO(migration): replace with generated `ExportPlan` when the planner
+ * moves into Rust.
+ */
 export interface ExportPlan {
   included: { path: string; relative_path: string }[];
   excluded: { path: string; reason: string }[];
   audience: string;
 }
 
-export interface ExportedFile {
-  path: string;
-  content: string;
-}
-
-export interface BinaryExportFile {
-  path: string;
-  data: number[];
-}
-
+/**
+ * Host-side storage info shape (uses `number` for sizes).
+ *
+ * Diverges from generated `StorageInfo` which uses `bigint` for u64 fields.
+ * TODO(migration): switch callers to the generated type after auditing
+ * every arithmetic site (sizes fit comfortably in Number for the
+ * foreseeable future).
+ */
 export interface StorageInfo {
   used: number;
   limit: number;

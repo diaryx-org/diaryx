@@ -7,7 +7,7 @@
   import { maybeStartWindowDrag } from "$lib/windowDrag";
   import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
   import { switchWorkspace } from "$lib/workspace/switchWorkspace";
-  import { getWorkspaceDirectoryPath } from "$lib/workspace/rootPath";
+  import { getWorkspaceDirectoryPath } from "$lib/utils/path";
   import { installLocalPlugin } from "$lib/plugins/pluginInstallService";
   import { addFilesToZip } from "./lib/settings/zipUtils";
   import { useMobileGestures } from "$lib/hooks/useMobileGestures.svelte";

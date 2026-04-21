@@ -65,7 +65,7 @@ use wasm_bindgen::prelude::*;
 // Initialization
 // ============================================================================
 
-#[cfg(feature = "console_error_panic_hook")]
+#[cfg(feature = "panic-hook")]
 pub fn set_panic_hook() {
     console_error_panic_hook::set_once();
 }
@@ -73,7 +73,7 @@ pub fn set_panic_hook() {
 /// Initialize the WASM module. Called automatically on module load.
 #[wasm_bindgen(start)]
 pub fn init() {
-    #[cfg(feature = "console_error_panic_hook")]
+    #[cfg(feature = "panic-hook")]
     set_panic_hook();
 
     // Initialize console logging for Rust log macros (Info level for reduced verbosity)

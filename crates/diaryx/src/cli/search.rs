@@ -2,9 +2,10 @@
 
 use std::path::PathBuf;
 
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::search::{SearchMode, SearchQuery, SearchResults, Searcher};
 use diaryx_core::workspace::Workspace;
+use diaryx_native::{NativeConfigExt, RealFileSystem};
 
 /// Helper to run async operations in sync context
 fn block_on<F: std::future::Future>(f: F) -> F::Output {

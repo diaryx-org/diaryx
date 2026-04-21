@@ -23,8 +23,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 
 use diaryx_core::diaryx::Diaryx;
-use diaryx_core::fs::{AsyncFileSystem, RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::{AsyncFileSystem, SyncToAsyncFs};
 use diaryx_core::{Command, Response};
+use diaryx_native::RealFileSystem;
 
 #[cfg(feature = "plugins")]
 use std::collections::HashMap;

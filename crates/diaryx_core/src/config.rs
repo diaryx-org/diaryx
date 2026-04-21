@@ -2,7 +2,7 @@
 //!
 //! This module provides the [`Config`] struct which stores user preferences
 //! and workspace settings. Configuration is persisted as a markdown file with
-//! YAML frontmatter (typically at `~/.config/diaryx/config.md` on Unix systems).
+//! YAML frontmatter.
 //!
 //! The config directory forms a mini-workspace: `config.md` is the root index
 //! with `contents: [auth.md]`, and `auth.md` has `part_of: config.md`.
@@ -17,8 +17,10 @@
 //! # Async-first Design
 //!
 //! Use `Config::load_from()` with an `AsyncFileSystem` to load config.
-//! For synchronous contexts, use the `_sync` variants or wrap with
-//! `SyncToAsyncFs` and use `block_on()`.
+//! Native callers who want platform conventions
+//! (`~/.config/diaryx/config.md`, `~/diaryx` fallback workspace) and
+//! blocking `_sync` wrappers should use the `diaryx_native` crate and
+//! import `diaryx_native::NativeConfigExt`.
 //!
 //! # Example
 //!
@@ -29,7 +31,8 @@
 //! // Create a new config
 //! let config = Config::new(PathBuf::from("/home/user/diary"));
 //!
-//! // Load from default location (native only)
+//! // Load from default location (native only — requires diaryx_native)
+//! use diaryx_native::NativeConfigExt;
 //! let config = Config::load()?;
 //!
 //! // Access config values
@@ -42,8 +45,6 @@ use std::path::PathBuf;
 
 use crate::error::{DiaryxError, Result};
 use crate::fs::AsyncFileSystem;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::fs::{FileSystem, RealFileSystem, SyncToAsyncFs};
 use crate::link_parser::LinkFormat;
 use crate::workspace_registry::{WorkspaceEntry, WorkspaceRegistry};
 
@@ -271,116 +272,24 @@ impl Config {
             Err(_) => Self::new(default_workspace),
         }
     }
-
-    // ========================================================================
-    // Sync wrappers (compatibility layer). Prefer the async APIs above.
-    // ========================================================================
-    //
-    // IMPORTANT:
-    // These wrappers are only available on non-WASM targets because they require a
-    // blocking executor. On WASM, filesystem access is expected to be async.
-
-    /// Sync wrapper for [`Config::load_from`].
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn load_from_sync<FS: FileSystem>(fs: FS, path: &std::path::Path) -> Result<Self> {
-        futures_lite::future::block_on(Self::load_from(&SyncToAsyncFs::new(fs), path))
-    }
-
-    /// Sync wrapper for [`Config::save_to`].
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn save_to_sync<FS: FileSystem>(&self, fs: FS, path: &std::path::Path) -> Result<()> {
-        futures_lite::future::block_on(self.save_to(&SyncToAsyncFs::new(fs), path))
-    }
-
-    /// Sync wrapper for [`Config::load_from_or_default`].
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn load_from_or_default_sync<FS: FileSystem>(
-        fs: FS,
-        path: &std::path::Path,
-        default_workspace: PathBuf,
-    ) -> Self {
-        futures_lite::future::block_on(Self::load_from_or_default(
-            &SyncToAsyncFs::new(fs),
-            path,
-            default_workspace,
-        ))
-    }
 }
 
 // ============================================================================
-// Native-only implementation (not available in WASM)
+// Platform-agnostic Default
 // ============================================================================
+//
+// The plain `Default` impl uses an empty workspace path — it's the reasonable
+// zero value for a `Config` on any platform (including WASM, where paths are
+// virtual). Native callers that want the on-disk convention (`~/diaryx`)
+// should use `diaryx_native::default_config()` or
+// `<Config as diaryx_native::NativeConfigExt>::default_native()`.
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Default for Config {
     fn default() -> Self {
-        let default_base = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("diaryx");
-
         Self {
             title: default_config_title(),
             contents: default_config_contents(),
-            default_workspace: default_base,
-            editor: None,
-            link_format: LinkFormat::default(),
-            git: GitConfig::default(),
-            workspaces: Vec::new(),
-            workspace_bookmarks: HashMap::new(),
-            icloud_enabled: false,
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Config {
-    /// Get the config file path (~/.config/diaryx/config.md)
-    /// Only available on native platforms
-    pub fn config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|dir| dir.join("diaryx").join("config.md"))
-    }
-
-    /// Load config from default location, or return default if file doesn't exist.
-    /// Only available on native platforms
-    pub fn load() -> Result<Self> {
-        let Some(path) = Self::config_path() else {
-            return Ok(Config::default());
-        };
-        if !path.exists() {
-            return Ok(Config::default());
-        }
-        Self::load_from_sync(RealFileSystem, &path)
-    }
-
-    /// Save config to default location as markdown with YAML frontmatter.
-    /// Only available on native platforms
-    pub fn save(&self) -> Result<()> {
-        let path = Self::config_path().ok_or(DiaryxError::NoConfigDir)?;
-        self.save_to_sync(RealFileSystem, &path)
-    }
-
-    /// Initialize config with the given default workspace and save to default location.
-    /// Only available on native platforms
-    pub fn init(default_workspace: PathBuf) -> Result<Self> {
-        let config = Config::new(default_workspace);
-        config.save()?;
-        Ok(config)
-    }
-}
-
-// ============================================================================
-// WASM-specific implementation
-// ============================================================================
-
-#[cfg(target_arch = "wasm32")]
-impl Default for Config {
-    fn default() -> Self {
-        // In WASM, we use a simple default path
-        // The actual workspace location will be virtual
-        Self {
-            title: default_config_title(),
-            contents: default_config_contents(),
-            default_workspace: PathBuf::from("/workspace"),
+            default_workspace: PathBuf::new(),
             editor: None,
             link_format: LinkFormat::default(),
             git: GitConfig::default(),

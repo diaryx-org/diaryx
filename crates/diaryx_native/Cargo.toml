@@ -1,0 +1,24 @@
+[package]
+name = "diaryx_native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+description = "Native (non-WASM) filesystem, config, and blocking adapters for diaryx_core. Shared by the CLI and Tauri frontends."
+keywords = ["diary", "journal", "markdown", "frontmatter"]
+categories = ["filesystem"]
+
+[dependencies]
+diaryx_core = { workspace = true }
+dirs = "6.0"
+futures-lite = "2"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+[package.metadata.release]
+# This crate should be published to crates.io alongside diaryx_core.
+publish = true

@@ -12,9 +12,15 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [features]
-default = ["console_error_panic_hook", "browser"]
+# Production default: browser storage backends only. Panic hooks add significant
+# WASM size (~5-10 KB of panic-formatting infrastructure), so they are opt-in.
+# Enable `panic-hook` in dev/debug builds for better panic messages in the console.
+default = ["browser"]
 # Enable browser-specific storage backends (OPFS, IndexedDB, File System Access)
 browser = ["dep:opfs", "dep:indexed-db", "dep:web-sys"]
+# Enable console_error_panic_hook for readable panics in the browser console.
+# Off by default for release builds to keep WASM size down.
+panic-hook = ["dep:console_error_panic_hook"]
 
 [dependencies]
 diaryx_core = { path = "../diaryx_core", default-features = false, features = ["browser-js", "typescript"] }

@@ -15,6 +15,7 @@ use diaryx_core::auth::{
 };
 use diaryx_core::config::Config;
 use diaryx_core::frontmatter::{parse_typed, serialize_typed};
+use diaryx_native::NativeConfigExt;
 
 /// On-disk auth file format (private to this module).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

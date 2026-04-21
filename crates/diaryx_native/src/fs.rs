@@ -1,23 +1,21 @@
-//! Native filesystem implementation.
+//! Native filesystem implementation backed by `std::fs`.
 //!
-//! Only available on non-WASM targets.
+//! `RealFileSystem` implements [`diaryx_core::fs::FileSystem`]. Wrap it with
+//! [`diaryx_core::fs::SyncToAsyncFs`] to use it with the async-first core
+//! APIs (`Workspace`, `Validator`, `Exporter`, etc.).
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::fs::{self, OpenOptions};
-#[cfg(not(target_arch = "wasm32"))]
 use std::io::{Error, ErrorKind, Read, Result, Write};
-#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
-#[cfg(not(target_arch = "wasm32"))]
-use super::FileSystem;
+use diaryx_core::fs::FileSystem;
 
-#[cfg(not(target_arch = "wasm32"))]
+/// Synchronous [`FileSystem`] implementation backed by [`std::fs`].
+///
+/// Only available on native targets (not WebAssembly).
 #[derive(Clone, Copy)]
-/// This is a simple filesystem implementation that simply maps to std::fs methods
 pub struct RealFileSystem;
 
-#[cfg(not(target_arch = "wasm32"))]
 impl FileSystem for RealFileSystem {
     fn read_to_string(&self, path: &Path) -> Result<String> {
         fs::read_to_string(path)

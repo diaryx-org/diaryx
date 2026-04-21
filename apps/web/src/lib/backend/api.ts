@@ -14,6 +14,14 @@ import {
 } from '$lib/plugins/browserPluginManager.svelte';
 import { mirrorCurrentWorkspaceMutationToLinkedProviders } from '$lib/sync/browserWorkspaceMutationMirror';
 import {
+  isMarkdownPath,
+  isRootIndexPath,
+  normalizeSlashes,
+  normalizeWorkspacePathCandidate,
+  normalizeWorkspaceRootPath,
+  parentDirectory,
+} from '$lib/utils/path';
+import {
   permissionStore,
   type PermissionType,
 } from '@/models/stores/permissionStore.svelte';
@@ -119,44 +127,6 @@ type TauriPluginPermissionError = {
   permissionType: PermissionType;
   target: string;
 };
-
-function normalizeSlashes(value: string): string {
-  return value.replace(/\\/g, '/');
-}
-
-function normalizeWorkspaceRootPath(workspacePath: string | null | undefined): string | null {
-  if (!workspacePath) return null;
-
-  const normalized = normalizeSlashes(workspacePath).replace(/\/+$/, '');
-  if (!normalized) return null;
-
-  if (normalized.endsWith('/README.md') || normalized.endsWith('/index.md')) {
-    const slash = normalized.lastIndexOf('/');
-    return slash > 0 ? normalized.slice(0, slash) : null;
-  }
-
-  return normalized;
-}
-
-function normalizeWorkspacePathCandidate(path: string | null | undefined): string | null {
-  if (!path) return null;
-
-  const normalized = normalizeSlashes(path).replace(/\/+$/, '');
-  return normalized || null;
-}
-
-function isRootIndexPath(path: string): boolean {
-  return /(^|\/)(README|index)\.md$/.test(path);
-}
-
-function isMarkdownPath(path: string): boolean {
-  return /\.md$/i.test(path);
-}
-
-function parentDirectory(path: string): string | null {
-  const slash = path.lastIndexOf('/');
-  return slash > 0 ? path.slice(0, slash) : null;
-}
 
 function normalizePluginPermissionTarget(
   backend: Backend,

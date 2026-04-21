@@ -20,6 +20,23 @@ To build the WebAssembly module:
 wasm-pack build --target web --out-dir ../../apps/web/src/lib/wasm
 ```
 
+Or via xtask (recommended, runs `wasm-opt -Oz` afterwards):
+
+```bash
+cargo xtask build-wasm                 # production (smallest binary)
+cargo xtask build-wasm --panic-hook    # dev (enables console_error_panic_hook)
+```
+
+### Cargo features
+
+- `browser` (default) — enable OPFS, IndexedDB, and File System Access
+  Storage backends plus the `web-sys` APIs they need.
+- `panic-hook` (off by default) — install `console_error_panic_hook` so
+  Rust panics render readable stack traces in the browser devtools. Adds a
+  small amount of WASM code, so it's opt-in and only recommended for
+  debug/dev builds. Pass `--features panic-hook` to `wasm-pack` or
+  `--panic-hook` to `cargo xtask build-wasm`.
+
 ## Testing
 
 Run browser filesystem integration tests (wasm + browser):

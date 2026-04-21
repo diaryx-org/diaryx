@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 diaryx_core = { workspace = true }
+diaryx_native = { workspace = true }
 chrono = { workspace = true }
 futures-lite = "2"
 indexmap = { workspace = true }

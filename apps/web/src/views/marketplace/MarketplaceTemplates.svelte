@@ -26,7 +26,7 @@
     type TemplateInstallRuntime,
   } from "$lib/marketplace/templateInstall";
   import { getBackend, createApi } from "$lib/backend";
-  import { getWorkspaceDirectoryPath } from "$lib/workspace/rootPath";
+  import { getWorkspaceDirectoryPath } from "$lib/utils/path";
   import { useMarketplacePanel, isRecord } from "./useMarketplacePanel.svelte";
 
   interface DisplayTemplate extends TemplateRegistryEntry {

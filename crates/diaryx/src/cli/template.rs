@@ -22,6 +22,7 @@ mod plugin_impl {
     use std::path::Path;
 
     use diaryx_core::config::Config;
+    use diaryx_native::NativeConfigExt;
     use serde_json::Value as JsonValue;
 
     use crate::cli::args::TemplateCommands;

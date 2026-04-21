@@ -22,6 +22,7 @@ function createNode(
     is_index: false,
     audience: [],
     children,
+    properties: undefined,
   };
 }
 

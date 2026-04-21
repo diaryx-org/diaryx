@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use diaryx_core::auth::{AuthenticatedClient, DEFAULT_SYNC_SERVER};
 use diaryx_core::config::Config;
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::plugin::permissions::PermissionType;
 use diaryx_core::plugin::{Plugin, PluginContext, PluginManifest};
+use diaryx_native::{NativeConfigExt, RealFileSystem};
 
 use super::auth_client::FsAuthenticatedClient;
 use diaryx_extism::protocol::GuestManifest;

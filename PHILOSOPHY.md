@@ -1,12 +1,23 @@
 ---
 title: PHILOSOPHY
 part_of: '[Diaryx](/Diaryx.md)'
-updated: 2026-04-04T10:06:44-06:00
+updated: 2026-04-20T10:47:55-06:00
 link_of:
 - '[Diaryx](/Diaryx.md)'
-- '[Diaryx](/diaryx.md)'
 link: '[PHILOSOPHY](/PHILOSOPHY.md)'
 ---
+## Founder's Note
+
+> When I was young, writing was all I had. I grew up with a hearing problem that made it easier for me to read and write than to speak and listen. Unfortunately, I came to realize that it was a lot harder to connect with people through writing than through speaking, and I suffered from intense loneliness.
+>
+> As I got older and became interested in programming and computers, I realized that this boundary was artificial. The technology to make writing as flexible as speaking already existed—but had not been utilized to its fullest potential.
+>
+> I realized the true power of writing when I went on a two year mission to Australia, far away from my family and friends. I communicated them via email once a week. During that experience, I felt more connected to them than I ever had in my life. For the first time ever, I was placed in a situation where I was *expected* to write to them rather than talk to them. I felt liberated, but also imprisoned by email’s limitations: there just wasn’t enough time to write to everyone individually.
+>
+> I made Diaryx because I wanted to capture that feeling of connection. I wanted to be able to write to multiple audiences—to connect through writing without feeling restrained. I hope it can do for you what it has already done for me.
+
+---
+
 # PHILOSOPHY
 
 In a sentence, the Diaryx philosophy is: *Readable, self-describing files should be usable and accessible for all writing purposes.* If you are familiar with local-first software, you can skip down to the “Self-Describing” section to see Diaryx-specific innovations.

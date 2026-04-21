@@ -16,7 +16,9 @@ mod util;
 mod validation;
 mod workspace;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use crate::yaml_value::YamlValue;
 
@@ -26,6 +28,144 @@ use crate::error::Result;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
 use crate::path_utils::strip_workspace_root_prefix;
+
+/// Boxed, type-erased future returned by the per-domain dispatchers.
+///
+/// Going through a trait object is deliberate: it places a dynamic-dispatch
+/// boundary between `execute` and the domain handlers that `wasm-opt` cannot
+/// inline across. With a plain `async fn`, LTO + wasm-opt's `-Oz` pass
+/// re-inlines all handler bodies back into `execute`, undoing the split and
+/// producing one ~327 KB function. The type erasure costs one small heap
+/// allocation per command (negligible vs. the work the command actually
+/// performs) and preserves the code-size savings from the split.
+///
+/// The `+ Send` bound is required on native targets because multi-threaded
+/// runtimes (axum in the CLI's edit server, tokio in Tauri) need to move
+/// the future across threads. On WASM we drop the bound: the WASM filesystem
+/// adapters return `!Send` futures (`wasm_bindgen_futures` JS promises), and
+/// the browser is single-threaded so `Send` carries no meaning anyway.
+#[cfg(not(target_arch = "wasm32"))]
+type BoxedResponseFuture<'a> = Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
+#[cfg(target_arch = "wasm32")]
+type BoxedResponseFuture<'a> = Pin<Box<dyn Future<Output = Result<Response>> + 'a>>;
+
+/// Internal classification of a [`Command`] variant by the domain that handles
+/// it. Used by [`Diaryx::execute`] to dispatch to a per-domain handler so each
+/// handler's async state machine only has to accommodate the futures for its
+/// own ~5–15 variants, instead of all 68.
+///
+/// This is a WASM-size optimization; it is not part of the public wire format
+/// (which still uses the flat [`Command`] enum) and must stay private.
+#[derive(Clone, Copy)]
+enum CommandDomain {
+    Entry,
+    Frontmatter,
+    Workspace,
+    Validation,
+    Attachment,
+    Filesystem,
+    Config,
+    Plugin,
+    /// Synchronous utility commands — link parsing, naming/URL validation,
+    /// storage usage.
+    Util,
+}
+
+impl CommandDomain {
+    /// Classify a command into its handler domain.
+    ///
+    /// The match here is exhaustive on `Command`, so adding a new `Command`
+    /// variant is a hard compile error until it's routed to a domain.
+    fn of(command: &Command) -> Self {
+        match command {
+            // Entry operations
+            Command::GetEntry { .. }
+            | Command::SaveEntry { .. }
+            | Command::CreateEntry { .. }
+            | Command::DeleteEntry { .. }
+            | Command::MoveEntry { .. }
+            | Command::RenameEntry { .. }
+            | Command::DuplicateEntry { .. }
+            | Command::ConvertToIndex { .. }
+            | Command::ConvertToLeaf { .. }
+            | Command::CreateChildEntry { .. }
+            | Command::AttachEntryToParent { .. }
+            | Command::AddLink { .. }
+            | Command::RemoveLink { .. }
+            | Command::SyncMoveMetadata { .. }
+            | Command::SyncCreateMetadata { .. }
+            | Command::SyncDeleteMetadata { .. } => CommandDomain::Entry,
+
+            // Frontmatter operations
+            Command::GetFrontmatter { .. }
+            | Command::SetFrontmatterProperty { .. }
+            | Command::RemoveFrontmatterProperty { .. }
+            | Command::ReorderFrontmatterKeys { .. }
+            | Command::MoveFrontmatterSectionToFile { .. } => CommandDomain::Frontmatter,
+
+            // Workspace-tree / search operations
+            Command::FindRootIndex { .. }
+            | Command::GetAvailableAudiences { .. }
+            | Command::GetEffectiveAudience { .. }
+            | Command::GetWorkspaceTree { .. }
+            | Command::GetWorkspaceFileSet { .. }
+            | Command::PrepareMultiDelete { .. }
+            | Command::CheckDeleteIncludesDescendants { .. }
+            | Command::GetFilesystemTree { .. }
+            | Command::CreateWorkspace { .. }
+            | Command::GetAvailableParentIndexes { .. }
+            | Command::SearchWorkspace { .. } => CommandDomain::Workspace,
+
+            // Validation / auto-fix operations
+            Command::ValidateWorkspace { .. }
+            | Command::ValidateFile { .. }
+            | Command::FixAll { .. }
+            | Command::FixValidationWarning { .. }
+            | Command::FixValidationError { .. } => CommandDomain::Validation,
+
+            // Attachment operations
+            Command::GetAttachments { .. }
+            | Command::GetAncestorAttachments { .. }
+            | Command::RegisterAttachment { .. }
+            | Command::DeleteAttachment { .. }
+            | Command::GetAttachmentData { .. }
+            | Command::ResolveAttachmentPath { .. }
+            | Command::MoveAttachment { .. } => CommandDomain::Attachment,
+
+            // Raw filesystem operations
+            Command::FileExists { .. }
+            | Command::ReadFile { .. }
+            | Command::GetFileInfo { .. }
+            | Command::WriteFile { .. }
+            | Command::DeleteFile { .. }
+            | Command::ClearDirectory { .. }
+            | Command::WriteFileWithMetadata { .. }
+            | Command::UpdateFileMetadata { .. } => CommandDomain::Filesystem,
+
+            // Workspace-config operations
+            Command::GetLinkFormat { .. }
+            | Command::SetLinkFormat { .. }
+            | Command::GetWorkspaceConfig { .. }
+            | Command::GenerateFilename { .. }
+            | Command::SetWorkspaceConfig { .. }
+            | Command::ConvertLinks { .. } => CommandDomain::Config,
+
+            // Plugin operations
+            Command::PluginCommand { .. }
+            | Command::GetPluginManifests
+            | Command::GetPluginConfig { .. }
+            | Command::SetPluginConfig { .. }
+            | Command::RemoveWorkspacePluginData { .. } => CommandDomain::Plugin,
+
+            // Synchronous utilities (no .await, no I/O)
+            Command::LinkParser { .. }
+            | Command::ValidateWorkspaceName { .. }
+            | Command::ValidatePublishingSlug { .. }
+            | Command::NormalizeServerUrl { .. }
+            | Command::GetStorageUsage => CommandDomain::Util,
+        }
+    }
+}
 
 #[cfg(test)]
 use crate::path_utils::normalize_path;
@@ -434,239 +574,356 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ///     println!("Title: {:?}", entry.title);
     /// }
     /// ```
+    ///
+    /// # Implementation note: per-domain dispatch
+    ///
+    /// Historically this was a single 68-arm `match command { ... }` inside
+    /// one async function. That generated a ~327 KB async state machine in
+    /// WASM because the state machine had to store the union of all 68
+    /// per-variant futures, and LTO inlined every `cmd_*` body into its arm.
+    ///
+    /// We now dispatch once on the command's *domain* (a cheap synchronous
+    /// classification) and hand the whole `Command` to a per-domain async
+    /// handler. Each domain handler matches only its own ~5–15 variants, so
+    /// each generated state machine is much smaller. The domain handlers are
+    /// marked `#[inline(never)]` to keep LTO from collapsing them back into
+    /// `execute`.
     pub async fn execute(&self, mut command: Command) -> Result<Response> {
         command.normalize_paths(|p| self.to_workspace_relative(p));
 
-        match command {
-            // === Entry Operations ===
-            Command::GetEntry { path } => self.cmd_get_entry(path).await,
-            Command::SaveEntry {
-                path,
-                content,
-                root_index_path,
-                detect_h1_title,
-            } => {
-                self.cmd_save_entry(path, content, root_index_path, detect_h1_title)
-                    .await
-            }
-            Command::CreateEntry { path, options } => self.cmd_create_entry(path, options).await,
-            Command::DeleteEntry { path, hard_delete } => {
-                self.cmd_delete_entry(path, hard_delete).await
-            }
-            Command::MoveEntry { from, to } => self.cmd_move_entry(from, to).await,
-            Command::RenameEntry { path, new_filename } => {
-                self.cmd_rename_entry(path, new_filename).await
-            }
-            Command::DuplicateEntry { path } => self.cmd_duplicate_entry(path).await,
-            Command::ConvertToIndex { path } => self.cmd_convert_to_index(path).await,
-            Command::ConvertToLeaf { path } => self.cmd_convert_to_leaf(path).await,
-            Command::CreateChildEntry { parent_path } => {
-                self.cmd_create_child_entry(parent_path).await
-            }
-            Command::AttachEntryToParent {
-                entry_path,
-                parent_path,
-            } => {
-                self.cmd_attach_entry_to_parent(entry_path, parent_path)
-                    .await
-            }
-            Command::AddLink {
-                source_path,
-                target_path,
-                content,
-            } => self.cmd_add_link(source_path, target_path, content).await,
-            Command::RemoveLink {
-                source_path,
-                target_path,
-                content,
-            } => {
-                self.cmd_remove_link(source_path, target_path, content)
-                    .await
-            }
-            Command::SyncMoveMetadata { old_path, new_path } => {
-                self.cmd_sync_move_metadata(old_path, new_path).await
-            }
-            Command::SyncCreateMetadata { path } => self.cmd_sync_create_metadata(path).await,
-            Command::SyncDeleteMetadata { path } => self.cmd_sync_delete_metadata(path).await,
+        let fut: BoxedResponseFuture<'_> = match CommandDomain::of(&command) {
+            CommandDomain::Entry => self.execute_entry_command(command),
+            CommandDomain::Frontmatter => self.execute_frontmatter_command(command),
+            CommandDomain::Workspace => self.execute_workspace_command(command),
+            CommandDomain::Validation => self.execute_validation_command(command),
+            CommandDomain::Attachment => self.execute_attachment_command(command),
+            CommandDomain::Filesystem => self.execute_filesystem_command(command),
+            CommandDomain::Config => self.execute_config_command(command),
+            CommandDomain::Plugin => self.execute_plugin_command(command),
+            // Util commands are synchronous — no need to box an async future.
+            CommandDomain::Util => return self.execute_util_command(command),
+        };
+        fut.await
+    }
 
-            // === Frontmatter Operations ===
-            Command::GetFrontmatter { path } => self.cmd_get_frontmatter(path).await,
-            Command::SetFrontmatterProperty {
-                path,
-                key,
-                value,
-                root_index_path,
-            } => {
-                self.cmd_set_frontmatter_property(path, key, value, root_index_path)
-                    .await
+    // -------------------------------------------------------------------------
+    // Per-domain dispatchers.
+    //
+    // Each returns a boxed `dyn Future` so `wasm-opt` cannot inline it back
+    // into `execute` (which was the original source of the 327 KB function).
+    // Every dispatcher ends with `_ => unreachable!(...)` because
+    // [`CommandDomain::of`] is the single source of truth for routing.
+    // -------------------------------------------------------------------------
+
+    fn execute_entry_command(&self, command: Command) -> BoxedResponseFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::GetEntry { path } => self.cmd_get_entry(path).await,
+                Command::SaveEntry {
+                    path,
+                    content,
+                    root_index_path,
+                    detect_h1_title,
+                } => {
+                    self.cmd_save_entry(path, content, root_index_path, detect_h1_title)
+                        .await
+                }
+                Command::CreateEntry { path, options } => {
+                    self.cmd_create_entry(path, options).await
+                }
+                Command::DeleteEntry { path, hard_delete } => {
+                    self.cmd_delete_entry(path, hard_delete).await
+                }
+                Command::MoveEntry { from, to } => self.cmd_move_entry(from, to).await,
+                Command::RenameEntry { path, new_filename } => {
+                    self.cmd_rename_entry(path, new_filename).await
+                }
+                Command::DuplicateEntry { path } => self.cmd_duplicate_entry(path).await,
+                Command::ConvertToIndex { path } => self.cmd_convert_to_index(path).await,
+                Command::ConvertToLeaf { path } => self.cmd_convert_to_leaf(path).await,
+                Command::CreateChildEntry { parent_path } => {
+                    self.cmd_create_child_entry(parent_path).await
+                }
+                Command::AttachEntryToParent {
+                    entry_path,
+                    parent_path,
+                } => {
+                    self.cmd_attach_entry_to_parent(entry_path, parent_path)
+                        .await
+                }
+                Command::AddLink {
+                    source_path,
+                    target_path,
+                    content,
+                } => self.cmd_add_link(source_path, target_path, content).await,
+                Command::RemoveLink {
+                    source_path,
+                    target_path,
+                    content,
+                } => {
+                    self.cmd_remove_link(source_path, target_path, content)
+                        .await
+                }
+                Command::SyncMoveMetadata { old_path, new_path } => {
+                    self.cmd_sync_move_metadata(old_path, new_path).await
+                }
+                Command::SyncCreateMetadata { path } => self.cmd_sync_create_metadata(path).await,
+                Command::SyncDeleteMetadata { path } => self.cmd_sync_delete_metadata(path).await,
+                _ => unreachable!("non-entry command routed to execute_entry_command"),
             }
-            Command::RemoveFrontmatterProperty { path, key } => {
-                self.cmd_remove_frontmatter_property(path, key).await
-            }
-            Command::ReorderFrontmatterKeys { path, keys } => {
-                self.cmd_reorder_frontmatter_keys(path, keys).await
-            }
-            Command::MoveFrontmatterSectionToFile {
-                source_path,
-                section_key,
-                target_path,
-                create_if_missing,
-            } => {
-                self.cmd_move_frontmatter_section_to_file(
+        })
+    }
+
+    fn execute_frontmatter_command(&self, command: Command) -> BoxedResponseFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::GetFrontmatter { path } => self.cmd_get_frontmatter(path).await,
+                Command::SetFrontmatterProperty {
+                    path,
+                    key,
+                    value,
+                    root_index_path,
+                } => {
+                    self.cmd_set_frontmatter_property(path, key, value, root_index_path)
+                        .await
+                }
+                Command::RemoveFrontmatterProperty { path, key } => {
+                    self.cmd_remove_frontmatter_property(path, key).await
+                }
+                Command::ReorderFrontmatterKeys { path, keys } => {
+                    self.cmd_reorder_frontmatter_keys(path, keys).await
+                }
+                Command::MoveFrontmatterSectionToFile {
                     source_path,
                     section_key,
                     target_path,
                     create_if_missing,
-                )
-                .await
+                } => {
+                    self.cmd_move_frontmatter_section_to_file(
+                        source_path,
+                        section_key,
+                        target_path,
+                        create_if_missing,
+                    )
+                    .await
+                }
+                _ => unreachable!("non-frontmatter command routed to execute_frontmatter_command"),
             }
+        })
+    }
 
-            // === Workspace Operations ===
-            Command::FindRootIndex { directory } => self.cmd_find_root_index(directory).await,
-            Command::GetAvailableAudiences { path } => self.cmd_get_available_audiences(path).await,
-            Command::GetEffectiveAudience { path } => self.cmd_get_effective_audience(path).await,
-            Command::GetWorkspaceTree {
-                path,
-                depth,
-                audience,
-            } => self.cmd_get_workspace_tree(path, depth, audience).await,
-            Command::GetWorkspaceFileSet { path } => self.cmd_get_workspace_file_set(path).await,
-            Command::PrepareMultiDelete { paths, tree_path } => {
-                self.cmd_prepare_multi_delete(paths, tree_path).await
+    fn execute_workspace_command(&self, command: Command) -> BoxedResponseFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::FindRootIndex { directory } => self.cmd_find_root_index(directory).await,
+                Command::GetAvailableAudiences { path } => {
+                    self.cmd_get_available_audiences(path).await
+                }
+                Command::GetEffectiveAudience { path } => {
+                    self.cmd_get_effective_audience(path).await
+                }
+                Command::GetWorkspaceTree {
+                    path,
+                    depth,
+                    audience,
+                } => self.cmd_get_workspace_tree(path, depth, audience).await,
+                Command::GetWorkspaceFileSet { path } => {
+                    self.cmd_get_workspace_file_set(path).await
+                }
+                Command::PrepareMultiDelete { paths, tree_path } => {
+                    self.cmd_prepare_multi_delete(paths, tree_path).await
+                }
+                Command::CheckDeleteIncludesDescendants { paths, tree_path } => {
+                    self.cmd_check_delete_includes_descendants(paths, tree_path)
+                        .await
+                }
+                Command::GetFilesystemTree {
+                    path,
+                    show_hidden,
+                    depth,
+                } => self.cmd_get_filesystem_tree(path, show_hidden, depth).await,
+                Command::CreateWorkspace { path, name } => {
+                    self.cmd_create_workspace(path, name).await
+                }
+                Command::GetAvailableParentIndexes {
+                    file_path,
+                    workspace_root,
+                } => {
+                    self.cmd_get_available_parent_indexes(file_path, workspace_root)
+                        .await
+                }
+                Command::SearchWorkspace { pattern, options } => {
+                    self.cmd_search_workspace(pattern, options).await
+                }
+                _ => unreachable!("non-workspace command routed to execute_workspace_command"),
             }
-            Command::CheckDeleteIncludesDescendants { paths, tree_path } => {
-                self.cmd_check_delete_includes_descendants(paths, tree_path)
-                    .await
-            }
-            Command::GetFilesystemTree {
-                path,
-                show_hidden,
-                depth,
-            } => self.cmd_get_filesystem_tree(path, show_hidden, depth).await,
-            Command::CreateWorkspace { path, name } => self.cmd_create_workspace(path, name).await,
-            Command::GetAvailableParentIndexes {
-                file_path,
-                workspace_root,
-            } => {
-                self.cmd_get_available_parent_indexes(file_path, workspace_root)
-                    .await
-            }
-            Command::SearchWorkspace { pattern, options } => {
-                self.cmd_search_workspace(pattern, options).await
-            }
+        })
+    }
 
-            // === Validation Operations ===
-            Command::ValidateWorkspace { path } => self.cmd_validate_workspace(path).await,
-            Command::ValidateFile { path } => self.cmd_validate_file(path).await,
-            Command::FixAll { validation_result } => self.cmd_fix_all(validation_result).await,
-            Command::FixValidationWarning { warning } => {
-                self.cmd_fix_validation_warning(warning).await
+    fn execute_validation_command(&self, command: Command) -> BoxedResponseFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::ValidateWorkspace { path } => self.cmd_validate_workspace(path).await,
+                Command::ValidateFile { path } => self.cmd_validate_file(path).await,
+                Command::FixAll { validation_result } => self.cmd_fix_all(validation_result).await,
+                Command::FixValidationWarning { warning } => {
+                    self.cmd_fix_validation_warning(warning).await
+                }
+                Command::FixValidationError { error } => self.cmd_fix_validation_error(error).await,
+                _ => unreachable!("non-validation command routed to execute_validation_command"),
             }
-            Command::FixValidationError { error } => self.cmd_fix_validation_error(error).await,
+        })
+    }
 
-            // === Attachment Operations ===
-            Command::GetAttachments { path } => self.cmd_get_attachments(path).await,
-            Command::GetAncestorAttachments { path } => {
-                self.cmd_get_ancestor_attachments(path).await
-            }
-            Command::RegisterAttachment {
-                entry_path,
-                filename,
-            } => self.cmd_register_attachment(entry_path, filename).await,
-            Command::DeleteAttachment {
-                entry_path,
-                attachment_path,
-            } => {
-                self.cmd_delete_attachment(entry_path, attachment_path)
-                    .await
-            }
-            Command::GetAttachmentData {
-                entry_path,
-                attachment_path,
-            } => {
-                self.cmd_get_attachment_data(entry_path, attachment_path)
-                    .await
-            }
-            Command::ResolveAttachmentPath {
-                entry_path,
-                attachment_path,
-            } => {
-                self.cmd_resolve_attachment_path(entry_path, attachment_path)
-                    .await
-            }
-            Command::MoveAttachment {
-                source_entry_path,
-                target_entry_path,
-                attachment_path,
-                new_filename,
-            } => {
-                self.cmd_move_attachment(
+    fn execute_attachment_command(&self, command: Command) -> BoxedResponseFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::GetAttachments { path } => self.cmd_get_attachments(path).await,
+                Command::GetAncestorAttachments { path } => {
+                    self.cmd_get_ancestor_attachments(path).await
+                }
+                Command::RegisterAttachment {
+                    entry_path,
+                    filename,
+                } => self.cmd_register_attachment(entry_path, filename).await,
+                Command::DeleteAttachment {
+                    entry_path,
+                    attachment_path,
+                } => {
+                    self.cmd_delete_attachment(entry_path, attachment_path)
+                        .await
+                }
+                Command::GetAttachmentData {
+                    entry_path,
+                    attachment_path,
+                } => {
+                    self.cmd_get_attachment_data(entry_path, attachment_path)
+                        .await
+                }
+                Command::ResolveAttachmentPath {
+                    entry_path,
+                    attachment_path,
+                } => {
+                    self.cmd_resolve_attachment_path(entry_path, attachment_path)
+                        .await
+                }
+                Command::MoveAttachment {
                     source_entry_path,
                     target_entry_path,
                     attachment_path,
                     new_filename,
-                )
-                .await
-            }
-
-            // === Filesystem Operations ===
-            Command::FileExists { path } => self.cmd_file_exists(path).await,
-            Command::ReadFile { path } => self.cmd_read_file(path).await,
-            Command::GetFileInfo { path } => self.cmd_get_file_info(path).await,
-            Command::WriteFile { path, content } => self.cmd_write_file(path, content).await,
-            Command::DeleteFile { path } => self.cmd_delete_file(path).await,
-            Command::ClearDirectory { path } => self.cmd_clear_directory(path).await,
-            Command::WriteFileWithMetadata {
-                path,
-                metadata,
-                body,
-            } => {
-                self.cmd_write_file_with_metadata(path, metadata, body)
+                } => {
+                    self.cmd_move_attachment(
+                        source_entry_path,
+                        target_entry_path,
+                        attachment_path,
+                        new_filename,
+                    )
                     .await
+                }
+                _ => unreachable!("non-attachment command routed to execute_attachment_command"),
             }
-            Command::UpdateFileMetadata {
-                path,
-                metadata,
-                body,
-            } => self.cmd_update_file_metadata(path, metadata, body).await,
+        })
+    }
 
-            // === Config Operations ===
-            Command::GetLinkFormat { root_index_path } => {
-                self.cmd_get_link_format(root_index_path).await
+    fn execute_filesystem_command(&self, command: Command) -> BoxedResponseFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::FileExists { path } => self.cmd_file_exists(path).await,
+                Command::ReadFile { path } => self.cmd_read_file(path).await,
+                Command::GetFileInfo { path } => self.cmd_get_file_info(path).await,
+                Command::WriteFile { path, content } => self.cmd_write_file(path, content).await,
+                Command::DeleteFile { path } => self.cmd_delete_file(path).await,
+                Command::ClearDirectory { path } => self.cmd_clear_directory(path).await,
+                Command::WriteFileWithMetadata {
+                    path,
+                    metadata,
+                    body,
+                } => {
+                    self.cmd_write_file_with_metadata(path, metadata, body)
+                        .await
+                }
+                Command::UpdateFileMetadata {
+                    path,
+                    metadata,
+                    body,
+                } => self.cmd_update_file_metadata(path, metadata, body).await,
+                _ => unreachable!("non-filesystem command routed to execute_filesystem_command"),
             }
-            Command::SetLinkFormat {
-                root_index_path,
-                format,
-            } => self.cmd_set_link_format(root_index_path, format).await,
-            Command::GetWorkspaceConfig { root_index_path } => {
-                self.cmd_get_workspace_config(root_index_path).await
-            }
-            Command::GenerateFilename {
-                title,
-                root_index_path,
-            } => self.cmd_generate_filename(title, root_index_path).await,
-            Command::SetWorkspaceConfig {
-                root_index_path,
-                field,
-                value,
-            } => {
-                self.cmd_set_workspace_config(root_index_path, field, value)
-                    .await
-            }
-            Command::ConvertLinks {
-                root_index_path,
-                format,
-                path,
-                dry_run,
-            } => {
-                self.cmd_convert_links(root_index_path, format, path, dry_run)
-                    .await
-            }
+        })
+    }
 
-            // === Sync utility (no awaits) ===
+    fn execute_config_command(&self, command: Command) -> BoxedResponseFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::GetLinkFormat { root_index_path } => {
+                    self.cmd_get_link_format(root_index_path).await
+                }
+                Command::SetLinkFormat {
+                    root_index_path,
+                    format,
+                } => self.cmd_set_link_format(root_index_path, format).await,
+                Command::GetWorkspaceConfig { root_index_path } => {
+                    self.cmd_get_workspace_config(root_index_path).await
+                }
+                Command::GenerateFilename {
+                    title,
+                    root_index_path,
+                } => self.cmd_generate_filename(title, root_index_path).await,
+                Command::SetWorkspaceConfig {
+                    root_index_path,
+                    field,
+                    value,
+                } => {
+                    self.cmd_set_workspace_config(root_index_path, field, value)
+                        .await
+                }
+                Command::ConvertLinks {
+                    root_index_path,
+                    format,
+                    path,
+                    dry_run,
+                } => {
+                    self.cmd_convert_links(root_index_path, format, path, dry_run)
+                        .await
+                }
+                _ => unreachable!("non-config command routed to execute_config_command"),
+            }
+        })
+    }
+
+    fn execute_plugin_command(&self, command: Command) -> BoxedResponseFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::PluginCommand {
+                    plugin,
+                    command,
+                    params,
+                } => self.cmd_plugin_command(plugin, command, params).await,
+                Command::GetPluginManifests => self.cmd_get_plugin_manifests(),
+                Command::GetPluginConfig { plugin } => self.cmd_get_plugin_config(plugin).await,
+                Command::SetPluginConfig { plugin, config } => {
+                    self.cmd_set_plugin_config(plugin, config).await
+                }
+                Command::RemoveWorkspacePluginData {
+                    root_index_path,
+                    plugin,
+                } => {
+                    self.cmd_remove_workspace_plugin_data(root_index_path, plugin)
+                        .await
+                }
+                _ => unreachable!("non-plugin command routed to execute_plugin_command"),
+            }
+        })
+    }
+
+    /// Synchronous "utility" commands: link parsing, naming/URL validation,
+    /// and storage usage. None of these touch the filesystem, so we keep
+    /// them on a synchronous path to avoid pointlessly widening the async
+    /// state machine on the hot dispatch path.
+    fn execute_util_command(&self, command: Command) -> Result<Response> {
+        match command {
             Command::LinkParser { operation } => self.cmd_link_parser(operation),
-
-            // === Naming / URL Validation (no awaits) ===
             Command::ValidateWorkspaceName {
                 name,
                 existing_local_names,
@@ -676,28 +933,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
             Command::ValidatePublishingSlug { slug } => self.cmd_validate_publishing_slug(slug),
             Command::NormalizeServerUrl { url } => self.cmd_normalize_server_url(url),
-
-            // === Storage (no awaits) ===
             Command::GetStorageUsage => self.cmd_get_storage_usage(),
-
-            // === Plugin Operations ===
-            Command::PluginCommand {
-                plugin,
-                command,
-                params,
-            } => self.cmd_plugin_command(plugin, command, params).await,
-            Command::GetPluginManifests => self.cmd_get_plugin_manifests(),
-            Command::GetPluginConfig { plugin } => self.cmd_get_plugin_config(plugin).await,
-            Command::SetPluginConfig { plugin, config } => {
-                self.cmd_set_plugin_config(plugin, config).await
-            }
-            Command::RemoveWorkspacePluginData {
-                root_index_path,
-                plugin,
-            } => {
-                self.cmd_remove_workspace_plugin_data(root_index_path, plugin)
-                    .await
-            }
+            _ => unreachable!("non-util command routed to execute_util_command"),
         }
     }
 

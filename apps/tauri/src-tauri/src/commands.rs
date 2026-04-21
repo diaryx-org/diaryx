@@ -26,7 +26,7 @@ use diaryx_core::{
     diaryx::Diaryx,
     error::{DiaryxError, SerializableError},
     frontmatter,
-    fs::{FileSystem, InMemoryFileSystem, RealFileSystem, SyncToAsyncFs},
+    fs::{FileSystem, InMemoryFileSystem, SyncToAsyncFs},
     plugin::permissions::{PermissionRule, PermissionType, PluginConfig, PluginPermissions},
     workspace::Workspace,
 };
@@ -34,6 +34,7 @@ use diaryx_core::{
 use diaryx_extism::protocol::{
     CommandResponse as ExtismCommandResponse, GuestRequestedPermissions,
 };
+use diaryx_native::{NativeConfigExt, RealFileSystem};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -4021,7 +4022,7 @@ pub async fn import_from_zip(
     let workspace = match workspace_path {
         Some(p) => PathBuf::from(p),
         None => {
-            let config = Config::default();
+            let config = Config::default_native();
             if config.default_workspace.as_os_str().is_empty() {
                 return Err(SerializableError {
                     kind: "ImportError".to_string(),
@@ -4168,7 +4169,7 @@ pub async fn pick_and_import_zip<R: Runtime>(
     let workspace = match workspace_path {
         Some(p) => PathBuf::from(p),
         None => {
-            let config = Config::default();
+            let config = Config::default_native();
             if config.default_workspace.as_os_str().is_empty() {
                 return Err(SerializableError {
                     kind: "ImportError".to_string(),
@@ -4342,7 +4343,7 @@ pub async fn import_from_zip_data(
     let workspace = match workspace_path {
         Some(p) => PathBuf::from(p),
         None => {
-            let config = Config::default();
+            let config = Config::default_native();
             if config.default_workspace.as_os_str().is_empty() {
                 return Err(SerializableError {
                     kind: "ImportError".to_string(),
@@ -4573,7 +4574,7 @@ pub async fn finish_import_upload<R: Runtime>(
     let workspace = match workspace_path {
         Some(p) => PathBuf::from(p),
         None => {
-            let config = Config::default();
+            let config = Config::default_native();
             if config.default_workspace.as_os_str().is_empty() {
                 return Err(SerializableError {
                     kind: "ImportError".to_string(),

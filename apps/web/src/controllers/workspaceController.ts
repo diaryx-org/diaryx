@@ -12,8 +12,10 @@ import type { TreeNode, Api, ValidationResultWithMeta } from '../lib/backend';
 import type { Backend } from '../lib/backend/interface';
 import {
   getWorkspaceDirectoryPath,
+  isMarkdownTreePath,
+  normalizeTreePath,
   resolveWorkspaceValidationRootPath,
-} from '../lib/workspace/rootPath';
+} from '../lib/utils/path';
 import { workspaceStore } from '../models/stores';
 import { toast } from 'svelte-sonner';
 
@@ -29,16 +31,6 @@ function getTimingNow(): number {
 
 function getElapsedMs(startedAt: number): number {
   return Math.round(getTimingNow() - startedAt);
-}
-
-function normalizeTreePath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/^\.\/+/, '');
-}
-
-function isMarkdownTreePath(path: string | null | undefined): path is string {
-  if (!path) return false;
-  const lastSegment = path.split('/').pop() ?? '';
-  return /\.(md|markdown)$/i.test(lastSegment);
 }
 
 function getKnownRootIndexPath(workspaceDir: string): string | null {

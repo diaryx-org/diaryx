@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use diaryx_core::config::Config;
 use diaryx_core::workspace::{Workspace, prepare_delete_plan, selection_includes_descendants};
+use diaryx_native::NativeConfigExt;
 
 use crate::cli::util::{load_config, resolve_paths};
 use crate::cli::{CliDiaryxAppSync, CliWorkspace, block_on};

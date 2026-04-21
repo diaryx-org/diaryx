@@ -4,11 +4,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use diaryx_core::frontmatter;
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::plugin::permissions::{
     PermissionCheck, PermissionType, PluginConfig, check_permission,
 };
 use diaryx_core::workspace::Workspace;
+use diaryx_native::RealFileSystem;
 
 use crate::host_fns::PermissionChecker;
 

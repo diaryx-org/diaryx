@@ -55,7 +55,10 @@ fn print_help() {
     eprintln!("Usage: cargo xtask <task> [args...]\n");
     eprintln!("Tasks:");
     eprintln!(
-        "  build-wasm                   Build crates/diaryx_wasm for apps/web (wasm-pack + wasm-opt)"
+        "  build-wasm [--panic-hook]    Build crates/diaryx_wasm for apps/web (wasm-pack + wasm-opt)"
+    );
+    eprintln!(
+        "                               --panic-hook/--debug: enable console_error_panic_hook"
     );
     eprintln!(
         "  build-plugin <name>          Build a plugin WASM (pass --release for size-optimized output)"

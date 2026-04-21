@@ -93,7 +93,7 @@ Plugins can also intercept core `Command` variants directly via `handle_typed_co
 
 When `Diaryx::execute()` encounters a CRDT command, it first checks `PluginRegistry::try_typed_command()`. If a plugin returns `Some(result)`, that result is used directly. Otherwise, the command falls through to the existing inline handler code.
 
-`SyncPlugin` in `diaryx_sync` implements this to handle all ~50 CRDT command variants, making it the authoritative CRDT handler when registered.
+The `diaryx_sync_extism` plugin implements this to handle all ~50 CRDT command variants, making it the authoritative CRDT handler when registered.
 
 ## Plugin-owned UI Surfaces
 

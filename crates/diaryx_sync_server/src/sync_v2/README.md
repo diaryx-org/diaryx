@@ -121,9 +121,14 @@ sendToDoc('body:abc123/journal/2024.md', syncStep1Message);
 | File | Purpose |
 |------|---------|
 | `mod.rs` | Module entry point and exports |
-| `hooks.rs` | DiaryxHook implementation for siphonophore |
-| `server.rs` | SyncV2Server wrapper |
-| `handshake.rs` | Files-Ready handshake (future use) |
+| `hooks.rs` | `DiarySyncHook` — siphonophore `Hook` impl + `SyncHookDelegate` trait |
+| `generic_hook.rs` | `GenericNamespaceSyncHook` — JWT + session-code auth delegate |
+| `server.rs` | `SyncV2Server` wrapper around siphonophore `Server` |
+| `handshake.rs` | Files-Ready handshake control messages |
+| `sqlite_storage.rs` | `SqliteStorage` (rusqlite-backed `CrdtStorage` impl) |
+| `storage_cache.rs` | Per-workspace `SqliteStorage` connection cache |
+
+Platform-agnostic CRDT primitives (`CrdtStorage` trait, `SyncDocManager`, `WorkspaceCrdt`, protocol types) live in [`diaryx_server::sync`](../../../diaryx_server/src/sync/), shared with the Cloudflare Workers adapter.
 
 ## Limitations
 

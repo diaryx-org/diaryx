@@ -4,8 +4,8 @@
 //! Uses the WebSocket Hibernation API for cost-efficient long-lived connections.
 
 use super::do_storage::DoSyncStorage;
-use diaryx_sync::protocol_types::{DocType, ServerControlMessage};
-use diaryx_sync::{SyncDocManager, UpdateOrigin};
+use diaryx_server::sync::protocol::{DocType, ServerControlMessage};
+use diaryx_server::sync::{SyncDocManager, UpdateOrigin};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use worker::*;

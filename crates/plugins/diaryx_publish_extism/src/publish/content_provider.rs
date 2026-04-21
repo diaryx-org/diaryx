@@ -6,7 +6,7 @@
 //!
 //! Two implementations:
 //! - `FilesystemContentProvider` (in this module's sibling `fs_content_provider`) — reads local files
-//! - `CrdtContentProvider` (in `diaryx_sync`, feature "server") — reads CRDT state
+//! - `CrdtContentProvider` — reads CRDT state (server-side; lives with the server adapter that owns the CRDT storage)
 
 use std::collections::HashMap;
 

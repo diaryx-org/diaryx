@@ -8,7 +8,7 @@ use std::sync::{Arc, RwLock};
 
 use yrs::{Doc, ReadTxn, Transact, Update, updates::decoder::Decode};
 
-use crate::crdt_storage::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
+use super::crdt_storage::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
 
 /// Threshold for triggering auto-compaction (number of updates)
 const AUTO_COMPACT_THRESHOLD: usize = 1000;
@@ -96,7 +96,7 @@ impl CrdtStorage for MemoryStorage {
         let stored = StoredUpdate {
             id,
             data: update.to_vec(),
-            timestamp: crate::time::now_timestamp_millis(),
+            timestamp: super::time::now_timestamp_millis(),
             origin,
             device_id: device_id.map(String::from),
             device_name: device_name.map(String::from),

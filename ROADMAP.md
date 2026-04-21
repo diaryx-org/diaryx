@@ -50,7 +50,7 @@ Overhaul audience filtering UI.
 ## Would be cool (long term, low priority)
 
 - Abstract away kinds of metadata—instead of YAML frontmatter, why not TOML, JSON, or other format? Why not endmatter or an arbitrary metadata code block?
-- Integrate diaryx_sync crate. How much can go into core, how much in the plugin? Currently shared by sync plugin, share plugin, and diaryx_sync_server
+- Evaluate whether the server-side CRDT primitives now living in `diaryx_server::sync` should absorb additional sync plugin logic, or whether plugin-side sync stays self-contained in the Extism guest.
 - Interactive functionality in published Diaryx
 - More servers/load balancing for `diaryx_sync_server` (microservices?)
 - In the marketplace:

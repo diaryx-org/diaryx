@@ -4,9 +4,10 @@
 //! using the GenericNamespaceSyncHook delegate and DiarySyncHook from the shared crate.
 
 use axum::Router;
-use diaryx_sync::hooks::DiarySyncHook;
-use diaryx_sync::storage::StorageCache;
 use siphonophore::Server;
+
+use super::hooks::DiarySyncHook;
+use super::storage_cache::StorageCache;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

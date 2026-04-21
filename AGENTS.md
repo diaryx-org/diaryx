@@ -77,7 +77,6 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
 │   │       ├── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
 │   │       └── Y-sync v2 Module - Siphonophore-based sync implementation (experimental) - crates/diaryx_sync_server/src/sync_v2/README.md
-│   ├── diaryx_sync - crates/diaryx_sync/README.md
 │   ├── crates/diaryx_extism/README.md
 │   ├── crates/plugins/diaryx_plugin_sdk/README.md
 │   ├── Sync - Real-time multi-device sync across Diaryx workspaces - crates/plugins/diaryx_sync_extism/README.md
@@ -103,7 +102,6 @@ Read the root README.md first. For specific projects, use these entry points:
 | Web app          | apps/web/README.md                  |
 | Tauri app        | apps/tauri/README.md                |
 | WASM bindings    | crates/diaryx_wasm/README.md        |
-| Sync engine      | crates/diaryx_sync/README.md        |
 | Sync server      | crates/diaryx_sync_server/README.md |
 | Extism host      | crates/diaryx_extism/README.md      |
 | Plugin SDK       | crates/plugins/diaryx_plugin_sdk/README.md    |

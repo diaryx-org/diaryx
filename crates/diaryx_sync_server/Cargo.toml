@@ -13,7 +13,6 @@ license-file.workspace = true
 # Internal crates
 diaryx_server = { workspace = true }
 diaryx_core = { workspace = true }
-diaryx_sync = { workspace = true, features = ["server", "git"] }
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
@@ -31,9 +30,6 @@ serde_yaml_ng = { workspace = true }
 
 # Email (Resend HTTP API)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-
-# Git (for history API endpoints)
-git2 = { version = "0.19", default-features = false }
 
 # Utilities
 rand = "0.8"
@@ -55,6 +51,7 @@ tempfile = "3"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+log = "0.4"
 
 # Async
 futures = "0.3"

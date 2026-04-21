@@ -42,10 +42,10 @@ fn update_cargo_toml(path: &Path, version: &str) -> Result<(), String> {
     // [workspace.package].version
     doc["workspace"]["package"]["version"] = value(version);
 
-    // [workspace.dependencies].{diaryx_core,diaryx_sync}.version
-    // (these two are version-locked with the workspace; other internal crates
+    // [workspace.dependencies].diaryx_core.version
+    // (diaryx_core is version-locked with the workspace; other internal crates
     // have independent release cycles and are intentionally left untouched.)
-    for name in ["diaryx_core", "diaryx_sync"] {
+    for name in ["diaryx_core"] {
         let dep = &mut doc["workspace"]["dependencies"][name];
         if dep.is_none() {
             continue;

@@ -52,7 +52,7 @@ use diaryx_core::link_parser;
 use diaryx_core::path_utils::normalize_sync_path;
 use diaryx_core::types::FileMetadata;
 
-use crate::crdt_storage::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
+use super::crdt_storage::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
 
 /// The name of the Y.Map containing file metadata.
 const FILES_MAP_NAME: &str = "files";
@@ -704,7 +704,7 @@ impl WorkspaceCrdt {
     pub fn rename_file(&self, doc_id: &str, new_filename: &str) -> StorageResult<()> {
         if let Some(mut meta) = self.get_file(doc_id) {
             meta.filename = new_filename.to_string();
-            meta.modified_at = crate::time::now_timestamp_millis();
+            meta.modified_at = crate::sync::time::now_timestamp_millis();
             self.set_file(doc_id, meta)?;
         }
         Ok(())
@@ -721,7 +721,7 @@ impl WorkspaceCrdt {
     pub fn move_file(&self, doc_id: &str, new_parent_id: Option<&str>) -> StorageResult<()> {
         if let Some(mut meta) = self.get_file(doc_id) {
             meta.part_of = new_parent_id.map(String::from);
-            meta.modified_at = crate::time::now_timestamp_millis();
+            meta.modified_at = crate::sync::time::now_timestamp_millis();
             self.set_file(doc_id, meta)?;
         }
         Ok(())
@@ -1671,8 +1671,8 @@ impl std::fmt::Debug for WorkspaceCrdt {
 
 #[cfg(test)]
 mod tests {
+    use super::super::MemoryStorage;
     use super::*;
-    use crate::MemoryStorage;
 
     fn create_test_crdt() -> WorkspaceCrdt {
         let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
@@ -2225,7 +2225,7 @@ mod tests {
             .apply_update(&bootstrap, UpdateOrigin::Remote)
             .unwrap();
 
-        let now = crate::time::now_timestamp_millis();
+        let now = crate::sync::time::now_timestamp_millis();
 
         let mut local = crdt1.get_file("shared.md").unwrap();
         local
@@ -2273,7 +2273,7 @@ mod tests {
 
         let mut remote = crdt2.get_file("shared.md").unwrap();
         remote.description = None;
-        remote.modified_at = crate::time::now_timestamp_millis();
+        remote.modified_at = crate::sync::time::now_timestamp_millis();
         crdt2.set_file("shared.md", remote).unwrap();
 
         let update = crdt2.encode_state_as_update();

@@ -1,9 +1,9 @@
 //! CrdtStorage implementation backed by Durable Object's embedded SQLite.
 //!
-//! Uses the same schema as `diaryx_sync::SqliteStorage` but accessed through
+//! Uses the same schema as the native `SqliteStorage` but accessed through
 //! the worker crate's `SqlStorage` API (synchronous within the DO context).
 
-use diaryx_sync::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
+use diaryx_server::sync::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
 use worker::{SqlStorage, SqlStorageValue};
 use yrs::{ReadTxn, Transact, updates::decoder::Decode, updates::encoder::Encode};
 

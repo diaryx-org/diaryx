@@ -21,6 +21,25 @@ The shared core now includes typed `ServerCoreError` variants plus portable
 domain-management flows so adapters can map consistent outcomes without relying
 on string-matched error handling.
 
+## `sync` module
+
+`diaryx_server::sync` contains the platform-agnostic CRDT + sync primitives
+shared by every Diaryx server adapter:
+
+- `protocol` — wire types (`DocType`, `ControlMessage`, `HandshakeState`,
+  `AuthenticatedUser`, `ManifestFileEntry`) and framing helpers
+- `CrdtStorage` trait, `CrdtUpdate`, `UpdateOrigin`, `StorageResult`
+- `MemoryStorage` — in-memory `CrdtStorage` for tests and wasm hosts
+- `SyncDocManager` — transport-independent load/save/change/handshake logic
+- `WorkspaceCrdt` — `Y.Map`-backed workspace metadata document
+
+The entire module is wasm32-compatible (no tokio, axum, rusqlite, siphonophore,
+or git2). Native-only implementations (`SqliteStorage`, `StorageCache`,
+`DiarySyncHook`, axum WebSocket wiring, git history) live in
+`diaryx_sync_server::sync_v2`. The Cloudflare Workers adapter
+(`diaryx_cloudflare`) implements its own D1-backed `CrdtStorage` and Durable
+Object WebSocket layer against the same traits.
+
 ## Testing
 
 Two public modules exist for cross-adapter testing:

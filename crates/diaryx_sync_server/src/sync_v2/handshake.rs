@@ -29,7 +29,7 @@
 //! ```
 
 use axum::extract::ws::{Message, WebSocket};
-use diaryx_sync::SyncDocManager;
+use diaryx_server::sync::SyncDocManager;
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -40,8 +40,8 @@ use tokio::sync::broadcast;
 use tracing::{debug, info};
 
 // Re-export shared protocol types for backward compatibility
-use diaryx_sync::protocol::AuthenticatedUser;
-pub use diaryx_sync::protocol::{
+use diaryx_server::sync::protocol::AuthenticatedUser;
+pub use diaryx_server::sync::protocol::{
     ClientControlMessage, HandshakeState, ManifestFileEntry, ServerControlMessage,
 };
 
@@ -55,7 +55,10 @@ pub struct ConnectionContext {
 }
 
 impl ConnectionContext {
-    pub fn new(user: AuthenticatedUser, storage: Arc<dyn diaryx_sync::CrdtStorage>) -> Self {
+    pub fn new(
+        user: AuthenticatedUser,
+        storage: Arc<dyn diaryx_server::sync::CrdtStorage>,
+    ) -> Self {
         let workspace_id = user.workspace_id.clone();
         Self {
             user,

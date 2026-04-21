@@ -7,8 +7,9 @@
 //! - No file manifest handshake (clients use REST pre-sync)
 
 use async_trait::async_trait;
-use diaryx_sync::hooks::SyncHookDelegate;
-use diaryx_sync::protocol::{AuthenticatedUser, DocType};
+use diaryx_server::sync::protocol::{AuthenticatedUser, DocType};
+
+use super::hooks::SyncHookDelegate;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;

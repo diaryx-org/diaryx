@@ -38,8 +38,10 @@
 //!
 //! - [`EventEmittingFs`]: Emits events for all filesystem operations
 //!
-//! For CRDT-aware filesystem decorators (`CrdtFs`, `DecoratedFsBuilder`),
-//! see the `diaryx_sync` crate.
+//! CRDT-aware filesystem decorators (e.g., `CrdtFs`, `DecoratedFsBuilder`) used
+//! to live in a standalone `diaryx_sync` crate; client-side sync now lives in
+//! the Extism sync plugin, while server-side CRDT primitives live in
+//! `diaryx_server::sync`.
 
 mod async_fs;
 mod memory;

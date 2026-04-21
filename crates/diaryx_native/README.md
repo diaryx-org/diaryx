@@ -68,4 +68,3 @@ let tree = block_on(workspace.build_tree(std::path::Path::new("README.md")))?;
 - `diaryx_tauri` (desktop + mobile)
 - `diaryx_extism` (Extism host — uses `RealFileSystem` when loading plugins from disk)
 - `xtask` (workspace tooling)
-- `diaryx_sync` (dev-dep only, for integration tests)

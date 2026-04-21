@@ -4,9 +4,9 @@
 //! hooks into a reusable component. Both the native server (via `DiarySyncHook`)
 //! and the Cloudflare DO adapter use this for document load/save/change.
 
-use crate::crdt_storage::{CrdtStorage, StorageResult, UpdateOrigin};
-use crate::protocol_types::{ManifestFileEntry, select_persistable_update};
-use crate::workspace_doc::WorkspaceCrdt;
+use super::crdt_storage::{CrdtStorage, StorageResult, UpdateOrigin};
+use super::protocol::{ManifestFileEntry, select_persistable_update};
+use super::workspace_doc::WorkspaceCrdt;
 use std::sync::Arc;
 use tracing::{debug, info};
 use yrs::{Doc, ReadTxn, Transact, Update, updates::decoder::Decode};
@@ -170,9 +170,9 @@ impl SyncDocManager {
 
 #[cfg(test)]
 mod tests {
+    use super::super::MemoryStorage;
     use super::*;
-    use crate::MemoryStorage;
-    use yrs::{GetString, Text};
+    use yrs::Text;
 
     #[test]
     fn test_load_empty_document() {

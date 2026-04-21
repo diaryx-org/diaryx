@@ -15,6 +15,12 @@ license-file.workspace = true
 # suite against a live HTTP server enable this feature in their dev-deps.
 reqwest-dispatcher = ["dep:reqwest"]
 
+# Enables wall-clock timestamps in `sync::time` on wasm32 targets that have a
+# JS host (e.g. Cloudflare Workers via `diaryx_core/browser-js`). Native
+# targets always use `chrono::Utc::now()`. Extism guest wasm builds should
+# leave this off so the monotonic fallback is used.
+browser-js = ["diaryx_core/browser-js"]
+
 [dependencies]
 async-trait = "0.1"
 chrono = { workspace = true }
@@ -30,6 +36,12 @@ webauthn_rp = { version = "0.3", default-features = false, features = ["bin", "c
 base64 = "0.22"
 futures = "0.3"
 reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json"] }
+
+# CRDT sync primitives (moved from diaryx_sync)
+diaryx_core = { workspace = true }
+yrs = { version = "0.25", features = ["sync"] }
+indexmap = { workspace = true }
+log = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

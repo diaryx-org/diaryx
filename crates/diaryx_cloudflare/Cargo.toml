@@ -8,8 +8,7 @@ publish = false
 
 [dependencies]
 diaryx_core = { path = "../diaryx_core", default-features = false }
-diaryx_server = { path = "../diaryx_server" }
-diaryx_sync = { path = "../diaryx_sync", default-features = false, features = ["protocol", "doc-server"] }
+diaryx_server = { path = "../diaryx_server", features = ["browser-js"] }
 worker = { version = "0.8", features = ["d1"] }
 yrs = { version = "0.25", features = ["sync"] }
 serde_bytes = "0.11"

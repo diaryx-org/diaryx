@@ -7,8 +7,8 @@
 //! Document persistence (load/save/change) is handled by [`SyncDocManager`],
 //! which is shared with the Cloudflare Durable Object adapter.
 
-use crate::doc_manager::SyncDocManager;
 use async_trait::async_trait;
+use diaryx_server::sync::SyncDocManager;
 use siphonophore::{
     BeforeCloseDirtyPayload, BeforeSyncAction, ControlMessageResponse, Handle, Hook, HookResult,
     OnAuthenticatePayload, OnBeforeSyncPayload, OnChangePayload, OnConnectPayload,
@@ -18,9 +18,9 @@ use siphonophore::{
 use std::sync::{Arc, OnceLock};
 use tracing::{debug, error, info, warn};
 
-use crate::UpdateOrigin;
-use crate::protocol::{AuthenticatedUser, DocType};
-use crate::storage::StorageCache;
+use super::storage_cache::StorageCache;
+use diaryx_server::sync::UpdateOrigin;
+use diaryx_server::sync::protocol::{AuthenticatedUser, DocType};
 
 // ==================== SyncHookDelegate Trait ====================
 
@@ -313,10 +313,11 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
                 if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
                     let user = payload.context.get::<AuthenticatedUser>();
                     let requester_id = user.map(|u| u.user_id.as_str()).unwrap_or("unknown");
-                    let relay = crate::protocol::ServerControlMessage::FileRequested {
-                        path: path.to_string(),
-                        requester_id: requester_id.to_string(),
-                    };
+                    let relay =
+                        diaryx_server::sync::protocol::ServerControlMessage::FileRequested {
+                            path: path.to_string(),
+                            requester_id: requester_id.to_string(),
+                        };
                     if let Ok(relay_json) = serde_json::to_string(&relay) {
                         if let Some(handle) = self.handle.get() {
                             if let Some(doc_id) = payload.doc_id {
@@ -340,7 +341,7 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
                 ControlMessageResponse::Handled { responses: vec![] }
             }
             Some("session_end") => {
-                let ended = crate::protocol::ServerControlMessage::SessionEnded;
+                let ended = diaryx_server::sync::protocol::ServerControlMessage::SessionEnded;
                 if let Ok(ended_json) = serde_json::to_string(&ended) {
                     if let Some(handle) = self.handle.get() {
                         if let Some(doc_id) = payload.doc_id {
@@ -414,7 +415,7 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CrdtStorage;
+    use diaryx_server::sync::CrdtStorage;
     use siphonophore::Context;
     use yrs::{Doc, Map, ReadTxn, Transact, updates::decoder::Decode};
 

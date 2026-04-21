@@ -29,6 +29,7 @@ pub mod domain;
 pub mod ports;
 pub mod proxy;
 pub mod schema;
+pub mod sync;
 pub mod use_cases;
 
 // The contract + testing helpers are native-only. Their trait impls assume

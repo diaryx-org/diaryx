@@ -9,7 +9,6 @@ contents:
 - '[README](/crates/diaryx_daily/README.md)'
 - '[README](/crates/diaryx_wasm/README.md)'
 - '[README](/crates/diaryx_sync_server/README.md)'
-- '[README](/crates/diaryx_sync/README.md)'
 - '[README](/crates/diaryx_extism/README.md)'
 - '[README](/crates/plugins/diaryx_plugin_sdk/README.md)'
 - '[README](/crates/plugins/diaryx_sync_extism/README.md)'
@@ -32,8 +31,7 @@ This folder contains Diaryx crates for core features and platform bindings.
 - `[diaryx_core](/crates/diaryx_core/README.md)`: Core functions shared across all Diaryx clients
 - `[diaryx_daily](/crates/diaryx_daily/README.md)`: Shared daily-entry domain logic for plugins
 - `[diaryx_wasm](/crates/diaryx_wasm/README.md)`: WASM version of `diaryx_core` to be used in the web client at `[../apps/web](/apps/web/README.md)`
-- `[diaryx_sync_server](/crates/diaryx_sync_server/README.md)`: Sync server to enable live sync/multi-device sync (soon publishing as well).
-- `[diaryx_sync](/crates/diaryx_sync/README.md)`: Shared sync protocol library used by both `diaryx_sync_server` and the CLI's local web editing mode.
+- `[diaryx_sync_server](/crates/diaryx_sync_server/README.md)`: Sync server to enable live sync/multi-device sync (soon publishing as well). The platform-agnostic CRDT/sync primitives it and `diaryx_cloudflare` share now live in `diaryx_server::sync`.
 - `[diaryx_extism](/crates/diaryx_extism/README.md)`: Extism host runtime — loads WASM guest plugins at runtime
 - `tauri-plugin-icloud`: Tauri plugin for iCloud Drive workspace storage (iOS)
 - `tauri-plugin-iap`: Tauri plugin for Apple In-App Purchases via StoreKit 2

@@ -70,7 +70,7 @@ fn resolve_data_dir(app: &AppHandle) -> Result<PathBuf, SerializableAuthError> {
         .map_err(|e| SerializableAuthError::local(format!("app_data_dir unavailable: {e}")))
 }
 
-async fn ensure_service(
+pub(crate) async fn ensure_service(
     state: &State<'_, AuthServiceState>,
     app: &AppHandle,
 ) -> Result<Arc<AuthService<KeyringAuthenticatedClient>>, SerializableAuthError> {

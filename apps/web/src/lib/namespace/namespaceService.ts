@@ -1,130 +1,73 @@
 /**
- * Namespace Service — API client for namespace management operations.
+ * Namespace Service — thin facade over the `coreNamespaceService` router.
  *
- * Communicates directly with the sync server via proxyFetch, removing
- * the need for plugins to round-trip through WASM for namespace CRUD.
+ * Historically this module held a hand-written `proxyFetch` HTTP client for
+ * the sync server's `/namespaces` endpoints. That logic now lives in Rust
+ * (`diaryx_core::namespace`) and is exposed per-platform through:
+ *
+ * - `wasmNamespaceService.ts` → worker-hosted `NamespaceClient` (browser)
+ * - `tauriNamespaceService.ts` → `namespace_*` IPC commands (Tauri/macOS/iOS)
+ *
+ * These are multiplexed by `coreNamespaceRouter.ts`.
+ *
+ * The function exports here stay as-is for backward compatibility with the
+ * existing callers (`import * as namespaceService from './namespaceService'`
+ * or `import { createNamespace, … } from …`). The pure URL helpers at the
+ * bottom (`buildAccessUrl`, `buildSubscribeUrl`, `isNamespaceAvailable`)
+ * stay because they don't talk to the server.
  */
 
-import { getServerUrl } from '$lib/auth';
-import { proxyFetch } from '$lib/backend/proxyFetch';
+import { getServerUrl } from "$lib/auth";
+import { coreNamespaceService } from "./coreNamespaceRouter";
+import type {
+  NamespaceInfo,
+  AudienceInfo,
+  SubdomainInfo,
+  DomainInfo,
+  TokenResult,
+  SubscriberInfo,
+  BulkImportResult,
+} from "./coreNamespaceTypes";
 
 // ============================================================================
-// Types
+// Types (re-exported for existing callers; source of truth lives in
+// `coreNamespaceTypes.ts`, which in turn mirrors `diaryx_core::namespace`).
 // ============================================================================
 
-export interface NamespaceInfo {
-  id: string;
-  owner_user_id: string;
-  created_at: number;
-  metadata?: Record<string, unknown> | null;
-}
-
-export interface AudienceInfo {
-  name: string;
-  access: string;
-}
-
-export interface SubdomainInfo {
-  subdomain: string;
-  namespace_id: string;
-}
-
-export interface DomainInfo {
-  domain: string;
-  namespace_id: string;
-  audience_name: string;
-  created_at: number;
-  verified: boolean;
-}
-
-export interface TokenResult {
-  token: string;
-}
+export type {
+  NamespaceInfo,
+  AudienceInfo,
+  SubdomainInfo,
+  DomainInfo,
+  TokenResult,
+  SubscriberInfo,
+  BulkImportResult,
+} from "./coreNamespaceTypes";
 
 // ============================================================================
-// API Helpers
-// ============================================================================
-
-function getApiBase(): { serverUrl: string } | null {
-  const serverUrl = getServerUrl();
-  if (!serverUrl) return null;
-  return { serverUrl: serverUrl.replace(/\/$/, '') };
-}
-
-async function apiFetch<T>(
-  path: string,
-  options?: RequestInit,
-): Promise<T> {
-  const base = getApiBase();
-  if (!base) throw new Error('Not authenticated');
-
-  const response = await proxyFetch(
-    `${base.serverUrl}${path}`,
-    {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-    },
-  );
-
-  if (!response.ok) {
-    const text = await response.text();
-    let message = text || `Request failed: ${response.status}`;
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed.error) message = parsed.error;
-    } catch { /* use raw text */ }
-    throw new Error(message);
-  }
-
-  // Handle 204 No Content
-  if (response.status === 204) return undefined as T;
-  return response.json();
-}
-
-// ============================================================================
-// Public API
+// Public API — thin delegates to `coreNamespaceService`.
 // ============================================================================
 
 export async function createNamespace(
   id?: string,
   metadata?: Record<string, unknown> | null,
 ): Promise<NamespaceInfo> {
-  return apiFetch<NamespaceInfo>('/namespaces', {
-    method: 'POST',
-    body: JSON.stringify({
-      ...(id ? { id } : {}),
-      ...(metadata !== undefined ? { metadata } : {}),
-    }),
-  });
+  return coreNamespaceService.createNamespace(id ?? null, metadata);
 }
 
 export async function updateNamespaceMetadata(
   nsId: string,
   metadata: Record<string, unknown> | null,
 ): Promise<NamespaceInfo> {
-  return apiFetch<NamespaceInfo>(
-    `/namespaces/${encodeURIComponent(nsId)}`,
-    {
-      method: 'PATCH',
-      body: JSON.stringify({ metadata }),
-    },
-  );
+  return coreNamespaceService.updateNamespaceMetadata(nsId, metadata);
 }
 
 export async function deleteNamespace(nsId: string): Promise<void> {
-  await apiFetch<void>(
-    `/namespaces/${encodeURIComponent(nsId)}`,
-    { method: 'DELETE' },
-  );
+  return coreNamespaceService.deleteNamespace(nsId);
 }
 
 export async function listAudiences(nsId: string): Promise<AudienceInfo[]> {
-  return apiFetch<AudienceInfo[]>(
-    `/namespaces/${encodeURIComponent(nsId)}/audiences`,
-  );
+  return coreNamespaceService.listAudiences(nsId);
 }
 
 export async function setAudience(
@@ -132,22 +75,14 @@ export async function setAudience(
   name: string,
   access: string,
 ): Promise<void> {
-  await apiFetch<void>(
-    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(name)}`,
-    {
-      method: 'PUT',
-      body: JSON.stringify({ access }),
-    },
-  );
+  return coreNamespaceService.setAudience(nsId, name, access);
 }
 
 export async function getAudienceToken(
   nsId: string,
   name: string,
 ): Promise<TokenResult> {
-  return apiFetch<TokenResult>(
-    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(name)}/token`,
-  );
+  return coreNamespaceService.getAudienceToken(nsId, name);
 }
 
 export async function claimSubdomain(
@@ -155,28 +90,19 @@ export async function claimSubdomain(
   subdomain: string,
   defaultAudience?: string,
 ): Promise<SubdomainInfo> {
-  const body: Record<string, string> = { subdomain };
-  if (defaultAudience) body.default_audience = defaultAudience;
-  return apiFetch<SubdomainInfo>(
-    `/namespaces/${encodeURIComponent(nsId)}/subdomain`,
-    {
-      method: 'PUT',
-      body: JSON.stringify(body),
-    },
+  return coreNamespaceService.claimSubdomain(
+    nsId,
+    subdomain,
+    defaultAudience ?? null,
   );
 }
 
 export async function releaseSubdomain(nsId: string): Promise<void> {
-  await apiFetch<void>(
-    `/namespaces/${encodeURIComponent(nsId)}/subdomain`,
-    { method: 'DELETE' },
-  );
+  return coreNamespaceService.releaseSubdomain(nsId);
 }
 
 export async function listDomains(nsId: string): Promise<DomainInfo[]> {
-  return apiFetch<DomainInfo[]>(
-    `/namespaces/${encodeURIComponent(nsId)}/domains`,
-  );
+  return coreNamespaceService.listDomains(nsId);
 }
 
 export async function registerDomain(
@@ -184,46 +110,25 @@ export async function registerDomain(
   domain: string,
   audienceName: string,
 ): Promise<DomainInfo> {
-  return apiFetch<DomainInfo>(
-    `/namespaces/${encodeURIComponent(nsId)}/domains/${encodeURIComponent(domain)}`,
-    {
-      method: 'PUT',
-      body: JSON.stringify({ audience_name: audienceName }),
-    },
-  );
+  return coreNamespaceService.registerDomain(nsId, domain, audienceName);
 }
 
 export async function removeDomain(
   nsId: string,
   domain: string,
 ): Promise<void> {
-  await apiFetch<void>(
-    `/namespaces/${encodeURIComponent(nsId)}/domains/${encodeURIComponent(domain)}`,
-    { method: 'DELETE' },
-  );
+  return coreNamespaceService.removeDomain(nsId, domain);
 }
 
 // ============================================================================
 // Subscribers
 // ============================================================================
 
-export interface SubscriberInfo {
-  id: string;
-  email: string;
-}
-
-export interface BulkImportResult {
-  added: number;
-  errors: string[];
-}
-
 export async function listSubscribers(
   nsId: string,
   audienceName: string,
 ): Promise<SubscriberInfo[]> {
-  return apiFetch<SubscriberInfo[]>(
-    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers`,
-  );
+  return coreNamespaceService.listSubscribers(nsId, audienceName);
 }
 
 export async function addSubscriber(
@@ -231,13 +136,7 @@ export async function addSubscriber(
   audienceName: string,
   email: string,
 ): Promise<SubscriberInfo> {
-  return apiFetch<SubscriberInfo>(
-    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ email }),
-    },
-  );
+  return coreNamespaceService.addSubscriber(nsId, audienceName, email);
 }
 
 export async function removeSubscriber(
@@ -245,10 +144,7 @@ export async function removeSubscriber(
   audienceName: string,
   contactId: string,
 ): Promise<void> {
-  await apiFetch<void>(
-    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers/${encodeURIComponent(contactId)}`,
-    { method: 'DELETE' },
-  );
+  return coreNamespaceService.removeSubscriber(nsId, audienceName, contactId);
 }
 
 export async function bulkImportSubscribers(
@@ -256,14 +152,16 @@ export async function bulkImportSubscribers(
   audienceName: string,
   emails: string[],
 ): Promise<BulkImportResult> {
-  return apiFetch<BulkImportResult>(
-    `/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers/import`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ emails }),
-    },
+  return coreNamespaceService.bulkImportSubscribers(
+    nsId,
+    audienceName,
+    emails,
   );
 }
+
+// ============================================================================
+// Pure URL helpers — no server round-trip, stay in TS
+// ============================================================================
 
 /**
  * Build a subscriber signup URL for an audience.
@@ -272,16 +170,17 @@ export function buildSubscribeUrl(
   nsId: string,
   audienceName: string,
 ): string {
-  const base = getApiBase();
-  if (!base) return '';
-  return `${base.serverUrl}/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers`;
+  const serverUrl = getServerUrl();
+  if (!serverUrl) return "";
+  const base = serverUrl.replace(/\/$/, "");
+  return `${base}/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers`;
 }
 
 /**
  * Check if the namespace API is available (user is authenticated with a server).
  */
 export function isNamespaceAvailable(): boolean {
-  return getApiBase() !== null;
+  return getServerUrl() !== null;
 }
 
 /**

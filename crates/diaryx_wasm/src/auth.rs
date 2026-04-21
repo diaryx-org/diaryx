@@ -291,7 +291,7 @@ pub struct AuthClient {
     inner: AuthService<WasmAuthenticatedClient>,
 }
 
-fn auth_error_to_js(err: AuthError) -> JsValue {
+pub(crate) fn auth_error_to_js(err: AuthError) -> JsValue {
     let error = js_sys::Error::new(&err.message);
     let _ = Reflect::set(
         &error,
@@ -307,7 +307,7 @@ fn auth_error_to_js(err: AuthError) -> JsValue {
     error.into()
 }
 
-fn to_js_ok<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
+pub(crate) fn to_js_ok<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
     serde_json::to_string(value)
         .map(|s| JsValue::from_str(&s))
         .map_err(|e| JsValue::from_str(&format!("serialize error: {e}")))

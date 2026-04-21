@@ -37,12 +37,16 @@ mod fsa_fs;
 #[cfg(feature = "browser")]
 mod indexeddb_fs;
 mod js_async_fs;
+mod namespace;
 #[cfg(feature = "browser")]
 mod opfs_fs;
 mod utils;
 
 // Re-export the auth client
 pub use auth::AuthClient;
+
+// Re-export the namespace client
+pub use namespace::NamespaceClient;
 
 // Re-export the main backend class
 pub use backend::DiaryxBackend;

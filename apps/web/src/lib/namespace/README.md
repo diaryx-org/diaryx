@@ -12,15 +12,27 @@ exclude:
 Host-side namespace management extracted from the publish plugin.
 
 Namespace operations (create/delete namespace, manage audiences, claim subdomains,
-generate tokens, custom domains) talk directly to the sync server via
-`proxyFetch` instead of round-tripping through the WASM plugin guest. This
-makes namespace management available to any plugin and removes the WASM
-overhead for server calls.
+generate tokens, custom domains) now run through a shared Rust
+`diaryx_core::namespace` module, exposed to the host via:
+
+- **Browser**: a wasm-bindgen `NamespaceClient` (`diaryx_wasm::NamespaceClient`)
+  instantiated inside the backend worker.
+- **Tauri**: `namespace_*` IPC commands that reuse the keyring-backed
+  `AuthService<KeyringAuthenticatedClient>` so the session token never
+  crosses IPC.
+
+On either platform, `coreNamespaceService` (from `coreNamespaceRouter.ts`)
+is the active implementation and matches the `CoreNamespaceService`
+interface exactly. `namespaceService.ts` is a thin backward-compat facade
+over the router — its HTTP client body was deleted once the Rust path
+landed. The pure URL helpers (`buildAccessUrl`, `buildSubscribeUrl`,
+`isNamespaceAvailable`) stay in TS because they don't hit the network.
 
 ## Architecture
 
 - **Before**: `PublishingPanel` -> plugin command -> WASM guest -> `host::http` -> sync server
-- **After**: Plugin declarative manifest -> `namespace.*` HostWidgets -> `namespaceService` -> `proxyFetch` -> sync server
+- **Intermediate**: Plugin declarative manifest -> `namespace.*` HostWidgets -> `namespaceService` -> `proxyFetch` -> sync server
+- **After**: Plugin declarative manifest -> `namespace.*` HostWidgets -> `namespaceService` -> `coreNamespaceService` -> (`NamespaceClient` | `namespace_*` IPC) -> sync server
 
 Namespace creation and object create/read/update/delete/list operations go
 through `host::namespace::*` host functions so plugins don't need HTTP
@@ -55,7 +67,11 @@ Available widget IDs:
 
 | File | Purpose |
 | --- | --- |
-| `namespaceService.ts` | Direct API client for namespace CRUD using `proxyFetch` |
+| `namespaceService.ts` | Backward-compat facade; delegates to `coreNamespaceService` |
+| `coreNamespaceTypes.ts` | Source-of-truth types + `CoreNamespaceService` interface (mirrors Rust) |
+| `coreNamespaceRouter.ts` | Picks `wasm`/`tauri` implementation per runtime |
+| `wasmNamespaceService.ts` | Browser impl — routes to worker-hosted `NamespaceClient` |
+| `tauriNamespaceService.ts` | Tauri impl — invokes `namespace_*` IPC commands |
 | `namespaceContext.svelte.ts` | Shared reactive context store for namespace widgets |
 | **Primitives** | |
 | `NamespaceAudienceManager.svelte` | Audience list with access control dialog |

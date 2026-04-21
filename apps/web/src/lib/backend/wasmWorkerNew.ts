@@ -206,6 +206,44 @@ function requireAuthClient(): any {
   return authClient;
 }
 
+// ============================================================================
+// Namespace (WASM NamespaceClient for diaryx_core::namespace)
+//
+// Same pattern as the auth client above: instantiated once inside the worker,
+// driven by the same AuthCallbacks shape. Only `fetch` is actually called.
+// ============================================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let namespaceClient: any = null;
+let namespaceClientServerUrl: string | null = null;
+
+async function buildNamespaceClient(
+  serverUrl: string,
+  callbacks: unknown,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any> {
+  const wasm = await loadWasmModule();
+  const normalized = serverUrl.replace(/\/+$/, "");
+  const Ctor = (
+    wasm as {
+      NamespaceClient: new (url: string, callbacks: unknown) => unknown;
+    }
+  ).NamespaceClient;
+  namespaceClient = new Ctor(normalized, callbacks);
+  namespaceClientServerUrl = normalized;
+  return namespaceClient;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function requireNamespaceClient(): any {
+  if (!namespaceClient) {
+    throw new Error(
+      "Namespace client not initialized — call namespaceSetServerUrl first",
+    );
+  }
+  return namespaceClient;
+}
+
 /**
  * Migrate legacy OPFS workspace directories into the stable workspace ID root.
  * Copies files from legacy name-based roots into the target ID directory.
@@ -602,6 +640,113 @@ export const workerApi = {
   },
   async authDeleteWorkspace(workspaceId: string): Promise<void> {
     return requireAuthClient().deleteWorkspace(workspaceId);
+  },
+
+  // =========================================================================
+  // Namespace (WASM NamespaceClient)
+  // =========================================================================
+
+  async namespaceSetServerUrl(
+    serverUrl: string,
+    callbacks: unknown,
+  ): Promise<void> {
+    await buildNamespaceClient(serverUrl, callbacks);
+  },
+  async namespaceReset(): Promise<void> {
+    namespaceClient = null;
+    namespaceClientServerUrl = null;
+  },
+  namespaceGetServerUrl(): string | null {
+    return namespaceClientServerUrl;
+  },
+
+  async namespaceGet(id: string): Promise<unknown> {
+    return requireNamespaceClient().getNamespace(id);
+  },
+  async namespaceCreate(
+    id: string | null,
+    metadata: unknown,
+  ): Promise<unknown> {
+    return requireNamespaceClient().createNamespace(id, metadata);
+  },
+  async namespaceUpdateMetadata(
+    id: string,
+    metadata: unknown,
+  ): Promise<unknown> {
+    return requireNamespaceClient().updateNamespaceMetadata(id, metadata);
+  },
+  async namespaceDelete(id: string): Promise<void> {
+    return requireNamespaceClient().deleteNamespace(id);
+  },
+  async namespaceListAudiences(id: string): Promise<unknown> {
+    return requireNamespaceClient().listAudiences(id);
+  },
+  async namespaceSetAudience(
+    id: string,
+    name: string,
+    access: string,
+  ): Promise<void> {
+    return requireNamespaceClient().setAudience(id, name, access);
+  },
+  async namespaceGetAudienceToken(
+    id: string,
+    name: string,
+  ): Promise<unknown> {
+    return requireNamespaceClient().getAudienceToken(id, name);
+  },
+  async namespaceClaimSubdomain(
+    id: string,
+    subdomain: string,
+    defaultAudience: string | null,
+  ): Promise<unknown> {
+    return requireNamespaceClient().claimSubdomain(
+      id,
+      subdomain,
+      defaultAudience ?? undefined,
+    );
+  },
+  async namespaceReleaseSubdomain(id: string): Promise<void> {
+    return requireNamespaceClient().releaseSubdomain(id);
+  },
+  async namespaceListDomains(id: string): Promise<unknown> {
+    return requireNamespaceClient().listDomains(id);
+  },
+  async namespaceRegisterDomain(
+    id: string,
+    domain: string,
+    audienceName: string,
+  ): Promise<unknown> {
+    return requireNamespaceClient().registerDomain(id, domain, audienceName);
+  },
+  async namespaceRemoveDomain(id: string, domain: string): Promise<void> {
+    return requireNamespaceClient().removeDomain(id, domain);
+  },
+  async namespaceListSubscribers(
+    id: string,
+    audience: string,
+  ): Promise<unknown> {
+    return requireNamespaceClient().listSubscribers(id, audience);
+  },
+  async namespaceAddSubscriber(
+    id: string,
+    audience: string,
+    email: string,
+  ): Promise<unknown> {
+    return requireNamespaceClient().addSubscriber(id, audience, email);
+  },
+  async namespaceRemoveSubscriber(
+    id: string,
+    audience: string,
+    contactId: string,
+  ): Promise<void> {
+    return requireNamespaceClient().removeSubscriber(id, audience, contactId);
+  },
+  async namespaceBulkImportSubscribers(
+    id: string,
+    audience: string,
+    emails: string[],
+  ): Promise<unknown> {
+    return requireNamespaceClient().bulkImportSubscribers(id, audience, emails);
   },
 
   // =========================================================================

@@ -19,6 +19,7 @@ mod dev_ipc;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_security_scoped;
+mod namespace_commands;
 
 use auth_commands::AuthServiceState;
 use commands::{AppState, GuestModeState};
@@ -218,6 +219,23 @@ pub fn run() {
             auth_commands::auth_create_workspace,
             auth_commands::auth_rename_workspace,
             auth_commands::auth_delete_workspace,
+            // Namespace service (reuses the same keyring-backed client)
+            namespace_commands::namespace_get,
+            namespace_commands::namespace_create,
+            namespace_commands::namespace_update_metadata,
+            namespace_commands::namespace_delete,
+            namespace_commands::namespace_list_audiences,
+            namespace_commands::namespace_set_audience,
+            namespace_commands::namespace_get_audience_token,
+            namespace_commands::namespace_claim_subdomain,
+            namespace_commands::namespace_release_subdomain,
+            namespace_commands::namespace_list_domains,
+            namespace_commands::namespace_register_domain,
+            namespace_commands::namespace_remove_domain,
+            namespace_commands::namespace_list_subscribers,
+            namespace_commands::namespace_add_subscriber,
+            namespace_commands::namespace_remove_subscriber,
+            namespace_commands::namespace_bulk_import_subscribers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -27,7 +27,7 @@ rusqlite = { version = "0.34", features = ["bundled"] }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 
 # Email (Resend HTTP API)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }

@@ -776,7 +776,7 @@ fn extract_title_from_file(path: &Path) -> Option<String> {
     let frontmatter_str = &rest[..end_idx];
 
     // Parse YAML
-    let frontmatter: YamlValue = serde_yaml::from_str(frontmatter_str).ok()?;
+    let frontmatter: YamlValue = serde_yaml_ng::from_str(frontmatter_str).ok()?;
 
     // Extract title
     if let YamlValue::Mapping(map) = frontmatter
@@ -875,7 +875,7 @@ pub fn format_value(value: &YamlValue) -> String {
             let items_str: Vec<String> = items.iter().map(format_value).collect();
             format!("[{}]", items_str.join(", "))
         }
-        _ => serde_yaml::to_string(value)
+        _ => serde_yaml_ng::to_string(value)
             .unwrap_or_default()
             .trim()
             .to_string(),

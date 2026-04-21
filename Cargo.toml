@@ -50,7 +50,7 @@ license-file = "LICENSE.md"
 # Shared dependencies across workspace
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9"
+serde_yaml_ng = "0.10"
 thiserror = "2.0"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 indexmap = { version = "2.0", features = ["serde"] }

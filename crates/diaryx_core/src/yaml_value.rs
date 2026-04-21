@@ -1,7 +1,7 @@
 //! A minimal YAML value type for dynamic frontmatter manipulation.
 //!
-//! Replaces `serde_yaml::Value` with a lightweight enum that uses String keys
-//! in mappings (rather than `serde_yaml::Value` keys) and separates integers
+//! Replaces `serde_yaml_ng::Value` with a lightweight enum that uses String keys
+//! in mappings (rather than `serde_yaml_ng::Value` keys) and separates integers
 //! from floats. Uses hand-written Serialize/Deserialize impls to keep code
 //! generation minimal.
 
@@ -278,10 +278,12 @@ impl std::fmt::Display for YamlValue {
                 f.write_str(buf.format(*v))
             }
             YamlValue::String(s) => write!(f, "{s}"),
-            YamlValue::Sequence(_) | YamlValue::Mapping(_) => match serde_yaml::to_string(self) {
-                Ok(s) => write!(f, "{}", s.trim()),
-                Err(_) => write!(f, "<complex value>"),
-            },
+            YamlValue::Sequence(_) | YamlValue::Mapping(_) => {
+                match serde_yaml_ng::to_string(self) {
+                    Ok(s) => write!(f, "{}", s.trim()),
+                    Err(_) => write!(f, "<complex value>"),
+                }
+            }
         }
     }
 }
@@ -380,7 +382,7 @@ mod tests {
     #[test]
     fn round_trip_yaml() {
         let yaml = "title: Hello\ncount: 42\ntags:\n- a\n- b\n";
-        let value: YamlValue = serde_yaml::from_str(yaml).unwrap();
+        let value: YamlValue = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert!(value.is_mapping());
         let map = value.as_mapping().unwrap();

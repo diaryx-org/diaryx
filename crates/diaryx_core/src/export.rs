@@ -438,7 +438,8 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         let body = &rest[end_idx + 5..];
 
         // Parse as YAML
-        let mut frontmatter: crate::yaml_value::YamlValue = serde_yaml::from_str(frontmatter_str)?;
+        let mut frontmatter: crate::yaml_value::YamlValue =
+            serde_yaml_ng::from_str(frontmatter_str)?;
 
         // Filter contents array
         if let Some(contents) = frontmatter
@@ -463,7 +464,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         }
 
         // Reconstruct file
-        let new_frontmatter = serde_yaml::to_string(&frontmatter)?;
+        let new_frontmatter = serde_yaml_ng::to_string(&frontmatter)?;
         // Remove trailing newline from YAML output for cleaner formatting
         let new_frontmatter = new_frontmatter.trim_end();
 
@@ -487,7 +488,8 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         let body = &rest[end_idx + 5..];
 
         // Parse as YAML
-        let mut frontmatter: crate::yaml_value::YamlValue = serde_yaml::from_str(frontmatter_str)?;
+        let mut frontmatter: crate::yaml_value::YamlValue =
+            serde_yaml_ng::from_str(frontmatter_str)?;
 
         // Remove audience property
         if let Some(map) = frontmatter.as_mapping_mut() {
@@ -500,7 +502,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         }
 
         // Reconstruct file
-        let new_frontmatter = serde_yaml::to_string(&frontmatter)?;
+        let new_frontmatter = serde_yaml_ng::to_string(&frontmatter)?;
         let new_frontmatter = new_frontmatter.trim_end();
 
         Ok(format!("---\n{}\n---\n{}", new_frontmatter, body))

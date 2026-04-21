@@ -704,8 +704,8 @@ mod tests {
             },
         };
 
-        let yaml = serde_yaml::to_string(&config).unwrap();
-        let parsed: PluginConfig = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
+        let parsed: PluginConfig = serde_yaml_ng::from_str(&yaml).unwrap();
 
         assert_eq!(parsed.download, config.download);
         assert!(parsed.permissions.read_files.is_some());

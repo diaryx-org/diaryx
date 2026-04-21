@@ -40,7 +40,7 @@ pub fn parse(content: &str) -> Result<ParsedFile> {
     let body = &rest[end_idx + 5..]; // Skip "\n---\n"
 
     // Parse YAML frontmatter into IndexMap to preserve order
-    let frontmatter: IndexMap<String, YamlValue> = serde_yaml::from_str(frontmatter_str)?;
+    let frontmatter: IndexMap<String, YamlValue> = serde_yaml_ng::from_str(frontmatter_str)?;
 
     Ok(ParsedFile {
         frontmatter,
@@ -72,7 +72,8 @@ pub fn parse_or_empty(content: &str) -> Result<ParsedFile> {
             let body = &rest[idx + 5..]; // Skip "\n---\n"
 
             // Parse YAML frontmatter into IndexMap to preserve order
-            let frontmatter: IndexMap<String, YamlValue> = serde_yaml::from_str(frontmatter_str)?;
+            let frontmatter: IndexMap<String, YamlValue> =
+                serde_yaml_ng::from_str(frontmatter_str)?;
 
             Ok(ParsedFile {
                 frontmatter,
@@ -91,7 +92,7 @@ pub fn parse_or_empty(content: &str) -> Result<ParsedFile> {
 
 /// Serialize frontmatter and body back to markdown content.
 pub fn serialize(frontmatter: &IndexMap<String, YamlValue>, body: &str) -> Result<String> {
-    let yaml_str = serde_yaml::to_string(frontmatter)?;
+    let yaml_str = serde_yaml_ng::to_string(frontmatter)?;
     Ok(format!("---\n{}---\n{}", yaml_str, body))
 }
 
@@ -114,16 +115,16 @@ pub fn extract_yaml(content: &str) -> Option<&str> {
 /// If no frontmatter delimiters are found, attempts to parse the entire content as YAML.
 pub fn parse_typed<T: serde::de::DeserializeOwned>(
     content: &str,
-) -> std::result::Result<T, serde_yaml::Error> {
+) -> std::result::Result<T, serde_yaml_ng::Error> {
     let yaml = extract_yaml(content).unwrap_or(content);
-    serde_yaml::from_str(yaml)
+    serde_yaml_ng::from_str(yaml)
 }
 
 /// Serialize a typed struct as YAML frontmatter in a markdown file.
 pub fn serialize_typed<T: serde::Serialize>(
     value: &T,
-) -> std::result::Result<String, serde_yaml::Error> {
-    let yaml = serde_yaml::to_string(value)?;
+) -> std::result::Result<String, serde_yaml_ng::Error> {
+    let yaml = serde_yaml_ng::to_string(value)?;
     Ok(format!("---\n{}---\n", yaml))
 }
 
@@ -187,7 +188,7 @@ pub fn get_string_array(frontmatter: &IndexMap<String, YamlValue>, key: &str) ->
 }
 
 /// Replace only the body portion of a markdown string, preserving the raw
-/// frontmatter block byte-for-byte. This avoids a `serde_yaml` round-trip.
+/// frontmatter block byte-for-byte. This avoids a `serde_yaml_ng` round-trip.
 ///
 /// If `content` has no frontmatter (or has a malformed opening/closing
 /// delimiter), returns `new_body` as-is.

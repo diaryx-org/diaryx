@@ -246,9 +246,9 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
         let mut fm = parsed.frontmatter.clone();
 
         let config = self.config.read().unwrap().clone();
-        let config_yaml_str = serde_yaml::to_string(&config).map_err(DiaryxError::Yaml)?;
+        let config_yaml_str = serde_yaml_ng::to_string(&config).map_err(DiaryxError::Yaml)?;
         let config_yaml: diaryx_core::yaml_value::YamlValue =
-            serde_yaml::from_str(&config_yaml_str).map_err(DiaryxError::Yaml)?;
+            serde_yaml_ng::from_str(&config_yaml_str).map_err(DiaryxError::Yaml)?;
 
         // Store config under `plugins."diaryx.publish"` (dotted key, matching
         // the canonical plugin ID used by the permissions system).

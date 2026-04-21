@@ -17,7 +17,7 @@ use diaryx_core::visibility;
 use handlebars::Handlebars;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
-use serde_yaml::Value as YamlValue;
+use serde_yaml_ng::Value as YamlValue;
 
 /// Render-time body template renderer.
 ///
@@ -184,7 +184,7 @@ pub fn render_for_audiences(
     }
 }
 
-/// Convert a `serde_yaml::Value` to a `serde_json::Value`.
+/// Convert a `serde_yaml_ng::Value` to a `serde_json::Value`.
 pub fn yaml_to_json(value: &YamlValue) -> JsonValue {
     match value {
         YamlValue::Null => JsonValue::Null,
@@ -210,7 +210,7 @@ pub fn yaml_to_json(value: &YamlValue) -> JsonValue {
                 .filter_map(|(k, v)| {
                     let key = match k {
                         YamlValue::String(s) => s.clone(),
-                        other => serde_yaml::to_string(other).ok()?.trim().to_string(),
+                        other => serde_yaml_ng::to_string(other).ok()?.trim().to_string(),
                     };
                     Some((key, yaml_to_json(v)))
                 })
@@ -226,7 +226,7 @@ mod tests {
     use super::*;
 
     fn make_frontmatter(yaml: &str) -> IndexMap<String, YamlValue> {
-        serde_yaml::from_str(yaml).unwrap()
+        serde_yaml_ng::from_str(yaml).unwrap()
     }
 
     #[test]

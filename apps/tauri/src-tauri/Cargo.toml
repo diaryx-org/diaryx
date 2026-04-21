@@ -18,7 +18,7 @@ diaryx_core = { workspace = true }
 diaryx_native = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = "0.9"
+serde_yaml_ng = "0.10"
 thiserror.workspace = true
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-shell = "2"

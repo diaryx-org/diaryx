@@ -18,7 +18,7 @@ async-trait = "0.1"
 extism-pdk = "1.4"
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 indexmap = { workspace = true }
 log = "0.4"
 mrml = { version = "5.1.0", default-features = false, features = ["parse", "render", "print"] }

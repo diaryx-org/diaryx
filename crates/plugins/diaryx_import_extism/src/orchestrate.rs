@@ -236,7 +236,7 @@ fn write_index_hierarchy(
         );
         fm.insert("contents".to_string(), Value::Sequence(contents));
 
-        let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
+        let yaml = serde_yaml_ng::to_string(&fm).unwrap_or_default();
         let content = format!("---\n{yaml}---\n");
 
         let _ = host::fs::write_file(&root_index_canonical, &content);
@@ -284,7 +284,7 @@ fn write_index_hierarchy(
             );
             fm.insert("contents".to_string(), Value::Sequence(contents));
 
-            let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
+            let yaml = serde_yaml_ng::to_string(&fm).unwrap_or_default();
             let content = format!("---\n{yaml}---\n");
 
             let _ = host::fs::write_file(year_canonical, &content);
@@ -338,7 +338,7 @@ fn write_index_hierarchy(
                 .collect();
             fm.insert("contents".to_string(), Value::Sequence(contents));
 
-            let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
+            let yaml = serde_yaml_ng::to_string(&fm).unwrap_or_default();
             let content = format!("---\n{yaml}---\n");
 
             let _ = host::fs::write_file(month_canonical, &content);
@@ -611,7 +611,7 @@ fn format_entry(
         fm.insert("attachments".to_string(), Value::Sequence(att_list));
     }
 
-    let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
+    let yaml = serde_yaml_ng::to_string(&fm).unwrap_or_default();
 
     // Resolve _attachments/ references in the body to include the entry stem.
     let body = if !entry.attachments.is_empty() {
@@ -694,7 +694,7 @@ fn format_attachment_note(
         ))]),
     );
 
-    let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
+    let yaml = serde_yaml_ng::to_string(&fm).unwrap_or_default();
     format!("---\n{yaml}---\n")
 }
 

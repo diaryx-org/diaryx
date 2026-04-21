@@ -123,7 +123,7 @@ fn handle_get_command(
                     println!(
                         "{}{}",
                         prefix,
-                        serde_yaml::to_string(&value).unwrap_or_default().trim()
+                        serde_yaml_ng::to_string(&value).unwrap_or_default().trim()
                     );
                 }
             },
@@ -162,7 +162,7 @@ fn handle_set_command(
     let mut skip_confirm = yes || !multiple_files;
     let mut had_error = false;
 
-    let yaml_value = match serde_yaml::from_str::<YamlValue>(value) {
+    let yaml_value = match serde_yaml_ng::from_str::<YamlValue>(value) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("✗ Invalid YAML value: {}", e);
@@ -360,7 +360,7 @@ fn handle_list_command(
                     if frontmatter.is_empty() {
                         println!("{{}}");
                     } else {
-                        match serde_yaml::to_string(&frontmatter) {
+                        match serde_yaml_ng::to_string(&frontmatter) {
                             Ok(s) => print!("{}", s),
                             Err(e) => {
                                 eprintln!("✗ Error serializing YAML: {}", e);
@@ -468,7 +468,7 @@ fn handle_list_append_command(
         yes,
         dry_run,
         &format!("Append '{}' to '{}'", value, key),
-        |items| match serde_yaml::from_str::<YamlValue>(value) {
+        |items| match serde_yaml_ng::from_str::<YamlValue>(value) {
             Ok(yaml_value) => {
                 items.push(yaml_value);
                 Ok(format!("✓ Appended to '{}'", key))
@@ -497,7 +497,7 @@ fn handle_list_prepend_command(
         yes,
         dry_run,
         &format!("Prepend '{}' to '{}'", value, key),
-        |items| match serde_yaml::from_str::<YamlValue>(value) {
+        |items| match serde_yaml_ng::from_str::<YamlValue>(value) {
             Ok(yaml_value) => {
                 items.insert(0, yaml_value);
                 Ok(format!("✓ Prepended to '{}'", key))
@@ -589,7 +589,7 @@ fn handle_list_set_at_command(
                 ));
             }
 
-            match serde_yaml::from_str::<YamlValue>(value) {
+            match serde_yaml_ng::from_str::<YamlValue>(value) {
                 Ok(yaml_value) => {
                     items[index] = yaml_value;
                     Ok(format!("✓ Set [{}] in '{}'", index, key))
@@ -619,7 +619,7 @@ fn handle_list_remove_value_command(
         yes,
         dry_run,
         &format!("Remove '{}' from '{}'", value, key),
-        |items| match serde_yaml::from_str::<YamlValue>(value) {
+        |items| match serde_yaml_ng::from_str::<YamlValue>(value) {
             Ok(yaml_value) => {
                 let original_len = items.len();
                 items.retain(|item| item != &yaml_value);

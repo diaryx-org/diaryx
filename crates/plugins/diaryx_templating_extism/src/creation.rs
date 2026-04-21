@@ -9,7 +9,7 @@
 
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use indexmap::IndexMap;
-use serde_yaml::Value;
+use serde_yaml_ng::Value;
 
 /// Available template variables and their descriptions.
 pub const TEMPLATE_VARIABLES: &[(&str, &str)] = &[
@@ -236,7 +236,7 @@ pub fn parse_rendered_template(content: &str) -> Result<(IndexMap<String, Value>
             let frontmatter_str = &rest[..idx];
             let body = &rest[idx + 5..]; // Skip "\n---\n"
 
-            let frontmatter: IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)
+            let frontmatter: IndexMap<String, Value> = serde_yaml_ng::from_str(frontmatter_str)
                 .map_err(|e| format!("Failed to parse frontmatter YAML: {e}"))?;
             Ok((frontmatter, body.to_string()))
         }

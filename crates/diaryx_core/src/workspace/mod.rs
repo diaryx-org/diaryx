@@ -429,7 +429,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let body = &rest[end_idx + 5..]; // Skip "\n---\n"
 
         let frontmatter: IndexFrontmatter =
-            serde_yaml::from_str(frontmatter_str).map_err(|e| DiaryxError::YamlParse {
+            serde_yaml_ng::from_str(frontmatter_str).map_err(|e| DiaryxError::YamlParse {
                 path: path.to_path_buf(),
                 message: e.to_string(),
             })?;
@@ -1020,7 +1020,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         // `IndexFrontmatter` derives `Serialize` so we can convert it to YAML.
 
         let yaml_str =
-            serde_yaml::to_string(&target_frontmatter).map_err(|e| DiaryxError::YamlParse {
+            serde_yaml_ng::to_string(&target_frontmatter).map_err(|e| DiaryxError::YamlParse {
                 path: target_path.to_path_buf(),
                 message: e.to_string(),
             })?;
@@ -1293,7 +1293,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     let frontmatter_str = &rest[..idx];
                     let body = &rest[idx + 5..];
                     let fm: indexmap::IndexMap<String, YamlValue> =
-                        serde_yaml::from_str(frontmatter_str)?;
+                        serde_yaml_ng::from_str(frontmatter_str)?;
                     (fm, body.to_string())
                 } else {
                     (indexmap::IndexMap::new(), content)
@@ -1340,7 +1340,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         // Set the new field value
         config_map.insert(field.to_string(), yaml_value);
 
-        let yaml_str = serde_yaml::to_string(&frontmatter)?;
+        let yaml_str = serde_yaml_ng::to_string(&frontmatter)?;
         let new_content = format!("---\n{}---\n{}", yaml_str, body);
 
         self.fs
@@ -2165,7 +2165,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         if let Some(idx) = end_idx {
             let frontmatter_str = &rest[..idx];
             let frontmatter: indexmap::IndexMap<String, YamlValue> =
-                serde_yaml::from_str(frontmatter_str)?;
+                serde_yaml_ng::from_str(frontmatter_str)?;
             Ok(frontmatter.get(key).cloned())
         } else {
             Ok(None)
@@ -2185,7 +2185,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 // Create new file with just this property
                 let mut frontmatter = indexmap::IndexMap::new();
                 frontmatter.insert(key.to_string(), value);
-                let yaml_str = serde_yaml::to_string(&frontmatter)?;
+                let yaml_str = serde_yaml_ng::to_string(&frontmatter)?;
                 let new_content = format!("---\n{}---\n", yaml_str);
                 return self.fs.write_file(path, &new_content).await.map_err(|e| {
                     DiaryxError::FileWrite {
@@ -2209,7 +2209,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     let frontmatter_str = &rest[..idx];
                     let body = &rest[idx + 5..];
                     let fm: indexmap::IndexMap<String, YamlValue> =
-                        serde_yaml::from_str(frontmatter_str)?;
+                        serde_yaml_ng::from_str(frontmatter_str)?;
                     (fm, body.to_string())
                 } else {
                     (indexmap::IndexMap::new(), content)
@@ -2219,7 +2219,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             };
 
         frontmatter.insert(key.to_string(), value);
-        let yaml_str = serde_yaml::to_string(&frontmatter)?;
+        let yaml_str = serde_yaml_ng::to_string(&frontmatter)?;
         let new_content = format!("---\n{}---\n{}", yaml_str, body);
 
         self.fs
@@ -2252,10 +2252,10 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let body = &rest[end_idx + 5..];
 
         let mut frontmatter: indexmap::IndexMap<String, YamlValue> =
-            serde_yaml::from_str(frontmatter_str)?;
+            serde_yaml_ng::from_str(frontmatter_str)?;
         frontmatter.shift_remove(key);
 
-        let yaml_str = serde_yaml::to_string(&frontmatter)?;
+        let yaml_str = serde_yaml_ng::to_string(&frontmatter)?;
         let new_content = format!("---\n{}---\n{}", yaml_str, body);
 
         self.fs
@@ -4067,7 +4067,7 @@ fn is_root_index_sync(fs: &dyn crate::fs::FileSystem, path: &Path) -> bool {
     };
 
     let frontmatter_str = &rest[..end_idx];
-    match serde_yaml::from_str::<IndexFrontmatter>(frontmatter_str) {
+    match serde_yaml_ng::from_str::<IndexFrontmatter>(frontmatter_str) {
         Ok(fm) => fm.is_root(),
         Err(_) => false,
     }

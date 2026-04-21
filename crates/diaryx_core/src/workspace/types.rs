@@ -554,14 +554,14 @@ mod tests {
     fn test_audience_bare_string_deserialized_as_vec() {
         // audience: private (bare string) should become vec!["private"]
         let yaml = "audience: private\n";
-        let fm: IndexFrontmatter = serde_yaml::from_str(yaml).unwrap();
+        let fm: IndexFrontmatter = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(fm.audience, Some(vec!["private".to_string()]));
     }
 
     #[test]
     fn test_audience_array_deserialized_normally() {
         let yaml = "audience:\n  - family\n  - private\n";
-        let fm: IndexFrontmatter = serde_yaml::from_str(yaml).unwrap();
+        let fm: IndexFrontmatter = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(
             fm.audience,
             Some(vec!["family".to_string(), "private".to_string()])

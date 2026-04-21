@@ -127,7 +127,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         let body = &rest[end_idx + 5..]; // Skip "\n---\n"
 
         // Parse YAML frontmatter into IndexMap to preserve order
-        let frontmatter: IndexMap<String, YamlValue> = serde_yaml::from_str(frontmatter_str)?;
+        let frontmatter: IndexMap<String, YamlValue> = serde_yaml_ng::from_str(frontmatter_str)?;
 
         Ok((frontmatter, body.to_string()))
     }
@@ -174,7 +174,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
 
                 // Parse YAML frontmatter into IndexMap to preserve order
                 let frontmatter: IndexMap<String, YamlValue> =
-                    serde_yaml::from_str(frontmatter_str)?;
+                    serde_yaml_ng::from_str(frontmatter_str)?;
 
                 Ok((frontmatter, body.to_string()))
             }
@@ -192,7 +192,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         frontmatter: &IndexMap<String, YamlValue>,
         body: &str,
     ) -> Result<()> {
-        let yaml_str = serde_yaml::to_string(frontmatter)?;
+        let yaml_str = serde_yaml_ng::to_string(frontmatter)?;
         let content = format!("---\n{}---\n{}", yaml_str, body);
         self.fs
             .write_file(std::path::Path::new(path), &content)
@@ -491,7 +491,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         let body = &rest[end_idx + 5..]; // Skip "\n---\n"
 
         // Parse YAML frontmatter into IndexMap to preserve order
-        let frontmatter: IndexMap<String, YamlValue> = serde_yaml::from_str(frontmatter_str)?;
+        let frontmatter: IndexMap<String, YamlValue> = serde_yaml_ng::from_str(frontmatter_str)?;
 
         Ok((frontmatter, body.to_string()))
     }
@@ -538,7 +538,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
                 // Parse YAML frontmatter into IndexMap to preserve order
                 let frontmatter: IndexMap<String, YamlValue> =
-                    serde_yaml::from_str(frontmatter_str)?;
+                    serde_yaml_ng::from_str(frontmatter_str)?;
 
                 Ok((frontmatter, body.to_string()))
             }
@@ -556,7 +556,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         frontmatter: &IndexMap<String, YamlValue>,
         body: &str,
     ) -> Result<()> {
-        let yaml_str = serde_yaml::to_string(frontmatter)?;
+        let yaml_str = serde_yaml_ng::to_string(frontmatter)?;
         let content = format!("---\n{}---\n{}", yaml_str, body);
         self.fs
             .write_file(std::path::Path::new(path), &content)
@@ -800,7 +800,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         };
 
         let frontmatter_str = &rest[..end_idx];
-        let frontmatter: IndexFrontmatter = match serde_yaml::from_str(frontmatter_str) {
+        let frontmatter: IndexFrontmatter = match serde_yaml_ng::from_str(frontmatter_str) {
             Ok(fm) => fm,
             Err(_) => return Ok(None),
         };

@@ -18,7 +18,7 @@ use diaryx_plugin_sdk::prelude::*;
 use extism_pdk::*;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
-use serde_yaml::Value as YamlValue;
+use serde_yaml_ng::Value as YamlValue;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct InitParams {
@@ -370,7 +370,7 @@ fn dispatch_command(command: &str, params: JsonValue) -> Result<JsonValue, Strin
     }
 }
 
-/// Convert `serde_json::Value` to `serde_yaml::Value`.
+/// Convert `serde_json::Value` to `serde_yaml_ng::Value`.
 fn json_to_yaml(value: &JsonValue) -> YamlValue {
     match value {
         JsonValue::Null => YamlValue::Null,
@@ -381,7 +381,7 @@ fn json_to_yaml(value: &JsonValue) -> YamlValue {
             } else if let Some(u) = n.as_u64() {
                 YamlValue::Number(u.into())
             } else if let Some(f) = n.as_f64() {
-                YamlValue::Number(serde_yaml::Number::from(f))
+                YamlValue::Number(serde_yaml_ng::Number::from(f))
             } else {
                 YamlValue::Null
             }
@@ -389,7 +389,7 @@ fn json_to_yaml(value: &JsonValue) -> YamlValue {
         JsonValue::String(s) => YamlValue::String(s.clone()),
         JsonValue::Array(arr) => YamlValue::Sequence(arr.iter().map(json_to_yaml).collect()),
         JsonValue::Object(map) => {
-            let mapping: serde_yaml::Mapping = map
+            let mapping: serde_yaml_ng::Mapping = map
                 .iter()
                 .map(|(k, v)| (YamlValue::String(k.clone()), json_to_yaml(v)))
                 .collect();

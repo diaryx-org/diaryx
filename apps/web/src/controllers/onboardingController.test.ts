@@ -150,7 +150,6 @@ function makeAutoCreateDeps(overrides: Record<string, any> = {}) {
       getBackend: vi.fn().mockResolvedValue(backend),
       createApi: vi.fn(() => api),
       setBackend: vi.fn(),
-      clearRustApi: vi.fn(),
       initEventSubscription: vi.fn(() => () => {}),
       setCleanupEventSubscription: vi.fn(),
       refreshTree: vi.fn().mockResolvedValue(undefined),
@@ -899,7 +898,6 @@ describe("onboardingController", () => {
 
       const deps = {
         autoCreateDeps: {
-          clearRustApi: vi.fn(),
           createApi: vi.fn(() => api),
           initEventSubscription: vi.fn(() => () => {}),
           persistPermissionDefaults: vi.fn(),
@@ -1028,7 +1026,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => api),
             initEventSubscription: vi.fn(() => () => {}),
             persistPermissionDefaults: vi.fn(),
@@ -1067,7 +1064,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => api),
             initEventSubscription: vi.fn(() => () => {}),
             persistPermissionDefaults: vi.fn(),
@@ -1098,7 +1094,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => api),
             initEventSubscription: vi.fn(() => () => {}),
             persistPermissionDefaults: vi.fn(),
@@ -1141,7 +1136,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => api),
             initEventSubscription: vi.fn(() => () => {}),
             persistPermissionDefaults: vi.fn(),
@@ -1179,7 +1173,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => api),
             initEventSubscription: vi.fn(() => () => {}),
             persistPermissionDefaults: vi.fn(),
@@ -1215,7 +1208,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => api),
             initEventSubscription: vi.fn(() => () => {}),
             persistPermissionDefaults: vi.fn(),
@@ -1248,7 +1240,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => api),
             initEventSubscription: vi.fn(() => () => {}),
             persistPermissionDefaults: vi.fn(),
@@ -1297,7 +1288,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => api),
             initEventSubscription: vi.fn(() => () => {}),
             persistPermissionDefaults: vi.fn(),
@@ -1347,7 +1337,6 @@ describe("onboardingController", () => {
 
       const deps = {
         autoCreateDeps: {
-          clearRustApi: vi.fn(),
           createApi: vi.fn(() => api),
           initEventSubscription: vi.fn(() => () => {}),
           persistPermissionDefaults: vi.fn(),
@@ -1395,7 +1384,6 @@ describe("onboardingController", () => {
 
       const deps = {
         autoCreateDeps: {
-          clearRustApi: vi.fn(),
           createApi: vi.fn(() => api),
           initEventSubscription: vi.fn(() => () => {}),
           persistPermissionDefaults: vi.fn(),
@@ -1457,7 +1445,6 @@ describe("onboardingController", () => {
 
       const deps = {
         autoCreateDeps: {
-          clearRustApi: vi.fn(),
           createApi: vi.fn(() => api),
           initEventSubscription: vi.fn(() => () => {}),
           persistPermissionDefaults: vi.fn(),
@@ -1496,7 +1483,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => ({
               resolveWorkspaceRootIndexPath: vi.fn(),
               getFrontmatter: vi.fn(),
@@ -1526,7 +1512,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => ({
               resolveWorkspaceRootIndexPath: vi.fn(),
               getFrontmatter: vi.fn(),
@@ -1556,7 +1541,6 @@ describe("onboardingController", () => {
       const { deps } = makeCreateWithProviderDeps({
         providerDeps: {
           autoCreateDeps: {
-            clearRustApi: vi.fn(),
             createApi: vi.fn(() => ({
               resolveWorkspaceRootIndexPath: vi.fn(),
               getFrontmatter: vi.fn(),
@@ -1591,7 +1575,6 @@ describe("onboardingController", () => {
       const deps = {
         getBackend: vi.fn().mockResolvedValue(backend),
         setBackend: vi.fn(),
-        clearRustApi: vi.fn(),
         refreshTree: vi.fn().mockResolvedValue(undefined),
         getTree: vi.fn(() => ({ path: "/ws/index.md" })),
         getCurrentEntry: vi.fn(() => null),
@@ -1604,7 +1587,6 @@ describe("onboardingController", () => {
 
       expect(deps.getBackend).toHaveBeenCalled();
       expect(deps.setBackend).toHaveBeenCalledWith(backend);
-      expect(deps.clearRustApi).toHaveBeenCalled();
       expect(deps.refreshTree).toHaveBeenCalled();
       expect(deps.expandNode).toHaveBeenCalledWith("/ws/index.md");
       expect(deps.openEntry).toHaveBeenCalledWith("/ws/index.md");
@@ -1615,7 +1597,6 @@ describe("onboardingController", () => {
       const deps = {
         getBackend: vi.fn().mockResolvedValue({}),
         setBackend: vi.fn(),
-        clearRustApi: vi.fn(),
         refreshTree: vi.fn().mockResolvedValue(undefined),
         getTree: vi.fn(() => ({ path: "/ws/index.md" })),
         getCurrentEntry: vi.fn(() => ({ path: "/ws/existing.md" })),
@@ -1634,7 +1615,6 @@ describe("onboardingController", () => {
       const deps = {
         getBackend: vi.fn().mockResolvedValue({}),
         setBackend: vi.fn(),
-        clearRustApi: vi.fn(),
         refreshTree: vi.fn().mockResolvedValue(undefined),
         getTree: vi.fn(() => null),
         getCurrentEntry: vi.fn(() => null),

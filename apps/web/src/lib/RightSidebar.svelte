@@ -32,9 +32,6 @@
     FileArchive,
     FileSpreadsheet,
     FileCode,
-    History,
-    RefreshCw,
-    RotateCcw,
     ArrowUpRight,
     Replace,
     Eye,
@@ -52,7 +49,6 @@
     FileOutput,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
-  import VersionDiff from "./history/VersionDiff.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Kbd from "$lib/components/ui/kbd";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
@@ -77,21 +73,6 @@
   } from "@/models/services/attachmentService";
   import { parseLinkDisplay } from "$lib/utils/linkParser";
   import MoveConfigDialog from "$lib/components/MoveConfigDialog.svelte";
-
-  interface CrdtHistoryEntry {
-    update_id: bigint;
-    timestamp: bigint;
-    origin: string;
-    device_name?: string | null;
-    summary?: string | null;
-  }
-
-  interface FileDiff {
-    path: string;
-    change_type: string;
-    old_value?: string | null;
-    new_value?: string | null;
-  }
 
   // Platform detection for keyboard shortcut display
   const isMac =
@@ -121,9 +102,6 @@
     onAttachmentErrorClear?: () => void;
     // Navigation
     onOpenEntry?: (path: string) => Promise<void>;
-    // History props
-    rustApi?: any | null;
-    onHistoryRestore?: () => void;
     // API for properties tab
     api?: Api | null;
     // External tab control (built-in tabs or plugin tab IDs)
@@ -155,8 +133,6 @@
     attachmentError = null,
     onAttachmentErrorClear,
     onOpenEntry,
-    rustApi = null,
-    onHistoryRestore,
     api = null,
     requestedTab = null,
     onRequestedTabConsumed,
@@ -180,9 +156,7 @@
 
   // Plugin store for right sidebar tabs
   const pluginStore = getPluginStore();
-  const historyTabId = $derived<string | null>(null);
-  const historyTabLabel = $derived("History");
-  const nonHistoryPluginTabs = $derived.by(() => {
+  const pluginSidebarTabs = $derived.by(() => {
     return pluginStore.rightSidebarTabs;
   });
   let authState = $derived(getAuthState());
@@ -190,7 +164,7 @@
   let aiPluginConfig = $state<Record<string, JsonValue>>({});
   let aiConfigLoading = $state(false);
 
-  // Tab state — built-in "properties"/"history" + plugin tab IDs
+  // Tab state — built-in "properties" + plugin tab IDs
   let activeTab: string = $state("properties");
 
   // Handle external tab request
@@ -204,137 +178,10 @@
   $effect(() => {
     const validTabIds = new Set<string>([
       "properties",
-      ...(historyTabId ? [historyTabId] : []),
-      ...nonHistoryPluginTabs.map((tab) => tab.contribution.id),
+      ...pluginSidebarTabs.map((tab) => tab.contribution.id),
     ]);
     if (!validTabIds.has(activeTab)) {
       activeTab = "properties";
-    }
-  });
-
-  // History state
-  let history: CrdtHistoryEntry[] = $state([]);
-  let historyLoading = $state(false);
-  let historyError = $state<string | null>(null);
-  let selectedEntry: CrdtHistoryEntry | null = $state(null);
-  let diffs: FileDiff[] = $state([]);
-  let loadingDiff = $state(false);
-
-  // Load history for current file (combines workspace metadata + body content changes)
-  async function loadHistory() {
-    if (!rustApi || !entry) return;
-
-    historyLoading = true;
-    historyError = null;
-    selectedEntry = null;
-    diffs = [];
-
-    try {
-      // Use file-specific history that combines workspace and body doc changes
-      history = await rustApi.getFileHistory(entry.path, 100);
-    } catch (e) {
-      historyError = e instanceof Error ? e.message : "Failed to load history";
-      console.error("[RightSidebar] Error loading history:", e);
-    } finally {
-      historyLoading = false;
-    }
-  }
-
-  // Select a history entry and load its diff
-  async function selectHistoryEntry(historyEntry: CrdtHistoryEntry) {
-    if (!rustApi) return;
-
-    if (selectedEntry?.update_id === historyEntry.update_id) {
-      // Deselect
-      selectedEntry = null;
-      diffs = [];
-      return;
-    }
-
-    selectedEntry = historyEntry;
-    loadingDiff = true;
-    diffs = [];
-
-    try {
-      const idx = history.findIndex((h) => h.update_id === historyEntry.update_id);
-      if (idx < history.length - 1) {
-        const previousEntry = history[idx + 1];
-        // Diff operates on workspace document for metadata changes
-        diffs = await rustApi.getVersionDiff(previousEntry.update_id, historyEntry.update_id, "workspace");
-      }
-    } catch (e) {
-      console.error("[RightSidebar] Error loading diff:", e);
-    } finally {
-      loadingDiff = false;
-    }
-  }
-
-  // Restore to a specific version
-  async function restoreVersion(historyEntry: CrdtHistoryEntry) {
-    if (!rustApi || !entry) return;
-
-    const confirmRestore = confirm(`Restore to version from ${formatTimestamp(historyEntry.timestamp)}?`);
-    if (!confirmRestore) return;
-
-    try {
-      // Restore operates on workspace document for metadata
-      await rustApi.restoreVersion(historyEntry.update_id, "workspace");
-      onHistoryRestore?.();
-      await loadHistory();
-    } catch (e) {
-      console.error("[RightSidebar] Error restoring version:", e);
-      alert("Failed to restore version");
-    }
-  }
-
-  function formatTimestamp(timestamp: bigint): string {
-    const date = new Date(Number(timestamp));
-    return date.toLocaleString();
-  }
-
-  function formatRelativeTime(timestamp: bigint): string {
-    const now = Date.now();
-    const diff = now - Number(timestamp);
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (minutes < 1) return "Just now";
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    return `${days}d ago`;
-  }
-
-  function getOriginLabel(entry: CrdtHistoryEntry): string {
-    // Show device name if available
-    if (entry.device_name) {
-      if (entry.origin === "local") {
-        return `You (${entry.device_name})`;
-      }
-      return entry.device_name;
-    }
-    // Fallback to origin-based label
-    switch (entry.origin) {
-      case "local": return "You";
-      case "remote": return "Remote";
-      case "sync": return "Sync";
-      default: return entry.origin;
-    }
-  }
-
-  function getOriginClass(origin: string): string {
-    switch (origin) {
-      case "Local": return "bg-primary text-primary-foreground";
-      case "Remote": return "bg-secondary text-secondary-foreground";
-      case "Sync": return "bg-accent text-accent-foreground";
-      default: return "bg-muted text-muted-foreground";
-    }
-  }
-
-  // Load history when switching to history tab or when entry changes
-  $effect(() => {
-    if (activeTab === historyTabId && entry && rustApi) {
-      loadHistory();
     }
   });
 
@@ -363,18 +210,9 @@
   }
 
   $effect(() => {
-    const pluginTab = nonHistoryPluginTabs.find((t) => t.contribution.id === activeTab);
+    const pluginTab = pluginSidebarTabs.find((t) => t.contribution.id === activeTab);
     if (!pluginTab || String(pluginTab.pluginId) !== "diaryx.ai") return;
     void loadAiPluginConfig();
-  });
-
-  // Reset history state when entry changes
-  $effect(() => {
-    if (entry) {
-      history = [];
-      selectedEntry = null;
-      diffs = [];
-    }
   });
 
   // Get attachments from frontmatter
@@ -1517,9 +1355,9 @@
           </p>
         </div>
       {/if}
-    {:else if activeTab !== "properties" && activeTab !== historyTabId}
+    {:else if activeTab !== "properties"}
       <!-- Plugin Tab -->
-      {@const pluginTab = nonHistoryPluginTabs.find(t => t.contribution.id === activeTab)}
+      {@const pluginTab = pluginSidebarTabs.find(t => t.contribution.id === activeTab)}
       {#if pluginTab && api}
         <div class="h-full">
           {#if String(pluginTab.pluginId) === "diaryx.ai" && aiConfigLoading}
@@ -1542,122 +1380,11 @@
           {/if}
         </div>
       {/if}
-    {:else if activeTab === historyTabId}
-      <!-- History Tab (CRDT Changes) -->
-      {#if entry}
-        <div class="p-3">
-          <!-- History Header -->
-          <div class="flex items-center justify-between mb-3">
-            <div class="flex items-center gap-2 text-xs text-muted-foreground">
-              <History class="size-3.5" />
-              <span class="font-medium">Version History</span>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="size-6"
-              onclick={loadHistory}
-              disabled={historyLoading}
-              aria-label="Refresh history"
-            >
-              <RefreshCw class="size-3 {historyLoading ? 'animate-spin' : ''}" />
-            </Button>
-          </div>
-
-          {#if historyError}
-            <Alert.Root variant="destructive" class="mb-3 py-2">
-              <AlertCircle class="size-4" />
-              <Alert.Description class="text-xs">
-                {historyError}
-              </Alert.Description>
-            </Alert.Root>
-          {/if}
-
-          {#if historyLoading && history.length === 0}
-            <div class="flex items-center justify-center py-8">
-              <RefreshCw class="size-5 animate-spin text-muted-foreground" />
-            </div>
-          {:else if history.length === 0}
-            <div class="flex flex-col items-center justify-center py-8 text-center">
-              <History class="size-8 text-muted-foreground mb-2" />
-              <p class="text-sm text-muted-foreground">No history available</p>
-              <p class="text-xs text-muted-foreground mt-1">
-                Changes will appear here
-              </p>
-            </div>
-          {:else}
-            <!-- History Entries -->
-            <div class="space-y-1">
-              {#each history as historyEntry (historyEntry.update_id)}
-                {@const isSelected = selectedEntry?.update_id === historyEntry.update_id}
-                <div
-                  class="rounded-md cursor-pointer transition-colors {isSelected ? 'bg-accent' : 'hover:bg-muted'}"
-                  role="button"
-                  tabindex="0"
-                  onclick={() => selectHistoryEntry(historyEntry)}
-                  onkeydown={(e) => e.key === 'Enter' && selectHistoryEntry(historyEntry)}
-                >
-                  <div class="flex items-center justify-between p-2">
-                    <div class="flex-1 min-w-0">
-                      <div class="flex items-center gap-2">
-                        <span class="text-sm font-medium text-foreground">
-                          {formatRelativeTime(historyEntry.timestamp)}
-                        </span>
-                        <span class="text-[10px] px-1.5 py-0.5 rounded {getOriginClass(historyEntry.origin)}">
-                          {getOriginLabel(historyEntry)}
-                        </span>
-                      </div>
-                      <div class="text-[10px] text-muted-foreground mt-0.5">
-                        #{historyEntry.update_id.toString()}
-                      </div>
-                    </div>
-                    {#if isSelected}
-                      <Button
-                        variant="default"
-                        size="sm"
-                        class="h-6 text-xs px-2 shrink-0"
-                        onclick={(e) => { e.stopPropagation(); restoreVersion(historyEntry); }}
-                      >
-                        <RotateCcw class="size-3 mr-1" />
-                        Restore
-                      </Button>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-            </div>
-
-            <!-- Version Diff -->
-            {#if selectedEntry && (diffs.length > 0 || loadingDiff)}
-              <div class="mt-4 pt-3 border-t border-sidebar-border">
-                <h4 class="text-xs font-medium text-muted-foreground mb-2">Changes in this version</h4>
-                {#if loadingDiff}
-                  <div class="flex items-center justify-center py-4">
-                    <RefreshCw class="size-4 animate-spin text-muted-foreground" />
-                  </div>
-                {:else}
-                  <VersionDiff {diffs} />
-                {/if}
-              </div>
-            {/if}
-          {/if}
-        </div>
-      {:else}
-        <div
-          class="flex flex-col items-center justify-center py-8 px-4 text-center"
-        >
-          <History class="size-8 text-muted-foreground mb-2" />
-          <p class="text-sm text-muted-foreground">No entry selected</p>
-          <p class="text-xs text-muted-foreground mt-1">
-            Select an entry to view its history
-          </p>
-        </div>
-      {/if}
     {/if}
   </div>
 
-  <!-- Tab Toggle (hidden when only one tab) -->
-  {#if historyTabId || nonHistoryPluginTabs.length > 0}
+  <!-- Tab Toggle (hidden when only the properties tab is visible) -->
+  {#if pluginSidebarTabs.length > 0}
   <div class="px-3 pt-1 pb-1 shrink-0">
     <div class="flex items-center gap-1 bg-muted rounded-md p-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       <button
@@ -1667,16 +1394,7 @@
       >
         Props
       </button>
-      {#if historyTabId}
-        <button
-          type="button"
-          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          onclick={() => activeTab = historyTabId}
-        >
-          {historyTabLabel}
-        </button>
-      {/if}
-      {#each nonHistoryPluginTabs as tab}
+      {#each pluginSidebarTabs as tab}
         <button
           type="button"
           class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"

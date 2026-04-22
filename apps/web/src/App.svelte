@@ -620,8 +620,6 @@
   );
   let pluginPermissionsRootPath = $state<string | null>(null);
 
-  // Reserved for plugin-provided history panels that may need host context.
-  let rustApi: any | null = $state(null);
   let lastAutoDispatchedFileOpenKey = $state<string | null>(null);
 
 
@@ -1258,8 +1256,6 @@
         cleanupEventSubscription = () => { unsubPlugins(); prevCleanup(); };
       }
 
-      rustApi = null;
-
       // Set workspace ID for plugin system (sync plugin reads this)
       const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
       workspaceStore.setWorkspaceId(sharedWorkspaceId);
@@ -1476,7 +1472,6 @@
       const apiInstance = createApi(backendInstance);
       await getPluginStore().init(apiInstance);
       cleanupEventSubscription = initEventSubscription(backendInstance);
-      rustApi = null;
 
       const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
       workspaceStore.setWorkspaceId(sharedWorkspaceId);
@@ -1513,7 +1508,6 @@
     // Re-initialize references: get the new backend from the singleton
     const newBackend = await getBackend();
     workspaceStore.setBackend(newBackend);
-    rustApi = null;
     // Refresh tree and validation from new workspace
     await refreshTree();
 
@@ -2183,7 +2177,6 @@
         {
           getBackend: () => getBackend(),
           setBackend: (b) => workspaceStore.setBackend(b),
-          clearRustApi: () => { rustApi = null; },
           refreshTree,
           getTree: () => tree,
           getCurrentEntry: () => currentEntry,
@@ -2214,7 +2207,6 @@
       getBackend: (id, name, storageType) => getBackend(id, name, storageType),
       createApi,
       setBackend: (b) => workspaceStore.setBackend(b),
-      clearRustApi: () => { rustApi = null; },
       initEventSubscription,
       setCleanupEventSubscription: (cleanup) => { cleanupEventSubscription = cleanup; },
       refreshTree,
@@ -4083,13 +4075,6 @@
     {attachmentError}
     onAttachmentErrorClear={() => (attachmentError = null)}
     onOpenEntry={async (path) => await openEntry(path)}
-    {rustApi}
-    onHistoryRestore={async () => {
-      // Refresh current entry after restore
-      if (currentEntry) {
-        await openEntry(currentEntry.path);
-      }
-    }}
     {api}
     requestedTab={requestedSidebarTab}
     onRequestedTabConsumed={() => (requestedSidebarTab = null)}

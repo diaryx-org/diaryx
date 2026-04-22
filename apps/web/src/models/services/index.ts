@@ -42,17 +42,6 @@ export {
 } from './updaterService';
 
 export {
-  getCommitHistory,
-  commitWorkspace,
-  restoreWorkspace,
-  isHistoryAvailable,
-  type CommitLogEntry,
-  type CommitResponse,
-  type RestoreResponse,
-} from './historyService';
-
-
-export {
   setAttachmentSyncBackend,
   setAttachmentSyncContext,
   enqueueAttachmentUpload,

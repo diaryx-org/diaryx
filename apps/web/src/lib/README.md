@@ -8,7 +8,6 @@ contents:
   - "[README](/apps/web/src/lib/components/README.md)"
   - "[README](/apps/web/src/lib/device/README.md)"
   - "[README](/apps/web/src/lib/extensions/README.md)"
-  - "[README](/apps/web/src/lib/history/README.md)"
   - "[README](/apps/web/src/lib/hooks/README.md)"
   - "[README](/apps/web/src/lib/marketplace/README.md)"
   - "[README](/apps/web/src/lib/namespace/README.md)"
@@ -36,7 +35,6 @@ Shared libraries, components, and utilities for the web application.
 | `components/`  | Reusable Svelte components                                             |
 | `device/`      | Device identification                                                  |
 | `extensions/`  | TipTap editor extensions                                               |
-| `history/`     | Version history components                                             |
 | `hooks/`       | Svelte hooks                                                           |
 | `marketplace/` | Marketplace asset registry/apply logic (themes, typographies, bundles) |
 | `namespace/`   | Namespace management services and host-side UI components               |

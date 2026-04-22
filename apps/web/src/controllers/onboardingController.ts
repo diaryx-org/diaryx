@@ -353,7 +353,6 @@ export interface AutoCreateWorkspaceDeps {
   getBackend: (id: string, name: string, storageType?: StorageType) => Promise<any>;
   createApi: (backend: any) => Api;
   setBackend: (backend: any) => void;
-  clearRustApi: () => void;
   initEventSubscription: (backend: any) => (() => void);
   setCleanupEventSubscription: (cleanup: (() => void)) => void;
   refreshTree: () => Promise<void>;
@@ -386,7 +385,6 @@ export async function autoCreateDefaultWorkspace(
     deps.setBackend(backendInstance);
 
     const apiInstance = deps.createApi(backendInstance);
-    deps.clearRustApi();
 
     deps.setCleanupEventSubscription(deps.initEventSubscription(backendInstance));
 
@@ -660,7 +658,6 @@ export async function handleCreateWithProvider(
     const dlBackend = await (await import("$lib/backend")).getBackend();
     const dlApi = deps.autoCreateDeps.createApi(dlBackend);
     deps.autoCreateDeps.setBackend(dlBackend);
-    deps.autoCreateDeps.clearRustApi();
     deps.autoCreateDeps.setCleanupEventSubscription(
       deps.autoCreateDeps.initEventSubscription(dlBackend),
     );
@@ -784,7 +781,6 @@ export async function handleCreateWithProvider(
 export interface HandleWelcomeCompleteDeps {
   getBackend: () => Promise<any>;
   setBackend: (backend: any) => void;
-  clearRustApi: () => void;
   refreshTree: () => Promise<void>;
   getTree: () => { path: string } | null;
   getCurrentEntry: () => any | null;
@@ -810,7 +806,6 @@ export async function handleWelcomeComplete(
   // Just refresh UI state.
   const newBackend = await deps.getBackend();
   deps.setBackend(newBackend);
-  deps.clearRustApi();
 
   await deps.refreshTree();
 

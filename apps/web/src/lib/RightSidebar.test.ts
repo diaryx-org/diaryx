@@ -95,10 +95,6 @@ vi.mock("$lib/components/MoveConfigDialog.svelte", async () => ({
   default: (await import("./test/NoopStub.svelte")).default,
 }));
 
-vi.mock("./history/VersionDiff.svelte", async () => ({
-  default: (await import("./test/NoopStub.svelte")).default,
-}));
-
 // --- Hooks / stores ---
 vi.mock("$lib/hooks/useMobile.svelte", () => ({
   getMobileState: () => ({ isMobile: false }),

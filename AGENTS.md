@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-04-21T02:44:49Z
+updated: 2026-04-22T15:33:42Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -31,7 +31,6 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │   │   │   │   └── UI Components - shadcn-svelte based UI primitives - apps/web/src/lib/components/ui/README.md
 │   │   │   │   ├── Device - Device identification - apps/web/src/lib/device/README.md
 │   │   │   │   ├── Extensions - TipTap editor extensions - apps/web/src/lib/extensions/README.md
-│   │   │   │   ├── History - Version history components - apps/web/src/lib/history/README.md
 │   │   │   │   ├── Hooks - Svelte hooks - apps/web/src/lib/hooks/README.md
 │   │   │   │   ├── Marketplace - Marketplace registries and bundle apply execution - apps/web/src/lib/marketplace/README.md
 │   │   │   │   ├── Namespace - Namespace management services and host-side UI components - apps/web/src/lib/namespace/README.md

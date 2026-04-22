@@ -13,12 +13,28 @@ mod update_agents_index;
 mod util;
 
 use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    let stray_target = detect_stray_target_xtask();
+    if let Some(path) = &stray_target {
+        eprintln!(
+            "warning: xtask built into a stray target dir at\n  {}\n\
+             The canonical location is\n  {}\n\
+             (Cargo's `xtask` alias uses `--target-dir target/xtask`, resolved relative to CWD,\n\
+             so running xtask from a subdirectory creates these strays.)\n\
+             Running the task now, then removing the stray tree on exit.\n",
+            path.display(),
+            util::workspace_root().join("target/xtask").display()
+        );
+    }
+
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((sub, rest)) = args.split_first() else {
         print_help();
+        cleanup_stray(stray_target.as_deref());
         return ExitCode::FAILURE;
     };
 
@@ -37,21 +53,65 @@ fn main() -> ExitCode {
         "update-agents-index" => update_agents_index::run(rest),
         "help" | "-h" | "--help" => {
             print_help();
+            cleanup_stray(stray_target.as_deref());
             return ExitCode::SUCCESS;
         }
         other => {
             eprintln!("unknown xtask subcommand: {other}\n");
             print_help();
+            cleanup_stray(stray_target.as_deref());
             return ExitCode::FAILURE;
         }
     };
 
-    match result {
+    let exit_code = match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: {err}");
             ExitCode::FAILURE
         }
+    };
+    cleanup_stray(stray_target.as_deref());
+    exit_code
+}
+
+/// If the running binary lives under a `target/xtask/` that isn't the one at
+/// the workspace root, return that stray `target/xtask/` path. Otherwise None.
+fn detect_stray_target_xtask() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?.canonicalize().ok()?;
+    let mut cursor = exe.parent()?;
+    let stray = loop {
+        let name = cursor.file_name()?.to_str()?;
+        let parent = cursor.parent()?;
+        let parent_name = parent.file_name().and_then(|n| n.to_str());
+        if name == "xtask" && parent_name == Some("target") {
+            break cursor.to_path_buf();
+        }
+        cursor = parent;
+    };
+    let canonical = util::workspace_root().join("target/xtask");
+    let canonical_norm = canonical.canonicalize().unwrap_or(canonical);
+    if stray == canonical_norm {
+        None
+    } else {
+        Some(stray)
+    }
+}
+
+/// Remove a stray `target/xtask/` tree. Unix unlinks on open-file descriptors
+/// don't kill the running process, so this is safe even though the binary
+/// lives inside the tree being removed.
+fn cleanup_stray(path: Option<&std::path::Path>) {
+    let Some(path) = path else { return };
+    eprintln!("==> Removing stray target dir: {}", path.display());
+    if let Err(e) = fs::remove_dir_all(path) {
+        eprintln!("warning: failed to remove {}: {e}", path.display());
+        return;
+    }
+    // If the parent `target/` dir is now empty, rmdir it too. Ignore errors —
+    // non-empty parents (or missing ones) are fine.
+    if let Some(parent) = path.parent() {
+        let _ = fs::remove_dir(parent);
     }
 }
 

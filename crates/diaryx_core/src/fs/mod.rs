@@ -37,11 +37,6 @@
 //! The filesystem module includes a decorator pattern for extending filesystem behavior:
 //!
 //! - [`EventEmittingFs`]: Emits events for all filesystem operations
-//!
-//! CRDT-aware filesystem decorators (e.g., `CrdtFs`, `DecoratedFsBuilder`) used
-//! to live in a standalone `diaryx_sync` crate; client-side sync now lives in
-//! the Extism sync plugin, while server-side CRDT primitives live in
-//! `diaryx_server::sync`.
 
 mod async_fs;
 mod memory;
@@ -67,7 +62,7 @@ use std::path::{Path, PathBuf};
 
 /// Returns true if the path refers to a temporary file created by the metadata
 /// writer's safe-write process (`.tmp`, `.bak`, `.swap` extensions).
-/// These should be excluded from workspace trees, CRDT updates, and sync.
+/// These should be excluded from workspace trees and sync.
 pub fn is_temp_file(path: &str) -> bool {
     path.ends_with(".tmp") || path.ends_with(".bak") || path.ends_with(".swap")
 }

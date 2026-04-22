@@ -81,7 +81,7 @@ pub enum Command {
         /// Path to the entry to delete.
         path: String,
         /// If true, perform a hard delete (remove from filesystem).
-        /// If false (default), perform a soft delete (mark as deleted in CRDT).
+        /// If false (default), perform a soft delete (mark as deleted).
         #[serde(default)]
         hard_delete: bool,
     },

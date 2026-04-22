@@ -64,7 +64,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         root_index_path: String,
         plugin: String,
     ) -> Result<Response> {
-        let canonical_path = self.get_canonical_path(&root_index_path);
         let frontmatter = self.entry().get_frontmatter(&root_index_path).await?;
 
         if let Some(plugins_value) = frontmatter.get("plugins").cloned()
@@ -103,10 +102,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
         }
 
-        self.plugin_registry()
-            .track_file_for_sync(&canonical_path)
-            .await;
-        self.emit_workspace_sync().await;
         Ok(Response::Ok)
     }
 }

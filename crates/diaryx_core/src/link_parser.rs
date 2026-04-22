@@ -25,9 +25,9 @@
 //! - `PlainRelative`: `../relative/path.md`
 //! - `PlainCanonical`: `workspace/root/path.md`
 //!
-//! # Internal CRDT Storage
+//! # Internal Canonical Paths
 //!
-//! The CRDT layer stores canonical paths WITHOUT the `/` prefix:
+//! Canonical workspace paths are stored WITHOUT the `/` prefix:
 //! ```text
 //! Utility/utility_index.md
 //! ```
@@ -164,7 +164,7 @@ pub fn parse_link(value: &str) -> ParsedLink {
     // Plain path - determine type
     let path_type = determine_path_type(value);
 
-    // Strip leading `/` for workspace-root paths (CRDT stores without prefix)
+    // Strip leading `/` for workspace-root paths (canonical form has no prefix)
     let path = if path_type == PathType::WorkspaceRoot {
         value.strip_prefix('/').unwrap_or(value).to_string()
     } else {
@@ -1744,18 +1744,18 @@ This is the projects index.
     }
 
     // =========================================================================
-    // Regression tests for CRDT sync corruption bug
+    // Regression tests for markdown-link path corruption
     // =========================================================================
     // These tests ensure that markdown links with spaces (which use angle brackets)
     // are parsed correctly and the extracted path can be used safely with Path operations.
-    // The bug was that markdown link strings were passed directly to Path::new() which
-    // would split the link at '/' characters inside the link syntax, corrupting the data.
+    // Previously, raw markdown link strings were passed to Path::new() directly,
+    // which split them at '/' characters inside the link syntax and corrupted the data.
 
     #[test]
     fn test_parse_markdown_link_extracts_clean_path_for_normalization() {
-        // This is the exact case that caused the CRDT sync corruption bug.
-        // The markdown link contains angle brackets because the path has spaces.
-        // When this was passed to Path::new() directly, it got corrupted.
+        // Regression: previously, the raw markdown link string was passed straight
+        // to Path::new(), which split the path at '/' characters inside the link
+        // syntax and corrupted paths used downstream for sync/metadata lookups.
         let raw_value = "[Archived documents](</Archive/Archived documents.md>)";
         let parsed = parse_link(raw_value);
 

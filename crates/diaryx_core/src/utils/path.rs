@@ -53,7 +53,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 /// - Strip leading `./` prefixes
 /// - Strip leading `/` prefixes
 ///
-/// This is used for CRDT/sync key normalization so path aliases like
+/// This is used for sync key normalization so path aliases like
 /// `README.md`, `./README.md`, and `/README.md` are treated as the same file.
 ///
 /// # Example

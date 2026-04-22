@@ -230,54 +230,6 @@ pub trait WorkspacePlugin: Plugin {
     }
 
     // ====================================================================
-    // CRDT side-effect hooks (default: no-op)
-    // ====================================================================
-
-    /// Called after a workspace-modifying operation completes.
-    ///
-    /// Plugins that manage sync state should broadcast CRDT workspace updates
-    /// to connected peers.
-    async fn notify_workspace_modified(&self) {}
-
-    /// Called when a body document needs to be renamed (file was moved/renamed).
-    ///
-    /// Plugins that manage body CRDTs should rename the underlying Y.Doc.
-    async fn on_body_doc_renamed(&self, _old_path: &str, _new_path: &str) {}
-
-    /// Called when a body document should be deleted.
-    ///
-    /// Plugins that manage body CRDTs should remove the underlying Y.Doc.
-    async fn on_body_doc_deleted(&self, _path: &str) {}
-
-    /// Called after a file operation to track CRDT metadata for echo detection.
-    ///
-    /// Plugins should read their own CRDT file metadata for the given canonical
-    /// path and register it with the sync echo tracker.
-    async fn track_file_for_sync(&self, _canonical_path: &str) {}
-
-    /// Track body content for echo detection.
-    ///
-    /// Called after writing body content locally so that the sync system
-    /// can recognize its own writes when they arrive via remote sync.
-    fn track_content_for_sync(&self, _canonical_path: &str, _content: &str) {}
-
-    /// Resolve a canonical path from a storage path.
-    ///
-    /// Returns `Some(canonical)` if the plugin performs path mapping (e.g.,
-    /// guest mode prefix stripping), or `None` to use the default.
-    fn get_canonical_path(&self, _storage_path: &str) -> Option<String> {
-        None
-    }
-
-    /// Get the title for a file from CRDT metadata.
-    ///
-    /// Returns `Some(title)` if the plugin has metadata for the given path,
-    /// or `None` to use the default filename-based title.
-    fn get_file_title(&self, _canonical_path: &str) -> Option<String> {
-        None
-    }
-
-    // ====================================================================
     // Configuration
     // ====================================================================
 

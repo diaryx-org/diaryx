@@ -2103,8 +2103,6 @@ function convertGuestManifest(guest: GuestManifest): PluginManifest {
           return "FileEvents" as PluginCapability;
         case "workspace_events":
           return "WorkspaceEvents" as PluginCapability;
-        case "crdt_commands":
-          return "CrdtCommands" as PluginCapability;
         case "sync_transport":
           return "SyncTransport" as PluginCapability;
         case "custom_commands":

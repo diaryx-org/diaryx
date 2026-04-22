@@ -2,7 +2,7 @@
 //!
 //! Provides fine-grained, path-based permissions for plugin access to
 //! workspace files, HTTP, storage, and commands. Permissions are stored
-//! in the root index frontmatter under a `plugins` key and synced via CRDT.
+//! in the root index frontmatter under a `plugins` key.
 //!
 //! # Permission resolution
 //!

@@ -2,7 +2,6 @@
 //!
 //! These types represent file metadata, binary attachments, and version history
 //! structures that are used in the command/response API and across multiple crates.
-//! They have no CRDT (yrs) dependency and are always available regardless of feature flags.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
@@ -46,10 +45,9 @@ pub struct FileInfo {
     pub modified_at_ms: Option<i64>,
 }
 
-/// Metadata for a file in the workspace CRDT.
+/// Metadata for a file in the workspace.
 ///
-/// This represents the synchronized state of a file's frontmatter properties,
-/// stored in a Y.Map within the workspace document.
+/// This represents the synchronized state of a file's frontmatter properties.
 ///
 /// ## Doc-ID Based Architecture
 ///
@@ -59,8 +57,6 @@ pub struct FileInfo {
 /// The actual filesystem path is derived from the `filename` field and the parent chain:
 /// - `filename`: The file's name on disk (e.g., "my-note.md")
 /// - `part_of`: Document ID of the parent (or None for root files)
-///
-/// Use `WorkspaceCrdt::get_path()` to derive the full path from a doc_id.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
@@ -434,8 +430,8 @@ impl FileMetadata {
 
 /// Reference to a binary attachment file.
 ///
-/// Binary files (images, PDFs, etc.) are stored separately from the CRDT,
-/// with only their metadata tracked in the synchronization system.
+/// Binary files (images, PDFs, etc.) are stored separately from the document
+/// content, with only their metadata tracked here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]

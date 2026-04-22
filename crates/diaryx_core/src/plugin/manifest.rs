@@ -44,8 +44,6 @@ pub enum PluginCapability {
     FileEvents,
     /// Listens to workspace lifecycle events (open, close, change, commit).
     WorkspaceEvents,
-    /// Handles CRDT-related commands (sync, body docs, etc.).
-    CrdtCommands,
     /// Provides sync transport (WebSocket, etc.).
     SyncTransport,
     /// Provides custom commands.
@@ -1055,7 +1053,7 @@ plugins:
     license: "PolyForm Shield 1.0.0"
     repository: "https://github.com/diaryx-org/diaryx-sync"
     categories: ["sync", "collaboration"]
-    tags: ["sync", "crdt", "realtime"]
+    tags: ["sync", "realtime"]
     artifact:
       url: "https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/1.2.3/abc123.wasm"
       sha256: "abc123"
@@ -1079,8 +1077,8 @@ author: "Diaryx Team"
 license: "PolyForm Shield 1.0.0"
 repository: "https://github.com/diaryx-org/diaryx-sync"
 categories: ["sync", "collaboration"]
-tags: ["sync", "crdt", "realtime"]
-capabilities: ["sync_transport", "crdt_commands"]
+tags: ["sync", "realtime"]
+capabilities: ["sync_transport"]
 artifact:
   url: "https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/1.2.3/abc123.wasm"
   sha256: "abc123"

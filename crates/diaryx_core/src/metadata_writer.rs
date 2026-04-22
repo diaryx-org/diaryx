@@ -1,7 +1,7 @@
 //! Metadata-to-frontmatter conversion and file writing utilities.
 //!
-//! This module provides functions to convert `FileMetadata` (from CRDT sync)
-//! into YAML frontmatter format and write files with proper structure.
+//! This module provides functions to convert `FileMetadata` into YAML
+//! frontmatter format and write files with proper structure.
 //!
 //! # Link Formats
 //!
@@ -27,7 +27,7 @@ use crate::fs::AsyncFileSystem;
 use crate::link_parser;
 
 /// Metadata structure for file frontmatter.
-/// This mirrors the CRDT FileMetadata but with simpler types for serialization.
+/// This mirrors `FileMetadata` but with simpler types for serialization.
 ///
 /// When serialized to YAML, `part_of`, `contents`, and `attachments` are formatted as markdown links
 /// with workspace-root paths: `[Title](/path/to/file.md)`
@@ -58,7 +58,7 @@ pub struct FrontmatterMetadata {
 }
 
 impl FrontmatterMetadata {
-    /// Parse from a JSON value (typically from CRDT FileMetadata).
+    /// Parse from a JSON value (typically from `FileMetadata`).
     ///
     /// Note: This basic version doesn't convert paths. For writing files to disk
     /// with proper markdown links, use `from_json_with_markdown_links`.
@@ -95,7 +95,7 @@ impl FrontmatterMetadata {
     /// ```ignore
     /// let metadata = FrontmatterMetadata::from_json_with_markdown_links(
     ///     &json_value,
-    ///     |path| crdt.get_file(path).and_then(|m| m.title).unwrap_or_else(|| path_to_title(path))
+    ///     |path| path_to_title(path),
     /// );
     /// ```
     pub fn from_json_with_markdown_links<F>(value: &serde_json::Value, title_resolver: F) -> Self
@@ -443,7 +443,7 @@ pub async fn write_file_with_metadata<FS: AsyncFileSystem>(
 /// # Arguments
 /// * `fs` - The filesystem to write to
 /// * `path` - The storage path to write the file to
-/// * `metadata` - The JSON metadata (typically from CRDT FileMetadata)
+/// * `metadata` - The JSON metadata (typically from `FileMetadata`)
 /// * `body` - The body content of the file
 /// * `canonical_path` - The canonical path of the file (e.g., "folder/index.md") for path conversion
 pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(

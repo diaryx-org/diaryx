@@ -170,10 +170,6 @@ pub enum DiaryxError {
     #[error("Plugin error: {0}")]
     Plugin(String),
 
-    /// Error from CRDT operations (sync, storage, etc.)
-    #[error("CRDT error: {0}")]
-    Crdt(String),
-
     /// Error from database operations.
     ///
     /// Stored as a string so `diaryx_core` stays free of any specific database
@@ -225,7 +221,6 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::Unsupported(_) => "Unsupported",
             DiaryxError::Validation(_) => "Validation",
             DiaryxError::Plugin(_) => "Plugin",
-            DiaryxError::Crdt(_) => "Crdt",
             DiaryxError::Database(_) => "Database",
             DiaryxError::Git(_) => "Git",
         }

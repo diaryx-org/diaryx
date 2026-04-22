@@ -2,7 +2,7 @@
 //!
 //! This module defines the events emitted by the [`EventEmittingFs`](super::EventEmittingFs)
 //! decorator when filesystem operations occur. These events can be used to trigger
-//! UI updates, CRDT synchronization, or other side effects.
+//! UI updates, sync broadcasts, or other side effects.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -106,7 +106,6 @@ pub enum FileSystemEvent {
     },
 
     /// Request to send sync message over WebSocket.
-    /// Emitted by command handler after CRDT updates.
     SendSyncMessage {
         /// Document name ("workspace" for workspace, file path for body)
         doc_name: String,

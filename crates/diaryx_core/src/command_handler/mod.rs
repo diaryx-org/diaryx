@@ -174,7 +174,7 @@ use std::path::Component;
 
 /// Normalize a path by resolving a relative path against a base directory.
 /// Handles `.` and `..` components without filesystem access.
-/// Returns a forward-slash-separated path string suitable for CRDT keys.
+/// Returns a forward-slash-separated canonical workspace path.
 /// Also handles corrupted absolute paths by stripping the workspace base path if found.
 #[cfg(test)]
 fn normalize_contents_path(base_dir: &Path, relative: &str, workspace_base: &Path) -> String {
@@ -407,13 +407,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     /// Get the canonical path from a storage path.
-    ///
-    /// Delegates to the plugin registry (e.g., SyncPlugin) if a plugin provides
-    /// path mapping. Otherwise returns the path unchanged.
     fn get_canonical_path(&self, storage_path: &str) -> String {
-        self.plugin_registry()
-            .get_canonical_path(storage_path)
-            .unwrap_or_else(|| storage_path.to_string())
+        storage_path.to_string()
     }
 
     /// Sync the first H1 heading in the body to the given title.
@@ -430,11 +425,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
     }
 
-    /// Notify plugins that the workspace was modified (for sync broadcast).
-    async fn emit_workspace_sync(&self) {
-        self.plugin_registry().notify_workspace_modified().await;
-    }
-
     /// Format a canonical path as a link for frontmatter.
     ///
     /// Uses the configured link format (see [`link_format`]).
@@ -443,9 +433,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// * `canonical_path` - The canonical path of the target file
     /// * `from_canonical_path` - The canonical path of the file containing this link
     ///
-    /// The title is resolved from:
-    /// 1. CRDT metadata (if available and has a title)
-    /// 2. Fallback: generated from the filename using `path_to_title`
+    /// The title is generated from the filename using `path_to_title`.
     fn format_link_for_file(&self, canonical_path: &str, from_canonical_path: &str) -> String {
         let title = self.resolve_title(canonical_path);
         let format = self.link_format();
@@ -488,12 +476,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
     /// Resolve a display title for a canonical path.
     ///
-    /// Looks up the title from CRDT metadata if available,
-    /// otherwise generates one from the filename.
+    /// Generates the title from the filename.
     fn resolve_title(&self, canonical_path: &str) -> String {
-        if let Some(title) = self.plugin_registry().get_file_title(canonical_path) {
-            return title;
-        }
         link_parser::path_to_title(canonical_path)
     }
 
@@ -1367,9 +1351,8 @@ mod tests {
     // =========================================================================
     // Integration test: parse_link + normalize_contents_path
     // =========================================================================
-    // This tests the fix for the CRDT sync corruption bug where markdown links
-    // in frontmatter contents were passed directly to normalize_contents_path,
-    // corrupting the path.
+    // Regression: markdown links in frontmatter `contents` were previously
+    // passed directly to normalize_contents_path, which corrupted the path.
 
     #[test]
     fn test_parse_then_normalize_markdown_link_with_spaces() {

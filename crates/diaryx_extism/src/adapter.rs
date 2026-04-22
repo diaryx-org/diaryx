@@ -344,7 +344,6 @@ fn convert_guest_manifest(guest: &GuestManifest) -> PluginManifest {
         .filter_map(|cap| match cap.as_str() {
             "file_events" => Some(PluginCapability::FileEvents),
             "workspace_events" => Some(PluginCapability::WorkspaceEvents),
-            "crdt_commands" => Some(PluginCapability::CrdtCommands),
             "sync_transport" => Some(PluginCapability::SyncTransport),
             "custom_commands" => Some(PluginCapability::CustomCommands {
                 commands: guest.commands.clone(),

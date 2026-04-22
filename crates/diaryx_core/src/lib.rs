@@ -67,7 +67,7 @@ pub mod workspace;
 /// Multi-workspace registry types shared across frontends
 pub mod workspace_registry;
 
-/// Core data types (FileMetadata, BinaryRef, CrdtStorage trait, history types)
+/// Core data types (FileMetadata, BinaryRef, history types)
 pub mod types;
 
 /// Plugin architecture for modular feature composition

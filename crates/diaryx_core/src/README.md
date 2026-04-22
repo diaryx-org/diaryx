@@ -46,8 +46,6 @@ This directory contains the source code for the core Diaryx library.
 | `appearance/`  | Workspace appearance: theme colors, typography, favicon resolution |
 | `plugin/`      | Plugin architecture: traits, events, registry               |
 | `publish/`     | HTML publishing pipeline (includes `ContentProvider` trait)  |
-| `crdt/`        | CRDT sync and version history (requires `crdt` feature)     |
-| `cloud/`       | Bidirectional file sync with cloud storage                  |
 | `entry/`       | Entry manipulation functionality                            |
 | `fs/`          | Filesystem abstraction layer                                |
 | `utils/`       | Utility functions (date, path)                              |
@@ -76,18 +74,10 @@ When `SetFrontmatterProperty` is called with `key="title"` and a `root_index_pat
 the handler reads workspace config and atomically:
 1. Computes the new filename using `apply_filename_style()` (if `auto_rename_to_title` is enabled)
 2. Renames the file via `workspace.rename_entry()` (handles both leaf files and index directories)
-3. Migrates the body CRDT doc to the new path
-4. Sets the title in frontmatter at the (possibly new) path
-5. Syncs the first H1 heading (if `sync_title_to_heading` is enabled)
+3. Sets the title in frontmatter at the (possibly new) path
+4. Syncs the first H1 heading (if `sync_title_to_heading` is enabled)
 
 Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherwise.
-
-## CRDT Metadata Notes
-
-- `Command::SetCrdtFile` preserves existing attachment `BinaryRef` metadata
-  when incoming metadata omits attachments or includes refs with empty hashes.
-  This avoids dropping cloud attachment references during frontmatter-driven
-  metadata refreshes.
 
 ## Attachment Path Resolution Notes
 
@@ -173,9 +163,6 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
 
 - `execute()` normalizes command path fields to workspace-relative values when a
   workspace root is configured.
-- CRDT commands with `doc_name` path semantics (for body docs and generic
-  sync-doc operations) are normalized through the same workspace-root stripping
-  logic, so absolute paths do not leak into sync doc IDs.
 - Workspace-root stripping also handles the corrupted absolute form where a
   leading slash was already removed (for example `Users/.../workspace/file.md`).
 - Handlers that call `Workspace`, `Validator`, exporter/search root APIs, or

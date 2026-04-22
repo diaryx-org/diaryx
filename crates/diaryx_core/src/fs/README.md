@@ -17,7 +17,6 @@ This module provides filesystem abstraction through `FileSystem` (synchronous) a
 |------|---------|
 | `async_fs.rs` | Async filesystem trait and `SyncToAsyncFs` adapter |
 | `memory.rs` | In-memory filesystem (portable; used by tests, WASM, and web client) |
-| `crdt_fs.rs` | CRDT-aware filesystem decorator |
 | `event_fs.rs` | Event-emitting filesystem decorator |
 | `events.rs` | Filesystem event types |
 | `callback_registry.rs` | Callback management for events |
@@ -36,76 +35,6 @@ Platform-specific backends live in sibling crates:
 directories for `write_file`, `write_binary`, and `create_new` operations. This
 keeps behavior consistent across web/native backends for nested path writes,
 including attachment/media uploads.
-
-Cross-backend parity is exercised by:
-
-- `crates/diaryx_core/tests/crdt_fs_trait_parity.rs`
-
-Run with:
-
-```bash
-cargo test -p diaryx_core --features crdt --test crdt_fs_trait_parity
-```
-
-## Sync Write Markers
-
-`AsyncFileSystem::mark_sync_write_start/end` markers are forwarded through the
-decorator stack (including `EventEmittingFs`) to `CrdtFs`. This prevents remote
-sync writes from being re-emitted as new local CRDT updates.
-
-`CrdtFs` also normalizes sync path keys before tracking local-write suppression,
-so path aliases (`README.md`, `./README.md`, `/README.md`) map to one logical
-file during sync echo handling.
-
-`CrdtFs` now shares its enabled flag across cloned decorator instances. This
-keeps runtime `set_enabled()` toggles consistent when one clone is used for
-command execution and another for control/sync wiring.
-
-Sync write suppression now applies to `move_file` and `delete_file` too (not
-just `write_file`). This is critical for safe-write swaps (`file -> file.bak ->
-file`) used by metadata updates during remote sync. Temp-file paths (`.tmp`,
-`.bak`, `.swap`) are skipped for CRDT mutations, preventing transient swap
-operations from corrupting workspace path state.
-
-## Frontmatter Path Canonicalization
-
-`CrdtFs` canonicalizes frontmatter references before writing metadata to CRDT:
-
-- `part_of`
-- `contents[]`
-- `attachments[]`
-
-It resolves links through `link_parser` (supports markdown links, workspace-root
-links, and relative paths) and stores workspace-relative canonical paths in CRDT
-metadata.
-
-When frontmatter parsing falls back from direct serde mapping, `attachments`
-entries are still preserved (string links and object/BinaryRef-style entries),
-so attachment refs are not dropped during CRDT metadata updates.
-
-If a file write contains no `attachments` frontmatter at all, `CrdtFs` now
-preserves existing CRDT `BinaryRef` entries for that file instead of replacing
-them with an empty list.
-
-For ambiguous plain paths (`Folder/file.md`), resolution is hint-aware:
-
-- if workspace/frontmatter link format is `plain_canonical`, ambiguous links are
-  treated as workspace-root canonical paths;
-- otherwise they default to relative semantics, with a filesystem existence check
-  to disambiguate legacy data safely.
-
-## Legacy Rename Handling
-
-`CrdtFs::move_file` now detects legacy path-key CRDT entries (non-UUID keys such
-as `notes/file.md`) and uses delete+create semantics for the CRDT mutation:
-
-- Old key is tombstoned.
-- New key is created from destination file content.
-- Destination body doc is treated as a fresh doc state.
-
-This keeps workspace metadata paths aligned with body-sync doc paths during
-renames, which prevents "old path/new path split-brain" sync behavior and
-reduces duplicate body merges after rename-heavy sessions.
 
 ## Safe-write Recovery
 

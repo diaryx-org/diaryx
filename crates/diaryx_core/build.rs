@@ -6,11 +6,7 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
 
     // Process README files with frontmatter stripping
-    let readmes = [
-        ("README.md", "README.md"),
-        ("src/crdt/README.md", "crdt_README.md"),
-        ("src/cloud/README.md", "cloud_README.md"),
-    ];
+    let readmes = [("README.md", "README.md")];
 
     for (src, dest) in readmes {
         if let Ok(content) = fs::read_to_string(src) {

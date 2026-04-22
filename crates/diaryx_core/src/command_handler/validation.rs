@@ -39,10 +39,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let total_failed = error_fixes.iter().filter(|r| !r.success).count()
             + warning_fixes.iter().filter(|r| !r.success).count();
 
-        if total_fixed > 0 {
-            self.emit_workspace_sync().await;
-        }
-
         Ok(Response::FixSummary(crate::command::FixSummary {
             error_fixes,
             warning_fixes,
@@ -72,10 +68,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             )),
         };
 
-        if result.success {
-            self.emit_workspace_sync().await;
-        }
-
         Ok(Response::FixResult(result))
     }
 
@@ -87,10 +79,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ) -> Result<Response> {
         let fixer = self.validate().fixer();
         let result = fixer.fix_error(&error).await;
-
-        if result.success {
-            self.emit_workspace_sync().await;
-        }
 
         Ok(Response::FixResult(result))
     }

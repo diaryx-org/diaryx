@@ -213,13 +213,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
     }
 
-    async fn track_link_metadata_change(&self, path: &str) {
-        let canonical_path = self.get_canonical_path(path);
-        self.plugin_registry()
-            .track_file_for_sync(&canonical_path)
-            .await;
-    }
-
     pub(crate) async fn cmd_get_frontmatter(&self, path: String) -> Result<Response> {
         let fm = self.entry().get_frontmatter(&path).await?;
         Ok(Response::Frontmatter(fm))
@@ -234,7 +227,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ) -> Result<Response> {
         // Handle link/part_of/contents/attachments specially - normalize and
         // format links according to workspace settings.
-        // CrdtFs.write_file extracts metadata from frontmatter automatically
         {
             let canonical_path = self.get_canonical_path(&path);
 
@@ -246,12 +238,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
-
-                    self.plugin_registry()
-                        .track_file_for_sync(&canonical_path)
-                        .await;
-
-                    self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 }
             } else if key == "attachment" {
@@ -267,35 +253,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
-
-                    self.plugin_registry()
-                        .track_file_for_sync(&canonical_path)
-                        .await;
-
-                    self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 }
             } else if key == "part_of" {
-                // Parse the value, convert to canonical, format as markdown link
                 if let YamlValue::String(ref s) = value {
                     let canonical_target = self.resolve_frontmatter_link_target(s, &canonical_path);
-
-                    // Format as markdown link for file
                     let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
-
-                    // Write formatted link to file - CrdtFs extracts metadata automatically
                     let yaml_value = YamlValue::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
-
-                    // Track for echo detection
-                    self.plugin_registry()
-                        .track_file_for_sync(&canonical_path)
-                        .await;
-
-                    // Emit workspace sync message
-                    self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 }
             } else if key == "contents"
@@ -303,7 +270,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 || key == "link_of"
                 || key == "attachment_of"
             {
-                // Handle contents array - format each item as markdown link
                 if let YamlValue::Sequence(ref arr) = value {
                     let mut formatted_links: Vec<YamlValue> = Vec::new();
 
@@ -320,19 +286,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         }
                     }
 
-                    // Write formatted links to file - CrdtFs extracts metadata automatically
                     let yaml_value = YamlValue::Sequence(formatted_links);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
-
-                    // Track for echo detection
-                    self.plugin_registry()
-                        .track_file_for_sync(&canonical_path)
-                        .await;
-
-                    // Emit workspace sync message
-                    self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 }
             } else if key == "attachments" {
@@ -354,13 +311,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
-
-                    // Track for echo detection
-                    self.plugin_registry()
-                        .track_file_for_sync(&canonical_path)
-                        .await;
-
-                    self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 } else if let YamlValue::String(ref s) = value {
                     let canonical_target = self.resolve_attachment_link_target_with_hint(
@@ -373,13 +323,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
-
-                    // Track for echo detection
-                    self.plugin_registry()
-                        .track_file_for_sync(&canonical_path)
-                        .await;
-
-                    self.emit_workspace_sync().await;
                     return Ok(Response::Ok);
                 }
             }
@@ -439,29 +382,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 if current_comparable != new_stem {
                     let new_path = ws.rename_entry(&entry_path, &new_filename).await?;
-                    let new_path_str = new_path.to_string_lossy().to_string();
-
-                    // Migrate body CRDT doc to new path
-                    {
-                        let canonical_old = self.get_canonical_path(&path);
-                        let canonical_new = self.get_canonical_path(&new_path_str);
-                        if canonical_old != canonical_new {
-                            self.plugin_registry()
-                                .emit_body_doc_renamed(&canonical_old, &canonical_new)
-                                .await;
-                        }
-                    }
-
-                    effective_path = new_path_str;
+                    effective_path = new_path.to_string_lossy().to_string();
                 }
             }
 
             // Always sync title to H1 heading
             self.sync_heading_to_title(&effective_path, new_title)
                 .await?;
-
-            // Emit workspace sync (covers both rename + frontmatter update)
-            self.emit_workspace_sync().await;
 
             // Return new path if rename happened, Ok otherwise
             if effective_path != path {
@@ -484,34 +411,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         path: String,
         key: String,
     ) -> Result<Response> {
-        // Remove property from frontmatter - CrdtFs extracts metadata automatically
         self.entry()
             .remove_frontmatter_property(&path, &key)
             .await?;
-
-        // CrdtFs handles CRDT updates automatically via write_file hook.
-        // We only need to track for echo detection and emit sync.
-        {
-            if key == "link"
-                || key == "attachment"
-                || key == "links"
-                || key == "link_of"
-                || key == "attachment_of"
-                || key == "part_of"
-                || key == "contents"
-                || key == "attachments"
-            {
-                let canonical_path = self.get_canonical_path(&path);
-
-                // Track for echo detection
-                self.plugin_registry()
-                    .track_file_for_sync(&canonical_path)
-                    .await;
-
-                // Emit workspace sync message
-                self.emit_workspace_sync().await;
-            }
-        }
 
         Ok(Response::Ok)
     }
@@ -548,12 +450,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .upsert_frontmatter_link_array_item(&target_path, "link_of", &source_canonical)
             .await?;
         changed |= self.ensure_self_link_property(&target_path).await?;
-
-        if changed {
-            self.track_link_metadata_change(&source_path).await;
-            self.track_link_metadata_change(&target_path).await;
-            self.emit_workspace_sync().await;
-        }
+        let _ = changed;
 
         Ok(Response::Ok)
     }
@@ -592,14 +489,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 .remove_frontmatter_link_array_item(&target_path, "link_of", &source_canonical)
                 .await?;
         }
-
-        if changed {
-            self.track_link_metadata_change(&source_path).await;
-            if self.fs().exists(&target_fs_path).await {
-                self.track_link_metadata_change(&target_path).await;
-            }
-            self.emit_workspace_sync().await;
-        }
+        let _ = changed;
 
         Ok(Response::Ok)
     }

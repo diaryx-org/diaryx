@@ -56,29 +56,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .map(|c| c.auto_update_timestamp)
             .unwrap_or(true);
 
-        // Save to filesystem (CrdtFs automatically updates body CRDT via its write hook)
         self.entry()
             .save_content_with_options(&path, &content, auto_update)
             .await?;
-
-        // Track for echo detection and emit sync message if CRDT is enabled
-        {
-            let canonical_path = self.get_canonical_path(&path);
-            log::debug!(
-                "[CommandHandler] SaveEntry: canonical_path='{}' (from input path='{}')",
-                canonical_path,
-                path
-            );
-
-            // Track for echo detection
-            self.plugin_registry()
-                .track_content_for_sync(&canonical_path, frontmatter::extract_body(&content));
-
-            log::debug!(
-                "[CommandHandler] SaveEntry: completed for canonical_path='{}'",
-                canonical_path
-            );
-        }
 
         // Emit file-saved event to file plugins
         self.plugin_registry()
@@ -142,25 +122,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     if current_comparable != new_stem {
                         let new_path = ws.rename_entry(&entry_path, &new_filename).await?;
                         let new_path_str = new_path.to_string_lossy().to_string();
-
-                        // Migrate body CRDT doc to new path
-                        {
-                            let canonical_old = self.get_canonical_path(&path);
-                            let canonical_new = self.get_canonical_path(&new_path_str);
-                            if canonical_old != canonical_new {
-                                self.plugin_registry()
-                                    .emit_body_doc_renamed(&canonical_old, &canonical_new)
-                                    .await;
-                            }
-
-                            self.emit_workspace_sync().await;
-                        }
-
                         return Ok(Response::String(new_path_str));
                     }
-
-                    // Title changed but filename didn't need to change
-                    self.emit_workspace_sync().await;
 
                     return Ok(Response::String(path));
                 }
@@ -243,7 +206,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             format!("---\ntitle: {}\n---\n\n# {}\n\n", title, title)
         };
 
-        // CrdtFs.create_new extracts metadata from frontmatter automatically
         let resolved_path = self.resolve_fs_path(&path);
         self.fs()
             .create_new(&resolved_path, &content)
@@ -254,7 +216,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             })?;
 
         // Set part_of if provided - format based on configured link format
-        // CrdtFs.write_file (via set_frontmatter_property) extracts updated metadata
         if let Some(ref parent) = options.part_of {
             let _formatted_link = {
                 let canonical_path = self.get_canonical_path(&path);
@@ -270,25 +231,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 .await?;
         }
 
-        // CrdtFs handles CRDT updates automatically via create_new and write_file hooks.
-        // We only need to track for echo detection and emit sync.
-        {
-            let canonical_path = self.get_canonical_path(&path);
-
-            // Track for echo detection
-            self.plugin_registry()
-                .track_file_for_sync(&canonical_path)
-                .await;
-
-            // Emit workspace sync message
-            self.emit_workspace_sync().await;
-
-            log::debug!(
-                "[CommandHandler] CreateEntry: created {} (CrdtFs handled CRDT)",
-                canonical_path
-            );
-        }
-
         // Emit file-created event to file plugins
         self.plugin_registry()
             .emit_file_created(&FileCreatedEvent { path: path.clone() })
@@ -302,22 +244,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         path: String,
         _hard_delete: bool,
     ) -> Result<Response> {
-        // Use Workspace::delete_entry which handles contents cleanup
-        // CrdtFs.delete_file marks as deleted and updates parent contents automatically
         let resolved_path = self.resolve_fs_path(&path);
         let ws = self.workspace().inner();
         ws.delete_entry(&resolved_path).await?;
-
-        // Delete body doc CRDT and emit sync
-        {
-            self.plugin_registry().emit_body_doc_deleted(&path).await;
-            self.emit_workspace_sync().await;
-
-            log::debug!(
-                "[CommandHandler] DeleteEntry: deleted {} (CrdtFs handled CRDT)",
-                path
-            );
-        }
 
         // Emit file-deleted event to file plugins
         self.plugin_registry()
@@ -332,16 +261,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             return Ok(Response::String(to));
         }
 
-        // Use Workspace::move_entry which handles contents/part_of updates
         let resolved_from = self.resolve_fs_path(&from);
         let resolved_to = self.resolve_fs_path(&to);
         let ws = self.workspace().inner();
         ws.move_entry(&resolved_from, &resolved_to).await?;
-
-        // Migrate body doc CRDT to new path
-        self.plugin_registry()
-            .emit_body_doc_renamed(&from, &to)
-            .await;
 
         // Emit file-moved event to file plugins
         self.plugin_registry()
@@ -375,26 +298,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let new_path = ws.rename_entry(&from_path, &new_filename).await?;
         let to_path_str = new_path.to_string_lossy().to_string();
 
-        // Migrate body doc and emit sync
-        {
-            let canonical_old = self.get_canonical_path(&path);
-            let canonical_new = self.get_canonical_path(&to_path_str);
-
-            if canonical_old != canonical_new {
-                self.plugin_registry()
-                    .emit_body_doc_renamed(&canonical_old, &canonical_new)
-                    .await;
-            }
-
-            self.emit_workspace_sync().await;
-
-            log::debug!(
-                "[CommandHandler] RenameEntry: renamed {} -> {} (CrdtFs handled CRDT)",
-                canonical_old,
-                canonical_new
-            );
-        }
-
         // Sync H1 heading to match the new title
         self.sync_heading_to_title(&to_path_str, &title).await?;
 
@@ -410,31 +313,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     pub(crate) async fn cmd_duplicate_entry(&self, path: String) -> Result<Response> {
-        // workspace.duplicate_entry uses fs.write_file which goes through CrdtFs
-        // CrdtFs extracts metadata from frontmatter automatically
         let resolved_path = self.resolve_fs_path(&path);
         let ws = self.workspace().inner();
         let new_path = ws.duplicate_entry(&resolved_path).await?;
         let new_path_str = new_path.to_string_lossy().to_string();
-
-        // CrdtFs handles CRDT updates automatically via write_file hooks.
-        // We only need to track for echo detection and emit sync.
-        {
-            let canonical_path = self.get_canonical_path(&new_path_str);
-
-            // Track for echo detection
-            self.plugin_registry()
-                .track_file_for_sync(&canonical_path)
-                .await;
-
-            // Emit workspace sync message
-            self.emit_workspace_sync().await;
-
-            log::debug!(
-                "[CommandHandler] DuplicateEntry: duplicated {} (CrdtFs handled CRDT)",
-                canonical_path
-            );
-        }
 
         Ok(Response::String(new_path_str))
     }
@@ -448,48 +330,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
 
         // Add empty contents array to frontmatter
-        // CrdtFs.write_file extracts contents: [] from frontmatter automatically
         self.entry()
             .set_frontmatter_property(&path, "contents", YamlValue::Sequence(vec![]))
             .await?;
-
-        // CrdtFs handles CRDT updates automatically via write_file hook.
-        // We only need to track for echo detection and emit sync.
-        {
-            let canonical_path = self.get_canonical_path(&path);
-
-            // Track for echo detection
-            self.plugin_registry()
-                .track_file_for_sync(&canonical_path)
-                .await;
-
-            // Emit workspace sync for hierarchy change
-            self.emit_workspace_sync().await;
-        }
 
         Ok(Response::String(path))
     }
 
     pub(crate) async fn cmd_convert_to_leaf(&self, path: String) -> Result<Response> {
-        // Remove contents property from frontmatter
-        // CrdtFs.write_file detects absence of contents property automatically
         self.entry()
             .remove_frontmatter_property(&path, "contents")
             .await?;
-
-        // CrdtFs handles CRDT updates automatically via write_file hook.
-        // We only need to track for echo detection and emit sync.
-        {
-            let canonical_path = self.get_canonical_path(&path);
-
-            // Track for echo detection
-            self.plugin_registry()
-                .track_file_for_sync(&canonical_path)
-                .await;
-
-            // Emit workspace sync for hierarchy change
-            self.emit_workspace_sync().await;
-        }
 
         Ok(Response::String(path))
     }
@@ -501,26 +352,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .create_child_entry_with_result(&resolved_parent_path, None)
             .await?;
 
-        // CrdtFs handles CRDT updates automatically via create_new and write_file hooks.
-        // We only need to track for echo detection and emit sync.
-        {
-            let canonical_child = self.get_canonical_path(&result.child_path);
-
-            // Track for echo detection
-            self.plugin_registry()
-                .track_file_for_sync(&canonical_child)
-                .await;
-
-            // Emit workspace sync message
-            self.emit_workspace_sync().await;
-
-            log::debug!(
-                "[CommandHandler] CreateChildEntry: created {} (parent_converted={}, CrdtFs handled CRDT)",
-                canonical_child,
-                result.parent_converted
-            );
-        }
-
         Ok(Response::CreateChildResult(result))
     }
 
@@ -529,7 +360,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         entry_path: String,
         parent_path: String,
     ) -> Result<Response> {
-        // workspace.attach_and_move_entry_to_parent uses move operations via CrdtFs
         let resolved_entry_path = self.resolve_fs_path(&entry_path);
         let resolved_parent_path = self.resolve_fs_path(&parent_path);
         let ws = self.workspace().inner();
@@ -537,29 +367,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .attach_and_move_entry_to_parent(&resolved_entry_path, &resolved_parent_path)
             .await?;
         let new_path_str = new_path.to_string_lossy().to_string();
-
-        // CrdtFs handles CRDT updates automatically via move_file hooks.
-        // We only need to migrate body doc and emit sync.
-        {
-            let canonical_old = self.get_canonical_path(&entry_path);
-            let canonical_new = self.get_canonical_path(&new_path_str);
-
-            // Migrate body doc CRDT to new path
-            if canonical_old != canonical_new {
-                self.plugin_registry()
-                    .emit_body_doc_renamed(&canonical_old, &canonical_new)
-                    .await;
-            }
-
-            // Emit workspace sync message
-            self.emit_workspace_sync().await;
-
-            log::debug!(
-                "[CommandHandler] AttachEntryToParent: moved {} -> {} (CrdtFs handled CRDT)",
-                canonical_old,
-                canonical_new
-            );
-        }
 
         Ok(Response::String(new_path_str))
     }
@@ -578,11 +385,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let ws = self.workspace().inner();
         ws.sync_move_metadata(&resolved_old, &resolved_new).await?;
 
-        // Migrate body doc CRDT to new path
-        self.plugin_registry()
-            .emit_body_doc_renamed(&old_path, &new_path)
-            .await;
-
         Ok(Response::String(new_path))
     }
 
@@ -591,14 +393,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let ws = self.workspace().inner();
         ws.sync_create_metadata(&resolved_path).await?;
 
-        {
-            self.emit_workspace_sync().await;
-
-            log::debug!(
-                "[CommandHandler] SyncCreateMetadata: added {} to hierarchy",
-                path
-            );
-        }
+        log::debug!(
+            "[CommandHandler] SyncCreateMetadata: added {} to hierarchy",
+            path
+        );
 
         Ok(Response::Ok)
     }
@@ -608,14 +406,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let ws = self.workspace().inner();
         ws.sync_delete_metadata(&resolved_path).await?;
 
-        {
-            self.emit_workspace_sync().await;
-
-            log::debug!(
-                "[CommandHandler] SyncDeleteMetadata: removed {} from hierarchy",
-                path
-            );
-        }
+        log::debug!(
+            "[CommandHandler] SyncDeleteMetadata: removed {} from hierarchy",
+            path
+        );
 
         Ok(Response::Ok)
     }

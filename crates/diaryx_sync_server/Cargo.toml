@@ -82,7 +82,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 dotenvy = "0.15"
 
 [build-dependencies]
-diaryx_core = { path = "../diaryx_core" }
+diaryx_core = { workspace = true }
 
 [dev-dependencies]
 tokio-tungstenite = "0.26"

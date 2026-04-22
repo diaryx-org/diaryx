@@ -15,7 +15,7 @@ name = "diaryx"
 path = "src/main.rs"
 
 [dependencies]
-diaryx_core = { workspace = true }
+diaryx_core = { workspace = true, features = ["uuid"] }
 diaryx_native = { workspace = true }
 diaryx_extism = { workspace = true, optional = true, features = ["http", "ws-transport"] }
 async-trait = "0.1"

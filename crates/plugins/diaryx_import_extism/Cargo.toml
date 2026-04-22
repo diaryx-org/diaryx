@@ -15,14 +15,14 @@ markdown-import = []
 email-import = ["dep:mailparse"]
 
 [dependencies]
-diaryx_core = { path = "../../diaryx_core" }
+diaryx_core = { workspace = true }
 diaryx_plugin_sdk = { workspace = true, features = ["core", "files"] }
 extism-pdk = "1.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml_ng = "0.10"
-indexmap = { version = "2", features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+indexmap.workspace = true
 base64 = "0.22"
-chrono = { workspace = true }
+chrono.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
 mailparse = { version = "0.16", optional = true }

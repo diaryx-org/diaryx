@@ -42,10 +42,17 @@ fn update_cargo_toml(path: &Path, version: &str) -> Result<(), String> {
     // [workspace.package].version
     doc["workspace"]["package"]["version"] = value(version);
 
-    // [workspace.dependencies].diaryx_core.version
-    // (diaryx_core is version-locked with the workspace; other internal crates
-    // have independent release cycles and are intentionally left untouched.)
-    for name in ["diaryx_core"] {
+    // [workspace.dependencies].<crate>.version for every internal crate that
+    // is version-locked to the workspace. Extism guest plugins under
+    // crates/plugins/*_extism ship on independent release cycles to the
+    // marketplace, so they are intentionally not listed here.
+    for name in [
+        "diaryx_core",
+        "diaryx_native",
+        "diaryx_server",
+        "diaryx_extism",
+        "diaryx_plugin_sdk",
+    ] {
         let dep = &mut doc["workspace"]["dependencies"][name];
         if dep.is_none() {
             continue;

@@ -12,6 +12,6 @@ crate-type = ["cdylib"]
 [dependencies]
 diaryx_plugin_sdk = { workspace = true, features = ["core"] }
 extism-pdk = "1.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde.workspace = true
+serde_json.workspace = true
 pulldown-latex = "0.6"

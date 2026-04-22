@@ -2481,16 +2481,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diaryx_daily"
-version = "1.4.5"
-dependencies = [
- "chrono",
- "chrono-english",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "diaryx_daily_extism"
 version = "0.1.8"
 dependencies = [

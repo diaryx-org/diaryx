@@ -6,7 +6,6 @@ members = [
     "crates/diaryx_native",
     "crates/diaryx",
     "crates/diaryx_wasm",
-    "crates/diaryx_daily",
     "crates/diaryx_sync_server",
     "crates/diaryx_extism",
     "crates/plugins/diaryx_plugin_sdk",
@@ -55,12 +54,11 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "std"
 indexmap = { version = "2.0", features = ["serde"] }
 
 # Internal crates - version must match workspace.package.version for publishing
-diaryx_server = { path = "crates/diaryx_server", version = "1.4.0" }
-diaryx_core = { path = "crates/diaryx_core", version = "1.4.5" }
+diaryx_server = { path = "crates/diaryx_server", version = "1.4.5" }
+diaryx_core = { path = "crates/diaryx_core", version = "1.4.5", default-features = false }
 diaryx_native = { path = "crates/diaryx_native", version = "1.4.5" }
-diaryx_daily = { path = "crates/diaryx_daily", version = "1.3.0" }
-diaryx_extism = { path = "crates/diaryx_extism", version = "1.3.0" }
-diaryx_plugin_sdk = { path = "crates/plugins/diaryx_plugin_sdk", version = "1.4.1", features = ["getrandom-shim"] }
+diaryx_extism = { path = "crates/diaryx_extism", version = "1.4.5" }
+diaryx_plugin_sdk = { path = "crates/plugins/diaryx_plugin_sdk", version = "1.4.5", features = ["getrandom-shim"] }
 
 # cargo-release configuration
 [workspace.metadata.release]

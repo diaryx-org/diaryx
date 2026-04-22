@@ -2,8 +2,8 @@
 //!
 //! Helpers for serializing timestamps with the local timezone offset.
 //!
-//! Natural language date parsing ("today", "3 days ago", etc.) has moved
-//! to the `diaryx_daily` / `plugin-daily` crates which own that functionality.
+//! Natural language date parsing ("today", "3 days ago", etc.) lives in the
+//! `diaryx_daily_extism` plugin.
 
 use chrono::{Local, SecondsFormat, TimeZone};
 

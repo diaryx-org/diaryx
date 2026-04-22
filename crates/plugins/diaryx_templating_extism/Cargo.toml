@@ -10,13 +10,13 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-diaryx_core = { path = "../../diaryx_core", default-features = false }
+diaryx_core = { workspace = true, default-features = false }
 diaryx_plugin_sdk = { workspace = true }
 extism-pdk = "1.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml_ng = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
-indexmap = { version = "2", features = ["serde"] }
+indexmap.workspace = true
 base64 = "0.22"
 handlebars = "6"

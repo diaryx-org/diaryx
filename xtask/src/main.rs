@@ -1,5 +1,7 @@
 mod build_plugin;
 mod build_wasm;
+mod check;
+mod clean;
 mod publish_ios;
 mod publish_macos;
 mod release_plugin;
@@ -23,6 +25,8 @@ fn main() -> ExitCode {
     let result = match sub.as_str() {
         "build-wasm" => build_wasm::run(rest),
         "build-plugin" => build_plugin::run(rest),
+        "check" => check::run(rest),
+        "clean" => clean::run(rest),
         "publish-ios" => publish_ios::run(rest),
         "publish-macos" => publish_macos::run(rest),
         "release-plugin" => release_plugin::run(rest),
@@ -63,6 +67,16 @@ fn print_help() {
     eprintln!(
         "  build-plugin <name>          Build a plugin WASM (pass --release for size-optimized output)"
     );
+    eprintln!(
+        "  check [--fix]                Run cargo fmt + clippy (rust lane) concurrently with"
+    );
+    eprintln!(
+        "                               svelte-check (web lane). --fix applies clippy/fmt autofixes."
+    );
+    eprintln!(
+        "  clean [--dry-run]            Run `cargo clean` and remove stray nested target/ dirs"
+    );
+    eprintln!("                               in apps/web and crates/diaryx_wasm");
     eprintln!(
         "  publish-ios                  Build the iOS App Store export and upload via altool (macOS only)"
     );

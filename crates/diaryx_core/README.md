@@ -383,7 +383,7 @@ let now = current_local_timestamp_rfc3339();
 let from_millis = timestamp_millis_to_local_rfc3339(1_700_000_000_000);
 ```
 
-Natural language date parsing ("today", "3 days ago", etc.) is provided by the `diaryx_daily` crate / `plugin-daily` Extism plugin.
+Natural language date parsing ("today", "3 days ago", etc.) is provided by the `diaryx_daily_extism` plugin.
 
 ## Shared errors
 

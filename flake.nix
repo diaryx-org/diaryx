@@ -218,7 +218,6 @@
               cargo-binstall
               bun
               pkg-config
-              prek
               llvmPackages.lld
               openssl.dev
               binaryen

@@ -2,6 +2,8 @@ mod build_plugin;
 mod build_wasm;
 mod check;
 mod clean;
+mod install_hooks;
+mod pre_commit;
 mod publish_ios;
 mod publish_macos;
 mod release_plugin;
@@ -43,6 +45,8 @@ fn main() -> ExitCode {
         "build-plugin" => build_plugin::run(rest),
         "check" => check::run(rest),
         "clean" => clean::run(rest),
+        "install-hooks" => install_hooks::run(rest),
+        "pre-commit" => pre_commit::run(rest),
         "publish-ios" => publish_ios::run(rest),
         "publish-macos" => publish_macos::run(rest),
         "release-plugin" => release_plugin::run(rest),
@@ -137,6 +141,16 @@ fn print_help() {
         "  clean [--dry-run]            Run `cargo clean` and remove stray nested target/ dirs"
     );
     eprintln!("                               in apps/web and crates/diaryx_wasm");
+    eprintln!(
+        "  install-hooks [--force]      Install .git/hooks/pre-commit that calls `cargo xtask pre-commit`"
+    );
+    eprintln!(
+        "  pre-commit [--all]           Run the project pre-commit checks (whitespace/EOF fixers,"
+    );
+    eprintln!("                               check-yaml/json, cargo fmt+clippy, svelte-check,");
+    eprintln!(
+        "                               sync-versions, update-agents-index). Invoked from the git hook."
+    );
     eprintln!(
         "  publish-ios                  Build the iOS App Store export and upload via altool (macOS only)"
     );

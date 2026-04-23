@@ -136,4 +136,4 @@ cargo xtask tauri macos
 Read these files directly when needed:
 
 - CI/workflows: `.github/workflows/*.yml`
-- Pre-commit config: `.pre-commit-config.yaml`
+- Pre-commit hook: `cargo xtask pre-commit` (install via `cargo xtask install-hooks`)

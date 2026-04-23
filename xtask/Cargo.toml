@@ -14,6 +14,8 @@ diaryx_native = { workspace = true }
 chrono = { workspace = true }
 futures-lite = "2"
 indexmap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 sha2 = "0.10"
 toml_edit = "0.22"

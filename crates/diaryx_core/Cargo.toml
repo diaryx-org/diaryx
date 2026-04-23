@@ -26,6 +26,11 @@ serde_yaml_ng.workspace = true
 sha2 = "0.10"
 thiserror.workspace = true
 async-trait = "0.1"
+# Used by PluginRegistry::init_all to drive plugin init futures concurrently
+# via FuturesUnordered. `default-features = false, features = ["std"]`
+# avoids pulling in the executor and io modules we don't need; this also
+# keeps the WASM build slim.
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 urlencoding = "2"
 uuid = { version = "1", features = ["v4", "rng-getrandom"], optional = true }
 

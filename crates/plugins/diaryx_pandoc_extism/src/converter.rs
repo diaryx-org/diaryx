@@ -141,17 +141,6 @@ pub fn download_converter(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Ensure a converter is available, downloading it if needed.
-///
-/// Called during plugin init to pre-cache the converter WASM.
-pub fn ensure_converter(name: &str) {
-    if !is_converter_available(name) {
-        if let Err(e) = download_converter(name) {
-            host::log::log("warn", &format!("Failed to download {name} on init: {e}"));
-        }
-    }
-}
-
 // ============================================================================
 // Format conversion
 // ============================================================================

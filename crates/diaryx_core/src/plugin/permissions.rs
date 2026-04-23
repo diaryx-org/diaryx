@@ -69,7 +69,7 @@ pub struct PluginPermissions {
 }
 
 /// A single permission rule with include/exclude lists.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PermissionRule {
     /// Scope values that grant access. Can be:
     /// - `"all"` — allow everything
@@ -84,6 +84,14 @@ pub struct PermissionRule {
     /// Exclude always wins over include.
     #[serde(default)]
     pub exclude: Vec<String>,
+
+    /// Per-plugin quota in bytes. Only meaningful for `plugin_storage` —
+    /// other permission types ignore this field. `None` means "use the
+    /// host default" (currently 1 MiB). The host caps the effective
+    /// value at its hard ceiling regardless of what's configured here,
+    /// so a plugin can't request unlimited disk by editing a number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_bytes: Option<u64>,
 }
 
 /// The categories of permission that can be checked.
@@ -408,6 +416,7 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["all".to_string()],
             exclude: vec![],
+            quota_bytes: None,
         };
         assert_eq!(
             check_file_permission(&rule, "journal/2026-03-02.md"),
@@ -420,6 +429,7 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["all".to_string()],
             exclude: vec!["[Sensitive](/private/sensitive.md)".to_string()],
+            quota_bytes: None,
         };
         assert_eq!(
             check_file_permission(&rule, "journal/2026-03-02.md"),
@@ -441,6 +451,7 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["[Daily](/journal/daily/daily.md)".to_string()],
             exclude: vec![],
+            quota_bytes: None,
         };
         // The file is under the folder containing daily.md
         assert_eq!(
@@ -459,6 +470,7 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["[My File](/projects/todo.md)".to_string()],
             exclude: vec![],
+            quota_bytes: None,
         };
         assert_eq!(
             check_file_permission(&rule, "projects/todo.md"),
@@ -475,6 +487,7 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["[Daily](/journal/daily/daily.md)".to_string()],
             exclude: vec![],
+            quota_bytes: None,
         };
         assert_eq!(
             check_file_permission(&rule, "private/secret.md"),
@@ -487,6 +500,7 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["all".to_string()],
             exclude: vec!["[Private](/private/private.md)".to_string()],
+            quota_bytes: None,
         };
         assert_eq!(
             check_file_permission(&rule, "private/notes.md"),
@@ -499,6 +513,7 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["openrouter.ai".to_string(), "api.anthropic.com".to_string()],
             exclude: vec![],
+            quota_bytes: None,
         };
         assert_eq!(
             check_http_permission(&rule, "https://openrouter.ai/v1/chat"),
@@ -519,6 +534,7 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["all".to_string()],
             exclude: vec![],
+            quota_bytes: None,
         };
         assert_eq!(
             check_http_permission(&rule, "https://anything.com/path"),
@@ -531,12 +547,14 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["all".to_string()],
             exclude: vec![],
+            quota_bytes: None,
         };
         assert_eq!(check_storage_permission(&rule), PermissionCheck::Allowed);
 
         let empty_rule = PermissionRule {
             include: vec![],
             exclude: vec![],
+            quota_bytes: None,
         };
         assert_eq!(
             check_storage_permission(&empty_rule),
@@ -580,14 +598,17 @@ mod tests {
                     read_files: Some(PermissionRule {
                         include: vec!["[Daily](/journal/daily/daily.md)".to_string()],
                         exclude: vec!["[Sensitive](/private/sensitive.md)".to_string()],
+                        quota_bytes: None,
                     }),
                     http_requests: Some(PermissionRule {
                         include: vec!["openrouter.ai".to_string()],
                         exclude: vec![],
+                        quota_bytes: None,
                     }),
                     plugin_storage: Some(PermissionRule {
                         include: vec!["all".to_string()],
                         exclude: vec![],
+                        quota_bytes: None,
                     }),
                     ..Default::default()
                 },
@@ -687,18 +708,22 @@ mod tests {
                         "[Utility](/utility/utility.md)".to_string(),
                     ],
                     exclude: vec!["[Sensitive](/private/sensitive.md)".to_string()],
+                    quota_bytes: None,
                 }),
                 edit_files: Some(PermissionRule {
                     include: vec!["[Daily](/journal/daily/daily.md)".to_string()],
                     exclude: vec![],
+                    quota_bytes: None,
                 }),
                 http_requests: Some(PermissionRule {
                     include: vec!["openrouter.ai".to_string(), "api.anthropic.com".to_string()],
                     exclude: vec![],
+                    quota_bytes: None,
                 }),
                 plugin_storage: Some(PermissionRule {
                     include: vec!["all".to_string()],
                     exclude: vec![],
+                    quota_bytes: None,
                 }),
                 ..Default::default()
             },
@@ -719,6 +744,7 @@ mod tests {
         let rule = PermissionRule {
             include: vec!["all".to_string()],
             exclude: vec![],
+            quota_bytes: None,
         };
         // Both with and without leading slash should work
         assert_eq!(

@@ -60,7 +60,10 @@ pub fn manifest(_input: String) -> FnResult<String> {
         defaults: serde_json::json!({
             "read_files": { "include": ["all"], "exclude": [] },
             "http_requests": { "include": ["unpkg.com"], "exclude": [] },
-            "plugin_storage": { "include": ["all"], "exclude": [] }
+            // The pandoc WASM module is ~58 MB; request 100 MiB so the
+            // download fits with headroom. The host caps this at its hard
+            // ceiling regardless.
+            "plugin_storage": { "include": ["all"], "exclude": [], "quota_bytes": 104857600u64 }
         }),
         reasons: [
             (
@@ -73,7 +76,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
             ),
             (
                 "plugin_storage".into(),
-                "Cache downloaded pandoc WASM module between runs.".into(),
+                "Cache the ~58 MB pandoc WASM module between runs.".into(),
             ),
         ]
         .into_iter()
@@ -98,7 +101,14 @@ pub fn init(input: String) -> FnResult<String> {
         .map_err(extism_pdk::Error::msg)?;
     }
 
-    converter::ensure_converter("pandoc");
+    // The pandoc WASM is ~58 MB and must be downloaded over HTTP. We used
+    // to fetch it here to pre-warm the cache, but that blocked init for
+    // 20+ seconds and held up every other plugin's readiness reporting on
+    // hosts that init plugins serially. `convert_format` already
+    // downloads on demand, so init now returns immediately and the cost
+    // moves to the first conversion (when the user explicitly asked for
+    // it). Hosts that want eager warming can dispatch `DownloadConverter`
+    // themselves.
 
     host::log::log("info", "Pandoc plugin initialized");
     Ok(String::new())

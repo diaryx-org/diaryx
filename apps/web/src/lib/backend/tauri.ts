@@ -191,6 +191,9 @@ export class TauriBackend implements Backend {
   }
   private extismEventUnlisteners: UnlistenFn[] = [];
   private pluginsReadyCallbacks = new Set<() => void>();
+  private pluginReadyCallbacks = new Set<
+    (event: { id: string; ok: boolean; error?: string | null; gen: number }) => void
+  >();
 
   private async invokeInitWithRetry<T>(
     command: "initialize_app" | "reinitialize_workspace",
@@ -480,6 +483,24 @@ export class TauriBackend implements Backend {
       },
     );
     this.extismEventUnlisteners.push(unlistenPlugins);
+
+    // Per-plugin readiness: fires once per plugin as it finishes init, in
+    // completion order. Lets the UI react incrementally instead of waiting
+    // for the slowest plugin.
+    const unlistenPluginReady = await this.listen<{
+      id: string;
+      ok: boolean;
+      error?: string | null;
+      gen: number;
+    }>(
+      "plugin-ready",
+      (event) => {
+        for (const callback of this.pluginReadyCallbacks) {
+          callback(event.payload);
+        }
+      },
+    );
+    this.extismEventUnlisteners.push(unlistenPluginReady);
   }
 
   /**
@@ -562,6 +583,13 @@ export class TauriBackend implements Backend {
   onPluginsReady(callback: () => void): () => void {
     this.pluginsReadyCallbacks.add(callback);
     return () => { this.pluginsReadyCallbacks.delete(callback); };
+  }
+
+  onPluginReady(
+    callback: (event: { id: string; ok: boolean; error?: string | null; gen: number }) => void,
+  ): () => void {
+    this.pluginReadyCallbacks.add(callback);
+    return () => { this.pluginReadyCallbacks.delete(callback); };
   }
 
   emitFileSystemEvent(event: FileSystemEvent): void {

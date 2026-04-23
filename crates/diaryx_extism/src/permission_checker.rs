@@ -132,6 +132,20 @@ impl PermissionChecker for FrontmatterPermissionChecker {
             )),
         }
     }
+
+    fn storage_quota_bytes(&self, plugin_id: &str) -> Option<u64> {
+        // Re-read frontmatter on each call for consistency with
+        // check_permission. If the frontmatter is unreadable or the plugin
+        // has no quota_bytes configured, return None — host falls back to
+        // its default quota.
+        self.load_plugins_config()
+            .ok()?
+            .get(plugin_id)?
+            .permissions
+            .plugin_storage
+            .as_ref()?
+            .quota_bytes
+    }
 }
 
 fn normalize_workspace_file_target(root_index_path: Option<&Path>, target: &str) -> String {
@@ -194,6 +208,7 @@ mod tests {
         PermissionRule {
             include: include.iter().map(|value| (*value).to_string()).collect(),
             exclude: Vec::new(),
+            quota_bytes: None,
         }
     }
 

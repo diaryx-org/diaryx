@@ -16,7 +16,7 @@ use crate::macos_security_scoped::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -188,6 +188,13 @@ pub struct AppState {
     /// Signalled when background plugin loading completes.
     /// Commands that need plugins wait on this before retrying.
     pub plugins_ready: Arc<PluginsReady>,
+    /// Monotonic counter bumped every time a fresh background plugin load is
+    /// kicked off. Background tasks capture the value at spawn time and skip
+    /// writing back state (cached Diaryx, loaded-at timestamp, ready latch,
+    /// `plugins-ready` event) if the generation has moved on while they were
+    /// running. This prevents a slow/stale workspace's load from clobbering a
+    /// newer workspace that started loading mid-flight.
+    pub plugin_load_generation: Arc<AtomicU64>,
     /// Active macOS security-scoped workspace access, when needed.
     #[cfg(target_os = "macos")]
     pub workspace_access: Mutex<Option<ActiveSecurityScopedAccess>>,
@@ -200,6 +207,7 @@ impl AppState {
             diaryx: Mutex::new(None),
             plugins_loaded_at: Mutex::new(None),
             plugins_ready: Arc::new(PluginsReady::new()),
+            plugin_load_generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "macos")]
             workspace_access: Mutex::new(None),
         }
@@ -584,12 +592,26 @@ fn merge_permission_rule(
         Some(rule) => rule.include.is_empty() && rule.exclude.is_empty(),
     };
 
-    if !should_fill {
-        return false;
+    if should_fill {
+        *current = Some(requested_rule.clone());
+        return true;
     }
 
-    *current = Some(requested_rule.clone());
-    true
+    // Rule already populated by the user — preserve their include/exclude
+    // choices, but backfill quota_bytes if the requested manifest has one
+    // and the user's config doesn't. This keeps previously-approved
+    // permissions working when a plugin upgrades to declare a quota
+    // (e.g. Pandoc moving from no-quota to 100 MiB); otherwise the user
+    // would be silently capped at the host default and have to edit the
+    // frontmatter by hand.
+    let Some(rule) = current.as_mut() else {
+        return false;
+    };
+    if rule.quota_bytes.is_none() && requested_rule.quota_bytes.is_some() {
+        rule.quota_bytes = requested_rule.quota_bytes;
+        return true;
+    }
+    false
 }
 
 #[cfg(feature = "extism-plugins")]
@@ -2269,8 +2291,18 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
     }
     // Arm the latch *before* spawning the bg task so any execute() call that
     // observes the basic instance will correctly wait for the upcoming load.
+    // Bumping the generation in the same step lets any in-flight bg task from
+    // a prior get_or_init recognize that it's stale and skip its writes.
     app_state.plugins_ready.reset();
-    log::info!("[get_or_init] Basic instance cached: {:?}", t0.elapsed());
+    let my_gen = app_state
+        .plugin_load_generation
+        .fetch_add(1, Ordering::AcqRel)
+        + 1;
+    log::info!(
+        "[get_or_init] Basic instance cached: {:?} (gen={})",
+        t0.elapsed(),
+        my_gen
+    );
 
     // Phase 2: Load plugins in the background and swap in a full instance
     // when ready. Core commands work immediately; plugin commands become
@@ -2278,6 +2310,7 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
     #[cfg(feature = "extism-plugins")]
     {
         let app_handle = app.clone();
+        let load_gen = Arc::clone(&app_state.plugin_load_generation);
         tauri::async_runtime::spawn(async move {
             let t1 = std::time::Instant::now();
             let app_state = app_handle.state::<AppState>();
@@ -2286,13 +2319,41 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
             // bail out early on a poisoned lock or panic. Without this, a
             // failed background load would leave execute() callers parked
             // forever waiting for plugins_ready.
-            struct ReadyGuard(Arc<PluginsReady>);
+            //
+            // Only mark ready if we're still the current generation —
+            // otherwise a stale finishing task would prematurely flip the
+            // latch for the newer generation that just called reset().
+            struct ReadyGuard {
+                plugins_ready: Arc<PluginsReady>,
+                load_gen: Arc<AtomicU64>,
+                my_gen: u64,
+            }
             impl Drop for ReadyGuard {
                 fn drop(&mut self) {
-                    self.0.mark_ready();
+                    if self.load_gen.load(Ordering::Acquire) == self.my_gen {
+                        self.plugins_ready.mark_ready();
+                    }
                 }
             }
-            let _ready_guard = ReadyGuard(Arc::clone(&app_state.plugins_ready));
+            let _ready_guard = ReadyGuard {
+                plugins_ready: Arc::clone(&app_state.plugins_ready),
+                load_gen: Arc::clone(&load_gen),
+                my_gen,
+            };
+
+            let is_stale = || {
+                let current = load_gen.load(Ordering::Acquire);
+                if current != my_gen {
+                    log::info!(
+                        "[get_or_init:bg] Skipping stale plugin load (my_gen={}, current_gen={})",
+                        my_gen,
+                        current
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
 
             let workspace_path = {
                 let ws_guard = match acquire_lock(&app_state.workspace_path) {
@@ -2313,17 +2374,54 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
 
             let adapters = register_extism_plugins(&app_handle, &mut d);
             log::info!(
-                "[get_or_init:bg] register_extism_plugins: {:?}",
-                t1.elapsed()
+                "[get_or_init:bg] register_extism_plugins: {:?} (gen={})",
+                t1.elapsed(),
+                my_gen
             );
+
+            // If a newer load was kicked off while we were registering
+            // plugins, drop our work before it can clobber shared state or
+            // mislead the frontend with stale adapter metadata.
+            if is_stale() {
+                return;
+            }
 
             sync_loaded_plugin_adapters(&app_handle, adapters);
             let full_diaryx = Arc::new(d);
 
-            let init_failures = full_diaryx.init_plugins().await;
-            log::info!("[get_or_init:bg] init_plugins: {:?}", t1.elapsed());
+            // Run plugin init concurrently and emit a `plugin-ready` event
+            // per plugin as each finishes — gives the frontend per-plugin
+            // visibility instead of waiting for the slowest to complete.
+            // Stale-generation tasks still emit; the frontend can use the
+            // generation tag to ignore them, and the existing late
+            // is_stale() check below blocks the final swap+broadcast.
+            let progress_handle = app_handle.clone();
+            let init_failures = full_diaryx
+                .init_plugins_with_progress(|id, result| {
+                    let payload = serde_json::json!({
+                        "id": id.to_string(),
+                        "ok": result.is_ok(),
+                        "error": result.err().map(|e| e.to_string()),
+                        "gen": my_gen,
+                    });
+                    let _ = progress_handle.emit("plugin-ready", payload);
+                })
+                .await;
+            log::info!(
+                "[get_or_init:bg] init_plugins: {:?} (gen={})",
+                t1.elapsed(),
+                my_gen
+            );
             for (id, err) in &init_failures {
                 log::error!("Plugin {} failed to init: {}", id, err);
+            }
+
+            // The init_plugins().await above can block for tens of seconds
+            // (e.g. plugin doing network I/O). Re-check generation before
+            // landing the result so a slow stale load can't overwrite a
+            // newer workspace's already-cached instance.
+            if is_stale() {
+                return;
             }
 
             match acquire_lock(&app_state.diaryx) {
@@ -2339,8 +2437,9 @@ async fn get_or_init_tauri_diaryx<R: Runtime>(
                 *loaded_guard = Some(SystemTime::now());
             }
             log::info!(
-                "[get_or_init:bg] Plugin loading complete: {:?}",
-                t1.elapsed()
+                "[get_or_init:bg] Plugin loading complete: {:?} (gen={})",
+                t1.elapsed(),
+                my_gen
             );
 
             // Notify the frontend so it can re-render with plugin support
@@ -5696,6 +5795,7 @@ mod tests {
         PermissionRule {
             include: include.iter().map(|value| (*value).to_string()).collect(),
             exclude: exclude.iter().map(|value| (*value).to_string()).collect(),
+            quota_bytes: None,
         }
     }
 
@@ -5825,6 +5925,79 @@ mod tests {
                 .include,
             vec!["all".to_string()]
         );
+    }
+
+    #[test]
+    fn merge_requested_permission_defaults_backfills_quota_on_existing_rule() {
+        // Existing rule has user-approved include/exclude but no quota_bytes
+        // (e.g. workspace predates the quota field). The plugin manifest now
+        // requests a quota — we should backfill it without disturbing the
+        // user's other choices.
+        let mut existing_rule = rule(&["all"], &[]);
+        existing_rule.quota_bytes = None;
+        let mut plugins = HashMap::from([(
+            "diaryx.pandoc".to_string(),
+            PluginConfig {
+                download: None,
+                permissions: PluginPermissions {
+                    plugin_storage: Some(existing_rule),
+                    ..PluginPermissions::default()
+                },
+            },
+        )]);
+
+        let mut requested_rule = rule(&["all"], &[]);
+        requested_rule.quota_bytes = Some(104_857_600);
+        let defaults = PluginPermissions {
+            plugin_storage: Some(requested_rule),
+            ..PluginPermissions::default()
+        };
+
+        let changed = merge_requested_permission_defaults(&mut plugins, "diaryx.pandoc", &defaults);
+
+        assert!(changed, "missing quota_bytes should be backfilled");
+        let storage = plugins["diaryx.pandoc"]
+            .permissions
+            .plugin_storage
+            .as_ref()
+            .expect("plugin_storage should still be present");
+        assert_eq!(storage.include, vec!["all".to_string()]);
+        assert_eq!(storage.quota_bytes, Some(104_857_600));
+    }
+
+    #[test]
+    fn merge_requested_permission_defaults_preserves_user_quota_override() {
+        // The user already chose a smaller quota. A plugin update that
+        // requests more should not overwrite that choice.
+        let mut existing_rule = rule(&["all"], &[]);
+        existing_rule.quota_bytes = Some(2_000_000);
+        let mut plugins = HashMap::from([(
+            "diaryx.pandoc".to_string(),
+            PluginConfig {
+                download: None,
+                permissions: PluginPermissions {
+                    plugin_storage: Some(existing_rule),
+                    ..PluginPermissions::default()
+                },
+            },
+        )]);
+
+        let mut requested_rule = rule(&["all"], &[]);
+        requested_rule.quota_bytes = Some(104_857_600);
+        let defaults = PluginPermissions {
+            plugin_storage: Some(requested_rule),
+            ..PluginPermissions::default()
+        };
+
+        let changed = merge_requested_permission_defaults(&mut plugins, "diaryx.pandoc", &defaults);
+
+        assert!(!changed, "user-set quota should not be overridden");
+        let storage = plugins["diaryx.pandoc"]
+            .permissions
+            .plugin_storage
+            .as_ref()
+            .expect("plugin_storage should still be present");
+        assert_eq!(storage.quota_bytes, Some(2_000_000));
     }
 
     #[test]

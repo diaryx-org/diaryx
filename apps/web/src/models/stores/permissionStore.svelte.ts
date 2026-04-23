@@ -37,6 +37,12 @@ export interface PermissionRequest {
 export interface PermissionRule {
   include: string[];
   exclude: string[];
+  /**
+   * Per-plugin quota in bytes. Only meaningful for `plugin_storage` —
+   * other permission types ignore this field. Omitted means "use the
+   * host default".
+   */
+  quota_bytes?: number;
 }
 
 export interface PluginPermissions {

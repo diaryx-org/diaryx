@@ -479,6 +479,20 @@ export interface Backend {
   onPluginsReady?(callback: () => void): () => void;
 
   /**
+   * Register a callback that fires once per plugin as it finishes init,
+   * in completion order (not registration order). Useful for streaming
+   * UI updates: a slow plugin no longer blocks others from being shown.
+   *
+   * `gen` is a per-load generation tag — if a workspace switch races with
+   * an in-flight load, listeners can compare `gen` to ignore stale events.
+   *
+   * Returns an unsubscribe function.
+   */
+  onPluginReady?(
+    callback: (event: { id: string; ok: boolean; error?: string | null; gen: number }) => void,
+  ): () => void;
+
+  /**
    * Manually emit a filesystem event.
    *
    * Primarily used for testing or manual sync scenarios.

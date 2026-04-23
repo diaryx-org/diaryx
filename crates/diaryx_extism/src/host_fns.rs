@@ -589,6 +589,16 @@ pub trait PermissionChecker: Send + Sync {
         permission_type: PermissionType,
         target: &str,
     ) -> Result<(), String>;
+
+    /// Return the configured per-plugin storage quota in bytes.
+    ///
+    /// `None` means "use the host's default quota". The host will cap any
+    /// returned value at [`MAX_STORAGE_QUOTA_BYTES`] regardless, so a
+    /// misconfigured workspace can't exceed the ceiling.
+    fn storage_quota_bytes(&self, plugin_id: &str) -> Option<u64> {
+        let _ = plugin_id;
+        None
+    }
 }
 
 /// Context shared with host functions via Extism's `UserData` mechanism.
@@ -627,7 +637,17 @@ pub struct HostContext {
 }
 
 /// Default plugin storage quota: 1 MiB.
+///
+/// Used when the workspace frontmatter doesn't specify a `quota_bytes` for
+/// the plugin's `plugin_storage` permission rule.
 pub const DEFAULT_STORAGE_QUOTA_BYTES: u64 = 1024 * 1024;
+
+/// Hard ceiling on per-plugin storage quota: 1 GiB.
+///
+/// The host caps the effective quota at this value regardless of what the
+/// plugin requests or what the user approves in frontmatter. Prevents a
+/// plugin from claiming unlimited disk via the permission system.
+pub const MAX_STORAGE_QUOTA_BYTES: u64 = 1024 * 1024 * 1024;
 
 impl HostContext {
     /// Create a context with just a filesystem (backwards compatible).
@@ -1623,11 +1643,21 @@ fn host_storage_set(
         plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
         return Ok(());
     }
-    if ctx.storage_quota_bytes > 0 && bytes.len() as u64 > ctx.storage_quota_bytes {
+    // Resolve effective quota: prefer what the permission checker says (which
+    // reads the user-approved value from workspace frontmatter), fall back to
+    // the static per-context default. Cap at the hard ceiling so an
+    // overzealous frontmatter value can't exceed it.
+    let effective_quota = ctx
+        .permission_checker
+        .as_ref()
+        .and_then(|c| c.storage_quota_bytes(&ctx.plugin_id))
+        .unwrap_or(ctx.storage_quota_bytes)
+        .min(MAX_STORAGE_QUOTA_BYTES);
+    if effective_quota > 0 && bytes.len() as u64 > effective_quota {
         let msg = format!(
             "host_storage_set: data size ({} bytes) exceeds plugin storage quota ({} bytes)",
             bytes.len(),
-            ctx.storage_quota_bytes
+            effective_quota
         );
         plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
         return Ok(());

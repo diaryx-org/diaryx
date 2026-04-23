@@ -148,30 +148,72 @@ impl PluginRegistry {
     // Lifecycle
     // ========================================================================
 
-    /// Initialize all registered plugins.
+    /// Initialize all registered plugins concurrently.
     ///
     /// Plugins that fail to init are marked as [`PluginHealth::Failed`] and
     /// skipped for subsequent event dispatch. Returns a list of all failures
     /// (empty means all plugins initialized successfully).
     pub async fn init_all(&self, ctx: &PluginContext) -> Vec<(PluginId, PluginError)> {
-        let mut errors = Vec::new();
+        self.init_all_with_progress(ctx, |_, _| {}).await
+    }
+
+    /// Initialize all registered plugins concurrently, calling `on_progress`
+    /// each time a plugin's init finishes (in completion order, not
+    /// registration order).
+    ///
+    /// This is the parallel equivalent of [`init_all`](Self::init_all): each
+    /// plugin's `init` future is polled concurrently inside a
+    /// `FuturesUnordered`, so a slow plugin (e.g. one that does network I/O)
+    /// no longer blocks the others from being reported ready. The total wait
+    /// drops from `sum(init_times)` to `max(init_times)`.
+    ///
+    /// `on_progress` runs synchronously on this task between polls; keep it
+    /// cheap (e.g. emit a Tauri event, push to a channel) — anything heavy
+    /// will stall the next plugin's completion from being observed.
+    pub async fn init_all_with_progress<F>(
+        &self,
+        ctx: &PluginContext,
+        mut on_progress: F,
+    ) -> Vec<(PluginId, PluginError)>
+    where
+        F: FnMut(&PluginId, Result<(), &PluginError>),
+    {
+        use futures_util::stream::{FuturesUnordered, StreamExt};
+
         let total = self.plugins.len();
         log::info!("[plugin-registry] Initializing {} plugin(s)", total);
-        for plugin in &self.plugins {
-            let id = plugin.id();
-            log::debug!("[plugin-registry] Init start: {}", id);
-            match plugin.init(ctx).await {
+
+        let mut tasks: FuturesUnordered<_> = self
+            .plugins
+            .iter()
+            .map(|plugin| {
+                let plugin = Arc::clone(plugin);
+                let id = plugin.id();
+                log::debug!("[plugin-registry] Init start: {}", id);
+                async move {
+                    let result = plugin.init(ctx).await;
+                    (id, result)
+                }
+            })
+            .collect();
+
+        let mut errors = Vec::new();
+        while let Some((id, result)) = tasks.next().await {
+            match result {
                 Ok(()) => {
                     log::info!("[plugin-registry] Init OK: {}", id);
-                    self.set_health(id, PluginHealth::Healthy);
+                    self.set_health(id.clone(), PluginHealth::Healthy);
+                    on_progress(&id, Ok(()));
                 }
                 Err(e) => {
                     log::error!("[plugin-registry] Init FAILED: {}: {}", id, e);
                     self.set_health(id.clone(), PluginHealth::Failed(e.to_string()));
+                    on_progress(&id, Err(&e));
                     errors.push((id, e));
                 }
             }
         }
+
         let healthy = total - errors.len();
         if errors.is_empty() {
             log::info!("[plugin-registry] Init complete: {} healthy", healthy);

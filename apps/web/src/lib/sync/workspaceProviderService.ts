@@ -88,6 +88,7 @@ function clonePermissionRule(rule: PermissionRule): PermissionRule {
   return {
     include: [...(rule.include ?? [])],
     exclude: [...(rule.exclude ?? [])],
+    ...(rule.quota_bytes !== undefined ? { quota_bytes: rule.quota_bytes } : {}),
   };
 }
 

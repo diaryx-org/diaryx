@@ -101,6 +101,25 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
         self.plugin_registry.init_all(&ctx).await
     }
 
+    /// Like [`init_plugins`](Self::init_plugins), but invokes `on_progress`
+    /// each time a plugin finishes init (in completion order). Plugins are
+    /// driven concurrently, so a slow plugin no longer blocks others from
+    /// being reported ready.
+    pub async fn init_plugins_with_progress<F>(
+        &self,
+        on_progress: F,
+    ) -> Vec<(crate::plugin::PluginId, crate::plugin::PluginError)>
+    where
+        // Use std::result::Result explicitly — `Result` is aliased to
+        // `Result<T, DiaryxError>` at the top of this module.
+        F: FnMut(&crate::plugin::PluginId, std::result::Result<(), &crate::plugin::PluginError>),
+    {
+        let ctx = crate::plugin::PluginContext::new(self.workspace_root(), self.link_format);
+        self.plugin_registry
+            .init_all_with_progress(&ctx, on_progress)
+            .await
+    }
+
     /// Get entry operations accessor.
     ///
     /// This provides methods for reading/writing file content and frontmatter.

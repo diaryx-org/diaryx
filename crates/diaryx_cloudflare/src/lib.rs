@@ -3,7 +3,6 @@ pub mod config;
 mod getrandom_shim;
 mod handlers;
 pub mod sync;
-mod tokens;
 
 use worker::*;
 
@@ -59,26 +58,20 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "/api/namespaces/:ns_id/audiences/:name",
             handlers::delete_audience,
         )
-        // Subscribers
-        .post_async(
-            "/api/namespaces/:ns_id/audiences/:audience_name/subscribers",
-            handlers::add_subscriber,
-        )
+        // Magic-link token issuance (owner-authenticated).
         .get_async(
-            "/api/namespaces/:ns_id/audiences/:audience_name/subscribers",
-            handlers::list_subscribers,
+            "/api/namespaces/:ns_id/audiences/:name/token",
+            handlers::get_audience_link_token,
         )
-        .delete_async(
-            "/api/namespaces/:ns_id/audiences/:audience_name/subscribers/:contact_id",
-            handlers::remove_subscriber,
-        )
+        // Password-gate unlock (unauthenticated; password IS the auth).
         .post_async(
-            "/api/namespaces/:ns_id/audiences/:audience_name/subscribers/import",
-            handlers::bulk_import_subscribers,
+            "/api/namespaces/:ns_id/audiences/:name/unlock",
+            handlers::unlock_audience,
         )
+        // Password rotation (owner-authenticated).
         .post_async(
-            "/api/namespaces/:ns_id/audiences/:audience_name/send-email",
-            handlers::send_audience_email,
+            "/api/namespaces/:ns_id/audiences/:name/rotate-password",
+            handlers::rotate_audience_password,
         )
         // Domains
         .get_async("/api/namespaces/:ns_id/domains", handlers::list_domains)

@@ -4,7 +4,7 @@ use crate::adapters::d1::*;
 use crate::adapters::kv::KvDomainMappingCache;
 use crate::adapters::r2::R2BlobStore;
 use crate::config;
-use crate::tokens::validate_audience_token;
+use diaryx_server::audience_token::validate_audience_token;
 use diaryx_server::api::billing::{
     AppleRestoreResponse, AppleVerifyReceiptResponse, StripeConfigResponse, UrlResponse,
 };
@@ -592,29 +592,36 @@ pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Re
         Err(e) => return error_response(e),
     };
 
-    // Enforce access control
-    match access.access.as_str() {
-        "public" => {}
-        "token" => {
-            let url = req.url()?;
-            let token_str = url
-                .query_pairs()
-                .find(|(k, _)| k == "audience_token")
-                .map(|(_, v)| v.to_string());
-
-            let key_bytes = signing_key(&ctx);
-            let valid = token_str
-                .as_deref()
-                .and_then(|t| validate_audience_token(&key_bytes, t))
-                .is_some_and(|claims| {
-                    claims.slug == ns_id && claims.audience == access.audience_name
-                });
-
-            if !valid {
-                return Response::empty().map(|r| r.with_status(403));
+    // Enforce the audience's gate stack with short-circuit OR. Empty gates =
+    // public = always granted. Otherwise any satisfied gate grants access.
+    if !access.gates.is_empty() {
+        let url = req.url()?;
+        let token_str = url
+            .query_pairs()
+            .find(|(k, _)| k == "audience_token")
+            .map(|(_, v)| v.to_string());
+        let key_bytes = signing_key(&ctx);
+        let claims = token_str
+            .as_deref()
+            .and_then(|t| validate_audience_token(&key_bytes, t));
+        let granted = access.gates.iter().any(|gate| match gate {
+            diaryx_server::GateRecord::Link => claims.as_ref().is_some_and(|c| {
+                matches!(c.gate, diaryx_server::audience_token::GateKind::Link)
+                    && c.slug == ns_id
+                    && c.audience == access.audience_name
+            }),
+            diaryx_server::GateRecord::Password { version, .. } => {
+                claims.as_ref().is_some_and(|c| {
+                    matches!(c.gate, diaryx_server::audience_token::GateKind::Unlock)
+                        && c.slug == ns_id
+                        && c.audience == access.audience_name
+                        && c.password_version == Some(*version)
+                })
             }
+        });
+        if !granted {
+            return Response::empty().map(|r| r.with_status(403));
         }
-        _ => return Response::empty().map(|r| r.with_status(403)),
     }
 
     match service
@@ -779,407 +786,10 @@ pub async fn rotate_audience_password(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Subscriber handlers
-// ---------------------------------------------------------------------------
+// Subscriber / broadcast handlers removed along with the EmailBroadcastService
+// surface. The writer now composes audience emails in their own mail client;
+// no server-side contact list is maintained.
 
-use diaryx_server::ports::EmailBroadcastService;
-
-#[derive(Deserialize)]
-struct AddSubscriberBody {
-    email: String,
-}
-
-#[derive(Deserialize)]
-struct BulkImportBody {
-    emails: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct SendEmailBody {
-    subject: String,
-    #[serde(default)]
-    reply_to: Option<String>,
-}
-
-/// Look up the Resend audience ID. Returns None if not yet created.
-async fn get_audience_id(
-    blob_store: &R2BlobStore,
-    ns_id: &str,
-    audience_name: &str,
-) -> std::result::Result<Option<String>, ServerCoreError> {
-    let key = format!("ns/{}/_email_config/{}.json", ns_id, audience_name);
-    if let Some(data) = blob_store.get(&key).await? {
-        if let Ok(config) = serde_json::from_slice::<serde_json::Value>(&data) {
-            if let Some(id) = config.get("resend_audience_id").and_then(|v| v.as_str()) {
-                return Ok(Some(id.to_string()));
-            }
-        }
-    }
-    Ok(None)
-}
-
-/// Get or create the Resend audience ID for a namespace audience.
-async fn get_or_create_audience_id(
-    blob_store: &R2BlobStore,
-    email_svc: &dyn EmailBroadcastService,
-    ns_id: &str,
-    audience_name: &str,
-) -> std::result::Result<String, ServerCoreError> {
-    let key = format!("ns/{}/_email_config/{}.json", ns_id, audience_name);
-    if let Some(data) = blob_store.get(&key).await? {
-        if let Ok(config) = serde_json::from_slice::<serde_json::Value>(&data) {
-            if let Some(id) = config.get("resend_audience_id").and_then(|v| v.as_str()) {
-                return Ok(id.to_string());
-            }
-        }
-    }
-    let resend_id = email_svc
-        .create_audience(&format!("{}/{}", ns_id, audience_name))
-        .await?;
-    let config = serde_json::json!({ "resend_audience_id": resend_id });
-    blob_store
-        .put(
-            &key,
-            serde_json::to_vec(&config).unwrap_or_default().as_slice(),
-            "application/json",
-            None,
-        )
-        .await?;
-    Ok(resend_id)
-}
-
-/// Verify the caller owns the namespace.
-async fn require_ns_owner(
-    ns_store: &D1NamespaceStore,
-    ns_id: &str,
-    user_id: &str,
-) -> std::result::Result<(), ServerCoreError> {
-    let ns = ns_store
-        .get_namespace(ns_id)
-        .await?
-        .ok_or_else(|| ServerCoreError::not_found("Namespace not found"))?;
-    if ns.owner_user_id != user_id {
-        return Err(ServerCoreError::permission_denied(
-            "You do not own this namespace",
-        ));
-    }
-    Ok(())
-}
-
-pub async fn add_subscriber(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let ns_id = require_decoded_param(&ctx, "ns_id")?;
-    let audience_name = ctx
-        .param("audience_name")
-        .ok_or_else(|| Error::from("missing audience_name"))?
-        .to_string();
-    let body: AddSubscriberBody = req.json().await?;
-
-    if !body.email.contains('@') {
-        return error_response(ServerCoreError::invalid_input("Invalid email address"));
-    }
-
-    let ns_store = D1NamespaceStore::new(db(&ctx)?);
-    if ns_store
-        .get_namespace(&ns_id)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?
-        .is_none()
-    {
-        return error_response(ServerCoreError::not_found("Namespace not found"));
-    }
-
-    let blob_store = R2BlobStore::new(bucket(&ctx)?);
-    let email_svc = match config::email_broadcast(&ctx.env) {
-        Some(svc) => svc,
-        None => return error_response(ServerCoreError::unavailable("Email not configured")),
-    };
-
-    let audience_id = get_or_create_audience_id(&blob_store, &email_svc, &ns_id, &audience_name)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?;
-
-    match email_svc.add_contact(&audience_id, &body.email).await {
-        Ok(contact_id) => Response::from_json(&serde_json::json!({
-            "id": contact_id,
-            "email": body.email,
-        }))
-        .map(|r| r.with_status(201)),
-        Err(e) => error_response(e),
-    }
-}
-
-pub async fn list_subscribers(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = require_auth!(&req, &ctx);
-    let ns_id = require_decoded_param(&ctx, "ns_id")?;
-    let audience_name = ctx
-        .param("audience_name")
-        .ok_or_else(|| Error::from("missing audience_name"))?
-        .to_string();
-
-    let ns_store = D1NamespaceStore::new(db(&ctx)?);
-    if let Err(e) = require_ns_owner(&ns_store, &ns_id, &user_id).await {
-        return error_response(e);
-    }
-
-    let blob_store = R2BlobStore::new(bucket(&ctx)?);
-
-    // Read-only: return empty list if no Resend audience exists yet
-    let audience_id = match get_audience_id(&blob_store, &ns_id, &audience_name)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?
-    {
-        Some(id) => id,
-        None => return Response::from_json(&Vec::<serde_json::Value>::new()),
-    };
-
-    let email_svc = match config::email_broadcast(&ctx.env) {
-        Some(svc) => svc,
-        None => return error_response(ServerCoreError::unavailable("Email not configured")),
-    };
-
-    match email_svc.list_contacts(&audience_id).await {
-        Ok(contacts) => {
-            let filtered: Vec<_> = contacts
-                .into_iter()
-                .filter(|c| !c.unsubscribed)
-                .map(|c| serde_json::json!({ "id": c.id, "email": c.email }))
-                .collect();
-            Response::from_json(&filtered)
-        }
-        Err(e) => error_response(e),
-    }
-}
-
-pub async fn remove_subscriber(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = require_auth!(&req, &ctx);
-    let ns_id = require_decoded_param(&ctx, "ns_id")?;
-    let audience_name = ctx
-        .param("audience_name")
-        .ok_or_else(|| Error::from("missing audience_name"))?
-        .to_string();
-    let contact_id = ctx
-        .param("contact_id")
-        .ok_or_else(|| Error::from("missing contact_id"))?
-        .to_string();
-
-    let ns_store = D1NamespaceStore::new(db(&ctx)?);
-    if let Err(e) = require_ns_owner(&ns_store, &ns_id, &user_id).await {
-        return error_response(e);
-    }
-
-    let blob_store = R2BlobStore::new(bucket(&ctx)?);
-    let email_svc = match config::email_broadcast(&ctx.env) {
-        Some(svc) => svc,
-        None => return error_response(ServerCoreError::unavailable("Email not configured")),
-    };
-
-    let audience_id = get_or_create_audience_id(&blob_store, &email_svc, &ns_id, &audience_name)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?;
-
-    match email_svc.remove_contact(&audience_id, &contact_id).await {
-        Ok(()) => Response::empty().map(|r| r.with_status(204)),
-        Err(e) => error_response(e),
-    }
-}
-
-pub async fn bulk_import_subscribers(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = require_auth!(&req, &ctx);
-    let ns_id = require_decoded_param(&ctx, "ns_id")?;
-    let audience_name = ctx
-        .param("audience_name")
-        .ok_or_else(|| Error::from("missing audience_name"))?
-        .to_string();
-    let body: BulkImportBody = req.json().await?;
-
-    let ns_store = D1NamespaceStore::new(db(&ctx)?);
-    if let Err(e) = require_ns_owner(&ns_store, &ns_id, &user_id).await {
-        return error_response(e);
-    }
-
-    let blob_store = R2BlobStore::new(bucket(&ctx)?);
-    let email_svc = match config::email_broadcast(&ctx.env) {
-        Some(svc) => svc,
-        None => return error_response(ServerCoreError::unavailable("Email not configured")),
-    };
-
-    let audience_id = get_or_create_audience_id(&blob_store, &email_svc, &ns_id, &audience_name)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?;
-
-    let mut added = 0usize;
-    let mut errors: Vec<String> = Vec::new();
-    for email in &body.emails {
-        if !email.contains('@') {
-            errors.push(format!("Invalid email: {}", email));
-            continue;
-        }
-        match email_svc.add_contact(&audience_id, email).await {
-            Ok(_) => added += 1,
-            Err(e) => errors.push(format!("{}: {}", email, e)),
-        }
-    }
-
-    Response::from_json(&serde_json::json!({ "added": added, "errors": errors }))
-}
-
-pub async fn send_audience_email(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let user_id = require_auth!(&req, &ctx);
-    let ns_id = require_decoded_param(&ctx, "ns_id")?;
-    let audience_name = ctx
-        .param("audience_name")
-        .ok_or_else(|| Error::from("missing audience_name"))?
-        .to_string();
-    let body: SendEmailBody = req.json().await?;
-
-    let ns_store = D1NamespaceStore::new(db(&ctx)?);
-    if let Err(e) = require_ns_owner(&ns_store, &ns_id, &user_id).await {
-        return error_response(e);
-    }
-
-    let blob_store = R2BlobStore::new(bucket(&ctx)?);
-
-    // Read email draft
-    let draft_key = format!("ns/{}/_email_draft/{}.html", ns_id, audience_name);
-    let draft_bytes = match blob_store.get(&draft_key).await {
-        Ok(Some(b)) => b,
-        Ok(None) => return error_response(ServerCoreError::not_found("No email draft found")),
-        Err(e) => return error_response(e),
-    };
-    let draft_html =
-        String::from_utf8(draft_bytes).map_err(|_| Error::from("Draft is not valid UTF-8"))?;
-
-    let email_svc = config::email_broadcast(&ctx.env);
-
-    // Dev mode: if email service is not configured, log and return a fake receipt
-    if email_svc.is_none() {
-        worker::console_log!(
-            "[Dev mode] Email send skipped — no RESEND_API_KEY. audience={} subject={}",
-            audience_name,
-            body.subject
-        );
-
-        let receipt_key = format!(
-            "ns/{}/_email_log/{}/{}.json",
-            ns_id,
-            audience_name,
-            js_sys::Date::now() as u64
-        );
-        let receipt = serde_json::json!({
-            "timestamp": js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default(),
-            "audience": audience_name,
-            "recipient_count": 0,
-            "subject": body.subject,
-        });
-        let _ = blob_store
-            .put(
-                &receipt_key,
-                serde_json::to_vec(&receipt).unwrap_or_default().as_slice(),
-                "application/json",
-                None,
-            )
-            .await;
-        let _ = blob_store.delete(&draft_key).await;
-
-        return Response::from_json(&serde_json::json!({
-            "recipients": 0,
-            "send_receipt_key": receipt_key,
-        }));
-    }
-
-    let email_svc = email_svc.unwrap();
-
-    // Get audience contacts
-    let audience_id = get_or_create_audience_id(&blob_store, &email_svc, &ns_id, &audience_name)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?;
-    let contacts = email_svc
-        .list_contacts(&audience_id)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?;
-    let active_emails: Vec<String> = contacts
-        .into_iter()
-        .filter(|c| !c.unsubscribed)
-        .map(|c| c.email)
-        .collect();
-
-    if active_emails.is_empty() {
-        return error_response(ServerCoreError::invalid_input("No active subscribers"));
-    }
-
-    let from = format!("{} <{}>", email_svc.from_name(), email_svc.from_email());
-    let mut headers = std::collections::HashMap::new();
-    headers.insert(
-        "List-Unsubscribe".to_string(),
-        "<mailto:unsubscribe@diaryx.org>".to_string(),
-    );
-
-    for chunk in active_emails.chunks(100) {
-        let batch: Vec<_> = chunk
-            .iter()
-            .map(|email| {
-                (
-                    email.clone(),
-                    body.subject.clone(),
-                    draft_html.clone(),
-                    body.reply_to.clone(),
-                    Some(headers.clone()),
-                )
-            })
-            .collect();
-        email_svc
-            .send_batch(&from, batch)
-            .await
-            .map_err(|e| Error::from(e.to_string()))?;
-    }
-
-    // Write send receipt
-    let now = js_sys::Date::new_0();
-    let timestamp = format!(
-        "{}T{}Z",
-        js_sys::Date::to_iso_string(&now)
-            .as_string()
-            .unwrap_or_default()
-            .split('T')
-            .next()
-            .unwrap_or(""),
-        js_sys::Date::to_iso_string(&now)
-            .as_string()
-            .unwrap_or_default()
-            .split('T')
-            .nth(1)
-            .unwrap_or("")
-    );
-    let receipt_key = format!(
-        "ns/{}/_email_log/{}/{}.json",
-        ns_id,
-        audience_name,
-        now.get_time() as u64
-    );
-    let receipt = serde_json::json!({
-        "timestamp": timestamp,
-        "audience": audience_name,
-        "recipient_count": active_emails.len(),
-        "subject": body.subject,
-    });
-    let _ = blob_store
-        .put(
-            &receipt_key,
-            serde_json::to_vec(&receipt).unwrap_or_default().as_slice(),
-            "application/json",
-            None,
-        )
-        .await;
-
-    // Delete draft
-    let _ = blob_store.delete(&draft_key).await;
-
-    Response::from_json(&serde_json::json!({
-        "recipients": active_emails.len(),
-        "send_receipt_key": receipt_key,
-    }))
-}
 
 // ---------------------------------------------------------------------------
 // Domain handlers

@@ -77,12 +77,6 @@ pub fn mailer(env: &Env, magic_link_expiry_minutes: i64) -> Option<ResendMailer>
     ))
 }
 
-/// Build a ResendMailer for email broadcast operations, or None if not configured.
-pub fn email_broadcast(env: &Env) -> Option<ResendMailer> {
-    // Reuse the same config as mailer, with a dummy expiry (not used for broadcasts)
-    mailer(env, 0)
-}
-
 /// Apple IAP bundle ID for transaction validation.
 pub fn apple_iap_bundle_id(env: &Env) -> Option<String> {
     env.var("APPLE_IAP_BUNDLE_ID")

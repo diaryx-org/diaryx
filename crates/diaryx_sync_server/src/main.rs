@@ -17,9 +17,9 @@ use diaryx_sync_server::{
     email::EmailService,
     handlers::{
         AudienceState, DomainState, NamespaceState, NsSessionState, ObjectState, ProxyState,
-        SubscriberState, ai_routes, audience_routes, auth_routes, domain_auth_route, domain_routes,
+        ai_routes, audience_routes, auth_routes, domain_auth_route, domain_routes,
         namespace_routes, ns_session_routes, object_routes, proxy_routes, public_object_routes,
-        site_routes, subscriber_routes, usage_routes,
+        site_routes, usage_routes,
     },
     proxy_adapters::{NativeProxySecretResolver, NativeProxyUsageStore, StaticProxyConfigStore},
     sync_v2::SyncV2Server,
@@ -213,14 +213,6 @@ async fn main() {
         namespace_store: namespace_state.namespace_store.clone(),
         session_store,
     };
-    let subscriber_state = SubscriberState {
-        namespace_store: namespace_state.namespace_store.clone(),
-        blob_store: blob_store.clone(),
-        object_meta_store: Arc::new(NativeObjectMetaStore::new(ns_repo.clone())),
-        email_service: email_service.clone()
-            as Arc<dyn diaryx_server::ports::EmailBroadcastService>,
-    };
-
     // Create Stripe state (if configured)
     let stripe_router = if let Some(stripe_config) = config.stripe.clone() {
         info!("Stripe billing: enabled (price={})", stripe_config.price_id);
@@ -302,11 +294,6 @@ async fn main() {
         .nest("/namespaces/{ns_id}", object_routes(object_state.clone()))
         // Audience routes (mounted under /namespaces/{ns_id})
         .nest("/namespaces/{ns_id}", audience_routes(audience_state))
-        // Subscriber routes (mounted under /namespaces/{ns_id}/audiences/{audience_name})
-        .nest(
-            "/namespaces/{ns_id}/audiences/{audience_name}",
-            subscriber_routes(subscriber_state),
-        )
         // Domain management routes (mounted under /namespaces/{ns_id})
         .nest("/namespaces/{ns_id}", domain_routes(domain_state.clone()))
         // Public (unauthenticated) object access

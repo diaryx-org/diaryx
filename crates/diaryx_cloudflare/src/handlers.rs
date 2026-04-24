@@ -634,10 +634,9 @@ pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Re
 // Audience handlers
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct SetAudienceBody {
-    access: String,
-}
+use diaryx_server::use_cases::audiences::{
+    AudienceResponse, RotatePasswordRequest, SetAudienceRequest, UnlockRequest,
+};
 
 pub async fn set_audience(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let user_id = require_auth!(&req, &ctx);
@@ -646,14 +645,14 @@ pub async fn set_audience(mut req: Request, ctx: RouteContext<()>) -> Result<Res
         .param("name")
         .ok_or_else(|| Error::from("missing name"))?
         .to_string();
-    let body: SetAudienceBody = req.json().await?;
+    let body: SetAudienceRequest = req.json().await?;
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
     let service = AudienceService::new(&ns_store, &blob_store);
 
-    match service.set(&ns_id, &name, &body.access, &user_id).await {
-        Ok(info) => Response::from_json(&info),
+    match service.set(&ns_id, &name, body.gates, &user_id).await {
+        Ok(info) => Response::from_json(&AudienceResponse::from(info)),
         Err(e) => error_response(e),
     }
 }
@@ -667,7 +666,11 @@ pub async fn list_audiences(req: Request, ctx: RouteContext<()>) -> Result<Respo
     let service = AudienceService::new(&ns_store, &blob_store);
 
     match service.list(&ns_id, &user_id).await {
-        Ok(list) => Response::from_json(&list),
+        Ok(list) => {
+            let resp: Vec<AudienceResponse> =
+                list.into_iter().map(AudienceResponse::from).collect();
+            Response::from_json(&resp)
+        }
         Err(e) => error_response(e),
     }
 }
@@ -686,6 +689,92 @@ pub async fn delete_audience(req: Request, ctx: RouteContext<()>) -> Result<Resp
 
     match service.delete(&ns_id, &name, &user_id).await {
         Ok(()) => Response::empty().map(|r| r.with_status(204)),
+        Err(e) => error_response(e),
+    }
+}
+
+/// GET /api/namespaces/:ns_id/audiences/:name/token — issue a magic-link
+/// token. Fails 400 if the audience has no link gate.
+pub async fn get_audience_link_token(
+    req: Request,
+    ctx: RouteContext<()>,
+) -> Result<Response> {
+    let user_id = require_auth!(&req, &ctx);
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
+    let name = ctx
+        .param("name")
+        .ok_or_else(|| Error::from("missing name"))?
+        .to_string();
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let blob_store = R2BlobStore::new(bucket(&ctx)?);
+    let service = AudienceService::new(&ns_store, &blob_store);
+    let key_bytes = signing_key(&ctx);
+
+    match service
+        .issue_link_token(&key_bytes, &ns_id, &name, &user_id)
+        .await
+    {
+        Ok(resp) => Response::from_json(&resp),
+        Err(e) => error_response(e),
+    }
+}
+
+/// POST /api/namespaces/:ns_id/audiences/:name/unlock — verify a reader-
+/// supplied password and mint an unlock token. Unauthenticated.
+pub async fn unlock_audience(
+    mut req: Request,
+    ctx: RouteContext<()>,
+) -> Result<Response> {
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
+    let name = ctx
+        .param("name")
+        .ok_or_else(|| Error::from("missing name"))?
+        .to_string();
+    let body: UnlockRequest = req.json().await?;
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let blob_store = R2BlobStore::new(bucket(&ctx)?);
+    let service = AudienceService::new(&ns_store, &blob_store);
+    let key_bytes = signing_key(&ctx);
+
+    match service
+        .unlock_with_password(&key_bytes, &ns_id, &name, &body.password)
+        .await
+    {
+        Ok(resp) => Response::from_json(&resp),
+        Err(e) => error_response(e),
+    }
+}
+
+/// POST /api/namespaces/:ns_id/audiences/:name/rotate-password — owner-
+/// authenticated; bumps the password gate's version and returns a fresh
+/// unlock token.
+pub async fn rotate_audience_password(
+    mut req: Request,
+    ctx: RouteContext<()>,
+) -> Result<Response> {
+    let user_id = require_auth!(&req, &ctx);
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
+    let name = ctx
+        .param("name")
+        .ok_or_else(|| Error::from("missing name"))?
+        .to_string();
+    let body: RotatePasswordRequest = req.json().await?;
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let blob_store = R2BlobStore::new(bucket(&ctx)?);
+    let service = AudienceService::new(&ns_store, &blob_store);
+    let key_bytes = signing_key(&ctx);
+
+    match service
+        .rotate_password_and_issue(&key_bytes, &ns_id, &name, &body.password, &user_id)
+        .await
+    {
+        Ok((version, token)) => Response::from_json(&serde_json::json!({
+            "version": version,
+            "token": token.token,
+        })),
         Err(e) => error_response(e),
     }
 }

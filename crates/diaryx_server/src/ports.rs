@@ -1,7 +1,7 @@
 use crate::domain::{
-    AudienceInfo, AuthSessionInfo, ContactInfo, CustomDomainInfo, DeviceInfo, NamespaceInfo,
-    NamespaceSessionInfo, ObjectMeta, PasskeyChallengeInfo, PasskeyCredentialInfo, UsageTotals,
-    UserInfo, UserTier,
+    AudienceInfo, AuthSessionInfo, ContactInfo, CustomDomainInfo, DeviceInfo, GateRecord,
+    NamespaceInfo, NamespaceSessionInfo, ObjectMeta, PasskeyChallengeInfo, PasskeyCredentialInfo,
+    UsageTotals, UserInfo, UserTier,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -230,11 +230,14 @@ pub trait NamespaceStore: Send + Sync {
     ) -> Result<(), ServerCoreError>;
     async fn delete_namespace(&self, namespace_id: &str) -> Result<(), ServerCoreError>;
 
+    /// Upsert the full gate set for an audience. Replaces any previous gates
+    /// atomically. Callers are responsible for merging with existing state
+    /// (e.g. preserving password hashes on update) before calling.
     async fn upsert_audience(
         &self,
         namespace_id: &str,
         audience_name: &str,
-        access: &str,
+        gates: &[GateRecord],
     ) -> Result<(), ServerCoreError>;
     async fn list_audiences(
         &self,

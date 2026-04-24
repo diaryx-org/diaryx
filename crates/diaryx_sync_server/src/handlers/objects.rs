@@ -1,7 +1,6 @@
 //! Object store handlers — `PUT/GET/DELETE/LIST /namespaces/{id}/objects`.
 
 use crate::auth::RequireAuth;
-use crate::tokens::validate_signed_token;
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -10,11 +9,52 @@ use axum::{
     response::{IntoResponse, Json, Response},
     routing::{get, post, put},
 };
-use diaryx_server::domain::{ObjectMeta, UsageTotals};
+use diaryx_server::audience_token::{GateKind, validate_audience_token};
+use diaryx_server::domain::{GateRecord, ObjectMeta, UsageTotals};
 use diaryx_server::ports::{BlobStore, NamespaceStore, ObjectMetaStore, ServerCoreError};
 use diaryx_server::use_cases::objects::ObjectService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// Evaluate whether a request satisfies any gate in the audience's gate set.
+/// Empty gates = public = always granted. Otherwise short-circuits on the
+/// first satisfied gate. Matches the contract the site-proxy enforces.
+fn gate_check_passes(
+    gates: &[GateRecord],
+    audience_name: &str,
+    slug: &str,
+    signing_key: &[u8],
+    supplied_token: Option<&str>,
+) -> bool {
+    if gates.is_empty() {
+        return true;
+    }
+    let claims = supplied_token.and_then(|t| validate_audience_token(signing_key, t));
+    for gate in gates {
+        match gate {
+            GateRecord::Link => {
+                if let Some(ref c) = claims
+                    && matches!(c.gate, GateKind::Link)
+                    && c.slug == slug
+                    && c.audience == audience_name
+                {
+                    return true;
+                }
+            }
+            GateRecord::Password { version, .. } => {
+                if let Some(ref c) = claims
+                    && matches!(c.gate, GateKind::Unlock)
+                    && c.slug == slug
+                    && c.audience == audience_name
+                    && c.password_version == Some(*version)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
 
 /// Shared state for object handlers.
 #[derive(Clone)]
@@ -450,22 +490,15 @@ async fn get_public_object(
         Err(e) => return core_error_response(e),
     };
 
-    // Enforce access control.
-    match access.access.as_str() {
-        "public" => { /* allowed */ }
-        "token" => {
-            let token_str = match &params.audience_token {
-                Some(t) => t,
-                None => return StatusCode::FORBIDDEN.into_response(),
-            };
-            match validate_signed_token(&state.token_signing_key, token_str) {
-                Some(claims) if claims.slug == ns_id && claims.audience == access.audience_name => {
-                    /* valid */
-                }
-                _ => return StatusCode::FORBIDDEN.into_response(),
-            }
-        }
-        _ => return StatusCode::FORBIDDEN.into_response(), // "private" or unknown
+    // Enforce gate stack. Short-circuit OR: any satisfied gate grants access.
+    if !gate_check_passes(
+        &access.gates,
+        &access.audience_name,
+        &ns_id,
+        &state.token_signing_key,
+        params.audience_token.as_deref(),
+    ) {
+        return StatusCode::FORBIDDEN.into_response();
     }
 
     // Fetch and serve the blob.

@@ -276,7 +276,12 @@ mod tests {
         async fn delete_custom_domain(&self, _: &str) -> Result<bool, ServerCoreError> {
             Ok(false)
         }
-        async fn upsert_audience(&self, _: &str, _: &str, _: &str) -> Result<(), ServerCoreError> {
+        async fn upsert_audience(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[crate::domain::GateRecord],
+        ) -> Result<(), ServerCoreError> {
             Ok(())
         }
         async fn list_audiences(&self, _: &str) -> Result<Vec<AudienceInfo>, ServerCoreError> {

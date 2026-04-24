@@ -26,6 +26,21 @@ fn ts(epoch: i64) -> worker::wasm_bindgen::JsValue {
     worker::wasm_bindgen::JsValue::from_f64(epoch as f64)
 }
 
+/// Deserialize a D1 row into an `AudienceInfo`, reading the `gates` JSON
+/// column and tolerating missing/malformed values by treating them as empty.
+fn row_to_audience(row: serde_json::Value) -> AudienceInfo {
+    let gates_json = row["gates"].as_str().unwrap_or("[]");
+    let gates = serde_json::from_str(gates_json).unwrap_or_default();
+    AudienceInfo {
+        namespace_id: row["namespace_id"].as_str().unwrap_or_default().to_string(),
+        audience_name: row["audience_name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        gates,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // NamespaceStore
 // ---------------------------------------------------------------------------
@@ -167,7 +182,7 @@ impl NamespaceStore for D1NamespaceStore {
         let result = self
             .db
             .prepare(
-                "SELECT namespace_id, audience_name, access FROM namespace_audiences \
+                "SELECT namespace_id, audience_name, gates FROM namespace_audiences \
                  WHERE namespace_id = ?1 AND audience_name = ?2",
             )
             .bind(&[namespace_id.into(), audience_name.into()])
@@ -176,29 +191,35 @@ impl NamespaceStore for D1NamespaceStore {
             .await
             .map_err(e)?;
 
-        Ok(result.map(|row| AudienceInfo {
-            namespace_id: row["namespace_id"].as_str().unwrap_or_default().to_string(),
-            audience_name: row["audience_name"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            access: row["access"].as_str().unwrap_or_default().to_string(),
-        }))
+        Ok(result.map(row_to_audience))
     }
 
     async fn upsert_audience(
         &self,
         namespace_id: &str,
         audience_name: &str,
-        access: &str,
+        gates: &[diaryx_server::GateRecord],
     ) -> Result<(), ServerCoreError> {
+        let gates_json = serde_json::to_string(gates)
+            .map_err(|err| ServerCoreError::internal(format!("encode gates: {err}")))?;
+        // `access` column still exists in the legacy schema; write a derived
+        // value so any unmigrated readers see a sensible approximation. The
+        // `gates` column is the authoritative source.
+        let legacy_access = if gates.is_empty() { "public" } else { "token" };
         self.db
             .prepare(
-                "INSERT INTO namespace_audiences (namespace_id, audience_name, access) \
-                 VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(namespace_id, audience_name) DO UPDATE SET access = excluded.access",
+                "INSERT INTO namespace_audiences (namespace_id, audience_name, access, gates) \
+                 VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT(namespace_id, audience_name) DO UPDATE SET \
+                    access = excluded.access, \
+                    gates = excluded.gates",
             )
-            .bind(&[namespace_id.into(), audience_name.into(), access.into()])
+            .bind(&[
+                namespace_id.into(),
+                audience_name.into(),
+                legacy_access.into(),
+                gates_json.into(),
+            ])
             .map_err(e)?
             .run()
             .await
@@ -213,7 +234,7 @@ impl NamespaceStore for D1NamespaceStore {
         let results = self
             .db
             .prepare(
-                "SELECT namespace_id, audience_name, access FROM namespace_audiences \
+                "SELECT namespace_id, audience_name, gates FROM namespace_audiences \
                  WHERE namespace_id = ?1 ORDER BY audience_name",
             )
             .bind(&[namespace_id.into()])
@@ -223,17 +244,7 @@ impl NamespaceStore for D1NamespaceStore {
             .map_err(e)?;
 
         let rows: Vec<serde_json::Value> = results.results().map_err(e)?;
-        Ok(rows
-            .into_iter()
-            .map(|row| AudienceInfo {
-                namespace_id: row["namespace_id"].as_str().unwrap_or_default().to_string(),
-                audience_name: row["audience_name"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
-                access: row["access"].as_str().unwrap_or_default().to_string(),
-            })
-            .collect())
+        Ok(rows.into_iter().map(row_to_audience).collect())
     }
 
     async fn delete_audience(

@@ -332,7 +332,12 @@ mod tests {
         async fn delete_namespace(&self, _: &str) -> Result<(), ServerCoreError> {
             Ok(())
         }
-        async fn upsert_audience(&self, _: &str, _: &str, _: &str) -> Result<(), ServerCoreError> {
+        async fn upsert_audience(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[crate::domain::GateRecord],
+        ) -> Result<(), ServerCoreError> {
             Ok(())
         }
         async fn list_audiences(&self, _: &str) -> Result<Vec<AudienceInfo>, ServerCoreError> {
@@ -424,7 +429,7 @@ mod tests {
             AudienceInfo {
                 namespace_id: "ns_123".to_string(),
                 audience_name: "public".to_string(),
-                access: "public".to_string(),
+                gates: vec![],
             },
         );
         let cache = TestDomainMappingCache::default();

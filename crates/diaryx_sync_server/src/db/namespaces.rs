@@ -1,6 +1,7 @@
 //! Namespace, object, audience, and usage repository methods.
 
 use chrono::Utc;
+use diaryx_server::GateRecord;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::{Arc, Mutex};
 
@@ -30,12 +31,13 @@ pub struct NamespaceObjectMeta {
     pub content_hash: Option<String>,
 }
 
-/// Audience visibility record.
+/// Audience visibility record. Gates are persisted as a JSON array in the
+/// `gates` column and rehydrated on read.
 #[derive(Debug, Clone)]
 pub struct AudienceInfo {
     pub namespace_id: String,
     pub audience_name: String,
-    pub access: String, // "public" | "token" | "private"
+    pub gates: Vec<GateRecord>,
 }
 
 /// Session mapping: code → namespace.
@@ -442,14 +444,21 @@ impl NamespaceRepo {
         &self,
         namespace_id: &str,
         audience_name: &str,
-        access: &str,
+        gates: &[GateRecord],
     ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
+        let gates_json = serde_json::to_string(gates).map_err(|e| format!("encode gates: {e}"))?;
+        // The `access` column still exists from legacy schema; write a derived
+        // value so any unmigrated readers see a sensible approximation, but the
+        // authoritative source is `gates`.
+        let legacy_access = if gates.is_empty() { "public" } else { "token" };
         conn.execute(
-            "INSERT INTO namespace_audiences (namespace_id, audience_name, access)
-             VALUES (?1, ?2, ?3)
-             ON CONFLICT(namespace_id, audience_name) DO UPDATE SET access = excluded.access",
-            params![namespace_id, audience_name, access],
+            "INSERT INTO namespace_audiences (namespace_id, audience_name, access, gates)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(namespace_id, audience_name) DO UPDATE SET
+                access = excluded.access,
+                gates = excluded.gates",
+            params![namespace_id, audience_name, legacy_access, gates_json],
         )
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -458,14 +467,16 @@ impl NamespaceRepo {
     pub fn get_audience(&self, namespace_id: &str, audience_name: &str) -> Option<AudienceInfo> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT namespace_id, audience_name, access FROM namespace_audiences
+            "SELECT namespace_id, audience_name, gates FROM namespace_audiences
              WHERE namespace_id = ?1 AND audience_name = ?2",
             params![namespace_id, audience_name],
             |row| {
+                let gates_json: String = row.get(2)?;
+                let gates: Vec<GateRecord> = serde_json::from_str(&gates_json).unwrap_or_default();
                 Ok(AudienceInfo {
                     namespace_id: row.get(0)?,
                     audience_name: row.get(1)?,
-                    access: row.get(2)?,
+                    gates,
                 })
             },
         )
@@ -476,15 +487,17 @@ impl NamespaceRepo {
     pub fn list_audiences(&self, namespace_id: &str) -> Vec<AudienceInfo> {
         let conn = self.conn.lock().unwrap();
         conn.prepare(
-            "SELECT namespace_id, audience_name, access FROM namespace_audiences
+            "SELECT namespace_id, audience_name, gates FROM namespace_audiences
              WHERE namespace_id = ?1 ORDER BY audience_name",
         )
         .and_then(|mut stmt| {
             stmt.query_map(params![namespace_id], |row| {
+                let gates_json: String = row.get(2)?;
+                let gates: Vec<GateRecord> = serde_json::from_str(&gates_json).unwrap_or_default();
                 Ok(AudienceInfo {
                     namespace_id: row.get(0)?,
                     audience_name: row.get(1)?,
-                    access: row.get(2)?,
+                    gates,
                 })
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -848,22 +861,31 @@ mod tests {
         let repo = make_repo_with_schema();
         repo.create_namespace("site:abc", "u1", None).unwrap();
 
-        repo.upsert_audience("site:abc", "public", "public")
-            .unwrap();
-        repo.upsert_audience("site:abc", "members", "token")
+        repo.upsert_audience("site:abc", "public", &[]).unwrap();
+        repo.upsert_audience("site:abc", "members", &[GateRecord::Link])
             .unwrap();
 
         let list = repo.list_audiences("site:abc");
         assert_eq!(list.len(), 2);
 
         let a = repo.get_audience("site:abc", "public").unwrap();
-        assert_eq!(a.access, "public");
+        assert!(a.gates.is_empty());
 
-        // Update
-        repo.upsert_audience("site:abc", "public", "private")
-            .unwrap();
+        // Update: swap public → password-gated.
+        repo.upsert_audience(
+            "site:abc",
+            "public",
+            &[GateRecord::Password {
+                hash: Some("$argon2id$v=19$…".to_string()),
+                version: 1,
+            }],
+        )
+        .unwrap();
         let a2 = repo.get_audience("site:abc", "public").unwrap();
-        assert_eq!(a2.access, "private");
+        assert!(matches!(
+            a2.gates.first(),
+            Some(GateRecord::Password { version: 1, .. })
+        ));
 
         repo.delete_audience("site:abc", "public").unwrap();
         assert!(repo.get_audience("site:abc", "public").is_none());

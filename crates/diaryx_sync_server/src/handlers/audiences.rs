@@ -1,20 +1,24 @@
-//! Audience visibility handlers — `PUT/GET/DELETE /namespaces/{id}/audiences/{name}`.
+//! Audience gate handlers — `PUT/GET/DELETE /namespaces/{id}/audiences/{name}`,
+//! plus `POST .../unlock` and `POST .../rotate-password`.
+//!
+//! This file is intentionally thin: request/response types and orchestration
+//! live in `diaryx_server::use_cases::audiences`, shared with the Cloudflare
+//! worker adapter.
 
 use crate::auth::RequireAuth;
-use crate::tokens::create_signed_token;
 use axum::{
     Router,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{get, put},
+    routing::{get, post, put},
 };
-use diaryx_server::domain::AudienceInfo;
 use diaryx_server::ports::{BlobStore, NamespaceStore, ServerCoreError};
-use diaryx_server::use_cases::audiences::AudienceService;
-use serde::{Deserialize, Serialize};
+use diaryx_server::use_cases::audiences::{
+    AudienceResponse, AudienceService, RotatePasswordRequest, SetAudienceRequest, TokenResponse,
+    UnlockRequest,
+};
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// Shared state for audience handlers.
 #[derive(Clone)]
@@ -24,38 +28,6 @@ pub struct AudienceState {
     pub token_signing_key: Vec<u8>,
     /// Blob store for writing `_audiences.json` metadata to R2.
     pub blob_store: Arc<dyn BlobStore>,
-}
-
-// ---------------------------------------------------------------------------
-// Request / response types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-pub struct SetAudienceRequest {
-    /// "public" | "token" | "private"
-    pub access: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AudienceResponse {
-    pub namespace_id: String,
-    pub name: String,
-    pub access: String,
-}
-
-impl From<AudienceInfo> for AudienceResponse {
-    fn from(a: AudienceInfo) -> Self {
-        Self {
-            namespace_id: a.namespace_id,
-            name: a.audience_name,
-            access: a.access,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct TokenResponse {
-    pub token: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +41,12 @@ pub fn audience_routes(state: AudienceState) -> Router {
             "/audiences/{name}",
             put(set_audience).delete(delete_audience),
         )
-        .route("/audiences/{name}/token", get(get_audience_token))
+        .route("/audiences/{name}/token", get(get_audience_link_token))
+        .route("/audiences/{name}/unlock", post(unlock_audience))
+        .route(
+            "/audiences/{name}/rotate-password",
+            post(rotate_audience_password),
+        )
         .with_state(state)
 }
 
@@ -102,7 +79,7 @@ fn core_error_response(err: ServerCoreError) -> axum::response::Response {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// PUT /namespaces/{ns_id}/audiences/{name} — set access level for an audience.
+/// PUT /namespaces/{ns_id}/audiences/{name} — upsert an audience's gate set.
 async fn set_audience(
     State(state): State<AudienceState>,
     RequireAuth(auth): RequireAuth,
@@ -111,7 +88,7 @@ async fn set_audience(
 ) -> impl IntoResponse {
     let service = AudienceService::new(state.namespace_store.as_ref(), state.blob_store.as_ref());
 
-    match service.set(&ns_id, &name, &req.access, &auth.user.id).await {
+    match service.set(&ns_id, &name, req.gates, &auth.user.id).await {
         Ok(info) => Json(AudienceResponse::from(info)).into_response(),
         Err(e) => core_error_response(e),
     }
@@ -135,8 +112,9 @@ async fn list_audiences(
     }
 }
 
-/// GET /namespaces/{ns_id}/audiences/{name}/token — generate a signed access token.
-async fn get_audience_token(
+/// GET /namespaces/{ns_id}/audiences/{name}/token — issue a signed magic-link
+/// token (requires the audience to have a `link` gate).
+async fn get_audience_link_token(
     State(state): State<AudienceState>,
     RequireAuth(auth): RequireAuth,
     Path((ns_id, name)): Path<(String, String)>,
@@ -144,25 +122,59 @@ async fn get_audience_token(
     let service = AudienceService::new(state.namespace_store.as_ref(), state.blob_store.as_ref());
 
     match service
-        .require_token_eligible(&ns_id, &name, &auth.user.id)
+        .issue_link_token(&state.token_signing_key, &ns_id, &name, &auth.user.id)
         .await
     {
-        Ok(_) => {
-            let token_id = Uuid::new_v4().to_string();
-            match create_signed_token(
-                &state.token_signing_key,
-                &ns_id,
-                &name,
-                &token_id,
-                None, // no expiry
-            ) {
-                Ok(token) => Json(TokenResponse { token }).into_response(),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
-                )
-                    .into_response(),
-            }
+        Ok(token) => Json(token).into_response(),
+        Err(e) => core_error_response(e),
+    }
+}
+
+/// POST /namespaces/{ns_id}/audiences/{name}/unlock — verify a reader-supplied
+/// password and mint an unlock token on success. Unauthenticated.
+async fn unlock_audience(
+    State(state): State<AudienceState>,
+    Path((ns_id, name)): Path<(String, String)>,
+    Json(req): Json<UnlockRequest>,
+) -> impl IntoResponse {
+    let service = AudienceService::new(state.namespace_store.as_ref(), state.blob_store.as_ref());
+
+    match service
+        .unlock_with_password(&state.token_signing_key, &ns_id, &name, &req.password)
+        .await
+    {
+        Ok(token) => Json(token).into_response(),
+        Err(e) => core_error_response(e),
+    }
+}
+
+/// POST /namespaces/{ns_id}/audiences/{name}/rotate-password — owner-
+/// authenticated password rotation. Returns a fresh unlock token for the
+/// writer to test with; old unlock cookies become invalid immediately.
+async fn rotate_audience_password(
+    State(state): State<AudienceState>,
+    RequireAuth(auth): RequireAuth,
+    Path((ns_id, name)): Path<(String, String)>,
+    Json(req): Json<RotatePasswordRequest>,
+) -> impl IntoResponse {
+    let service = AudienceService::new(state.namespace_store.as_ref(), state.blob_store.as_ref());
+
+    match service
+        .rotate_password_and_issue(
+            &state.token_signing_key,
+            &ns_id,
+            &name,
+            &req.password,
+            &auth.user.id,
+        )
+        .await
+    {
+        Ok((version, token)) => {
+            let body = serde_json::json!({
+                "version": version,
+                "token": token.token,
+            });
+            Json(body).into_response()
         }
         Err(e) => core_error_response(e),
     }
@@ -190,13 +202,14 @@ mod tests {
         auth::AuthUser,
         blob_store::InMemoryBlobStore,
         db::{NamespaceRepo, init_database},
-        tokens::validate_signed_token,
     };
     use axum::{
         body::to_bytes,
         response::{IntoResponse, Response},
     };
     use chrono::{TimeZone, Utc};
+    use diaryx_server::audience_token::{GateKind, validate_audience_token};
+    use diaryx_server::domain::GateInput;
     use diaryx_server::{AuthSessionInfo, BlobStore, UserInfo, UserTier};
     use rusqlite::{Connection, params};
     use serde_json::{Value as JsonValue, json};
@@ -258,19 +271,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn audience_routes_cover_lifecycle_and_token_generation() {
+    async fn link_gate_lifecycle_and_token_issuance() {
         let repo = setup_repo(&["user1"]);
         repo.create_namespace("workspace:alpha", "user1", None)
             .expect("seed namespace");
         let blob_store = Arc::new(InMemoryBlobStore::new(""));
         let state = state(repo, blob_store.clone());
 
+        // Set a link-gated audience.
         let set_response = set_audience(
             State(state.clone()),
             auth("user1"),
             Path(("workspace:alpha".to_string(), "members".to_string())),
             Json(SetAudienceRequest {
-                access: "token".to_string(),
+                gates: vec![GateInput::Link],
             }),
         )
         .await
@@ -278,20 +292,10 @@ mod tests {
         assert_eq!(set_response.status(), StatusCode::OK);
         let set_body = json_body(set_response).await;
         assert_eq!(set_body["name"], "members");
-        assert_eq!(set_body["access"], "token");
+        assert_eq!(set_body["gates"][0]["kind"], "link");
 
-        let listed = list_audiences(
-            State(state.clone()),
-            auth("user1"),
-            Path("workspace:alpha".to_string()),
-        )
-        .await
-        .into_response();
-        assert_eq!(listed.status(), StatusCode::OK);
-        let listed_body = json_body(listed).await;
-        assert_eq!(listed_body.as_array().map(Vec::len), Some(1));
-
-        let token_response = get_audience_token(
+        // Issue a link token.
+        let token_response = get_audience_link_token(
             State(state.clone()),
             auth("user1"),
             Path(("workspace:alpha".to_string(), "members".to_string())),
@@ -301,10 +305,13 @@ mod tests {
         assert_eq!(token_response.status(), StatusCode::OK);
         let token_body = json_body(token_response).await;
         let token = token_body["token"].as_str().expect("signed token");
-        let claims = validate_signed_token(&state.token_signing_key, token).expect("claims");
+        let claims = validate_audience_token(&state.token_signing_key, token).expect("claims");
         assert_eq!(claims.slug, "workspace:alpha");
         assert_eq!(claims.audience, "members");
+        assert!(matches!(claims.gate, GateKind::Link));
+        assert!(claims.password_version.is_none());
 
+        // Metadata blob reflects the gate shape.
         let metadata_blob = blob_store
             .get("ns/workspace:alpha/_audiences.json")
             .await
@@ -312,8 +319,9 @@ mod tests {
             .expect("metadata blob");
         let metadata_json: JsonValue =
             serde_json::from_slice(&metadata_blob).expect("metadata json");
-        assert_eq!(metadata_json, json!({ "members": "token" }));
+        assert_eq!(metadata_json["members"]["gates"][0]["kind"], "link");
 
+        // Delete and confirm empty listing.
         let deleted = delete_audience(
             State(state.clone()),
             auth("user1"),
@@ -335,23 +343,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn audience_token_route_rejects_public_audiences() {
+    async fn link_token_route_rejects_audience_without_link_gate() {
         let repo = setup_repo(&["user1"]);
         repo.create_namespace("workspace:alpha", "user1", None)
             .expect("seed namespace");
         let state = state(repo, Arc::new(InMemoryBlobStore::new("")));
 
+        // Public audience — empty gates.
         let _ = set_audience(
             State(state.clone()),
             auth("user1"),
             Path(("workspace:alpha".to_string(), "public".to_string())),
-            Json(SetAudienceRequest {
-                access: "public".to_string(),
-            }),
+            Json(SetAudienceRequest { gates: vec![] }),
         )
         .await;
 
-        let response = get_audience_token(
+        let response = get_audience_link_token(
             State(state),
             auth("user1"),
             Path(("workspace:alpha".to_string(), "public".to_string())),
@@ -360,7 +367,95 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = json_body(response).await;
-        assert_eq!(body["error"], "audience is public; no token needed");
+    }
+
+    #[tokio::test]
+    async fn password_flow_unlock_and_rotate() {
+        let repo = setup_repo(&["user1"]);
+        repo.create_namespace("workspace:alpha", "user1", None)
+            .expect("seed namespace");
+        let state = state(repo, Arc::new(InMemoryBlobStore::new("")));
+
+        // Declare a password gate with an initial password.
+        let set_response = set_audience(
+            State(state.clone()),
+            auth("user1"),
+            Path(("workspace:alpha".to_string(), "inner".to_string())),
+            Json(SetAudienceRequest {
+                gates: vec![GateInput::Password {
+                    password: Some("hunter2".to_string()),
+                }],
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(set_response.status(), StatusCode::OK);
+
+        // Unlock with the correct password → get a versioned unlock token.
+        let unlock_response = unlock_audience(
+            State(state.clone()),
+            Path(("workspace:alpha".to_string(), "inner".to_string())),
+            Json(UnlockRequest {
+                password: "hunter2".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(unlock_response.status(), StatusCode::OK);
+        let unlock_body = json_body(unlock_response).await;
+        let token = unlock_body["token"].as_str().expect("unlock token");
+        let claims = validate_audience_token(&state.token_signing_key, token).expect("claims");
+        assert!(matches!(claims.gate, GateKind::Unlock));
+        assert_eq!(claims.password_version, Some(1));
+
+        // Wrong password → 403.
+        let rejected = unlock_audience(
+            State(state.clone()),
+            Path(("workspace:alpha".to_string(), "inner".to_string())),
+            Json(UnlockRequest {
+                password: "wrong".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+
+        // Rotate password → bumped version.
+        let rotate_response = rotate_audience_password(
+            State(state.clone()),
+            auth("user1"),
+            Path(("workspace:alpha".to_string(), "inner".to_string())),
+            Json(RotatePasswordRequest {
+                password: "new".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(rotate_response.status(), StatusCode::OK);
+        let rotate_body = json_body(rotate_response).await;
+        assert_eq!(rotate_body["version"], 2);
+
+        // Old password no longer works; new password does.
+        let old_rejected = unlock_audience(
+            State(state.clone()),
+            Path(("workspace:alpha".to_string(), "inner".to_string())),
+            Json(UnlockRequest {
+                password: "hunter2".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(old_rejected.status(), StatusCode::FORBIDDEN);
+
+        let new_accepted = unlock_audience(
+            State(state),
+            Path(("workspace:alpha".to_string(), "inner".to_string())),
+            Json(UnlockRequest {
+                password: "new".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(new_accepted.status(), StatusCode::OK);
     }
 }

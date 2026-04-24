@@ -88,6 +88,26 @@ fn legacy_migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     // -- Column additions on `namespaces` --
     add_column_if_missing(conn, "namespaces", "metadata", "TEXT")?;
 
+    // -- Column additions on `namespace_audiences` (migration 4) --
+    // `gates` JSON column with empty-array default. Legacy rows with
+    // `access = 'public'` or `'token'` are backfilled so readers see the new
+    // canonical shape immediately; `access = 'private'` rows are deleted.
+    add_column_if_missing(
+        conn,
+        "namespace_audiences",
+        "gates",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    conn.execute_batch(
+        "UPDATE namespace_audiences SET gates = '[{\"kind\":\"link\"}]' \
+         WHERE access = 'token' AND gates = '[]';",
+    )?;
+    conn.execute_batch(
+        "UPDATE namespace_audiences SET gates = '[]' \
+         WHERE access = 'public' AND gates = '[]';",
+    )?;
+    conn.execute_batch("DELETE FROM namespace_audiences WHERE access = 'private';")?;
+
     // -- Backfill: clear explicit 200 MiB limits so tier defaults take effect --
     conn.execute(
         "UPDATE users SET attachment_limit_bytes = NULL WHERE attachment_limit_bytes = 209715200",

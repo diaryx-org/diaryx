@@ -103,12 +103,79 @@ pub struct NamespaceInfo {
     pub metadata: Option<String>,
 }
 
+/// A single stackable gate on a namespace audience.
+///
+/// An audience with no gates is public. Multiple gates are evaluated with OR
+/// semantics — any satisfied gate grants access.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GateRecord {
+    /// Access granted by presenting a signed magic-link token whose audience
+    /// claim matches. The signing key handles all validation; nothing extra is
+    /// persisted server-side.
+    Link,
+    /// Access granted by submitting a password that Argon2-verifies against
+    /// the stored hash. `hash = None` means the writer declared the gate but
+    /// has not set a password yet — readers must wait.
+    Password {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hash: Option<String>,
+        #[serde(default)]
+        version: u32,
+    },
+}
+
+impl GateRecord {
+    /// True if this gate record is a password gate, regardless of hash state.
+    pub fn is_password(&self) -> bool {
+        matches!(self, Self::Password { .. })
+    }
+
+    /// True if this gate record is a link gate.
+    pub fn is_link(&self) -> bool {
+        matches!(self, Self::Link)
+    }
+}
+
+/// Gate update input from API callers. Mirrors `GateRecord` but carries
+/// plaintext passwords instead of hashes; the service layer translates.
+///
+/// `Password { password: None }` on a new audience means "declare the gate
+/// but no password is set yet"; on an existing audience it means "preserve
+/// the current hash and version".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GateInput {
+    Link,
+    Password {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
+    },
+}
+
 /// Namespace audience metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudienceInfo {
     pub namespace_id: String,
     pub audience_name: String,
-    pub access: String,
+    pub gates: Vec<GateRecord>,
+}
+
+impl AudienceInfo {
+    /// True if this audience has no gates (empty = public).
+    pub fn is_public(&self) -> bool {
+        self.gates.is_empty()
+    }
+
+    /// Returns the password gate if present.
+    pub fn password_gate(&self) -> Option<&GateRecord> {
+        self.gates.iter().find(|g| g.is_password())
+    }
+
+    /// True if a link gate is present on this audience.
+    pub fn has_link_gate(&self) -> bool {
+        self.gates.iter().any(|g| g.is_link())
+    }
 }
 
 /// A contact/subscriber in an email audience.
@@ -177,7 +244,7 @@ pub struct UsageTotals {
 #[derive(Debug, Clone)]
 pub struct PublicObjectAccess {
     pub meta: ObjectMeta,
-    pub access: String,
+    pub gates: Vec<GateRecord>,
     pub audience_name: String,
 }
 

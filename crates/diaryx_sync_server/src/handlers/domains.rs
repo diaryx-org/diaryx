@@ -8,7 +8,6 @@
 use super::require_namespace_owner;
 use crate::auth::RequireAuth;
 use crate::db::NamespaceRepo;
-use crate::tokens::validate_signed_token;
 use axum::{
     Router,
     extract::{Path, Query, State},
@@ -16,7 +15,9 @@ use axum::{
     response::{IntoResponse, Json, Response},
     routing::{get, put},
 };
+use diaryx_server::audience_token::{GateKind, validate_audience_token};
 use diaryx_server::domain::CustomDomainInfo as CoreCustomDomainInfo;
+use diaryx_server::domain::GateRecord;
 use diaryx_server::ports::{BlobStore, DomainMappingCache, NamespaceStore, ServerCoreError};
 use diaryx_server::use_cases::domains::DomainService;
 use serde::{Deserialize, Serialize};
@@ -339,19 +340,28 @@ async fn domain_auth(
         None => return StatusCode::NOT_FOUND.into_response(),
     };
 
-    match audience.access.as_str() {
-        "public" => { /* allowed */ }
-        "token" => {
-            let token_str = match &params.audience_token {
-                Some(t) => t,
-                None => return StatusCode::FORBIDDEN.into_response(),
-            };
-            match validate_signed_token(&state.token_signing_key, token_str) {
-                Some(claims) if claims.slug == *ns_id && claims.audience == *audience_name => {}
-                _ => return StatusCode::FORBIDDEN.into_response(),
-            }
+    // Evaluate the audience's gate stack with OR semantics.
+    if audience.gates.is_empty() {
+        // Public — allowed.
+    } else {
+        let claims = params
+            .audience_token
+            .as_deref()
+            .and_then(|t| validate_audience_token(&state.token_signing_key, t));
+        let granted = audience.gates.iter().any(|gate| match gate {
+            GateRecord::Link => claims.as_ref().is_some_and(|c| {
+                matches!(c.gate, GateKind::Link) && c.slug == *ns_id && c.audience == *audience_name
+            }),
+            GateRecord::Password { version, .. } => claims.as_ref().is_some_and(|c| {
+                matches!(c.gate, GateKind::Unlock)
+                    && c.slug == *ns_id
+                    && c.audience == *audience_name
+                    && c.password_version == Some(*version)
+            }),
+        });
+        if !granted {
+            return StatusCode::FORBIDDEN.into_response();
         }
-        _ => return StatusCode::FORBIDDEN.into_response(),
     }
 
     // Serve the object bytes directly.
@@ -387,13 +397,15 @@ mod tests {
         auth::AuthUser,
         blob_store::InMemoryBlobStore,
         db::{NamespaceRepo, init_database},
-        tokens::create_signed_token,
     };
     use axum::{
         body::to_bytes,
         response::{IntoResponse, Response},
     };
     use chrono::{TimeZone, Utc};
+    use diaryx_server::audience_token::{
+        AudienceTokenClaims, GateKind as TestGateKind, create_audience_token,
+    };
     use diaryx_server::{AuthSessionInfo, BlobStore, UserInfo, UserTier};
     use reqwest::Client;
     use rusqlite::{Connection, params};
@@ -468,7 +480,7 @@ mod tests {
         let repo = setup_repo(&["user1"]);
         repo.create_namespace("workspace:alpha", "user1", None)
             .expect("seed namespace");
-        repo.upsert_audience("workspace:alpha", "public", "public")
+        repo.upsert_audience("workspace:alpha", "public", &[])
             .expect("seed audience");
         let state = state(repo, Arc::new(InMemoryBlobStore::new("")));
 
@@ -560,7 +572,7 @@ mod tests {
         let repo = setup_repo(&["user1"]);
         repo.create_namespace("workspace:alpha", "user1", None)
             .expect("seed namespace");
-        repo.upsert_audience("workspace:alpha", "public", "public")
+        repo.upsert_audience("workspace:alpha", "public", &[])
             .expect("seed audience");
         repo.upsert_custom_domain("example.com", "workspace:alpha", "public")
             .expect("seed domain");
@@ -629,8 +641,12 @@ mod tests {
         let repo = setup_repo(&["user1"]);
         repo.create_namespace("workspace:alpha", "user1", None)
             .expect("seed namespace");
-        repo.upsert_audience("workspace:alpha", "members", "token")
-            .expect("seed audience");
+        repo.upsert_audience(
+            "workspace:alpha",
+            "members",
+            &[diaryx_server::GateRecord::Link],
+        )
+        .expect("seed audience");
         repo.upsert_custom_domain("members.example.com", "workspace:alpha", "members")
             .expect("seed domain");
         repo.upsert_object(
@@ -670,12 +686,16 @@ mod tests {
         .into_response();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
 
-        let token = create_signed_token(
+        let token = create_audience_token(
             &state.token_signing_key,
-            "workspace:alpha",
-            "members",
-            "tok-1",
-            None,
+            &AudienceTokenClaims {
+                slug: "workspace:alpha".to_string(),
+                audience: "members".to_string(),
+                token_id: "tok-1".to_string(),
+                gate: TestGateKind::Link,
+                password_version: None,
+                expires_at: None,
+            },
         )
         .expect("signed token");
         let allowed = domain_auth(

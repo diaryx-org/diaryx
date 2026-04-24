@@ -155,7 +155,12 @@ mod tests {
         ) -> Result<Option<AudienceInfo>, ServerCoreError> {
             Ok(None)
         }
-        async fn upsert_audience(&self, _: &str, _: &str, _: &str) -> Result<(), ServerCoreError> {
+        async fn upsert_audience(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[crate::domain::GateRecord],
+        ) -> Result<(), ServerCoreError> {
             Ok(())
         }
         async fn list_audiences(&self, _: &str) -> Result<Vec<AudienceInfo>, ServerCoreError> {

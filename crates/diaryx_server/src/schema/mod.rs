@@ -33,10 +33,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "namespace_metadata",
         sql: include_str!("0003_namespace_metadata.sql"),
     },
+    Migration {
+        version: 4,
+        name: "audience_gates",
+        sql: include_str!("0004_audience_gates.sql"),
+    },
 ];
 
 /// The version number of the latest migration.
-pub const CURRENT_VERSION: u32 = 3;
+pub const CURRENT_VERSION: u32 = 4;
 
 #[cfg(test)]
 mod tests {

@@ -25,6 +25,7 @@ macro_rules! cfg_async_trait {
 }
 
 pub mod api;
+pub mod audience_token;
 pub mod domain;
 pub mod ports;
 pub mod proxy;
@@ -45,8 +46,9 @@ pub mod testing;
 
 pub use domain::{
     AudienceInfo, AuthContext, AuthSessionInfo, CurrentUserContext, CustomDomainInfo, DeviceInfo,
-    NamespaceInfo, NamespaceSessionInfo, ObjectMeta, PasskeyChallengeInfo, PasskeyCredentialInfo,
-    PasskeyInfo, PublicObjectAccess, TierDefaults, UsageTotals, UserInfo, UserTier,
+    GateInput, GateRecord, NamespaceInfo, NamespaceSessionInfo, ObjectMeta, PasskeyChallengeInfo,
+    PasskeyCredentialInfo, PasskeyInfo, PublicObjectAccess, TierDefaults, UsageTotals, UserInfo,
+    UserTier,
 };
 pub use ports::{
     AppleReceiptVerifier, AuthSessionStore, AuthStore, BillingProvider, BillingStore, BlobStore,

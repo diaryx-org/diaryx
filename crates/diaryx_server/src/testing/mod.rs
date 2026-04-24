@@ -37,7 +37,9 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::domain::{AudienceInfo, CustomDomainInfo, NamespaceInfo, ObjectMeta, UsageTotals};
+use crate::domain::{
+    AudienceInfo, CustomDomainInfo, GateRecord, NamespaceInfo, ObjectMeta, UsageTotals,
+};
 use crate::ports::{
     BlobStore, MultipartCompletedPart, NamespaceStore, ObjectMetaStore, ServerCoreError,
 };
@@ -198,14 +200,14 @@ impl NamespaceStore for InMemoryNamespaceStore {
         &self,
         namespace_id: &str,
         audience_name: &str,
-        access: &str,
+        gates: &[GateRecord],
     ) -> Result<(), ServerCoreError> {
         self.audiences.lock().unwrap().insert(
             (namespace_id.to_string(), audience_name.to_string()),
             AudienceInfo {
                 namespace_id: namespace_id.to_string(),
                 audience_name: audience_name.to_string(),
-                access: access.to_string(),
+                gates: gates.to_vec(),
             },
         );
         Ok(())

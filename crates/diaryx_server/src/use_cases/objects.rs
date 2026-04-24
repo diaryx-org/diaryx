@@ -115,14 +115,18 @@ impl<'a> ObjectService<'a> {
         // Skip R2 write if an identical blob already exists.
         let blob_exists = self.blob_store.exists(&blob_key).await?;
         if !blob_exists {
-            // Build R2 metadata with audience info.
+            // Build R2 metadata with audience info. The audience's current
+            // gate set is serialized into a `gates` JSON string so readers
+            // querying R2 directly can reason about access without a DB hit.
             let r2_metadata = match audience {
                 Some(aud) => {
                     let mut m = HashMap::new();
                     m.insert("audience".to_string(), aud.to_string());
                     if let Some(info) = self.namespace_store.get_audience(namespace_id, aud).await?
                     {
-                        m.insert("access".to_string(), info.access);
+                        let gates_json =
+                            serde_json::to_string(&info.gates).unwrap_or_else(|_| "[]".to_string());
+                        m.insert("gates".to_string(), gates_json);
                     }
                     Some(m)
                 }
@@ -403,7 +407,7 @@ impl<'a> ObjectService<'a> {
 
         Ok(PublicObjectAccess {
             meta,
-            access: audience.access,
+            gates: audience.gates,
             audience_name,
         })
     }
@@ -501,7 +505,12 @@ mod tests {
                 .get(&(ns.to_string(), name.to_string()))
                 .cloned())
         }
-        async fn upsert_audience(&self, _: &str, _: &str, _: &str) -> Result<(), ServerCoreError> {
+        async fn upsert_audience(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[crate::domain::GateRecord],
+        ) -> Result<(), ServerCoreError> {
             Ok(())
         }
         async fn list_audiences(&self, _: &str) -> Result<Vec<AudienceInfo>, ServerCoreError> {
@@ -819,7 +828,7 @@ mod tests {
             AudienceInfo {
                 namespace_id: "ns1".to_string(),
                 audience_name: "public".to_string(),
-                access: "public".to_string(),
+                gates: vec![],
             },
         );
         let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
@@ -890,7 +899,7 @@ mod tests {
             AudienceInfo {
                 namespace_id: "ns1".to_string(),
                 audience_name: "public".to_string(),
-                access: "public".to_string(),
+                gates: vec![],
             },
         );
         let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
@@ -911,7 +920,7 @@ mod tests {
             .resolve_public_access("ns1", "page.html")
             .await
             .unwrap();
-        assert_eq!(access.access, "public");
+        assert!(access.gates.is_empty());
         assert_eq!(access.audience_name, "public");
     }
 

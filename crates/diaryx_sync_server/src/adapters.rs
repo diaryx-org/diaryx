@@ -612,10 +612,10 @@ impl NamespaceStore for NativeNamespaceStore {
         &self,
         namespace_id: &str,
         audience_name: &str,
-        access: &str,
+        gates: &[diaryx_server::GateRecord],
     ) -> Result<(), ServerCoreError> {
         self.repo
-            .upsert_audience(namespace_id, audience_name, access)
+            .upsert_audience(namespace_id, audience_name, gates)
             .map_err(ServerCoreError::from)
     }
 
@@ -1051,7 +1051,7 @@ impl From<crate::db::AudienceInfo> for CoreAudienceInfo {
         Self {
             namespace_id: value.namespace_id,
             audience_name: value.audience_name,
-            access: value.access,
+            gates: value.gates,
         }
     }
 }
@@ -1142,7 +1142,7 @@ mod tests {
             .create_namespace("workspace:test", &user_id, None)
             .expect("namespace created");
         ns_repo
-            .upsert_audience("workspace:test", "public", "public")
+            .upsert_audience("workspace:test", "public", &[])
             .expect("audience created");
 
         let namespace_store = NativeNamespaceStore::new(ns_repo);

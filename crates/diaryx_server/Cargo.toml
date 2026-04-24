@@ -31,6 +31,7 @@ tracing = "0.1"
 hex = "0.4"
 hmac = "0.12"
 sha2 = "0.10"
+argon2 = "0.5"
 uuid = { version = "1", features = ["v4", "v5"] }
 webauthn_rp = { version = "0.3", default-features = false, features = ["bin", "custom", "serde", "serde_relaxed", "serializable_server_state"] }
 base64 = "0.22"
@@ -38,7 +39,7 @@ futures = "0.3"
 reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json"] }
 
 # CRDT sync primitives (moved from diaryx_sync)
-diaryx_core = { workspace = true }
+diaryx_core = { workspace = true, features = ["uuid"] }
 yrs = { version = "0.25", features = ["sync"] }
 indexmap = { workspace = true }
 log = "0.4"

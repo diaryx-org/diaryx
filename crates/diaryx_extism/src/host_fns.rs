@@ -136,15 +136,15 @@ pub trait NamespaceProvider: Send + Sync {
         limit: Option<u32>,
         offset: Option<u32>,
     ) -> Result<Vec<NamespaceObjectMeta>, String>;
-    fn sync_audience(&self, ns_id: &str, audience: &str, access: &str) -> Result<(), String>;
-    /// Trigger sending the email draft for an audience to all subscribers.
-    fn send_audience_email(
+    /// Sync an audience's gate stack on the server. `gates` is a JSON array
+    /// of `GateRecord` objects (`{ "kind": "link" }` or
+    /// `{ "kind": "password", ... }`); empty array = public.
+    fn sync_audience(
         &self,
         ns_id: &str,
         audience: &str,
-        subject: &str,
-        reply_to: Option<&str>,
-    ) -> Result<serde_json::Value, String>;
+        gates: &serde_json::Value,
+    ) -> Result<(), String>;
 
     /// Download multiple objects in a single request.
     fn get_objects_batch(&self, ns_id: &str, keys: &[String]) -> Result<BatchGetResult, String>;
@@ -552,16 +552,12 @@ impl NamespaceProvider for NoopNamespaceProvider {
     ) -> Result<Vec<NamespaceObjectMeta>, String> {
         Err("Namespace operations are not available".to_string())
     }
-    fn sync_audience(&self, _ns_id: &str, _audience: &str, _access: &str) -> Result<(), String> {
-        Err("Namespace operations are not available".to_string())
-    }
-    fn send_audience_email(
+    fn sync_audience(
         &self,
         _ns_id: &str,
         _audience: &str,
-        _subject: &str,
-        _reply_to: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
+        _gates: &serde_json::Value,
+    ) -> Result<(), String> {
         Err("Namespace operations are not available".to_string())
     }
 
@@ -970,13 +966,6 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_namespace_sync_audience,
-        )
-        .with_function(
-            "host_namespace_send_email",
-            [ValType::I64],
-            [ValType::I64],
-            user_data.clone(),
-            host_namespace_send_email,
         )
         .with_function(
             "host_ws_request",
@@ -2882,7 +2871,7 @@ fn host_namespace_create(
     Ok(())
 }
 
-/// Host function: `host_namespace_sync_audience(input: {ns_id, audience, access}) -> {ok: true} or {error}`
+/// Host function: `host_namespace_sync_audience(input: {ns_id, audience, gates}) -> {ok: true} or {error}`
 fn host_namespace_sync_audience(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],
@@ -2895,7 +2884,8 @@ fn host_namespace_sync_audience(
     struct Input {
         ns_id: String,
         audience: String,
-        access: String,
+        #[serde(default)]
+        gates: serde_json::Value,
     }
 
     let parsed: Input = serde_json::from_str(&input).map_err(|e| {
@@ -2908,49 +2898,10 @@ fn host_namespace_sync_audience(
         .map_err(|e| ExtismError::msg(format!("host_namespace_sync_audience: lock: {e}")))?;
     let result =
         ctx.namespace_provider
-            .sync_audience(&parsed.ns_id, &parsed.audience, &parsed.access);
+            .sync_audience(&parsed.ns_id, &parsed.audience, &parsed.gates);
 
     let json = match result {
         Ok(()) => serde_json::json!({ "ok": true }),
-        Err(e) => serde_json::json!({ "error": e }),
-    };
-    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
-    Ok(())
-}
-
-/// Host function: `host_namespace_send_email(input: {ns_id, audience, subject, reply_to?}) -> {recipients, send_receipt_key} or {error}`
-fn host_namespace_send_email(
-    plugin: &mut CurrentPlugin,
-    inputs: &[Val],
-    outputs: &mut [Val],
-    user_data: UserData<HostContext>,
-) -> Result<(), ExtismError> {
-    let input: String = plugin.memory_get_val(&inputs[0])?;
-
-    #[derive(serde::Deserialize)]
-    struct Input {
-        ns_id: String,
-        audience: String,
-        subject: String,
-        reply_to: Option<String>,
-    }
-
-    let parsed: Input = serde_json::from_str(&input)
-        .map_err(|e| ExtismError::msg(format!("host_namespace_send_email: invalid input: {e}")))?;
-
-    let ctx = user_data.get()?;
-    let ctx = ctx
-        .lock()
-        .map_err(|e| ExtismError::msg(format!("host_namespace_send_email: lock: {e}")))?;
-    let result = ctx.namespace_provider.send_audience_email(
-        &parsed.ns_id,
-        &parsed.audience,
-        &parsed.subject,
-        parsed.reply_to.as_deref(),
-    );
-
-    let json = match result {
-        Ok(val) => val,
         Err(e) => serde_json::json!({ "error": e }),
     };
     plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;

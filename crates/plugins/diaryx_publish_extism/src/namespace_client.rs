@@ -43,12 +43,15 @@ pub struct DomainInfo {
     pub verified: bool,
 }
 
-/// Sync an audience's access level on the server.
+/// Sync an audience's gate stack on the server.
+///
+/// `gates` is the JSON array in `{ kind: link | password, ... }` shape
+/// (empty array = public). See `diaryx_server::domain::GateInput`.
 pub fn sync_audience(
     server_url: &str,
     namespace_id: &str,
     audience_name: &str,
-    access: &str,
+    gates: &serde_json::Value,
 ) -> Result<(), String> {
     let url = format!(
         "{}/namespaces/{}/audiences/{}",
@@ -56,7 +59,7 @@ pub fn sync_audience(
         namespace_id,
         urlencoding::encode(audience_name)
     );
-    let body = serde_json::json!({ "access": access });
+    let body = serde_json::json!({ "gates": gates });
     let body_bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
 
     let mut headers = HashMap::new();

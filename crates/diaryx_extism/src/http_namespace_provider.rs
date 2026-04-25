@@ -311,14 +311,19 @@ impl NamespaceProvider for HttpNamespaceProvider {
             .unwrap_or_default())
     }
 
-    fn sync_audience(&self, ns_id: &str, audience: &str, access: &str) -> Result<(), String> {
+    fn sync_audience(
+        &self,
+        ns_id: &str,
+        audience: &str,
+        gates: &serde_json::Value,
+    ) -> Result<(), String> {
         let url = format!(
             "{}/namespaces/{}/audiences/{}",
             self.base_url,
             Self::encode_component(ns_id),
             Self::encode_component(audience)
         );
-        let body = serde_json::to_vec(&serde_json::json!({ "access": access }))
+        let body = serde_json::to_vec(&serde_json::json!({ "gates": gates }))
             .map_err(|e| format!("Failed to serialize audience request: {e}"))?;
         self.request_json::<serde_json::Value>(
             "PUT",
@@ -328,35 +333,6 @@ impl NamespaceProvider for HttpNamespaceProvider {
             None,
         )?;
         Ok(())
-    }
-
-    fn send_audience_email(
-        &self,
-        ns_id: &str,
-        audience: &str,
-        subject: &str,
-        reply_to: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
-        let url = format!(
-            "{}/namespaces/{}/audiences/{}/send-email",
-            self.base_url,
-            Self::encode_component(ns_id),
-            Self::encode_component(audience)
-        );
-        let body = serde_json::to_vec(&serde_json::json!({
-            "subject": subject,
-            "reply_to": reply_to,
-        }))
-        .map_err(|e| format!("Failed to serialize send-email request: {e}"))?;
-        Ok(self
-            .request_json::<serde_json::Value>(
-                "POST",
-                url,
-                Some(body),
-                Some("application/json"),
-                None,
-            )?
-            .unwrap_or_else(|| serde_json::json!({ "ok": true })))
     }
 
     fn get_objects_batch(&self, ns_id: &str, keys: &[String]) -> Result<BatchGetResult, String> {

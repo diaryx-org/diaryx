@@ -77,7 +77,6 @@ extern "ExtismHost" {
     pub fn host_namespace_list(input: String) -> String;
     pub fn host_namespace_create(input: String) -> String;
     pub fn host_namespace_sync_audience(input: String) -> String;
-    pub fn host_namespace_send_email(input: String) -> String;
 
     // Hashing
     pub fn host_hash_file(input: String) -> String;

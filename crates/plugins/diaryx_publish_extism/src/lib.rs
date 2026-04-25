@@ -163,12 +163,6 @@ pub fn manifest(_input: String) -> FnResult<String> {
             path: "/namespaces/{id}/objects/{key}".into(),
             description: "Delete a stale published artifact from a namespace".into(),
         },
-        ServerFunctionDecl {
-            name: "send_audience_email".into(),
-            method: "POST".into(),
-            path: "/namespaces/{id}/audiences/{audience}/send-email".into(),
-            description: "Send the email draft for an audience to all subscribers".into(),
-        },
     ])
     .requested_permissions(GuestRequestedPermissions {
         defaults: serde_json::json!({

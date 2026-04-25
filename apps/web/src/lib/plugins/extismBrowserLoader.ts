@@ -1912,7 +1912,7 @@ function buildHostFunctions(
       async host_namespace_sync_audience(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as
-            | { ns_id: string; audience: string; access: string }
+            | { ns_id: string; audience: string; gates: unknown }
             | undefined;
           if (!input) return cp.store(JSON.stringify({ error: "no input" }));
           await namespaceFetchBytes(
@@ -1920,36 +1920,10 @@ function buildHostFunctions(
             `/namespaces/${encodeURIComponent(input.ns_id)}/audiences/${encodeURIComponent(input.audience)}`,
             {
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ access: input.access }),
+              body: JSON.stringify({ gates: input.gates ?? [] }),
             },
           );
           return cp.store(JSON.stringify({ ok: true }));
-        } catch (e) {
-          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
-        }
-      },
-      async host_namespace_send_email(cp: CallContext, offs: bigint) {
-        try {
-          const input = cp.read(offs)?.json() as
-            | {
-                ns_id: string;
-                audience: string;
-                subject: string;
-                reply_to?: string;
-              }
-            | undefined;
-          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
-          const body: Record<string, string> = { subject: input.subject };
-          if (input.reply_to) body.reply_to = input.reply_to;
-          const data = await namespaceFetchText(
-            "POST",
-            `/namespaces/${encodeURIComponent(input.ns_id)}/audiences/${encodeURIComponent(input.audience)}/send-email`,
-            {
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body),
-            },
-          );
-          return cp.store(data);
         } catch (e) {
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
         }

@@ -264,42 +264,15 @@ pub fn list_objects_with_options(
         .map_err(|e| format!("Failed to decode list_objects response: {e}"))
 }
 
-/// Trigger sending the email draft for an audience to all subscribers.
+/// Sync an audience's gate stack on the server.
 ///
-/// The draft must already be uploaded as `_email_draft/{audience}.html`
-/// in the namespace's object store. The server reads the draft, sends to
-/// all active subscribers via Resend, writes a send receipt, and deletes
-/// the draft.
-pub fn send_audience_email(
-    ns_id: &str,
-    audience: &str,
-    subject: &str,
-    reply_to: Option<&str>,
-) -> Result<serde_json::Value, String> {
-    let mut input = serde_json::json!({
-        "ns_id": ns_id,
-        "audience": audience,
-        "subject": subject,
-    });
-    if let Some(rt) = reply_to {
-        input["reply_to"] = serde_json::Value::String(rt.to_string());
-    }
-    let result = unsafe { host_namespace_send_email(input.to_string()) }
-        .map_err(|e| format!("host_namespace_send_email failed: {e}"))?;
-    let parsed: serde_json::Value = serde_json::from_str(&result)
-        .map_err(|e| format!("Failed to parse send_email response: {e}"))?;
-    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
-        return Err(err.to_string());
-    }
-    Ok(parsed)
-}
-
-/// Sync an audience's access level on the server.
-pub fn sync_audience(ns_id: &str, audience: &str, access: &str) -> Result<(), String> {
+/// Gates is an ordered list of gate records (JSON objects tagged by `kind`).
+/// Empty gates = public. Shape matches `diaryx_server::domain::GateRecord`.
+pub fn sync_audience(ns_id: &str, audience: &str, gates: &serde_json::Value) -> Result<(), String> {
     let input = serde_json::json!({
         "ns_id": ns_id,
         "audience": audience,
-        "access": access,
+        "gates": gates,
     });
     let result = unsafe { host_namespace_sync_audience(input.to_string()) }
         .map_err(|e| format!("host_namespace_sync_audience failed: {e}"))?;

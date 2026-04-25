@@ -195,18 +195,13 @@ impl NamespaceProvider for MockNamespaceProvider {
         Ok(objects.into_iter().skip(offset).take(limit).collect())
     }
 
-    fn sync_audience(&self, _ns_id: &str, _audience: &str, _access: &str) -> Result<(), String> {
-        Ok(())
-    }
-
-    fn send_audience_email(
+    fn sync_audience(
         &self,
         _ns_id: &str,
         _audience: &str,
-        _subject: &str,
-        _reply_to: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
-        Ok(json!({ "ok": true }))
+        _gates: &serde_json::Value,
+    ) -> Result<(), String> {
+        Ok(())
     }
 
     fn get_objects_batch(

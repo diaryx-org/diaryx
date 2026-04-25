@@ -1,7 +1,22 @@
+/**
+ * Audience-access token shape, mirroring `diaryx_server::audience_token`.
+ *
+ * - `s`: namespace slug.
+ * - `a`: audience name.
+ * - `t`: token id (UUID, primarily for observability).
+ * - `g`: gate kind the token was minted to satisfy.
+ * - `pv`: password-gate version, present only when `g === 'unlock'`.
+ * - `e`: optional unix-seconds expiry.
+ *
+ * Older tokens were issued before `g` existed; for backward compatibility we
+ * treat an absent `g` as `link`.
+ */
 export type TokenClaims = {
   s: string;
   a: string;
   t: string;
+  g: 'link' | 'unlock';
+  pv: number | null;
   e: number | null;
 };
 
@@ -33,13 +48,21 @@ export async function validateSignedToken(
     ['verify'],
   );
 
-  const isValid = await crypto.subtle.verify('HMAC', key, signatureBytes.buffer as ArrayBuffer, payloadBytes.buffer as ArrayBuffer);
+  const isValid = await crypto.subtle.verify(
+    'HMAC',
+    key,
+    signatureBytes.buffer as ArrayBuffer,
+    payloadBytes.buffer as ArrayBuffer,
+  );
   if (!isValid) {
     return null;
   }
 
   const payloadText = new TextDecoder().decode(payloadBytes);
-  const claims = JSON.parse(payloadText) as Partial<TokenClaims>;
+  const claims = JSON.parse(payloadText) as Partial<TokenClaims> & {
+    g?: unknown;
+    pv?: unknown;
+  };
   if (
     typeof claims.s !== 'string' ||
     typeof claims.a !== 'string' ||
@@ -49,10 +72,24 @@ export async function validateSignedToken(
     return null;
   }
 
+  // `g` defaults to "link" for back-compat with tokens minted before the
+  // gate-stack rollout. "unlock" requires a numeric `pv`.
+  const gate: 'link' | 'unlock' =
+    claims.g === 'unlock' ? 'unlock' : 'link';
+  let pv: number | null = null;
+  if (gate === 'unlock') {
+    if (typeof claims.pv !== 'number') {
+      return null;
+    }
+    pv = claims.pv;
+  }
+
   return {
     s: claims.s,
     a: claims.a,
     t: claims.t,
+    g: gate,
+    pv,
     e: claims.e ?? null,
   };
 }

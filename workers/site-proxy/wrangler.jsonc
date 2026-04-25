@@ -26,6 +26,12 @@
 			"remote": true
 		}
 	],
+  "vars": {
+    // Base URL of the sync server. Used by the password-unlock flow
+    // (`POST /__unlock/{nsId}/{audience}`) to proxy reader-supplied
+    // passwords to the server's Argon2 verify endpoint.
+    "SYNC_SERVER_BASE_URL": "https://sync.diaryx.org"
+  },
   "observability": {
     "logs": {
       "enabled": true,

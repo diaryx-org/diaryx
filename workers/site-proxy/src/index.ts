@@ -6,6 +6,11 @@ type Env = {
   TOKEN_SIGNING_KEY: string;
   KV: KVNamespace;
   DB: D1Database;
+  /** Base URL of the sync server, e.g. `https://sync.diaryx.org`. The worker
+   * proxies password-unlock requests here so the server can run Argon2 verify
+   * + emit a fresh signed token. Optional — when unset, password gates fall
+   * back to a "service unavailable" response on the challenge form. */
+  SYNC_SERVER_BASE_URL?: string;
 };
 
 type SiteMeta = {
@@ -34,8 +39,16 @@ type NamespaceObjectMeta = {
   audience: string | null;
 };
 
+/**
+ * One stackable gate on an audience. Mirrors `diaryx_server::domain::GateRecord`
+ * — empty `gates` array on the audience = public, otherwise short-circuit OR.
+ */
+type GateRecord =
+  | { kind: 'link' }
+  | { kind: 'password'; hash?: string | null; version: number };
+
 type NamespaceAudienceMeta = {
-  access: string;
+  gates: GateRecord[];
 };
 
 const META_TTL_MS = 60_000;
@@ -103,6 +116,14 @@ export default {
     }
 
     const slug = segments[0];
+
+    // Password-unlock POST handler: `/__unlock/{nsId}/{audience}`. Routed
+    // here (rather than per-flow in the namespace/subdomain branches) so the
+    // form action stays the same regardless of which serving path the
+    // reader was originally on.
+    if (slug === '__unlock') {
+      return handleUnlockRequest(request, env, url, segments);
+    }
 
     // Namespace object route: /ns/{ns_id}/{*path}
     if (slug === 'ns') {
@@ -491,54 +512,85 @@ async function checkNamespaceAccess(
     return notFound();
   }
 
-  // Read audience and access level from R2 custom metadata.
+  // Read audience + gates from R2 custom metadata. The sync server writes
+  // the audience's gate stack as JSON on object upload (see
+  // `diaryx_server::use_cases::objects::put`). Legacy objects only have
+  // an `access` string — fall back to that for back-compat.
   const objectAudience = object.customMetadata?.audience;
-  const accessLevel = object.customMetadata?.access;
-  if (!objectAudience || !accessLevel) {
-    // No audience/access metadata = private, not publicly accessible.
+  if (!objectAudience) {
     return notFound();
   }
-
-  // If serving via custom domain, object must match the domain's audience.
   if (allowedAudience && objectAudience !== allowedAudience) {
     return notFound();
   }
 
-  if (accessLevel === 'public') {
-    // Allowed — serve directly.
-  } else if (accessLevel === 'token') {
-    // Check for audience_token query param or cookie.
-    const tokenStr =
-      url.searchParams.get('audience_token') ??
-      getCookie(request.headers.get('Cookie') ?? '', `diaryx_access_${nsId}`);
-
-    if (!tokenStr) {
-      return forbidden('Authentication required to access this resource.');
+  const gatesJson = object.customMetadata?.gates;
+  let audienceMeta: NamespaceAudienceMeta;
+  if (gatesJson) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(gatesJson);
+    } catch {
+      parsed = [];
     }
-
-    const claims = await validateSignedToken(env.TOKEN_SIGNING_KEY, tokenStr);
-    if (!claims || claims.s !== nsId || claims.a !== objectAudience) {
-      return forbidden('This access token is invalid or has expired.');
+    const gates: GateRecord[] = [];
+    if (Array.isArray(parsed)) {
+      for (const raw of parsed) {
+        if (raw && typeof raw === 'object' && 'kind' in raw) {
+          const kind = (raw as { kind: unknown }).kind;
+          if (kind === 'link') {
+            gates.push({ kind: 'link' });
+          } else if (kind === 'password') {
+            const obj = raw as { kind: 'password'; hash?: string | null; version?: unknown };
+            const version = typeof obj.version === 'number' ? obj.version : 0;
+            gates.push({ kind: 'password', hash: obj.hash ?? null, version });
+          }
+        }
+      }
     }
-    if (claims.e !== null && claims.e < Math.floor(Date.now() / 1000)) {
-      return forbidden('This access token has expired.');
-    }
-
-    // If token was in query param, redirect to strip it and set cookie.
-    if (url.searchParams.has('audience_token')) {
-      const redirectUrl = new URL(url.toString());
-      redirectUrl.searchParams.delete('audience_token');
-      const headers = new Headers();
-      headers.set('Location', redirectUrl.toString());
-      headers.append(
-        'Set-Cookie',
-        `diaryx_access_${nsId}=${encodeURIComponent(tokenStr)}; Path=/; HttpOnly; Secure; SameSite=Lax`,
-      );
-      return new Response(null, { status: 302, headers });
-    }
+    audienceMeta = { gates };
   } else {
-    // "private" or unknown — deny.
+    // Legacy fallback: derive a gate set from the old `access` string.
+    const accessLevel = object.customMetadata?.access;
+    if (!accessLevel) {
+      return notFound();
+    }
+    if (accessLevel === 'public') {
+      audienceMeta = { gates: [] };
+    } else if (accessLevel === 'token') {
+      audienceMeta = { gates: [{ kind: 'link' }] };
+    } else {
+      return forbidden('You do not have permission to access this resource.');
+    }
+  }
+
+  const presentedToken =
+    url.searchParams.get('audience_token') ??
+    getCookie(request.headers.get('Cookie') ?? '', `diaryx_access_${nsId}`);
+
+  const evaluation = await evaluateGates(
+    audienceMeta,
+    nsId,
+    objectAudience,
+    presentedToken,
+    env.TOKEN_SIGNING_KEY,
+  );
+
+  if (evaluation.kind === 'challenge') {
+    return renderUnlockChallenge(nsId, objectAudience, url, null);
+  }
+  if (evaluation.kind === 'denied') {
     return forbidden('You do not have permission to access this resource.');
+  }
+
+  // Granted. If the token rode in via query param, bake it into a cookie.
+  if (presentedToken && url.searchParams.has('audience_token')) {
+    const redirectUrl = new URL(url.toString());
+    redirectUrl.searchParams.delete('audience_token');
+    const headers = new Headers();
+    headers.set('Location', redirectUrl.toString());
+    headers.append('Set-Cookie', buildNamespaceCookie(nsId, presentedToken));
+    return new Response(null, { status: 302, headers });
   }
 
   // Serve the object.
@@ -570,15 +622,107 @@ async function getNamespaceAudienceMeta(
   nsId: string,
   audience: string,
 ): Promise<NamespaceAudienceMeta | null> {
+  // Read the new `gates` JSON column (added in migration 0004).
   const result = await env.DB.prepare(
-    `SELECT access
+    `SELECT gates
        FROM namespace_audiences
       WHERE namespace_id = ?1 AND audience_name = ?2`,
   )
     .bind(nsId, audience)
-    .first<NamespaceAudienceMeta>();
+    .first<{ gates: string }>();
 
-  return result ?? null;
+  if (!result) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.gates ?? '[]');
+  } catch {
+    parsed = [];
+  }
+  if (!Array.isArray(parsed)) {
+    return null;
+  }
+  const gates: GateRecord[] = [];
+  for (const raw of parsed) {
+    if (raw && typeof raw === 'object' && 'kind' in raw) {
+      const kind = (raw as { kind: unknown }).kind;
+      if (kind === 'link') {
+        gates.push({ kind: 'link' });
+      } else if (kind === 'password') {
+        const obj = raw as {
+          kind: 'password';
+          hash?: string | null;
+          version?: unknown;
+        };
+        const version = typeof obj.version === 'number' ? obj.version : 0;
+        gates.push({ kind: 'password', hash: obj.hash ?? null, version });
+      }
+      // Unknown gate kinds are dropped silently — better to fail closed.
+    }
+  }
+  return { gates };
+}
+
+/**
+ * Evaluate the audience's gate stack against the request.
+ *
+ * Returns one of:
+ * - `{ kind: 'granted' }` — at least one gate is satisfied (or the gate set
+ *   is empty, meaning public).
+ * - `{ kind: 'challenge', gate: 'password' }` — no token presented, but a
+ *   password gate exists; the caller should serve the unlock challenge page.
+ * - `{ kind: 'denied' }` — gates exist, none are satisfied, and there's no
+ *   user-friendly challenge to offer (link-only audience without a token).
+ */
+type GateEvaluation =
+  | { kind: 'granted' }
+  | { kind: 'challenge'; gate: 'password' }
+  | { kind: 'denied' };
+
+async function evaluateGates(
+  meta: NamespaceAudienceMeta,
+  nsId: string,
+  audience: string,
+  presentedToken: string | null,
+  signingKey: string,
+): Promise<GateEvaluation> {
+  // Empty gates = public.
+  if (meta.gates.length === 0) {
+    return { kind: 'granted' };
+  }
+
+  // Validate the presented token once; we'll re-use the claims across gate
+  // checks. Tokens are scoped to (slug, audience) so any mismatch invalidates.
+  const claims = presentedToken
+    ? await validateSignedToken(signingKey, presentedToken)
+    : null;
+  const claimsValidForAudience =
+    claims !== null && claims.s === nsId && claims.a === audience;
+
+  for (const gate of meta.gates) {
+    if (gate.kind === 'link') {
+      if (claimsValidForAudience && claims!.g === 'link') {
+        return { kind: 'granted' };
+      }
+    } else if (gate.kind === 'password') {
+      if (
+        claimsValidForAudience &&
+        claims!.g === 'unlock' &&
+        claims!.pv === gate.version
+      ) {
+        return { kind: 'granted' };
+      }
+    }
+  }
+
+  // No gate satisfied. Pick a user-facing fallback: prefer the password
+  // challenge page if a password gate exists, otherwise return denied.
+  const hasPasswordGate = meta.gates.some((g) => g.kind === 'password');
+  return hasPasswordGate
+    ? { kind: 'challenge', gate: 'password' }
+    : { kind: 'denied' };
 }
 
 function buildNamespaceCookie(nsId: string, token: string, path = '/'): string {
@@ -615,38 +759,37 @@ async function serveNamespaceObjectByKey(
     return notFound();
   }
 
-  if (audienceMeta.access === 'public') {
-    // Allowed.
-  } else if (audienceMeta.access === 'token') {
-    const tokenStr =
-      url.searchParams.get('audience_token') ??
-      getCookie(request.headers.get('Cookie') ?? '', `diaryx_access_${nsId}`);
+  const presentedToken =
+    url.searchParams.get('audience_token') ??
+    getCookie(request.headers.get('Cookie') ?? '', `diaryx_access_${nsId}`);
 
-    if (!tokenStr) {
-      return forbidden('Authentication required to access this resource.');
-    }
+  const evaluation = await evaluateGates(
+    audienceMeta,
+    nsId,
+    objectAudience,
+    presentedToken,
+    env.TOKEN_SIGNING_KEY,
+  );
 
-    const claims = await validateSignedToken(env.TOKEN_SIGNING_KEY, tokenStr);
-    if (!claims || claims.s !== nsId || claims.a !== objectAudience) {
-      return forbidden('This access token is invalid or has expired.');
-    }
-    if (claims.e !== null && claims.e < Math.floor(Date.now() / 1000)) {
-      return forbidden('This access token has expired.');
-    }
-
-    if (url.searchParams.has('audience_token')) {
-      const redirectUrl = new URL(url.toString());
-      redirectUrl.searchParams.delete('audience_token');
-      const headers = new Headers();
-      headers.set('Location', redirectUrl.toString());
-      headers.append(
-        'Set-Cookie',
-        buildNamespaceCookie(nsId, tokenStr, options?.cookiePath ?? '/'),
-      );
-      return new Response(null, { status: 302, headers });
-    }
-  } else {
+  if (evaluation.kind === 'challenge') {
+    return renderUnlockChallenge(nsId, objectAudience, url, null);
+  }
+  if (evaluation.kind === 'denied') {
     return forbidden('You do not have permission to access this resource.');
+  }
+
+  // Granted. If the token rode in via query param, redirect to strip it and
+  // bake it into a cookie so future requests don't need it.
+  if (presentedToken && url.searchParams.has('audience_token')) {
+    const redirectUrl = new URL(url.toString());
+    redirectUrl.searchParams.delete('audience_token');
+    const headers = new Headers();
+    headers.set('Location', redirectUrl.toString());
+    headers.append(
+      'Set-Cookie',
+      buildNamespaceCookie(nsId, presentedToken, options?.cookiePath ?? '/'),
+    );
+    return new Response(null, { status: 302, headers });
   }
 
   const blobKey = meta.r2_key ?? `ns/${nsId}/${key}`;
@@ -761,6 +904,13 @@ async function serveSubdomainSite(
 ): Promise<Response> {
   // Canonicalize root to "/" with trailing slash.
   const segments = url.pathname.split('/').filter(Boolean);
+
+  // Password-unlock POST handler — must be matched before other routing
+  // so subdomain readers can submit the challenge form to a same-host URL.
+  if (segments[0] === '__unlock') {
+    return handleUnlockRequest(request, env, url, segments);
+  }
+
   if (segments.length === 0 && !url.pathname.endsWith('/')) {
     const canonicalUrl = new URL(url.toString());
     canonicalUrl.pathname = '/';
@@ -849,6 +999,12 @@ async function serveNamespaceCustomDomain(
   url: URL,
 ): Promise<Response> {
   const segments = url.pathname.split('/').filter(Boolean);
+
+  // Password-unlock POST handler — same as subdomain path.
+  if (segments[0] === '__unlock') {
+    return handleUnlockRequest(request, env, url, segments);
+  }
+
   let objectPath = segments.map((s) => decodeURIComponent(s)).join('/');
   if (!objectPath) {
     objectPath = 'index.html';
@@ -1092,6 +1248,282 @@ function notFound(): Response {
 
 function forbidden(message: string): Response {
   return htmlError(403, 'Access denied', message);
+}
+
+/**
+ * Render the password unlock challenge page. The form POSTs to
+ * `/__unlock/{nsId}/{audience}` (handled by `handleUnlockRequest`), which
+ * proxies to the sync server's `/audiences/{name}/unlock` endpoint.
+ *
+ * `errorMessage` is shown above the form when the user arrives after a
+ * failed attempt (set by the unlock handler via a redirect with
+ * `?unlock_error=...`).
+ */
+function renderUnlockChallenge(
+  nsId: string,
+  audience: string,
+  url: URL,
+  errorMessage: string | null,
+): Response {
+  const errorFromQuery = url.searchParams.get('unlock_error');
+  const message = errorMessage ?? errorFromQuery;
+  const escapedMessage = message ? escapeHtml(message) : null;
+
+  // Where to redirect on success — strip the unlock_error query so the user
+  // doesn't get stuck staring at the error after a successful retry.
+  const redirectUrl = new URL(url.toString());
+  redirectUrl.searchParams.delete('unlock_error');
+  const redirectAfter = redirectUrl.pathname + (redirectUrl.search || '');
+
+  const formAction = `/__unlock/${encodeURIComponent(nsId)}/${encodeURIComponent(audience)}`;
+  const audienceLabel = escapeHtml(audience);
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Password required</title>
+    <style>
+    :root {
+        --bg: #fafaf9;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --border: #e5e7eb;
+        --accent: #0066cc;
+        --error: #dc2626;
+        --surface: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --bg: #0a0a0f;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --accent: #3b82f6;
+            --error: #f87171;
+            --surface: #111827;
+        }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        color: var(--text);
+        background: var(--bg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 2rem;
+        -webkit-font-smoothing: antialiased;
+    }
+    .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 2rem;
+        max-width: 24rem;
+        width: 100%;
+    }
+    h1 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+    .subtitle {
+        font-size: 0.9375rem;
+        color: var(--text-muted);
+        margin-bottom: 1.5rem;
+        line-height: 1.5;
+    }
+    .audience {
+        display: inline-block;
+        padding: 0.125rem 0.5rem;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-size: 0.8125rem;
+        color: var(--text-muted);
+    }
+    label {
+        display: block;
+        font-size: 0.875rem;
+        font-weight: 500;
+        margin-bottom: 0.375rem;
+    }
+    input[type="password"] {
+        width: 100%;
+        padding: 0.625rem 0.75rem;
+        font-size: 0.9375rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: inherit;
+    }
+    input[type="password"]:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: -1px;
+        border-color: var(--accent);
+    }
+    button {
+        width: 100%;
+        margin-top: 1rem;
+        padding: 0.625rem 1rem;
+        font-size: 0.9375rem;
+        font-weight: 500;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+    button:hover { opacity: 0.9; }
+    .error {
+        margin-bottom: 1rem;
+        padding: 0.625rem 0.75rem;
+        background: color-mix(in srgb, var(--error) 12%, transparent);
+        border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+        border-radius: 8px;
+        color: var(--error);
+        font-size: 0.875rem;
+    }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Password required</h1>
+        <p class="subtitle">
+            This content is shared with <span class="audience">${audienceLabel}</span>.
+            Enter the password to continue.
+        </p>
+        ${escapedMessage ? `<div class="error">${escapedMessage}</div>` : ''}
+        <form method="POST" action="${escapeHtml(formAction)}">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" autocomplete="current-password" autofocus required>
+            <input type="hidden" name="redirect" value="${escapeHtml(redirectAfter)}">
+            <button type="submit">Unlock</button>
+        </form>
+    </div>
+</body>
+</html>`;
+
+  return new Response(html, {
+    status: 401,
+    headers: { 'content-type': 'text/html; charset=utf-8' },
+  });
+}
+
+/**
+ * Handle `POST /__unlock/{nsId}/{audience}`. Reads the password from the form
+ * body, calls the sync server's unlock endpoint, and on success sets the
+ * audience-access cookie and redirects to the original page.
+ */
+async function handleUnlockRequest(
+  request: Request,
+  env: Env,
+  url: URL,
+  segments: string[],
+): Promise<Response> {
+  if (request.method !== 'POST') {
+    return new Response('Method Not Allowed', { status: 405 });
+  }
+  if (segments.length < 3) {
+    return notFound();
+  }
+
+  const nsId = decodeURIComponent(segments[1]);
+  const audience = decodeURIComponent(segments[2]);
+
+  const formData = await request.formData().catch(() => null);
+  if (!formData) {
+    return new Response('Invalid form data', { status: 400 });
+  }
+  const password = formData.get('password');
+  if (typeof password !== 'string' || password.length === 0) {
+    return renderUnlockChallenge(nsId, audience, url, 'Password is required.');
+  }
+  const redirectAfter = (() => {
+    const v = formData.get('redirect');
+    if (typeof v !== 'string') return '/';
+    // Only honor same-site relative redirects to avoid open-redirect abuse.
+    return v.startsWith('/') && !v.startsWith('//') ? v : '/';
+  })();
+
+  const baseUrl = env.SYNC_SERVER_BASE_URL;
+  if (!baseUrl) {
+    return renderUnlockChallenge(
+      nsId,
+      audience,
+      url,
+      'Unlock service is not configured. Contact the site owner.',
+    );
+  }
+
+  const unlockUrl = `${baseUrl.replace(/\/$/, '')}/namespaces/${encodeURIComponent(
+    nsId,
+  )}/audiences/${encodeURIComponent(audience)}/unlock`;
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(unlockUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+  } catch (err) {
+    return renderUnlockChallenge(
+      nsId,
+      audience,
+      url,
+      'Could not reach the unlock service. Try again in a moment.',
+    );
+  }
+
+  if (upstream.status === 403) {
+    return renderUnlockChallenge(nsId, audience, url, 'Incorrect password.');
+  }
+  if (upstream.status === 429) {
+    return renderUnlockChallenge(
+      nsId,
+      audience,
+      url,
+      'Too many attempts. Please wait and try again.',
+    );
+  }
+  if (!upstream.ok) {
+    return renderUnlockChallenge(
+      nsId,
+      audience,
+      url,
+      'Unlock failed. Please try again.',
+    );
+  }
+
+  let parsed: { token?: unknown };
+  try {
+    parsed = (await upstream.json()) as { token?: unknown };
+  } catch {
+    return renderUnlockChallenge(nsId, audience, url, 'Unlock service returned a malformed response.');
+  }
+  const token = typeof parsed.token === 'string' ? parsed.token : null;
+  if (!token) {
+    return renderUnlockChallenge(nsId, audience, url, 'Unlock service did not return a token.');
+  }
+
+  const headers = new Headers();
+  headers.set('Location', redirectAfter);
+  headers.append('Set-Cookie', buildNamespaceCookie(nsId, token));
+  return new Response(null, { status: 302, headers });
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function htmlError(status: number, title: string, message: string): Response {

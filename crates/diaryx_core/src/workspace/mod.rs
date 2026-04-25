@@ -57,6 +57,89 @@ fn default_true() -> bool {
     true
 }
 
+/// A challenge gate that controls reader access to an audience's content.
+///
+/// Gates are stackable; an audience with no gates is public, and multiple
+/// gates are evaluated with OR semantics by the site-proxy worker (any
+/// satisfied gate grants access). This is the workspace-file shape — server
+/// state (e.g. password hashes) lives separately and is keyed by gate kind.
+///
+/// Phase 1 variants are unit-style; future kinds (e.g. `ip_allowlist`,
+/// `totp`) can be added without breaking older clients because unknown
+/// variants are tolerated by the parser.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Gate {
+    /// Reader presents a signed magic-link token whose `audience` claim
+    /// matches. The server signing key handles all validation.
+    Link,
+    /// Reader submits a password that Argon2-verifies against the
+    /// server-stored hash. The hash is intentionally not in the file —
+    /// it lives in the server's `namespace_audiences.gates` JSON.
+    Password,
+}
+
+/// A labeled share channel the writer can invoke from the audience UI to
+/// distribute the audience's URL. Channels are clipboard-mediated by design;
+/// the writer is the one who actually presses send. Tagged so future kinds
+/// (`discord_webhook`, etc.) can be added later.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ShareAction {
+    /// Pre-fill a `mailto:` URL with the recipient list (BCC), templated
+    /// subject, and templated body. Templates support `{{title}}` and
+    /// `{{url}}` placeholders, resolved by the UI when the button is
+    /// pressed.
+    Email {
+        /// BCC list packed into the generated `mailto:` URL.
+        #[serde(default)]
+        recipients: Vec<String>,
+        /// `{{title}}` / `{{url}}`-templated subject line. Falls back to a
+        /// generic subject if absent.
+        #[cfg_attr(feature = "typescript", ts(optional))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject_template: Option<String>,
+        /// `{{title}}` / `{{url}}`-templated body text. Falls back to just
+        /// the URL if absent.
+        #[cfg_attr(feature = "typescript", ts(optional))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body_template: Option<String>,
+    },
+    /// A labeled copy-to-clipboard button. The label is purely informational
+    /// — it lets the writer name the channel ("For the group chat") so the
+    /// UI shows it next to the URL.
+    CopyLink {
+        /// Optional label rendered next to the copy button. Falls back to
+        /// "Copy link" when absent.
+        #[cfg_attr(feature = "typescript", ts(optional))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+}
+
+/// A workspace-declared audience with a set of access gates and labeled
+/// share-channel shortcuts. The workspace file is the writer's source of
+/// truth; the server's audience records mirror this list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub struct AudienceDecl {
+    /// Audience name. Must match the `audience:` tag used on individual
+    /// entries to control visibility.
+    pub name: String,
+    /// Stackable challenge gates. Empty list = public.
+    #[serde(default)]
+    pub gates: Vec<Gate>,
+    /// Labeled share channels surfaced in the audience UI. Empty list is
+    /// fine — the UI always offers a generic copy-link affordance.
+    #[serde(default)]
+    pub share_actions: Vec<ShareAction>,
+}
+
 /// Workspace-level configuration stored in the root index file's frontmatter.
 ///
 /// This allows workspace settings to live with the data (local-first philosophy)
@@ -144,6 +227,25 @@ pub struct WorkspaceConfig {
     #[cfg_attr(feature = "typescript", ts(optional))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_plugins: Option<Vec<String>>,
+
+    /// Declared audiences for selective sharing. When present, this is the
+    /// authoritative list — the publish plugin syncs it to the server on
+    /// publish (creating, updating, or removing audience records to match).
+    /// When absent, the publish plugin falls back to its legacy
+    /// `audience_states` HashMap for backward compatibility.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audiences: Option<Vec<AudienceDecl>>,
+
+    /// True once the writer has imported any pre-existing
+    /// `audience_states` into the new `audiences` declaration. While this
+    /// is false the publish plugin is dual-read (file OR legacy) and
+    /// non-destructive (no audience deletions). Once true, the file is
+    /// strict-truth: removing an audience from the file removes it
+    /// server-side on next publish.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audiences_migrated: Option<bool>,
 }
 
 #[derive(Default)]
@@ -1210,6 +1312,19 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     .collect()
             });
 
+        // Parse `audiences:` via serde, round-tripping through JSON because
+        // the project's custom `YamlValue` doesn't expose a direct
+        // `from_value` shim. A malformed top-level shape (or a single bad
+        // entry) drops the whole list to `None` rather than silently
+        // accepting partial garbage.
+        let audiences = get("audiences").and_then(|v| {
+            serde_json::to_value(v)
+                .ok()
+                .and_then(|j| serde_json::from_value::<Vec<AudienceDecl>>(j).ok())
+        });
+
+        let audiences_migrated = get("audiences_migrated").and_then(|v| v.as_bool());
+
         Ok(WorkspaceConfig {
             link_format,
             default_template,
@@ -1226,6 +1341,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             theme_accent_hue,
             audience_colors,
             disabled_plugins,
+            audiences,
+            audiences_migrated,
         })
     }
 
@@ -4218,6 +4335,134 @@ mod tests {
         assert_eq!(config.theme_mode.as_deref(), Some("dark"));
         assert_eq!(config.theme_preset.as_deref(), Some("nord"));
         assert_eq!(config.theme_accent_hue, Some(210.0));
+    }
+
+    #[test]
+    fn test_get_workspace_config_audiences_full_shape() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("README.md"),
+            r#"---
+title: Root
+contents: []
+audiences:
+  - name: Public
+    share_actions:
+      - kind: email
+        recipients:
+          - friend@example.com
+        subject_template: "New from me: {{title}}"
+      - kind: copy_link
+        label: "Share anywhere"
+  - name: Family
+    gates:
+      - kind: link
+    share_actions:
+      - kind: email
+        recipients:
+          - mom@example.com
+          - dad@example.com
+  - name: Close
+    gates:
+      - kind: password
+      - kind: link
+    share_actions:
+      - kind: copy_link
+        label: "For the group chat"
+audiences_migrated: true
+---
+"#,
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        let audiences = config.audiences.expect("audiences parsed");
+        assert_eq!(audiences.len(), 3);
+
+        // Public: empty gates, two share actions.
+        assert_eq!(audiences[0].name, "Public");
+        assert!(audiences[0].gates.is_empty());
+        assert_eq!(audiences[0].share_actions.len(), 2);
+        match &audiences[0].share_actions[0] {
+            ShareAction::Email {
+                recipients,
+                subject_template,
+                ..
+            } => {
+                assert_eq!(recipients, &vec!["friend@example.com".to_string()]);
+                assert_eq!(subject_template.as_deref(), Some("New from me: {{title}}"));
+            }
+            _ => panic!("expected email share action"),
+        }
+
+        // Family: link-only.
+        assert_eq!(audiences[1].name, "Family");
+        assert_eq!(audiences[1].gates, vec![Gate::Link]);
+
+        // Close: stacked password + link gates.
+        assert_eq!(audiences[2].name, "Close");
+        assert_eq!(audiences[2].gates, vec![Gate::Password, Gate::Link]);
+
+        assert_eq!(config.audiences_migrated, Some(true));
+    }
+
+    #[test]
+    fn test_get_workspace_config_audiences_absent_is_none() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        )
+        .unwrap();
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert!(config.audiences.is_none());
+        assert!(config.audiences_migrated.is_none());
+    }
+
+    #[test]
+    fn test_get_workspace_config_audiences_unknown_share_kind_drops_list() {
+        // Unknown variant on any single entry trips the strict serde
+        // deserializer, which drops the whole list to None. This is the
+        // intentional "fail loud, don't silently accept partial garbage"
+        // behavior.
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\naudiences:\n  - name: Family\n    share_actions:\n      - kind: discord_webhook\n---\n",
+        )
+        .unwrap();
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert!(config.audiences.is_none());
+    }
+
+    #[test]
+    fn test_get_workspace_config_audiences_default_gates_empty() {
+        // An audience with no `gates:` key should parse with an empty Vec
+        // (== public), not fail.
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\naudiences:\n  - name: Public\n---\n",
+        )
+        .unwrap();
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        let audiences = config.audiences.expect("audiences parsed");
+        assert_eq!(audiences.len(), 1);
+        assert_eq!(audiences[0].name, "Public");
+        assert!(audiences[0].gates.is_empty());
+        assert!(audiences[0].share_actions.is_empty());
     }
 
     #[test]

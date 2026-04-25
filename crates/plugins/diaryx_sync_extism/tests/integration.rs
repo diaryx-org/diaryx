@@ -204,6 +204,14 @@ impl NamespaceProvider for MockNamespaceProvider {
         Ok(())
     }
 
+    fn list_audiences(&self, _ns_id: &str) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+
+    fn delete_audience(&self, _ns_id: &str, _audience: &str) -> Result<(), String> {
+        Ok(())
+    }
+
     fn get_objects_batch(
         &self,
         ns_id: &str,

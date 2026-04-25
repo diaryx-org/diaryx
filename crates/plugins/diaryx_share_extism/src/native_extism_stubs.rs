@@ -87,4 +87,6 @@ stub_host_fn!(host_namespace_put_object);
 stub_host_fn!(host_namespace_delete_object);
 stub_host_fn!(host_namespace_list_objects);
 stub_host_fn!(host_namespace_sync_audience);
+stub_host_fn!(host_namespace_list_audiences);
+stub_host_fn!(host_namespace_delete_audience);
 stub_host_fn!(host_storage_delete);

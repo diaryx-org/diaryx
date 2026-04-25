@@ -277,6 +277,22 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
             .and_then(|c| c.default_audience)
     }
 
+    /// Read the workspace-level audience declaration + migration flag from
+    /// the root index frontmatter. Returns `(audiences, migrated)`. Either
+    /// or both may be `None`.
+    async fn read_workspace_audiences(
+        &self,
+    ) -> (Option<Vec<diaryx_core::workspace::AudienceDecl>>, bool) {
+        let Ok(root) = self.current_root_index_path().await else {
+            return (None, false);
+        };
+        let ws = Workspace::new(self.fs.clone());
+        match ws.get_workspace_config(&root).await {
+            Ok(c) => (c.audiences, c.audiences_migrated.unwrap_or(false)),
+            Err(_) => (None, false),
+        }
+    }
+
     /// Load the workspace's theme and return an `HtmlFormat` configured with it.
     ///
     /// Reads workspace appearance files and returns an `HtmlFormat` with the
@@ -575,26 +591,29 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 let default_aud = self.default_audience().await;
                 let format = self.format_with_workspace_theme().await;
 
+                // Dual-read: prefer workspace-file `audiences:` declaration;
+                // fall back to legacy `audience_states` HashMap when absent.
+                let (workspace_audiences, audiences_migrated) =
+                    self.read_workspace_audiences().await;
+                let (resolved, audience_source) =
+                    resolve_audiences(workspace_audiences.as_deref(), &config);
+
                 let mut audiences_published: Vec<String> = Vec::new();
                 let mut files_uploaded: usize = 0;
                 let mut files_deleted: usize = 0;
                 let mut stale_audiences: Vec<String> = Vec::new();
 
-                // Collect all audience names from config
-                let all_audiences: Vec<String> = config.audience_states.keys().cloned().collect();
+                for audience in &resolved {
+                    let audience_name = &audience.name;
 
-                for audience_name in &all_audiences {
-                    let audience_config = match config.audience_states.get(audience_name) {
-                        Some(c) => c,
-                        None => continue,
-                    };
-
-                    if audience_config.state == AudienceAccessState::Unpublished {
-                        // Delete objects for this audience
+                    if !audience.publish {
+                        // Legacy `Unpublished` semantics: delete objects but
+                        // leave the server audience record alone. (File-
+                        // declared audiences always have `publish == true`.)
                         match diaryx_plugin_sdk::host::namespace::list_objects(&namespace_id) {
                             Ok(objects) => {
                                 for obj in objects {
-                                    if obj.audience.as_deref() == Some(audience_name) {
+                                    if obj.audience.as_deref() == Some(audience_name.as_str()) {
                                         let _ = diaryx_plugin_sdk::host::namespace::delete_object(
                                             &namespace_id,
                                             &obj.key,
@@ -610,18 +629,11 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                         continue;
                     }
 
-                    // Skip unpublished audiences entirely; leave their server
-                    // records untouched.
-                    if audience_config.state == AudienceAccessState::Unpublished {
-                        continue;
-                    }
-
                     // Sync audience gate stack to the server.
-                    let gates = gates_for_state(audience_config);
                     if let Err(e) = diaryx_plugin_sdk::host::namespace::sync_audience(
                         &namespace_id,
                         audience_name,
-                        &gates,
+                        &audience.gates,
                     ) {
                         return Err(PluginError::CommandError(format!(
                             "failed to sync audience {}: {}",
@@ -718,7 +730,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                         diaryx_plugin_sdk::host::namespace::list_objects(&namespace_id)
                     {
                         for obj in existing {
-                            if obj.audience.as_deref() == Some(audience_name)
+                            if obj.audience.as_deref() == Some(audience_name.as_str())
                                 && !uploaded_keys.contains(&obj.key)
                             {
                                 let _ = diaryx_plugin_sdk::host::namespace::delete_object(
@@ -733,8 +745,57 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     audiences_published.push(audience_name.clone());
                 }
 
-                // Remove stale audiences from config and persist
-                if !stale_audiences.is_empty() {
+                // Strict-sync deletion pass.
+                //
+                // - Legacy source: only remove audiences from `audience_states`
+                //   that turned out to have no entries this publish run
+                //   (via the `stale_audiences` accumulator). The server-side
+                //   audience record is left alone — that's a user-driven
+                //   removal in the legacy UI.
+                // - File-as-truth source with `audiences_migrated == true`:
+                //   the file is canonical. Any audience present on the server
+                //   that is NOT declared in the file is deleted server-side
+                //   (which also revokes any tokens issued for it).
+                let mut audiences_deleted: Vec<String> = Vec::new();
+                if audience_source == AudienceSource::File && audiences_migrated {
+                    match diaryx_plugin_sdk::host::namespace::list_audiences(&namespace_id) {
+                        Ok(server_audiences) => {
+                            let declared: std::collections::HashSet<&str> =
+                                resolved.iter().map(|a| a.name.as_str()).collect();
+                            for server_aud in server_audiences {
+                                if !declared.contains(server_aud.as_str()) {
+                                    if let Err(e) =
+                                        diaryx_plugin_sdk::host::namespace::delete_audience(
+                                            &namespace_id,
+                                            &server_aud,
+                                        )
+                                    {
+                                        log::warn!(
+                                            "Strict-sync: failed to delete audience '{}': {}",
+                                            server_aud,
+                                            e
+                                        );
+                                    } else {
+                                        audiences_deleted.push(server_aud);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Strict-sync: failed to list server audiences for cleanup: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+
+                // Remove stale audiences from legacy plugin-config and persist
+                // (legacy-source path only; the file path doesn't use this
+                // HashMap as authoritative state).
+                if !stale_audiences.is_empty()
+                    && audience_source == AudienceSource::LegacyPluginConfig
+                {
                     {
                         let mut config = self.config.write().unwrap();
                         for name in &stale_audiences {
@@ -749,6 +810,12 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
 
                 Ok(serde_json::json!({
                     "audiences_published": audiences_published,
+                    "audiences_deleted": audiences_deleted,
+                    "audience_source": match audience_source {
+                        AudienceSource::File => "file",
+                        AudienceSource::LegacyPluginConfig => "legacy_plugin_config",
+                    },
+                    "audiences_migrated": audiences_migrated,
                     "files_uploaded": files_uploaded,
                     "files_deleted": files_deleted,
                 }))
@@ -775,6 +842,74 @@ fn gates_for_state(config: &AudiencePublishConfig) -> serde_json::Value {
         AudienceAccessState::AccessControl => serde_json::json!([{ "kind": "link" }]),
         AudienceAccessState::Unpublished => serde_json::json!([]),
     }
+}
+
+/// Map a workspace-file `Gate` enum value to the JSON shape the server's
+/// `sync_audience` endpoint expects.
+fn gate_to_json(gate: &diaryx_core::workspace::Gate) -> serde_json::Value {
+    match gate {
+        diaryx_core::workspace::Gate::Link => serde_json::json!({ "kind": "link" }),
+        diaryx_core::workspace::Gate::Password => serde_json::json!({ "kind": "password" }),
+    }
+}
+
+/// One resolved audience the publish flow will operate on, regardless of
+/// whether the audience came from the workspace file (`audiences:`) or the
+/// legacy plugin-config HashMap (`audience_states`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedAudience {
+    pub name: String,
+    /// Gates JSON ready to send to the server's `sync_audience` endpoint.
+    pub gates: serde_json::Value,
+    /// True when this audience is "publishable" — has at least one entry
+    /// to render. Legacy `Unpublished` audiences from `audience_states`
+    /// produce `false` here so the caller knows to skip them; file-declared
+    /// audiences always produce `true` (the file is opt-in by definition).
+    pub publish: bool,
+}
+
+/// Audience source used for a given resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudienceSource {
+    /// Sourced from `WorkspaceConfig.audiences` (the new file-as-truth path).
+    File,
+    /// Sourced from `PublishPluginConfig.audience_states` (the legacy path).
+    LegacyPluginConfig,
+}
+
+/// Resolve the active audience set, preferring the workspace-file
+/// declaration over the legacy plugin-config HashMap.
+///
+/// Returns the list of resolved audiences plus the source that was used —
+/// callers gate strict-sync deletion on `source == File && migrated`.
+pub fn resolve_audiences(
+    workspace_audiences: Option<&[diaryx_core::workspace::AudienceDecl]>,
+    plugin_config: &PublishPluginConfig,
+) -> (Vec<ResolvedAudience>, AudienceSource) {
+    if let Some(decls) = workspace_audiences {
+        let resolved = decls
+            .iter()
+            .map(|d| ResolvedAudience {
+                name: d.name.clone(),
+                gates: serde_json::Value::Array(d.gates.iter().map(gate_to_json).collect()),
+                publish: true,
+            })
+            .collect();
+        return (resolved, AudienceSource::File);
+    }
+
+    // Legacy fallback — preserve existing publishability semantics: only
+    // audiences whose state isn't `Unpublished` are publishable.
+    let resolved = plugin_config
+        .audience_states
+        .iter()
+        .map(|(name, cfg)| ResolvedAudience {
+            name: name.clone(),
+            gates: gates_for_state(cfg),
+            publish: cfg.state != AudienceAccessState::Unpublished,
+        })
+        .collect();
+    (resolved, AudienceSource::LegacyPluginConfig)
 }
 
 /// Infer MIME type from a file extension. Falls back to `application/octet-stream`.
@@ -906,6 +1041,124 @@ mod tests {
         assert_eq!(
             mime_type_from_ext(Path::new("_attachments/audience-filter-demo.htm")),
             "text/html"
+        );
+    }
+
+    // ========================================================================
+    // resolve_audiences: dual-read between workspace file and legacy plugin
+    // config.
+    // ========================================================================
+
+    fn legacy_config_with(states: Vec<(&str, AudienceAccessState)>) -> PublishPluginConfig {
+        let mut cfg = PublishPluginConfig::default();
+        for (name, state) in states {
+            cfg.audience_states.insert(
+                name.to_string(),
+                AudiencePublishConfig {
+                    state,
+                    access_method: None,
+                },
+            );
+        }
+        cfg
+    }
+
+    #[test]
+    fn resolve_audiences_uses_workspace_file_when_present() {
+        // Even though the legacy HashMap has entries, the file declaration
+        // takes priority.
+        let file_decls = vec![
+            diaryx_core::workspace::AudienceDecl {
+                name: "Public".to_string(),
+                gates: vec![],
+                share_actions: vec![],
+            },
+            diaryx_core::workspace::AudienceDecl {
+                name: "Family".to_string(),
+                gates: vec![diaryx_core::workspace::Gate::Link],
+                share_actions: vec![],
+            },
+        ];
+        let legacy = legacy_config_with(vec![
+            ("LegacyOnly", AudienceAccessState::Public),
+            ("Public", AudienceAccessState::AccessControl),
+        ]);
+
+        let (resolved, source) = resolve_audiences(Some(&file_decls), &legacy);
+        assert_eq!(source, AudienceSource::File);
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].name, "Public");
+        assert_eq!(resolved[0].gates, serde_json::json!([]));
+        assert!(resolved[0].publish);
+        assert_eq!(resolved[1].name, "Family");
+        assert_eq!(resolved[1].gates, serde_json::json!([{ "kind": "link" }]));
+        // LegacyOnly is intentionally NOT in the resolved set when the file
+        // is the source of truth.
+        assert!(resolved.iter().all(|a| a.name != "LegacyOnly"));
+    }
+
+    #[test]
+    fn resolve_audiences_falls_back_to_legacy_when_file_absent() {
+        let legacy = legacy_config_with(vec![
+            ("Public", AudienceAccessState::Public),
+            ("Members", AudienceAccessState::AccessControl),
+            ("Hidden", AudienceAccessState::Unpublished),
+        ]);
+
+        let (resolved, source) = resolve_audiences(None, &legacy);
+        assert_eq!(source, AudienceSource::LegacyPluginConfig);
+        assert_eq!(resolved.len(), 3);
+
+        let by_name: std::collections::HashMap<&str, &ResolvedAudience> =
+            resolved.iter().map(|a| (a.name.as_str(), a)).collect();
+
+        // Public → empty gates, publishable.
+        assert_eq!(by_name["Public"].gates, serde_json::json!([]));
+        assert!(by_name["Public"].publish);
+
+        // Members → link gate, publishable.
+        assert_eq!(
+            by_name["Members"].gates,
+            serde_json::json!([{ "kind": "link" }])
+        );
+        assert!(by_name["Members"].publish);
+
+        // Hidden (Unpublished) → not publishable; the publish flow
+        // short-circuits these.
+        assert!(!by_name["Hidden"].publish);
+    }
+
+    #[test]
+    fn resolve_audiences_empty_file_list_yields_empty_resolution() {
+        // An explicit empty `audiences: []` block means the writer has
+        // declared zero audiences. This is distinct from "no audiences key"
+        // (None) — we honor the file source even when empty.
+        let legacy = legacy_config_with(vec![("LegacyOnly", AudienceAccessState::Public)]);
+
+        let (resolved, source) = resolve_audiences(Some(&[]), &legacy);
+        assert_eq!(source, AudienceSource::File);
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn resolve_audiences_password_gate_serializes_correctly() {
+        let file_decls = vec![diaryx_core::workspace::AudienceDecl {
+            name: "Inner".to_string(),
+            gates: vec![
+                diaryx_core::workspace::Gate::Password,
+                diaryx_core::workspace::Gate::Link,
+            ],
+            share_actions: vec![],
+        }];
+        let legacy = legacy_config_with(vec![]);
+
+        let (resolved, _) = resolve_audiences(Some(&file_decls), &legacy);
+        assert_eq!(
+            resolved[0].gates,
+            serde_json::json!([
+                { "kind": "password" },
+                { "kind": "link" }
+            ])
         );
     }
 }

@@ -366,6 +366,33 @@ impl diaryx_extism::NamespaceProvider for CliNamespaceProvider {
         Ok(())
     }
 
+    fn list_audiences(&self, ns_id: &str) -> Result<Vec<String>, String> {
+        let url = format!(
+            "{}/namespaces/{}/audiences",
+            self.server_url,
+            Self::encode_component(ns_id)
+        );
+        #[derive(serde::Deserialize)]
+        struct AudienceItem {
+            name: String,
+        }
+        let items: Vec<AudienceItem> = self
+            .request_json::<Vec<AudienceItem>>("GET", url, None, None, None)?
+            .unwrap_or_default();
+        Ok(items.into_iter().map(|a| a.name).collect())
+    }
+
+    fn delete_audience(&self, ns_id: &str, audience: &str) -> Result<(), String> {
+        let url = format!(
+            "{}/namespaces/{}/audiences/{}",
+            self.server_url,
+            Self::encode_component(ns_id),
+            Self::encode_component(audience)
+        );
+        self.request_json::<serde_json::Value>("DELETE", url, None, None, None)?;
+        Ok(())
+    }
+
     fn get_objects_batch(
         &self,
         ns_id: &str,

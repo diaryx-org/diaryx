@@ -1928,6 +1928,37 @@ function buildHostFunctions(
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
         }
       },
+      async host_namespace_list_audiences(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as { ns_id: string } | undefined;
+          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+          const data = await namespaceFetchText(
+            "GET",
+            `/namespaces/${encodeURIComponent(input.ns_id)}/audiences`,
+          );
+          // Server returns an array of `{ namespace_id, name, gates }`.
+          const items = JSON.parse(data) as Array<{ name: string }>;
+          const audiences = items.map((a) => a.name);
+          return cp.store(JSON.stringify({ audiences }));
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
+      async host_namespace_delete_audience(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { ns_id: string; audience: string }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+          await namespaceFetchBytes(
+            "DELETE",
+            `/namespaces/${encodeURIComponent(input.ns_id)}/audiences/${encodeURIComponent(input.audience)}`,
+          );
+          return cp.store(JSON.stringify({ ok: true }));
+        } catch (e) {
+          return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
       async host_proxy_request(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as

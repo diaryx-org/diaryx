@@ -146,6 +146,15 @@ pub trait NamespaceProvider: Send + Sync {
         gates: &serde_json::Value,
     ) -> Result<(), String>;
 
+    /// List the names of all audiences configured on the server for a
+    /// namespace. Used by the publish plugin's strict-sync pass.
+    fn list_audiences(&self, ns_id: &str) -> Result<Vec<String>, String>;
+
+    /// Delete an audience from the server (and its tagged objects). Used by
+    /// the publish plugin's strict-sync pass when an audience has been
+    /// removed from the workspace file.
+    fn delete_audience(&self, ns_id: &str, audience: &str) -> Result<(), String>;
+
     /// Download multiple objects in a single request.
     fn get_objects_batch(&self, ns_id: &str, keys: &[String]) -> Result<BatchGetResult, String>;
 
@@ -560,6 +569,12 @@ impl NamespaceProvider for NoopNamespaceProvider {
     ) -> Result<(), String> {
         Err("Namespace operations are not available".to_string())
     }
+    fn list_audiences(&self, _ns_id: &str) -> Result<Vec<String>, String> {
+        Err("Namespace operations are not available".to_string())
+    }
+    fn delete_audience(&self, _ns_id: &str, _audience: &str) -> Result<(), String> {
+        Err("Namespace operations are not available".to_string())
+    }
 
     fn get_objects_batch(&self, _ns_id: &str, _keys: &[String]) -> Result<BatchGetResult, String> {
         Err("Namespace operations are not available".to_string())
@@ -966,6 +981,20 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_namespace_sync_audience,
+        )
+        .with_function(
+            "host_namespace_list_audiences",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_list_audiences,
+        )
+        .with_function(
+            "host_namespace_delete_audience",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_delete_audience,
         )
         .with_function(
             "host_ws_request",
@@ -2899,6 +2928,75 @@ fn host_namespace_sync_audience(
     let result =
         ctx.namespace_provider
             .sync_audience(&parsed.ns_id, &parsed.audience, &parsed.gates);
+
+    let json = match result {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_list_audiences(input: {ns_id}) -> {audiences: [name, ...]} or {error}`
+fn host_namespace_list_audiences(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+    }
+
+    let parsed: Input = serde_json::from_str(&input).map_err(|e| {
+        ExtismError::msg(format!("host_namespace_list_audiences: invalid input: {e}"))
+    })?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_list_audiences: lock: {e}")))?;
+    let result = ctx.namespace_provider.list_audiences(&parsed.ns_id);
+
+    let json = match result {
+        Ok(names) => serde_json::json!({ "audiences": names }),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_delete_audience(input: {ns_id, audience}) -> {ok: true} or {error}`
+fn host_namespace_delete_audience(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+        audience: String,
+    }
+
+    let parsed: Input = serde_json::from_str(&input).map_err(|e| {
+        ExtismError::msg(format!(
+            "host_namespace_delete_audience: invalid input: {e}"
+        ))
+    })?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_delete_audience: lock: {e}")))?;
+    let result = ctx
+        .namespace_provider
+        .delete_audience(&parsed.ns_id, &parsed.audience);
 
     let json = match result {
         Ok(()) => serde_json::json!({ "ok": true }),

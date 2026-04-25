@@ -3,6 +3,7 @@
 
 export type { AncestorAttachmentEntry } from './AncestorAttachmentEntry';
 export type { AncestorAttachmentsResult } from './AncestorAttachmentsResult';
+export type { AudienceDecl } from './AudienceDecl';
 export type { BinaryExportFile } from './BinaryExportFile';
 export type { BinaryFileInfo } from './BinaryFileInfo';
 export type { BinaryRef } from './BinaryRef';
@@ -32,6 +33,7 @@ export type { FileSystemEvent } from './FileSystemEvent';
 export type { FilenameStyle } from './FilenameStyle';
 export type { FixResult } from './FixResult';
 export type { FixSummary } from './FixSummary';
+export type { Gate } from './Gate';
 export type { HostAction } from './HostAction';
 export type { InsertCommand } from './InsertCommand';
 export type { InsertCommandPlacement } from './InsertCommandPlacement';
@@ -57,6 +59,7 @@ export type { SearchOptions } from './SearchOptions';
 export type { SearchResults } from './SearchResults';
 export type { SelectOption } from './SelectOption';
 export type { SettingsField } from './SettingsField';
+export type { ShareAction } from './ShareAction';
 export type { SidebarSide } from './SidebarSide';
 export type { StatusBarPosition } from './StatusBarPosition';
 export type { StorageInfo } from './StorageInfo';

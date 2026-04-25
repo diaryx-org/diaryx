@@ -283,3 +283,45 @@ pub fn sync_audience(ns_id: &str, audience: &str, gates: &serde_json::Value) -> 
     }
     Ok(())
 }
+
+/// List the names of all audiences currently configured on the server for a
+/// namespace. Used by the publish plugin's strict-sync pass to detect server
+/// audiences that are no longer declared in the workspace file.
+pub fn list_audiences(ns_id: &str) -> Result<Vec<String>, String> {
+    let input = serde_json::json!({ "ns_id": ns_id });
+    let result = unsafe { host_namespace_list_audiences(input.to_string()) }
+        .map_err(|e| format!("host_namespace_list_audiences failed: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse list_audiences response: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    let names = parsed
+        .get("audiences")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(names)
+}
+
+/// Delete an audience from the server. Removes the audience record and any
+/// objects tagged with that audience. Used by the publish plugin during
+/// strict-sync when an audience has been removed from the workspace file.
+pub fn delete_audience(ns_id: &str, audience: &str) -> Result<(), String> {
+    let input = serde_json::json!({
+        "ns_id": ns_id,
+        "audience": audience,
+    });
+    let result = unsafe { host_namespace_delete_audience(input.to_string()) }
+        .map_err(|e| format!("host_namespace_delete_audience failed: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse delete_audience response: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    Ok(())
+}

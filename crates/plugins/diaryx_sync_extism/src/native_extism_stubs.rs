@@ -90,4 +90,6 @@ stub_host_fn!(host_namespace_list_objects);
 stub_host_fn!(host_namespace_list);
 stub_host_fn!(host_namespace_create);
 stub_host_fn!(host_namespace_sync_audience);
+stub_host_fn!(host_namespace_list_audiences);
+stub_host_fn!(host_namespace_delete_audience);
 stub_host_fn!(host_hash_file);

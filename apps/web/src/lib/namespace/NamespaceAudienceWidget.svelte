@@ -99,8 +99,10 @@
       audiences={ctx.allAudiences}
       audienceStates={ctx.audienceStates}
       defaultAudience={ctx.defaultAudience}
+      subdomain={ctx.subdomain}
+      siteBaseUrl={ctx.siteBaseUrl}
+      siteDomain={ctx.siteDomain}
       onStateChange={(aud, config) => ctx.handleAudienceStateChange(aud, config)}
-      onSendEmail={(aud) => ctx.handleSendEmail(aud)}
     />
   {/if}
 {/if}

@@ -760,9 +760,6 @@ describe('NamespaceContext', () => {
       await ctx.handleAudienceStateChange('vip', {
         state: 'private',
         access_method: 'token',
-        email_on_publish: true,
-        email_subject: 'Hello',
-        email_cover: 'cover.html',
       });
 
       expect(api.executePluginCommand).toHaveBeenCalledWith(
@@ -774,9 +771,6 @@ describe('NamespaceContext', () => {
           config: {
             state: 'private',
             access_method: 'token',
-            email_on_publish: true,
-            email_subject: 'Hello',
-            email_cover: 'cover.html',
           },
         },
       );
@@ -795,45 +789,9 @@ describe('NamespaceContext', () => {
   });
 
   // -----------------------------------------------------------------------
-  // handleSendEmail
-  // -----------------------------------------------------------------------
-
-  describe('handleSendEmail', () => {
-    it('does nothing without namespaceId', async () => {
-      const api = createMockApi();
-      const ctx = createCtx();
-      ctx.init(api);
-
-      await ctx.handleSendEmail('public');
-      expect(api.executePluginCommand).not.toHaveBeenCalled();
-    });
-
-    it('sends email command', async () => {
-      const api = createMockApi({ executePluginCommand: vi.fn().mockResolvedValue(undefined) });
-      const ctx = createCtx();
-      ctx.init(api);
-      ctx.namespaceId = 'ns-1';
-
-      await ctx.handleSendEmail('members');
-      expect(api.executePluginCommand).toHaveBeenCalledWith(
-        'diaryx.publish',
-        'SendEmailToAudience',
-        { namespace_id: 'ns-1', audience: 'members' },
-      );
-    });
-
-    it('rethrows on error', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockRejectedValue(new Error('email fail')),
-      });
-      const ctx = createCtx();
-      ctx.init(api);
-      ctx.namespaceId = 'ns-1';
-
-      await expect(ctx.handleSendEmail('public')).rejects.toThrow('email fail');
-    });
-  });
-
+  // (handleSendEmail removed — server-side email broadcasts are gone; the
+  // writer composes audience emails in their own mail client via the
+  // mailto-based share-action UI in NamespaceAudienceManager.)
   // -----------------------------------------------------------------------
   // handleSubdomainChange
   // -----------------------------------------------------------------------

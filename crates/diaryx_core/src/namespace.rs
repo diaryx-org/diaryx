@@ -90,6 +90,17 @@ pub struct TokenResult {
     pub token: String,
 }
 
+/// Returned by `POST /namespaces/{id}/audiences/{name}/rotate-password`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RotatePasswordResult {
+    /// The password gate's new version number after rotation. Old unlock
+    /// tokens minted under any previous version are invalidated.
+    pub version: u32,
+    /// A fresh unlock token bound to the new version, useful for the writer
+    /// to test the new password without going through the reader flow.
+    pub token: String,
+}
+
 /// Subscriber (audience member) record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriberInfo {
@@ -127,6 +138,10 @@ fn audience_path(id: &str, name: &str) -> String {
 
 fn audience_token_path(id: &str, name: &str) -> String {
     format!("{}/token", audience_path(id, name))
+}
+
+fn audience_rotate_password_path(id: &str, name: &str) -> String {
+    format!("{}/rotate-password", audience_path(id, name))
 }
 
 fn audiences_path(id: &str) -> String {
@@ -297,17 +312,19 @@ pub async fn list_audiences<C: AuthenticatedClient>(
     resp.json()
 }
 
-/// Create or update an audience entry on a namespace.
+/// Create or update an audience's gate stack on the server.
 ///
-/// `access` is the opaque access-mode string (e.g. `"public"`, `"private"`,
-/// `"authenticated"`) that the server understands.
-pub async fn set_audience<C: AuthenticatedClient>(
+/// `gates` is a JSON array matching `diaryx_server::domain::GateInput` —
+/// `[{"kind":"link"}, {"kind":"password","password":"..."}, ...]`. An empty
+/// array means the audience is public. The legacy `access`-string overload
+/// is kept below for back-compat.
+pub async fn set_audience_gates<C: AuthenticatedClient>(
     client: &C,
     id: &str,
     name: &str,
-    access: &str,
+    gates: &serde_json::Value,
 ) -> Result<(), AuthError> {
-    let body = serde_json::json!({ "access": access }).to_string();
+    let body = serde_json::json!({ "gates": gates }).to_string();
     let resp = client.put(&audience_path(id, name), Some(&body)).await?;
     if !resp.is_success() {
         return Err(err_from(
@@ -319,7 +336,27 @@ pub async fn set_audience<C: AuthenticatedClient>(
     Ok(())
 }
 
-/// Request a short-lived access token for a specific audience.
+/// Legacy access-string overload that translates the old vocabulary into
+/// the new gate stack. Kept so the older UI flows keep working until they
+/// are migrated to call `set_audience_gates` directly.
+pub async fn set_audience<C: AuthenticatedClient>(
+    client: &C,
+    id: &str,
+    name: &str,
+    access: &str,
+) -> Result<(), AuthError> {
+    let gates = match access {
+        "public" => serde_json::json!([]),
+        "token" => serde_json::json!([{ "kind": "link" }]),
+        // Anything else (legacy `private`, unrecognized) translates to no
+        // gates so the server doesn't reject the request outright.
+        _ => serde_json::json!([]),
+    };
+    set_audience_gates(client, id, name, &gates).await
+}
+
+/// Request a short-lived access token for a specific audience. Fails with a
+/// `400`-ish error if the audience does not have a `link` gate.
 pub async fn get_audience_token<C: AuthenticatedClient>(
     client: &C,
     id: &str,
@@ -331,6 +368,30 @@ pub async fn get_audience_token<C: AuthenticatedClient>(
             &resp.body,
             resp.status,
             &format!("Failed to get audience token: HTTP {}", resp.status),
+        ));
+    }
+    resp.json()
+}
+
+/// Rotate the password on an audience's password gate. Returns the new
+/// version. Old unlock tokens minted under the previous version stop
+/// validating immediately; link tokens (if the audience also has a link
+/// gate) are unaffected because they don't carry a password version.
+pub async fn rotate_audience_password<C: AuthenticatedClient>(
+    client: &C,
+    id: &str,
+    name: &str,
+    password: &str,
+) -> Result<RotatePasswordResult, AuthError> {
+    let body = serde_json::json!({ "password": password }).to_string();
+    let resp = client
+        .post(&audience_rotate_password_path(id, name), Some(&body))
+        .await?;
+    if !resp.is_success() {
+        return Err(err_from(
+            &resp.body,
+            resp.status,
+            &format!("Failed to rotate audience password: HTTP {}", resp.status),
         ));
     }
     resp.json()
@@ -806,20 +867,63 @@ mod tests {
     }
 
     #[test]
-    fn set_audience_sends_put_with_access_body() {
+    fn set_audience_gates_sends_put_with_gates_body() {
         let client = MockClient::new(vec![HttpResponse {
             status: 204,
             body: String::new(),
         }]);
-        block_on(set_audience(&client, "ns-1", "friends", "authenticated")).unwrap();
+        let gates = serde_json::json!([{ "kind": "link" }]);
+        block_on(set_audience_gates(&client, "ns-1", "friends", &gates)).unwrap();
 
         let call = client.last_call().unwrap();
         assert_eq!(call.method, "PUT");
         assert_eq!(call.path, "/namespaces/ns-1/audiences/friends");
         let body: serde_json::Value = serde_json::from_str(&call.body.unwrap()).unwrap();
+        assert_eq!(body.get("gates"), Some(&gates));
+    }
+
+    #[test]
+    fn set_audience_legacy_overload_translates_access_to_gates() {
+        let client = MockClient::new(vec![HttpResponse {
+            status: 204,
+            body: String::new(),
+        }]);
+        block_on(set_audience(&client, "ns-1", "friends", "token")).unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(&client.last_call().unwrap().body.unwrap()).unwrap();
         assert_eq!(
-            body.get("access").and_then(|v| v.as_str()),
-            Some("authenticated")
+            body.get("gates").and_then(|v| v.as_array()).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            body.pointer("/gates/0/kind").and_then(|v| v.as_str()),
+            Some("link")
+        );
+    }
+
+    #[test]
+    fn rotate_audience_password_posts_password_and_returns_version_token() {
+        let client = MockClient::new(vec![HttpResponse {
+            status: 200,
+            body: r#"{"version":3,"token":"unlock-tok"}"#.to_string(),
+        }]);
+        let r = block_on(rotate_audience_password(
+            &client, "ns-1", "inner", "hunter2",
+        ))
+        .unwrap();
+        assert_eq!(r.version, 3);
+        assert_eq!(r.token, "unlock-tok");
+
+        let call = client.last_call().unwrap();
+        assert_eq!(call.method, "POST");
+        assert_eq!(
+            call.path,
+            "/namespaces/ns-1/audiences/inner/rotate-password"
+        );
+        let body: serde_json::Value = serde_json::from_str(&call.body.unwrap()).unwrap();
+        assert_eq!(
+            body.get("password").and_then(|v| v.as_str()),
+            Some("hunter2")
         );
     }
 

@@ -36,6 +36,13 @@ export interface TokenResult {
   token: string;
 }
 
+export interface RotatePasswordResult {
+  /** New password-gate version after rotation. */
+  version: number;
+  /** Fresh unlock token bound to the new version. */
+  token: string;
+}
+
 export interface SubscriberInfo {
   id: string;
   email: string;
@@ -74,6 +81,11 @@ export interface CoreNamespaceService {
   listAudiences(id: string): Promise<AudienceInfo[]>;
   setAudience(id: string, name: string, access: string): Promise<void>;
   getAudienceToken(id: string, name: string): Promise<TokenResult>;
+  rotateAudiencePassword(
+    id: string,
+    name: string,
+    password: string,
+  ): Promise<RotatePasswordResult>;
 
   // Subdomain
   claimSubdomain(

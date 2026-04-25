@@ -7,8 +7,8 @@
 //! parse.
 
 use diaryx_core::namespace::{
-    self, AudienceInfo, BulkImportResult, DomainInfo, NamespaceMetadata, SubdomainInfo,
-    SubscriberInfo, TokenResult,
+    self, AudienceInfo, BulkImportResult, DomainInfo, NamespaceMetadata, RotatePasswordResult,
+    SubdomainInfo, SubscriberInfo, TokenResult,
 };
 use tauri::{AppHandle, State};
 
@@ -107,6 +107,20 @@ pub async fn namespace_get_audience_token(
 ) -> Result<TokenResult, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
     namespace::get_audience_token(service.client(), &id, &name)
+        .await
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn namespace_rotate_audience_password(
+    state: State<'_, AuthServiceState>,
+    app: AppHandle,
+    id: String,
+    name: String,
+    password: String,
+) -> Result<RotatePasswordResult, SerializableAuthError> {
+    let service = ensure_service(&state, &app).await?;
+    namespace::rotate_audience_password(service.client(), &id, &name, &password)
         .await
         .map_err(Into::into)
 }

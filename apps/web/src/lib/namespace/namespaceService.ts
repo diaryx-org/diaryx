@@ -13,8 +13,8 @@
  * The function exports here stay as-is for backward compatibility with the
  * existing callers (`import * as namespaceService from './namespaceService'`
  * or `import { createNamespace, … } from …`). The pure URL helpers at the
- * bottom (`buildAccessUrl`, `buildSubscribeUrl`, `isNamespaceAvailable`)
- * stay because they don't talk to the server.
+ * bottom (`buildAccessUrl`, `isNamespaceAvailable`) stay because they don't
+ * talk to the server.
  */
 
 import { getServerUrl } from "$lib/auth";
@@ -25,8 +25,7 @@ import type {
   SubdomainInfo,
   DomainInfo,
   TokenResult,
-  SubscriberInfo,
-  BulkImportResult,
+  RotatePasswordResult,
 } from "./coreNamespaceTypes";
 
 // ============================================================================
@@ -40,8 +39,7 @@ export type {
   SubdomainInfo,
   DomainInfo,
   TokenResult,
-  SubscriberInfo,
-  BulkImportResult,
+  RotatePasswordResult,
 } from "./coreNamespaceTypes";
 
 // ============================================================================
@@ -70,6 +68,12 @@ export async function listAudiences(nsId: string): Promise<AudienceInfo[]> {
   return coreNamespaceService.listAudiences(nsId);
 }
 
+/**
+ * Legacy access-string overload retained for the old "Set audience access"
+ * UI path. Newer flows source audiences from the workspace file
+ * (`WorkspaceConfig.audiences`) and sync them on publish; this stays so the
+ * pre-Step-F UI keeps working until callers move over.
+ */
 export async function setAudience(
   nsId: string,
   name: string,
@@ -83,6 +87,24 @@ export async function getAudienceToken(
   name: string,
 ): Promise<TokenResult> {
   return coreNamespaceService.getAudienceToken(nsId, name);
+}
+
+/**
+ * Set or rotate the password on an audience's password gate. Returns the
+ * new gate version + a fresh unlock token. Old unlock tokens minted under
+ * any previous version stop validating immediately.
+ *
+ * The audience must already declare a `password` gate in the workspace
+ * file's `audiences:` block and have been synced to the server (i.e. the
+ * writer has published at least once after declaring it). Calling against
+ * an audience without a password gate will throw.
+ */
+export async function rotateAudiencePassword(
+  nsId: string,
+  name: string,
+  password: string,
+): Promise<RotatePasswordResult> {
+  return coreNamespaceService.rotateAudiencePassword(nsId, name, password);
 }
 
 export async function claimSubdomain(
@@ -121,60 +143,8 @@ export async function removeDomain(
 }
 
 // ============================================================================
-// Subscribers
-// ============================================================================
-
-export async function listSubscribers(
-  nsId: string,
-  audienceName: string,
-): Promise<SubscriberInfo[]> {
-  return coreNamespaceService.listSubscribers(nsId, audienceName);
-}
-
-export async function addSubscriber(
-  nsId: string,
-  audienceName: string,
-  email: string,
-): Promise<SubscriberInfo> {
-  return coreNamespaceService.addSubscriber(nsId, audienceName, email);
-}
-
-export async function removeSubscriber(
-  nsId: string,
-  audienceName: string,
-  contactId: string,
-): Promise<void> {
-  return coreNamespaceService.removeSubscriber(nsId, audienceName, contactId);
-}
-
-export async function bulkImportSubscribers(
-  nsId: string,
-  audienceName: string,
-  emails: string[],
-): Promise<BulkImportResult> {
-  return coreNamespaceService.bulkImportSubscribers(
-    nsId,
-    audienceName,
-    emails,
-  );
-}
-
-// ============================================================================
 // Pure URL helpers — no server round-trip, stay in TS
 // ============================================================================
-
-/**
- * Build a subscriber signup URL for an audience.
- */
-export function buildSubscribeUrl(
-  nsId: string,
-  audienceName: string,
-): string {
-  const serverUrl = getServerUrl();
-  if (!serverUrl) return "";
-  const base = serverUrl.replace(/\/$/, "");
-  return `${base}/namespaces/${encodeURIComponent(nsId)}/audiences/${encodeURIComponent(audienceName)}/subscribers`;
-}
 
 /**
  * Check if the namespace API is available (user is authenticated with a server).

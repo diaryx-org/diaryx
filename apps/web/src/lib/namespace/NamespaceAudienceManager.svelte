@@ -1,8 +1,8 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button';
   import * as Dialog from '$lib/components/ui/dialog';
-  import NativeSelect from '$lib/components/ui/native-select/native-select.svelte';
   import { getAudienceColorStore } from '$lib/stores/audienceColorStore.svelte';
+  import { getWorkspaceConfigStore } from '$lib/stores/workspaceConfigStore.svelte';
   import { getAudienceColor } from '$lib/utils/audienceDotColor';
   import {
     Globe,
@@ -13,540 +13,709 @@
     Check,
     Copy,
     Mail,
-    Send,
-    Users,
-    Plus,
-    Trash2,
-    Link,
+    Link as LinkIcon,
+    Shield,
+    AlertTriangle,
   } from '@lucide/svelte';
   import { Input } from '$lib/components/ui/input';
-  import { Switch } from '$lib/components/ui/switch';
   import { Label } from '$lib/components/ui/label';
   import { showError, showSuccess, showInfo } from '@/models/services/toastService';
   import * as namespaceService from './namespaceService';
   import type { AudienceConfig } from './namespaceContext.svelte';
+  import type { AudienceDecl, Gate, ShareAction } from '$lib/backend/generated';
 
   interface Props {
     namespaceId: string;
+    /** Audience names sourced from entry-tag scanning (legacy display). */
     audiences: string[];
+    /** Legacy plugin-config audience HashMap. Used as fallback when the
+     *  workspace file does not declare `audiences:`. */
     audienceStates: Record<string, AudienceConfig>;
     defaultAudience: string | null;
+    /** Server context for building access URLs. */
+    subdomain?: string | null;
+    siteBaseUrl?: string | null;
+    siteDomain?: string | null;
+    /** Callback used by the legacy audience-state UI. New file-declared
+     *  audiences sync via the workspace file; this stays for back-compat. */
     onStateChange: (audience: string, config: AudienceConfig) => void;
-    onSendEmail?: (audience: string) => void;
   }
 
-  let { namespaceId, audiences, audienceStates, defaultAudience, onStateChange, onSendEmail }: Props = $props();
+  let {
+    namespaceId,
+    audiences,
+    audienceStates,
+    defaultAudience,
+    subdomain = null,
+    siteBaseUrl = null,
+    siteDomain = null,
+    onStateChange,
+  }: Props = $props();
 
   const colorStore = getAudienceColorStore();
+  const configStore = getWorkspaceConfigStore();
 
-  // Access control dialog state
+  // ==========================================================================
+  // Source-of-truth resolution: file declaration takes priority over the
+  // legacy `audience_states` HashMap. The two paths are mutually exclusive
+  // at the UI level — once an audience declaration exists in the workspace
+  // file, the legacy panel hides itself.
+  // ==========================================================================
+
+  const declaredAudiences = $derived(configStore.config?.audiences ?? null);
+  const audiencesMigrated = $derived(
+    configStore.config?.audiences_migrated === true,
+  );
+  const legacyEntriesPresent = $derived(
+    Object.keys(audienceStates).length > 0,
+  );
+  const showMigrationBanner = $derived(
+    !audiencesMigrated && legacyEntriesPresent && declaredAudiences === null,
+  );
+  const usingFile = $derived(declaredAudiences !== null);
+
+  // ==========================================================================
+  // Password set/rotate dialog state
+  // ==========================================================================
+
+  let passwordDialogOpen = $state(false);
+  let passwordDialogAudience = $state<string | null>(null);
+  let passwordDialogValue = $state('');
+  let passwordDialogConfirm = $state('');
+  let isRotatingPassword = $state(false);
+
+  // ==========================================================================
+  // Generated link state — tracked per audience so the UI can show the URL
+  // inline next to whichever audience the writer just minted a token for.
+  // ==========================================================================
+
+  const generatedLinks = $state<Record<string, string>>({});
+  let creatingLinkFor = $state<string | null>(null);
+  const copiedLinks = $state<Record<string, boolean>>({});
+
+  // ==========================================================================
+  // Migration state
+  // ==========================================================================
+
+  let isMigrating = $state(false);
+
+  // ==========================================================================
+  // Legacy access dialog (kept for the no-file fallback path).
+  // ==========================================================================
+
   let accessDialogOpen = $state(false);
   let accessDialogAudience = $state<string | null>(null);
   let accessDialogState = $state<string>('unpublished');
   let accessDialogMethod = $state<string>('access-key');
 
-  // Token generation
-  let isCreatingToken = $state(false);
-  let lastCreatedAccessUrl = $state<string | null>(null);
-  let copiedAccessUrl = $state(false);
+  // --------------------------------------------------------------------------
+  // Helpers
+  // --------------------------------------------------------------------------
 
-  // Email settings dialog state
-  let emailOnPublish = $state(false);
-  let emailSubject = $state('');
-  let emailCover = $state('');
-  let isSendingEmail = $state(false);
-
-  // Subscriber management state
-  let subscribers = $state<namespaceService.SubscriberInfo[]>([]);
-  let subscribersLoading = $state(false);
-  let subscribersExpanded = $state(false);
-  let newSubscriberEmail = $state('');
-  let isAddingSubscriber = $state(false);
-  let copiedSignupUrl = $state(false);
-  let subscriberError = $state<string | null>(null);
-
-  function getAudienceState(audience: string): AudienceConfig {
-    return audienceStates[audience] ?? { state: 'unpublished' };
+  function buildUrl(audience: string, token?: string): string {
+    return namespaceService.buildAccessUrl(
+      namespaceId,
+      audience,
+      token,
+      subdomain ?? undefined,
+      siteBaseUrl,
+      siteDomain,
+    );
   }
 
-  function isDefaultOnly(audience: string): boolean {
-    return audience === defaultAudience && !audiences.includes(audience);
+  function hasGate(decl: AudienceDecl, kind: Gate['kind']): boolean {
+    return decl.gates.some((g) => g.kind === kind);
   }
+
+  async function copyToClipboard(value: string, audienceKey?: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      if (audienceKey) {
+        copiedLinks[audienceKey] = true;
+        setTimeout(() => {
+          copiedLinks[audienceKey] = false;
+        }, 1800);
+      } else {
+        showSuccess('Copied to clipboard');
+      }
+    } catch {
+      showError(
+        'Copy failed. Check browser clipboard permissions.',
+        'Audiences',
+      );
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Magic-link generation
+  // --------------------------------------------------------------------------
+
+  async function generateLink(audience: string) {
+    if (!namespaceId) {
+      showInfo('Publish first to enable link generation.');
+      return;
+    }
+    creatingLinkFor = audience;
+    try {
+      const result = await namespaceService.getAudienceToken(
+        namespaceId,
+        audience,
+      );
+      const url = buildUrl(audience, result.token);
+      generatedLinks[audience] = url;
+      await copyToClipboard(url, audience);
+      showSuccess('Link copied — share it directly.');
+    } catch (e) {
+      showError(
+        e instanceof Error ? e.message : 'Failed to generate link',
+        'Audiences',
+      );
+    } finally {
+      creatingLinkFor = null;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Password set/rotate
+  // --------------------------------------------------------------------------
+
+  function openPasswordDialog(audience: string) {
+    passwordDialogAudience = audience;
+    passwordDialogValue = '';
+    passwordDialogConfirm = '';
+    passwordDialogOpen = true;
+  }
+
+  async function submitPassword() {
+    if (!passwordDialogAudience) return;
+    if (passwordDialogValue.length < 4) {
+      showError('Password must be at least 4 characters.', 'Audiences');
+      return;
+    }
+    if (passwordDialogValue !== passwordDialogConfirm) {
+      showError('Passwords do not match.', 'Audiences');
+      return;
+    }
+    if (!namespaceId) {
+      showError('Publish first to enable the password gate.', 'Audiences');
+      return;
+    }
+    isRotatingPassword = true;
+    try {
+      const result = await namespaceService.rotateAudiencePassword(
+        namespaceId,
+        passwordDialogAudience,
+        passwordDialogValue,
+      );
+      showSuccess(`Password set (version ${result.version}).`);
+      passwordDialogOpen = false;
+      passwordDialogValue = '';
+      passwordDialogConfirm = '';
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to set password';
+      // The server returns InvalidInput when the audience has no password
+      // gate yet (e.g. declared in the file but not synced via publish).
+      if (msg.toLowerCase().includes('password gate')) {
+        showError(
+          'Audience has no password gate on the server yet — publish once after declaring it, then try again.',
+          'Audiences',
+        );
+      } else {
+        showError(msg, 'Audiences');
+      }
+    } finally {
+      isRotatingPassword = false;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Mailto: composition for `email` share-actions
+  // --------------------------------------------------------------------------
+
+  /** Conservative mailto cap. Most clients fall over above ~2000 chars. */
+  const MAILTO_LIMIT = 1800;
+
+  function fillTemplate(
+    template: string | undefined,
+    fallback: string,
+    vars: Record<string, string>,
+  ): string {
+    let out = template ?? fallback;
+    for (const [key, value] of Object.entries(vars)) {
+      out = out.replaceAll(`{{${key}}}`, value);
+    }
+    return out;
+  }
+
+  function buildMailto(
+    decl: AudienceDecl,
+    action: Extract<ShareAction, { kind: 'email' }>,
+  ): { url: string; truncated: boolean } {
+    const url = decl.gates.length === 0 ? buildUrl(decl.name) : (generatedLinks[decl.name] ?? '');
+    const subject = fillTemplate(action.subject_template, 'New from me', {
+      title: decl.name,
+      url,
+    });
+    const body = fillTemplate(
+      action.body_template,
+      url ? `${url}\n\n— Sent via Diaryx` : '— Sent via Diaryx',
+      {
+        title: decl.name,
+        url,
+      },
+    );
+
+    // Pack recipients into the BCC field, truncating until the URL fits the
+    // conservative cap. Surface the truncation count so the writer can copy
+    // remaining addresses from the share-actions UI later.
+    const recipients = action.recipients.slice();
+    let truncated = false;
+    while (recipients.length > 0) {
+      const bcc = recipients.join(',');
+      const built = `mailto:?bcc=${encodeURIComponent(bcc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      if (built.length <= MAILTO_LIMIT) {
+        return { url: built, truncated };
+      }
+      recipients.pop();
+      truncated = true;
+    }
+    return {
+      url: `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+      truncated: true,
+    };
+  }
+
+  function composeEmail(
+    decl: AudienceDecl,
+    action: Extract<ShareAction, { kind: 'email' }>,
+  ) {
+    // For password / link audiences, require a generated link first so the
+    // body actually contains something readers can click.
+    if (decl.gates.length > 0 && !generatedLinks[decl.name]) {
+      showInfo('Generate a link first so the email has something to share.');
+      return;
+    }
+    const { url, truncated } = buildMailto(decl, action);
+    if (truncated) {
+      showInfo(
+        `Recipient list trimmed to fit the email-link size limit. Copy the rest from the audience card.`,
+      );
+    }
+    window.location.href = url;
+  }
+
+  // --------------------------------------------------------------------------
+  // Migration: import legacy `audience_states` into `audiences:` block.
+  // --------------------------------------------------------------------------
+
+  function legacyToDecl(): AudienceDecl[] {
+    const decls: AudienceDecl[] = [];
+    for (const name of audiences) {
+      const cfg = audienceStates[name];
+      if (!cfg || cfg.state === 'unpublished') continue;
+      const gates: Gate[] =
+        cfg.state === 'public' ? [] : [{ kind: 'link' }];
+      decls.push({ name, gates, share_actions: [] });
+    }
+    return decls;
+  }
+
+  async function migrate() {
+    if (!configStore.rootIndexPath) {
+      showError('No workspace open.', 'Audiences');
+      return;
+    }
+    isMigrating = true;
+    try {
+      const decls = legacyToDecl();
+      // The setField API expects a string value; for structured fields we
+      // pass JSON which the Rust core re-parses into the expected shape.
+      await configStore.setField('audiences', JSON.stringify(decls));
+      await configStore.setField('audiences_migrated', 'true');
+      showSuccess(
+        `Imported ${decls.length} audience${decls.length === 1 ? '' : 's'} into the workspace file.`,
+      );
+    } catch (e) {
+      showError(
+        e instanceof Error ? e.message : 'Migration failed',
+        'Audiences',
+      );
+    } finally {
+      isMigrating = false;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Legacy access dialog handlers (used only when no file declaration exists)
+  // --------------------------------------------------------------------------
 
   function openAccessDialog(audience: string) {
-    const config = getAudienceState(audience);
+    const config = audienceStates[audience] ?? { state: 'unpublished' };
     accessDialogAudience = audience;
     accessDialogState = config.state;
     accessDialogMethod = config.access_method ?? 'access-key';
-    emailOnPublish = config.email_on_publish ?? false;
-    emailSubject = config.email_subject ?? '';
-    emailCover = config.email_cover ?? '';
     accessDialogOpen = true;
-    lastCreatedAccessUrl = null;
-    // Reset subscriber state
-    subscribers = [];
-    subscribersExpanded = false;
-    newSubscriberEmail = '';
-    copiedSignupUrl = false;
-    subscriberError = null;
-    // Load subscribers if email is enabled
-    if (emailOnPublish && namespaceId) {
-      loadSubscribers(audience);
-    }
   }
 
-  async function loadSubscribers(audience: string) {
-    if (!namespaceId) return;
-    subscribersLoading = true;
-    subscriberError = null;
-    try {
-      subscribers = await namespaceService.listSubscribers(namespaceId, audience);
-    } catch (e) {
-      subscribers = [];
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('not configured') || msg.includes('unavailable') || msg.includes('503')) {
-        subscriberError = 'Email service not configured. Set RESEND_API_KEY on the server to manage subscribers.';
-      }
-    } finally {
-      subscribersLoading = false;
-    }
-  }
-
-  async function handleAddSubscriber() {
-    if (!accessDialogAudience || !namespaceId || !newSubscriberEmail.trim()) return;
-    isAddingSubscriber = true;
-    subscriberError = null;
-    try {
-      await namespaceService.addSubscriber(namespaceId, accessDialogAudience, newSubscriberEmail.trim());
-      newSubscriberEmail = '';
-      showSuccess('Subscriber added');
-      await loadSubscribers(accessDialogAudience);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to add subscriber';
-      if (msg.includes('not configured') || msg.includes('unavailable') || msg.includes('503')) {
-        subscriberError = 'Email service not configured. Set RESEND_API_KEY on the server.';
-      } else {
-        showError(msg, 'Subscribers');
-      }
-    } finally {
-      isAddingSubscriber = false;
-    }
-  }
-
-  async function handleRemoveSubscriber(contactId: string) {
-    if (!accessDialogAudience || !namespaceId) return;
-    try {
-      await namespaceService.removeSubscriber(namespaceId, accessDialogAudience, contactId);
-      subscribers = subscribers.filter(s => s.id !== contactId);
-      showSuccess('Subscriber removed');
-    } catch (e) {
-      showError(e instanceof Error ? e.message : 'Failed to remove subscriber', 'Subscribers');
-    }
-  }
-
-  function getSignupUrl(): string {
-    if (!namespaceId || !accessDialogAudience) return '';
-    return namespaceService.buildSubscribeUrl(namespaceId, accessDialogAudience);
-  }
-
-  async function copySignupUrl() {
-    try {
-      await navigator.clipboard.writeText(getSignupUrl());
-      copiedSignupUrl = true;
-      setTimeout(() => { copiedSignupUrl = false; }, 1800);
-    } catch {
-      showError('Copy failed. Check browser clipboard permissions.', 'Subscribers');
-    }
-  }
-
-  async function handleSendEmail() {
-    if (!accessDialogAudience || !onSendEmail) return;
-    isSendingEmail = true;
-    try {
-      onSendEmail(accessDialogAudience);
-      showSuccess(`Email send triggered for "${accessDialogAudience}"`);
-    } catch (e) {
-      showError(e instanceof Error ? e.message : 'Failed to send email', 'Email');
-    } finally {
-      isSendingEmail = false;
-    }
-  }
-
-  async function handleSaveAccessDialog() {
+  async function saveLegacyDialog() {
     if (!accessDialogAudience) return;
     const config: AudienceConfig = {
       state: accessDialogState,
-      access_method: accessDialogState === 'access-control' ? accessDialogMethod : undefined,
-      email_on_publish: emailOnPublish,
-      email_subject: emailSubject || undefined,
-      email_cover: emailCover || undefined,
+      access_method:
+        accessDialogState === 'access-control'
+          ? accessDialogMethod
+          : undefined,
     };
     try {
-      const access = accessDialogState === 'public' ? 'public'
-        : accessDialogState === 'access-control' ? 'token'
-        : 'private';
-      // Only sync to server if namespace is configured
+      const access =
+        accessDialogState === 'public'
+          ? 'public'
+          : accessDialogState === 'access-control'
+            ? 'token'
+            : 'private';
       if (namespaceId) {
-        await namespaceService.setAudience(namespaceId, accessDialogAudience, access);
+        await namespaceService.setAudience(
+          namespaceId,
+          accessDialogAudience,
+          access,
+        );
       }
       onStateChange(accessDialogAudience, config);
     } catch (e) {
-      showError(e instanceof Error ? e.message : 'Failed to save audience state', 'Publishing');
+      showError(
+        e instanceof Error ? e.message : 'Failed to save audience state',
+        'Publishing',
+      );
     }
     accessDialogOpen = false;
   }
-
-  async function handleCreateToken() {
-    if (!accessDialogAudience) return;
-    isCreatingToken = true;
-    try {
-      const result = await namespaceService.getAudienceToken(namespaceId, accessDialogAudience);
-      lastCreatedAccessUrl = namespaceService.buildAccessUrl(
-        namespaceId,
-        accessDialogAudience,
-        result.token,
-      );
-      showSuccess('Access link generated');
-      showInfo('Copy the access URL now. It is only shown once.');
-    } catch (e) {
-      showError(e instanceof Error ? e.message : 'Failed to create token', 'Publishing');
-    } finally {
-      isCreatingToken = false;
-    }
-  }
-
-  async function copyToClipboard(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      copiedAccessUrl = true;
-      setTimeout(() => { copiedAccessUrl = false; }, 1800);
-    } catch {
-      showError('Copy failed. Check browser clipboard permissions.', 'Publishing');
-    }
-  }
 </script>
 
-<div class="space-y-1.5">
-  <div class="flex items-center justify-between">
-    <p class="text-xs font-medium text-muted-foreground">Audience tags</p>
-  </div>
-
-  <div class="space-y-1">
-    {#each audiences as audience}
-      {@const config = getAudienceState(audience)}
-      {@const dotColor = getAudienceColor(audience, colorStore.audienceColors)}
-      {@const isDefault = isDefaultOnly(audience)}
-      <button
-        class="w-full flex items-center gap-2 px-2.5 py-2 rounded-md border border-border bg-background hover:bg-secondary transition-colors text-left"
-        onclick={() => openAccessDialog(audience)}
-      >
-        <span class="size-2.5 rounded-full shrink-0 {dotColor}"></span>
-        <span class="text-sm font-medium flex-1 truncate">
-          {audience}
-          {#if isDefault}
-            <span class="text-xs font-normal text-muted-foreground">(default)</span>
-          {/if}
-        </span>
-        <span class="text-xs text-muted-foreground flex items-center gap-1">
-          {#if config.state === 'public'}
-            <Globe class="size-3" />
-            Public
-          {:else if config.state === 'access-control'}
-            <Lock class="size-3" />
-            Access Key
-          {:else}
-            <span class="text-muted-foreground/60">Unpublished</span>
-          {/if}
-          {#if config.email_on_publish}
-            <Mail class="size-3 text-muted-foreground" />
-          {/if}
-        </span>
-        <Settings2 class="size-3.5 text-muted-foreground/50" />
-      </button>
-    {/each}
-  </div>
-</div>
-
-<!-- Access control dialog -->
-<Dialog.Root bind:open={accessDialogOpen}>
-  <Dialog.Content class="sm:max-w-md">
-    <Dialog.Header>
-      <Dialog.Title class="flex items-center gap-2 text-base">
-        {#if accessDialogAudience}
-          {@const dotColor = getAudienceColor(accessDialogAudience, colorStore.audienceColors)}
-          <span class="size-2.5 rounded-full {dotColor}"></span>
-        {/if}
-        {accessDialogAudience}
-      </Dialog.Title>
-      <Dialog.Description class="text-xs text-muted-foreground">
-        Configure how this audience tag is published.
-      </Dialog.Description>
-    </Dialog.Header>
-
-    <div class="space-y-3 py-2">
-      <div class="space-y-2">
-        <button
-          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-colors {accessDialogState === 'unpublished' ? 'border-primary bg-secondary' : 'border-border hover:bg-secondary'}"
-          onclick={() => { accessDialogState = 'unpublished'; }}
-        >
-          <div class="flex-1">
-            <p class="text-sm font-medium">Unpublished</p>
-            <p class="text-xs text-muted-foreground">This audience is not included when publishing.</p>
-          </div>
-        </button>
-
-        <button
-          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-colors {accessDialogState === 'public' ? 'border-primary bg-secondary' : 'border-border hover:bg-secondary'}"
-          onclick={() => { accessDialogState = 'public'; }}
-        >
-          <Globe class="size-4 text-muted-foreground shrink-0" />
-          <div class="flex-1">
-            <p class="text-sm font-medium">Public</p>
-            <p class="text-xs text-muted-foreground">Anyone with the link can view.</p>
-          </div>
-        </button>
-
-        <button
-          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-colors {accessDialogState === 'access-control' ? 'border-primary bg-secondary' : 'border-border hover:bg-secondary'}"
-          onclick={() => { accessDialogState = 'access-control'; }}
-        >
-          <Lock class="size-4 text-muted-foreground shrink-0" />
-          <div class="flex-1">
-            <p class="text-sm font-medium">Access Control</p>
-            <p class="text-xs text-muted-foreground">Restrict access with a key link.</p>
-          </div>
-        </button>
+<div class="space-y-3">
+  {#if showMigrationBanner}
+    <div
+      class="rounded-md border border-amber-300/40 bg-amber-100/40 p-3 text-sm dark:border-amber-700/40 dark:bg-amber-950/30"
+    >
+      <div class="mb-1.5 flex items-center gap-2 font-medium">
+        <AlertTriangle class="size-4 text-amber-700 dark:text-amber-400" />
+        <span>Audiences moved to the workspace file</span>
       </div>
+      <p class="mb-2 text-xs text-muted-foreground">
+        Diaryx now stores audiences directly in your root index frontmatter.
+        Importing brings your existing settings over so they sync on the next
+        publish.
+      </p>
+      <div class="flex items-center gap-2">
+        <Button
+          size="sm"
+          onclick={migrate}
+          disabled={isMigrating}
+        >
+          {#if isMigrating}
+            <Loader2 class="mr-1.5 size-3 animate-spin" />
+          {/if}
+          Import existing audiences
+        </Button>
+      </div>
+    </div>
+  {/if}
 
-      <!-- Email settings -->
-      {#if accessDialogState !== 'unpublished'}
-        <div class="space-y-3 p-3 rounded-md bg-secondary border border-border">
-          <div class="flex items-center justify-between">
-            <Label class="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-              <Mail class="size-3" />
-              Email on publish
-            </Label>
-            <Switch
-              checked={emailOnPublish}
-              onCheckedChange={(checked) => {
-                emailOnPublish = checked;
-                if (checked && accessDialogAudience && namespaceId) {
-                  loadSubscribers(accessDialogAudience);
-                }
-              }}
-            />
-          </div>
-
-          {#if emailOnPublish}
-            <div class="space-y-2">
-              <div class="space-y-1">
-                <label for="email-subject" class="text-xs font-medium text-muted-foreground">Subject template</label>
-                <Input
-                  id="email-subject"
-                  type="text"
-                  placeholder="{'{'}title{'}'} — New posts"
-                  bind:value={emailSubject}
-                  class="h-8 text-xs"
-                />
-                <p class="text-[10px] text-muted-foreground">Use {'{'}title{'}'} for the site title.</p>
+  {#if usingFile && declaredAudiences}
+    <!-- File-as-truth path: render declared audiences with gate chips +
+         share actions. -->
+    {#if declaredAudiences.length === 0}
+      <p class="text-xs text-muted-foreground">
+        No audiences declared in the workspace file yet. Add an
+        <code class="rounded bg-muted px-1 py-0.5">audiences:</code>
+        block to your root index frontmatter.
+      </p>
+    {:else}
+      <div class="space-y-2">
+        {#each declaredAudiences as decl (decl.name)}
+          {@const dot = getAudienceColor(decl.name, colorStore.audienceColors)}
+          {@const isPublic = decl.gates.length === 0}
+          {@const hasLink = hasGate(decl, 'link')}
+          {@const hasPassword = hasGate(decl, 'password')}
+          <div
+            class="rounded-md border border-border bg-card p-3 text-sm shadow-sm"
+          >
+            <div class="mb-2 flex items-center gap-2">
+              <span
+                class="inline-block size-2 rounded-full"
+                style="background-color: {dot};"
+                aria-hidden="true"
+              ></span>
+              <span class="font-medium">{decl.name}</span>
+              {#if decl.name === defaultAudience}
+                <span class="text-xs text-muted-foreground">(default)</span>
+              {/if}
+              <div class="ml-auto flex items-center gap-1">
+                {#if isPublic}
+                  <span
+                    class="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium"
+                  >
+                    <Globe class="size-3" />
+                    Public
+                  </span>
+                {/if}
+                {#if hasLink}
+                  <span
+                    class="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium"
+                  >
+                    <LinkIcon class="size-3" />
+                    Link
+                  </span>
+                {/if}
+                {#if hasPassword}
+                  <span
+                    class="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium"
+                  >
+                    <Lock class="size-3" />
+                    Password
+                  </span>
+                {/if}
               </div>
+            </div>
 
-              <div class="space-y-1">
-                <label for="email-cover" class="text-xs font-medium text-muted-foreground">Cover file (optional)</label>
-                <Input
-                  id="email-cover"
-                  type="text"
-                  placeholder="newsletters/intro.md"
-                  bind:value={emailCover}
-                  class="h-8 text-xs"
-                />
-                <p class="text-[10px] text-muted-foreground">Markdown file shown as intro above the entry digest.</p>
-              </div>
-
-              {#if namespaceId && onSendEmail}
+            <!-- Share-action row -->
+            <div class="flex flex-wrap items-center gap-1.5">
+              {#if isPublic}
                 <Button
-                  variant="secondary"
                   size="sm"
-                  class="w-full h-8 text-xs"
-                  onclick={handleSendEmail}
-                  disabled={isSendingEmail || subscribers.length === 0}
+                  variant="outline"
+                  onclick={() =>
+                    copyToClipboard(buildUrl(decl.name), decl.name)}
                 >
-                  {#if isSendingEmail}
-                    <Loader2 class="size-3.5 mr-1 animate-spin" />
-                    Sending...
+                  {#if copiedLinks[decl.name]}
+                    <Check class="mr-1 size-3" /> Copied
                   {:else}
-                    <Send class="size-3.5 mr-1" />
-                    {subscribers.length > 0 ? `Send to ${subscribers.length} subscriber${subscribers.length === 1 ? '' : 's'}` : 'Add subscribers first'}
+                    <Copy class="mr-1 size-3" /> Copy public URL
                   {/if}
                 </Button>
               {/if}
 
-              <!-- Subscriber management -->
-              {#if namespaceId}
-                <div class="border-t border-border pt-2 mt-1">
-                  <button
-                    class="w-full flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors py-1"
+              {#if hasLink}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onclick={() => generateLink(decl.name)}
+                  disabled={creatingLinkFor === decl.name || !namespaceId}
+                >
+                  {#if creatingLinkFor === decl.name}
+                    <Loader2 class="mr-1 size-3 animate-spin" />
+                  {:else if generatedLinks[decl.name]}
+                    <Check class="mr-1 size-3" />
+                  {:else}
+                    <LinkIcon class="mr-1 size-3" />
+                  {/if}
+                  {generatedLinks[decl.name]
+                    ? 'Re-generate link'
+                    : 'Generate link'}
+                </Button>
+              {/if}
+
+              {#if hasPassword}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onclick={() => openPasswordDialog(decl.name)}
+                  disabled={!namespaceId}
+                >
+                  <KeyRound class="mr-1 size-3" /> Set / rotate password
+                </Button>
+              {/if}
+
+              {#each decl.share_actions as action}
+                {#if action.kind === 'email'}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onclick={() => composeEmail(decl, action)}
+                    disabled={action.recipients.length === 0}
+                  >
+                    <Mail class="mr-1 size-3" />
+                    Compose email
+                    {#if action.recipients.length > 0}
+                      <span class="ml-1 text-[10px] text-muted-foreground">
+                        ({action.recipients.length})
+                      </span>
+                    {/if}
+                  </Button>
+                {:else if action.kind === 'copy_link'}
+                  <Button
+                    size="sm"
+                    variant="ghost"
                     onclick={() => {
-                      subscribersExpanded = !subscribersExpanded;
-                      if (subscribersExpanded && accessDialogAudience) loadSubscribers(accessDialogAudience);
+                      const url = isPublic
+                        ? buildUrl(decl.name)
+                        : (generatedLinks[decl.name] ?? '');
+                      if (!url) {
+                        showInfo(
+                          'Generate a link first to copy a shareable URL.',
+                        );
+                        return;
+                      }
+                      copyToClipboard(url, decl.name);
                     }}
                   >
-                    <span class="flex items-center gap-1.5 font-medium">
-                      <Users class="size-3" />
-                      Subscribers
-                      {#if subscribers.length > 0}
-                        <span class="text-[10px] bg-muted px-1.5 py-0.5 rounded-full">{subscribers.length}</span>
-                      {/if}
-                    </span>
-                    <span class="text-[10px]">{subscribersExpanded ? 'Hide' : 'Show'}</span>
-                  </button>
-
-                  {#if subscribersExpanded}
-                    <div class="space-y-2 pt-1.5">
-                      {#if subscriberError}
-                        <p class="text-[11px] text-destructive bg-destructive/10 rounded px-2 py-1.5">{subscriberError}</p>
-                      {/if}
-                      <!-- Add subscriber -->
-                      <div class="flex gap-1.5">
-                        <Input
-                          type="email"
-                          placeholder="email@example.com"
-                          bind:value={newSubscriberEmail}
-                          class="h-7 text-xs flex-1"
-                          onkeydown={(e) => { if (e.key === 'Enter') handleAddSubscriber(); }}
-                        />
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          class="h-7 text-xs px-2 shrink-0"
-                          onclick={handleAddSubscriber}
-                          disabled={isAddingSubscriber || !newSubscriberEmail.trim()}
-                        >
-                          {#if isAddingSubscriber}
-                            <Loader2 class="size-3 animate-spin" />
-                          {:else}
-                            <Plus class="size-3" />
-                          {/if}
-                        </Button>
-                      </div>
-
-                      <!-- Signup link -->
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="w-full h-7 text-[11px] text-muted-foreground justify-start"
-                        onclick={copySignupUrl}
-                      >
-                        {#if copiedSignupUrl}
-                          <Check class="size-3 mr-1" /> Copied signup URL
-                        {:else}
-                          <Link class="size-3 mr-1" /> Copy public signup URL
-                        {/if}
-                      </Button>
-
-                      <!-- Subscriber list -->
-                      {#if subscribersLoading}
-                        <div class="flex items-center justify-center py-2">
-                          <Loader2 class="size-3.5 animate-spin text-muted-foreground" />
-                        </div>
-                      {:else if subscribers.length === 0}
-                        <p class="text-[11px] text-muted-foreground text-center py-1">No subscribers yet.</p>
-                      {:else}
-                        <div class="max-h-32 overflow-y-auto space-y-0.5">
-                          {#each subscribers as sub (sub.id)}
-                            <div class="flex items-center justify-between px-1.5 py-1 rounded text-xs hover:bg-muted/50 group">
-                              <span class="truncate flex-1 text-[11px]">{sub.email}</span>
-                              <button
-                                class="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity p-0.5"
-                                onclick={() => handleRemoveSubscriber(sub.id)}
-                                aria-label="Remove subscriber"
-                              >
-                                <Trash2 class="size-3" />
-                              </button>
-                            </div>
-                          {/each}
-                        </div>
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/if}
-
-      {#if accessDialogState === 'access-control'}
-        <div class="space-y-3 p-3 rounded-md bg-secondary border border-border">
-          <div class="space-y-1.5">
-            <label for="access-method" class="text-xs font-medium text-muted-foreground">Method</label>
-            <NativeSelect id="access-method" bind:value={accessDialogMethod} class="w-full h-8 text-xs">
-              <option value="access-key">Access Key Link</option>
-            </NativeSelect>
-          </div>
-
-          {#if accessDialogMethod === 'access-key' && namespaceId}
-            <div class="space-y-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                class="w-full h-8 text-xs"
-                onclick={handleCreateToken}
-                disabled={isCreatingToken}
-              >
-                {#if isCreatingToken}
-                  <Loader2 class="size-3.5 mr-1 animate-spin" />
-                {:else}
-                  <KeyRound class="size-3.5 mr-1" />
+                    <Copy class="mr-1 size-3" />
+                    {action.label ?? 'Copy link'}
+                  </Button>
                 {/if}
-                Generate Access Link
-              </Button>
-
-              {#if lastCreatedAccessUrl}
-                <div class="py-2 border border-primary/30 bg-secondary rounded-md px-3">
-                  <div class="text-xs space-y-2">
-                    <p class="font-medium text-foreground">Access URL (shown once)</p>
-                    <code class="block text-[11px] break-all bg-background rounded p-2 border border-border">{lastCreatedAccessUrl}</code>
-                    <div class="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        class="h-7 text-xs"
-                        onclick={() => copyToClipboard(lastCreatedAccessUrl!)}
-                      >
-                        {#if copiedAccessUrl}
-                          <Check class="size-3.5 mr-1" /> Copied
-                        {:else}
-                          <Copy class="size-3.5 mr-1" /> Copy URL
-                        {/if}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="h-7 text-xs"
-                        onclick={() => { lastCreatedAccessUrl = null; }}
-                      >
-                        Dismiss
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              {/if}
+              {/each}
             </div>
-          {:else if accessDialogMethod === 'access-key' && !namespaceId}
-            <p class="text-xs text-muted-foreground">Publish the site first to generate access links.</p>
-          {/if}
-        </div>
-      {/if}
-    </div>
 
+            {#if generatedLinks[decl.name]}
+              <p
+                class="mt-2 break-all rounded bg-muted px-2 py-1 text-[11px] text-muted-foreground"
+              >
+                {generatedLinks[decl.name]}
+              </p>
+            {/if}
+
+            {#if hasPassword && !namespaceId}
+              <p class="mt-2 text-[11px] text-muted-foreground">
+                Publish at least once to enable the password gate.
+              </p>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
+  {:else}
+    <!-- Legacy fallback path -->
+    {#if audiences.length === 0}
+      <p class="text-xs text-muted-foreground">No audiences yet.</p>
+    {:else}
+      <div class="space-y-1">
+        {#each audiences as audience (audience)}
+          {@const config = audienceStates[audience] ?? { state: 'unpublished' }}
+          {@const dot = getAudienceColor(audience, colorStore.audienceColors)}
+          <button
+            class="flex w-full items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-left text-sm hover:bg-accent"
+            onclick={() => openAccessDialog(audience)}
+            type="button"
+          >
+            <span
+              class="inline-block size-2 rounded-full"
+              style="background-color: {dot};"
+              aria-hidden="true"
+            ></span>
+            <span class="flex-1 truncate">
+              {audience}
+              {#if audience === defaultAudience}
+                <span class="text-xs text-muted-foreground">(default)</span>
+              {/if}
+            </span>
+            <span
+              class="inline-flex items-center gap-1 text-xs text-muted-foreground"
+            >
+              {#if config.state === 'public'}
+                <Globe class="size-3" /> Public
+              {:else if config.state === 'access-control'}
+                <Lock class="size-3" /> Access key
+              {:else}
+                Unpublished
+              {/if}
+              <Settings2 class="size-3" />
+            </span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+  {/if}
+</div>
+
+<!-- =========================================================================
+     Password set/rotate dialog
+     ========================================================================= -->
+<Dialog.Root bind:open={passwordDialogOpen}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title class="flex items-center gap-2">
+        <Shield class="size-4" />
+        Set password for "{passwordDialogAudience}"
+      </Dialog.Title>
+      <Dialog.Description>
+        Setting a new password invalidates any unlock cookies readers
+        already have. Magic links you've shared keep working.
+      </Dialog.Description>
+    </Dialog.Header>
+    <div class="space-y-3 py-2">
+      <div>
+        <Label for="audience-password">Password</Label>
+        <Input
+          id="audience-password"
+          type="password"
+          bind:value={passwordDialogValue}
+          autocomplete="new-password"
+          autofocus
+        />
+      </div>
+      <div>
+        <Label for="audience-password-confirm">Confirm</Label>
+        <Input
+          id="audience-password-confirm"
+          type="password"
+          bind:value={passwordDialogConfirm}
+          autocomplete="new-password"
+        />
+      </div>
+    </div>
     <Dialog.Footer>
-      <Button variant="outline" size="sm" onclick={() => { accessDialogOpen = false; }}>
+      <Button
+        variant="outline"
+        onclick={() => (passwordDialogOpen = false)}
+      >
         Cancel
       </Button>
-      <Button size="sm" onclick={handleSaveAccessDialog}>
+      <Button onclick={submitPassword} disabled={isRotatingPassword}>
+        {#if isRotatingPassword}
+          <Loader2 class="mr-1.5 size-3 animate-spin" />
+        {/if}
         Save
       </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- =========================================================================
+     Legacy access dialog (only shown when audiences are not declared in
+     the workspace file).
+     ========================================================================= -->
+<Dialog.Root bind:open={accessDialogOpen}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Access for "{accessDialogAudience}"</Dialog.Title>
+    </Dialog.Header>
+    <div class="space-y-2 py-2">
+      <Button
+        variant={accessDialogState === 'unpublished' ? 'default' : 'outline'}
+        class="w-full justify-start"
+        onclick={() => (accessDialogState = 'unpublished')}
+      >
+        Unpublished
+      </Button>
+      <Button
+        variant={accessDialogState === 'public' ? 'default' : 'outline'}
+        class="w-full justify-start"
+        onclick={() => (accessDialogState = 'public')}
+      >
+        <Globe class="mr-2 size-4" /> Public
+      </Button>
+      <Button
+        variant={accessDialogState === 'access-control' ? 'default' : 'outline'}
+        class="w-full justify-start"
+        onclick={() => (accessDialogState = 'access-control')}
+      >
+        <Lock class="mr-2 size-4" /> Access key
+      </Button>
+    </div>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (accessDialogOpen = false)}>
+        Cancel
+      </Button>
+      <Button onclick={saveLegacyDialog}>Save</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

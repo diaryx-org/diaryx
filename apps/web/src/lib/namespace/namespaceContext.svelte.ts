@@ -39,9 +39,6 @@ const CONTEXT_KEY = Symbol('namespace-context');
 export type AudienceConfig = {
   state: string;
   access_method?: string;
-  email_on_publish?: boolean;
-  email_subject?: string;
-  email_cover?: string;
 };
 
 function normalizeToObject(value: any): any {
@@ -293,9 +290,6 @@ export class NamespaceContext {
         config: {
           state: config.state,
           access_method: config.access_method,
-          email_on_publish: config.email_on_publish,
-          email_subject: config.email_subject,
-          email_cover: config.email_cover,
         },
       });
     } catch {
@@ -307,18 +301,6 @@ export class NamespaceContext {
       this.audienceStates = rest;
     } else {
       this.audienceStates = { ...this.audienceStates, [audience]: config };
-    }
-  }
-
-  async handleSendEmail(audience: string) {
-    if (!this.namespaceId) return;
-    try {
-      await this.executePublishCommand('SendEmailToAudience', {
-        namespace_id: this.namespaceId,
-        audience,
-      });
-    } catch (e) {
-      throw e;
     }
   }
 

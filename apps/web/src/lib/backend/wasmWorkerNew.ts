@@ -694,6 +694,13 @@ export const workerApi = {
   ): Promise<unknown> {
     return requireNamespaceClient().getAudienceToken(id, name);
   },
+  async namespaceRotateAudiencePassword(
+    id: string,
+    name: string,
+    password: string,
+  ): Promise<unknown> {
+    return requireNamespaceClient().rotateAudiencePassword(id, name, password);
+  },
   async namespaceClaimSubdomain(
     id: string,
     subdomain: string,

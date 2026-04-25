@@ -17,6 +17,7 @@ import type {
   SubdomainInfo,
   DomainInfo,
   TokenResult,
+  RotatePasswordResult,
   SubscriberInfo,
   BulkImportResult,
 } from "./coreNamespaceTypes";
@@ -86,6 +87,13 @@ export function createTauriNamespaceService(): CoreNamespaceService {
 
     getAudienceToken(id, name) {
       return call<TokenResult>("namespace_get_audience_token", { id, name });
+    },
+
+    rotateAudiencePassword(id, name, password) {
+      return call<RotatePasswordResult>(
+        "namespace_rotate_audience_password",
+        { id, name, password },
+      );
     },
 
     claimSubdomain(id, subdomain, defaultAudience) {

@@ -227,6 +227,7 @@ pub fn run() {
             namespace_commands::namespace_list_audiences,
             namespace_commands::namespace_set_audience,
             namespace_commands::namespace_get_audience_token,
+            namespace_commands::namespace_rotate_audience_password,
             namespace_commands::namespace_claim_subdomain,
             namespace_commands::namespace_release_subdomain,
             namespace_commands::namespace_list_domains,

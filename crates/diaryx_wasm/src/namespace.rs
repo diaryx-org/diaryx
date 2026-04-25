@@ -156,6 +156,19 @@ impl NamespaceClient {
             .and_then(|r| to_js_ok(&r))
     }
 
+    #[wasm_bindgen(js_name = rotateAudiencePassword)]
+    pub async fn rotate_audience_password(
+        &self,
+        id: String,
+        name: String,
+        password: String,
+    ) -> Result<JsValue, JsValue> {
+        namespace::rotate_audience_password(&self.client, &id, &name, &password)
+            .await
+            .map_err(auth_error_to_js)
+            .and_then(|r| to_js_ok(&r))
+    }
+
     // =========================================================================
     // Subdomain
     // =========================================================================

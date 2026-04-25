@@ -21,6 +21,7 @@ import type {
   SubdomainInfo,
   DomainInfo,
   TokenResult,
+  RotatePasswordResult,
   SubscriberInfo,
   BulkImportResult,
 } from "./coreNamespaceTypes";
@@ -245,6 +246,17 @@ export function createWasmNamespaceService(
       try {
         const r = await remote();
         return parseJson<TokenResult>(await r.namespaceGetAudienceToken(id, name));
+      } catch (err) {
+        throw wrapError(err);
+      }
+    },
+
+    async rotateAudiencePassword(id, name, password) {
+      try {
+        const r = await remote();
+        return parseJson<RotatePasswordResult>(
+          await r.namespaceRotateAudiencePassword(id, name, password),
+        );
       } catch (err) {
         throw wrapError(err);
       }

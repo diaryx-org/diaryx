@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.4.5
-updated: 2026-04-17T21:15:24-06:00
+updated: 2026-04-25T17:39:46-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -41,6 +41,13 @@ workspace_config:
   theme_preset: default
   theme_accent_hue: null
   disabled_plugins: []
+  audiences:
+  - gates: []
+    name: public
+    share_actions:
+    - kind: copy_link
+      label: For group chat
+  audiences_migrated: true
 plugins:
   diaryx.publish:
     permissions:

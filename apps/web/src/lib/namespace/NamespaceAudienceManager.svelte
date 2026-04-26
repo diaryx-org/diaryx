@@ -16,6 +16,7 @@
     Link as LinkIcon,
     Shield,
     AlertTriangle,
+    Pencil,
   } from '@lucide/svelte';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
@@ -23,6 +24,7 @@
   import * as namespaceService from './namespaceService';
   import type { AudienceConfig } from './namespaceContext.svelte';
   import type { AudienceDecl, Gate, ShareAction } from '$lib/backend/generated';
+  import AudienceEditorDialog from './AudienceEditorDialog.svelte';
 
   interface Props {
     namespaceId: string;
@@ -98,6 +100,18 @@
   // ==========================================================================
 
   let isMigrating = $state(false);
+
+  // ==========================================================================
+  // Audience editor dialog
+  // ==========================================================================
+
+  let editorOpen = $state(false);
+  let editorInitialAudience = $state<string | null>(null);
+
+  function openEditor(audience: string | null = null) {
+    editorInitialAudience = audience;
+    editorOpen = true;
+  }
 
   // ==========================================================================
   // Legacy access dialog (kept for the no-file fallback path).
@@ -423,11 +437,20 @@
   {#if usingFile && declaredAudiences}
     <!-- File-as-truth path: render declared audiences with gate chips +
          share actions. -->
+    <div class="flex items-center justify-between">
+      <span class="text-xs font-medium text-muted-foreground">
+        {declaredAudiences.length} audience{declaredAudiences.length === 1 ? '' : 's'}
+      </span>
+      <Button variant="outline" size="sm" onclick={() => openEditor(null)}>
+        <Settings2 class="mr-1.5 size-3.5" />
+        Edit audiences
+      </Button>
+    </div>
+
     {#if declaredAudiences.length === 0}
       <p class="text-xs text-muted-foreground">
-        No audiences declared in the workspace file yet. Add an
-        <code class="rounded bg-muted px-1 py-0.5">audiences:</code>
-        block to your root index frontmatter.
+        No audiences declared yet. Click
+        <span class="font-medium">Edit audiences</span> to add one.
       </p>
     {:else}
       <div class="space-y-2">
@@ -474,6 +497,15 @@
                     Password
                   </span>
                 {/if}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="size-6"
+                  onclick={() => openEditor(decl.name)}
+                  aria-label={`Edit ${decl.name}`}
+                >
+                  <Pencil class="size-3" />
+                </Button>
               </div>
             </div>
 
@@ -584,8 +616,17 @@
     {/if}
   {:else}
     <!-- Legacy fallback path -->
+    <div class="flex items-center justify-end">
+      <Button variant="outline" size="sm" onclick={() => openEditor(null)}>
+        <Settings2 class="mr-1.5 size-3.5" />
+        Edit audiences
+      </Button>
+    </div>
     {#if audiences.length === 0}
-      <p class="text-xs text-muted-foreground">No audiences yet.</p>
+      <p class="text-xs text-muted-foreground">
+        No audiences yet. Click <span class="font-medium">Edit audiences</span>
+        to declare one.
+      </p>
     {:else}
       <div class="space-y-1">
         {#each audiences as audience (audience)}
@@ -719,3 +760,13 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<!-- =========================================================================
+     Master-detail audience editor — used for adding/editing/deleting
+     audiences declared in the workspace file.
+     ========================================================================= -->
+<AudienceEditorDialog
+  open={editorOpen}
+  initialAudience={editorInitialAudience}
+  onOpenChange={(v) => (editorOpen = v)}
+/>

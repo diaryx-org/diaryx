@@ -110,6 +110,9 @@ Read the root README.md first. For specific projects, use these entry points:
 Note: You may also access these commands from the Nix flake via `nix develop -c <COMMAND>`, or `nix develop` and afterward run the command normally.
 
 ```bash
+# Install the pre-commit hook (one-time, per clone)
+cargo xtask install-hooks
+
 # Build all crates
 cargo build
 
@@ -130,6 +133,27 @@ cd apps/web && bun run dev
 # Tauri dev (macOS desktop; use `ios` for iOS, `--dev-ipc` for the debug HTTP listener)
 cargo xtask tauri macos
 ```
+
+### xtask subcommands
+
+Project automation lives in `cargo xtask`. Run `cargo xtask help` for full usage and flags.
+
+| Command | Purpose |
+| --- | --- |
+| `build-wasm [--panic-hook]` | Build `crates/diaryx_wasm` for `apps/web` (wasm-pack + wasm-opt). |
+| `build-plugin <name>` | Build a plugin WASM (`--release` for size-optimized). |
+| `check [--fix]` | Run `cargo fmt` + `cargo clippy` concurrently with `svelte-check`. |
+| `clean [--dry-run]` | `cargo clean` plus removal of stray nested `target/` dirs. |
+| `install-hooks [--force]` | Install `.git/hooks/pre-commit` → `cargo xtask pre-commit`. |
+| `pre-commit [--all]` | Run the pre-commit checks (invoked by the git hook). |
+| `publish-ios` | Build the iOS App Store export and upload via altool (macOS only). |
+| `publish-macos <build>` | Build, sign, package, and upload the macOS App Store `.pkg` (macOS only). |
+| `release-plugin <name> [--upload]` | Build a release WASM + `dist/` artifact; with `--upload`, cut a GitHub Release + open a plugin-registry PR. |
+| `sync-bindings` | Sync ts-rs bindings into `apps/web/src/lib/backend/generated/`. |
+| `sync-marketplace` | Fetch marketplace registries from the production CDN. |
+| `sync-versions` | Propagate `README.md` version → `Cargo.toml` / `tauri.conf.json` / `package.json` / `flake.nix`. |
+| `tauri <subcommand>` | Tauri builds: `macos`, `ios`, `render-updater-config`. |
+| `update-agents-index` | Refresh the workspace tree in `AGENTS.md`. |
 
 ## Not Documented
 

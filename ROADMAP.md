@@ -3,7 +3,7 @@ title: ROADMAP
 description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
-updated: 2026-04-17T21:07:29-06:00
+updated: 2026-04-27T08:08:23-06:00
 part_of: '[Diaryx](/Diaryx.md)'
 link_of:
 - '[Diaryx](/Diaryx.md)'
@@ -18,26 +18,14 @@ Diaryx is still in its infancy. It aims to solve the audience filtering problem 
 
 **One-click website publishing**
 
-- [x] Onboarding screen shows only logo, tagline, and "Get Started" (plus a subtle advanced menu)
-- [ ] ~~"Get Started" creates an anonymous user in the database. Gives them access to free tier functionality.~~
-- [ ] Sets up workspace with default bundle. Automatically publishes their workspace as a website. Workspace contains 2-3 audience demo.
-
-Overhaul audience filtering UI.
-
-- [x] First, overhaul LeftSidebar filetree to make one-click audience filtering for files easy. Files should show their audience status somehow, perhaps with colors or icons
-- [x] Second, introduce a "audience highlighting" UX for inline audience filtering. Click along the left side for paragraph filtering, highlight text for inline filtering. Could be stored in markdown as pandoc-style selectors:
-
-**Publish plugin**
-
-- [ ] Phone number/SMS support
 - [ ] (partially implemented) Alternative theming support for website publishing
 - [x] Support rich interactive content in websites (like Ammon's demo)
 
 **Other**
 
 - [ ] Publish Obsidian plugin
-- [ ] Make sync plugin work if not already
-- [ ] Big upgrade to plugin-import and plugin-pandoc
+- [ ] Make sync plugin work
+- [ ] Make plugin-import and plugin-pandoc work
 - [ ] Finish TestFlight and publish to app store
 
 ## v1.6.0 - Real world usability
@@ -58,7 +46,6 @@ Overhaul audience filtering UI.
   - UI/keyboard haptics packs
   - UI animations packs
   - Themes can adjust size/padding of UI components
-- Either trademark "Diaryx" so I can name my app that (taken on App Store) or take suggestions for different names. (Some have suggested "Diary-X" or "Diary X")
 
 **AI plugin**
 
@@ -72,8 +59,3 @@ Overhaul audience filtering UI.
 - Integration with FamilySearch API for family history records—import/export
 - Per-audience workspace settings
 - diaryx_sync_server takes plugins and handles only server compute primitives, auth, and billing (sync logic owned entirely by sync plugin, publish logic owned entirely by publish plugin, etc.)
-
-## Possible Marketing Angles
-
-- CMS (compete with Substack, Wordpress, Ghost)
-- B2B (group announcements for organizations)

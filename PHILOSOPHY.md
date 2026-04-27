@@ -1,70 +1,51 @@
 ---
 title: PHILOSOPHY
 part_of: '[Diaryx](/Diaryx.md)'
-updated: 2026-04-20T10:47:55-06:00
+updated: 2026-04-27T08:01:49-06:00
 link_of:
 - '[Diaryx](/Diaryx.md)'
 link: '[PHILOSOPHY](/PHILOSOPHY.md)'
 ---
-## Founder's Note
-
-> When I was young, writing was all I had. I grew up with a hearing problem that made it easier for me to read and write than to speak and listen. Unfortunately, I came to realize that it was a lot harder to connect with people through writing than through speaking, and I suffered from intense loneliness.
->
-> As I got older and became interested in programming and computers, I realized that this boundary was artificial. The technology to make writing as flexible as speaking already existed—but had not been utilized to its fullest potential.
->
-> I realized the true power of writing when I went on a two year mission to Australia, far away from my family and friends. I communicated them via email once a week. During that experience, I felt more connected to them than I ever had in my life. For the first time ever, I was placed in a situation where I was *expected* to write to them rather than talk to them. I felt liberated, but also imprisoned by email’s limitations: there just wasn’t enough time to write to everyone individually.
->
-> I made Diaryx because I wanted to capture that feeling of connection. I wanted to be able to write to multiple audiences—to connect through writing without feeling restrained. I hope it can do for you what it has already done for me.
-
----
-
 # PHILOSOPHY
 
-In a sentence, the Diaryx philosophy is: *Readable, self-describing files should be usable and accessible for all writing purposes.* If you are familiar with local-first software, you can skip down to the “Self-Describing” section to see Diaryx-specific innovations.
+Diaryx is built on the following principles:
 
-## Readable, Accessible, and Usable
+- **File**[^1]** Over App**
+- **Thought**[^2]** Over File**
+- **Connection**[^3]** Over Thought**
 
-Diaryx uses UTF-8 plain text files with LF line endings. This is a universal standard understood by nearly every computer in the world. Whether it is an ancient piece of plastic from the ‘60s, or smart glasses from 2060, you should be able to read your files, regardless of what software or hardware you have available to you.
+Each item is more important than the last.
 
-However, plain text alone is not enough. Users need their text to have attributes such as *italic* or **bold**. This is an important aspect of being *usable* and *readable*.
+## File Over App
 
-Giving semantic meaning to plain text is a long debated issue. The primary standard in this space is Markdown, a syntax first specified by John Gruber in 2002. Diaryx attempts to be both compliant with modern markdown standards, and to build on top of this statement by John Gruber:
+There is already an excellent essay on this subject by @kepano at [https://stephango.com/file-over-app](https://stephango.com/file-over-app). To summarize: because files are the fundamental unit of human-computer interfacing, they must be considered as more important than any specific app you may use to modify those files. This means that files should be stored locally, and be accessible and readable to the user, rather than gatekept behind apps, platforms, licenses, and so forth.
 
-> The overriding design goal for Markdown’s formatting syntax is to make it as readable as possible. The idea is that a Markdown-formatted document should be publishable as-is, as plain text, without looking like it’s been marked up with tags or formatting instructions. While Markdown’s syntax has been influenced by several existing text-to-HTML filters, the single biggest source of inspiration for Markdown’s syntax is the format of plain text email.
+**Diaryx design choices influenced by this principle:**
 
-A less-common but still prevalent standard for Markdown files is to have “structured” and “unstructured” sections. Structured syntaxes such as JSON, TOML, and YAML are used to assist machines in parsing and understanding data. Markdown files with “frontmatter” often use YAML, which is designed to be both readable by humans and parseable by machines.
+- Using local Markdown files with YAML frontmatter as a source of truth.
+- Not being a publishing platform, but a tool to help users publish on their own.
+- Supporting a wide range of platforms, and making code source-available.
 
-## Self-Describing
+## Thought Over File
 
-Diaryx’s main innovation in the admittedly overexplored world of Markdown editors is twofold:
+This goes a step beyond the “File Over App” philosophy by acknowledging the importance of meaning behind the file. Although a file is important, it doesn’t exist for its own sake. Files are only containers for thoughts. Even language itself is an abstraction over thoughts. Right now, Diaryx uses Markdown files with YAML frontmatter—but if some better way to represent thought comes around, the files should change to accommodate thought, not the other way around.
 
-- **Diaryx attempts to abstract away markdown syntax entirely.** It uses the TipTap editor’s Markdown extension so that users can use a normal rich text editor instead of needing to memorize Markdown syntax. That way, users work natively with a portable, readable file format without having to think about it or make compromises.
-- **Diaryx embeds all metadata in the files themselves**—no separate config files. Your files are all you need. Files connect to each other in a `contents` / `part_of` hierarchy, so you can even use them independent of a filesystem.
+**Diaryx design choices influenced by this principle:**
 
-The recognized properties in Diaryx are carefully considered and given useful functionality:
+- Finding abstractions for important “building blocks of thought,” such as title, author/audience, and a contents/part_of hierarchy.
+- (future) support for different kinds of files/configuration options.
+- Supporting only *intentional use* of AI tools.
 
-- `title`: Kept in sync with the filename and the first H1, if present.
-- `link`: the canonical way to link to the current file.
-- `links`: explicit outbound links declared by the current file.
-- `link_of`: explicit backlinks from files that declare links to the current file.
-- `contents`: a list of files considered as “belonging” to the current one.
-- `part_of`: the reverse of `contents`.
-- `created` / `updated`: automatically set and kept in sync and used as a source of truth for time information.
-- `attachments`: declared binary files linked to by the current file.
-- `audience`: intended audience(s) for the current file.
+## Connection Over Thought
 
-## Unimplemented
+This goes yet another step further, bringing our whole writing adventure to a beautiful conclusion. Not even thoughts themselves exist for their own sake. Rather, they are merely a medium for connecting with others—real, loving connection being regarded as the meaning of life itself. Thus, Diaryx centers around this principle, seeking to enable the unique kinds of connection made possible only by writing.
 
-~~Diaryx still doesn’t match its own philosophy perfectly. Some gaps that are intended to be implemented in the near future:~~ Now implemented in part!
+**Diaryx design choices influenced by this principle:**
 
-### Links
+- A low technical barrier, because expertise shouldn’t be required to connect.
+- “Audiences” as a first-class primitive, to enable granular selective sharing.
+- Focus placed on different methods of publishing.
 
-Diaryx now supports a singular `link` property that declares the canonical way to link to a file. By default, this should be a Markdown workspace-root-relative link, such as `[My File](</link/to/My File.md>)`, and it should resolve back to the file itself.
-
-Diaryx also supports explicit frontmatter-declared `links` and `link_of` properties for non-structural file-to-file relationships. `links` declares outbound links, and `link_of` declares backlinks. Validation checks that outbound links resolve, warns when backlinks are missing or stale, and can self-heal those backlink lists on a best-effort basis!
-
-What remains unimplemented is treating all body-content links as part of that same declared graph automatically. The canonical metadata model is now in place, but body-link extraction and reconciliation are still follow-up work!
-
-### Attachments
-
-Right now, the `attachments` property links directly to binary (non-markdown) files. But each attachment should have its own “attachment note” so that each binary file’s corresponding attachment note can hold relevant information/metadata about that file. This file would contain a singular `attachment` property linking to the actual file (similar to the `link` property). `attachments` properties would link to the attachment note instead to the file directly. Links/embeds in the body content would still link to the file directly, using the attachment note’s `attachment` property as a source of truth for validation. Each attachment note could also contain an `attachment_of` property to backlink to all files linking to the attachment.
+[^1]: A “File” is the literal computer information used and accessed by the App, such as a .docx file or a Markdown file.
+[^2]: A “Thought” is the information represented by the bits in the file, like “I feel happy,” or “My toe hurts.” It could be expressed in any number of languages or files.
+[^3]: A “Connection” is the ultimate end purpose of thoughts: good feelings between people. Connections are more important than anything.

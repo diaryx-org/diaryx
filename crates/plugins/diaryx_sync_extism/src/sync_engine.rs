@@ -20,14 +20,13 @@ use crate::sync_manifest::{SyncManifest, SyncState};
 /// with an over-eager encode set. Decoding normalises them so that local ↔
 /// server comparisons work correctly.
 ///
-/// Also handles form-url-encoded `+` → space, since some upload paths (e.g. the
-/// web frontend) encode spaces as `+` rather than `%20`.
+/// `+` is left literal: every upload path (web `encodeURIComponent`, Tauri /
+/// CLI `percent_encoding::NON_ALPHANUMERIC`, sync-plugin `urlencoding::encode`)
+/// percent-encodes `+` as `%2B`, so any `+` we see here came from a literal
+/// filename character — not from form-urlencoded space. Treating it as space
+/// corrupts filenames like `LGBTQ+.md` on round-trip.
 fn decode_server_key(key: &str) -> String {
-    // Replace `+` with `%20` first so percent_decode handles both forms.
-    let plus_normalised = key.replace('+', "%20");
-    percent_decode_str(&plus_normalised)
-        .decode_utf8_lossy()
-        .into_owned()
+    percent_decode_str(key).decode_utf8_lossy().into_owned()
 }
 
 fn is_not_found_error(error: &str) -> bool {
@@ -1629,6 +1628,26 @@ mod tests {
             size,
             modified_at: 500,
         }
+    }
+
+    #[test]
+    fn decode_server_key_preserves_literal_plus() {
+        // Filenames containing `+` must round-trip unchanged; the previous
+        // `+` → space conversion corrupted names like "LGBTQ+.md" on pull.
+        assert_eq!(
+            decode_server_key("Archive/Essays/LGBTQ+.md"),
+            "Archive/Essays/LGBTQ+.md"
+        );
+        assert_eq!(
+            decode_server_key("School/Your passion + meaningful experience.md"),
+            "School/Your passion + meaningful experience.md"
+        );
+    }
+
+    #[test]
+    fn decode_server_key_decodes_percent_encoded_chars() {
+        assert_eq!(decode_server_key("Foo%20Bar.md"), "Foo Bar.md");
+        assert_eq!(decode_server_key("LGBTQ%2B.md"), "LGBTQ+.md");
     }
 
     #[test]

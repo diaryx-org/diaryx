@@ -74,7 +74,7 @@
 //!
 //! | Feature          | What it enables                              |
 //! |------------------|----------------------------------------------|
-//! | `core` (default) | File I/O, storage, logging, timestamps       |
+//! | `core` (default) | File I/O, storage, logging, timestamps, cancellation |
 //! | `http`           | HTTP requests via the host                   |
 //! | `secrets`        | Plugin-scoped secret storage via the host    |
 //! | `ws`             | WebSocket bridge                             |

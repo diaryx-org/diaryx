@@ -467,41 +467,53 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
         command_param_str(params, "workspace_root").ok_or("Missing workspace_root")?;
     let workspace_root = sync_engine::workspace_root_dir(&workspace_root);
 
-    let server_entries = sync_engine::fetch_server_manifest(params, &namespace_id)?;
+    // Cancellation token: host UI can flip this via the cancellation registry
+    // to abort the download cooperatively. Empty = no cancellation possible.
+    let cancel_token = command_param_str(params, "cancel_token").unwrap_or_default();
 
-    // Build a plan that pulls everything (empty manifest = all remote files are new)
-    let empty_local = std::collections::BTreeMap::new();
-    let mut manifest = sync_manifest::SyncManifest::new(namespace_id.clone());
-    let plan = sync_engine::compute_diff(&manifest, &empty_local, &server_entries, &workspace_root);
-    let total_ops = (plan.pull.len() + plan.delete_local.len()).max(1);
+    // Resumable: load any previously-saved manifest for this namespace. If a
+    // prior DownloadWorkspace was interrupted, the Clean entries we wrote
+    // will be skipped and only missing/changed files are re-pulled.
+    let mut manifest = sync_manifest::SyncManifest::load(&namespace_id);
+    if manifest.namespace_id != namespace_id {
+        manifest = sync_manifest::SyncManifest::new(namespace_id.clone());
+    }
 
-    let (pulled, _deleted_local, errors, deferred) = sync_engine::execute_pull(
-        params,
+    let result = sync_engine::execute_streaming_download(
         &namespace_id,
         &workspace_root,
-        &plan,
-        &server_entries,
         &mut manifest,
-        15,
-        80,
-        0,
-        total_ops,
+        &cancel_token,
         true, // defer non-markdown for background download
     );
 
-    if !errors.is_empty() {
-        // Persist whatever we managed to pull plus any PullFailed markers,
-        // so a subsequent Sync doesn't see the failed-pull files as
-        // "untracked local" and push stale disk bytes back to the server.
-        manifest.save();
+    // Always persist whatever progress we made (Clean entries from successful
+    // writes, PullFailed markers for write failures). On retry the next call
+    // resumes where this one left off.
+    manifest.save();
 
-        host::log::log("warn", &format!("DownloadWorkspace errors: {:?}", errors));
+    if result.cancelled {
+        host::log::log(
+            "info",
+            &format!(
+                "DownloadWorkspace cancelled: {} pulled, {} resumed-skip",
+                result.pulled, result.skipped_resume
+            ),
+        );
+        return Err("DownloadWorkspace cancelled".to_string());
+    }
+
+    if !result.errors.is_empty() {
+        host::log::log(
+            "warn",
+            &format!("DownloadWorkspace errors: {:?}", result.errors),
+        );
         return Err(summarize_sync_errors(
             &format!(
                 "DownloadWorkspace failed while writing {} file(s)",
-                errors.len()
+                result.errors.len()
             ),
-            &errors,
+            &result.errors,
         ));
     }
 
@@ -520,8 +532,9 @@ fn handle_download_workspace(params: &JsonValue) -> Result<JsonValue, String> {
     }
 
     Ok(serde_json::json!({
-        "files_imported": pulled,
-        "deferred_files": deferred,
+        "files_imported": result.pulled,
+        "files_resumed_skip": result.skipped_resume,
+        "deferred_files": result.deferred,
     }))
 }
 

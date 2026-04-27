@@ -1007,6 +1007,471 @@ pub fn execute_pull(
 }
 
 // ---------------------------------------------------------------------------
+// Streaming download (DownloadWorkspace)
+//
+// Eager pagination + checkpointing:
+//   - List server objects page-by-page.
+//   - As each page arrives, filter against the existing manifest (resumable:
+//     keys already pulled with matching hashes are skipped).
+//   - Buffer pulls until a wave is full, then dispatch concurrent batches.
+//   - Save the manifest after every wave so a crash/cancel can resume.
+//   - Adapt batch size and concurrency from the previous wave's throughput.
+//   - Poll cancellation between waves; on cancel, save and bail out.
+// ---------------------------------------------------------------------------
+
+const PULL_PAGE_LIMIT: u32 = 500;
+const MIN_BATCH_SIZE: usize = 50;
+const MAX_BATCH_SIZE: usize = 500;
+const MIN_CONCURRENCY: u32 = 1;
+const MAX_CONCURRENCY: u32 = 6;
+const LARGE_FILE_THRESHOLD: u64 = 5 * 1024 * 1024;
+const ADAPTIVE_FAST_MS: u64 = 5_000;
+const ADAPTIVE_SLOW_MS: u64 = 30_000;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AdaptiveState {
+    pub batch_size: usize,
+    pub concurrency: u32,
+}
+
+impl Default for AdaptiveState {
+    fn default() -> Self {
+        Self {
+            batch_size: 200,
+            concurrency: 4,
+        }
+    }
+}
+
+fn adaptive_storage_key(namespace_id: &str) -> String {
+    format!("download_adaptive::{namespace_id}")
+}
+
+pub fn load_adaptive_state(namespace_id: &str) -> AdaptiveState {
+    let key = adaptive_storage_key(namespace_id);
+    match host::storage::get(&key) {
+        Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        _ => AdaptiveState::default(),
+    }
+}
+
+pub fn save_adaptive_state(namespace_id: &str, state: &AdaptiveState) {
+    let key = adaptive_storage_key(namespace_id);
+    if let Ok(bytes) = serde_json::to_vec(state) {
+        let _ = host::storage::set(&key, &bytes);
+    }
+}
+
+fn adapt_after_wave(
+    state: &mut AdaptiveState,
+    wave_bytes: u64,
+    elapsed_ms: u64,
+    error_count: usize,
+) {
+    let _ = wave_bytes; // reserved for future throughput-tuning
+    if error_count > 0 || elapsed_ms > ADAPTIVE_SLOW_MS {
+        // Back off: halve batch size, drop one concurrency slot.
+        state.batch_size = (state.batch_size / 2).max(MIN_BATCH_SIZE);
+        if state.concurrency > MIN_CONCURRENCY {
+            state.concurrency -= 1;
+        }
+    } else if elapsed_ms < ADAPTIVE_FAST_MS && error_count == 0 {
+        // Going fast: ramp up.
+        state.batch_size = (state.batch_size * 3 / 2).min(MAX_BATCH_SIZE);
+        if state.concurrency < MAX_CONCURRENCY {
+            state.concurrency += 1;
+        }
+    }
+}
+
+fn manifest_already_satisfies(manifest: &SyncManifest, entry: &ServerEntry) -> bool {
+    let local_entry = match manifest.files.get(&entry.key) {
+        Some(e) => e,
+        None => return false,
+    };
+    if local_entry.state != SyncState::Clean {
+        return false;
+    }
+    if local_entry.content_hash.is_empty() {
+        return false;
+    }
+    match &entry.content_hash {
+        Some(server_hash) => &local_entry.content_hash == server_hash,
+        // Server didn't report a hash — assume manifest is up to date.
+        None => true,
+    }
+}
+
+/// One page of server entries plus a flag indicating whether more pages remain.
+struct ListPage {
+    entries: Vec<ServerEntry>,
+    has_more: bool,
+}
+
+fn fetch_server_page(namespace_id: &str, offset: u32, limit: u32) -> Result<ListPage, String> {
+    let items = host::namespace::list_objects_with_options(
+        namespace_id,
+        host::namespace::ListObjectsOptions {
+            prefix: Some("files/".to_string()),
+            limit: Some(limit),
+            offset: Some(offset),
+        },
+    )?;
+    let count = items.len();
+    let entries = items
+        .into_iter()
+        .map(|item| {
+            let key = decode_server_key(&item.key);
+            ServerEntry {
+                server_key: item.key,
+                key,
+                content_hash: item.content_hash,
+                size_bytes: item.size_bytes.unwrap_or(0),
+                updated_at: item.updated_at.unwrap_or(0),
+            }
+        })
+        .collect();
+    Ok(ListPage {
+        entries,
+        has_more: count >= limit as usize,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StreamingDownloadResult {
+    pub pulled: usize,
+    pub skipped_resume: usize,
+    pub errors: Vec<String>,
+    pub deferred: Vec<String>,
+    pub cancelled: bool,
+}
+
+/// Stream-and-pull the server manifest with resumability + concurrent batches +
+/// adaptive sizing + cooperative cancellation. Used by `DownloadWorkspace`.
+///
+/// `cancel_token` may be empty (no cancellation possible). When non-empty,
+/// the plugin polls `host::cancellation::is_cancelled` between waves.
+///
+/// `manifest` is mutated in place. On cancellation or partial success, the
+/// caller should `manifest.save()` to persist progress so a subsequent call
+/// can resume.
+pub fn execute_streaming_download(
+    namespace_id: &str,
+    workspace_root: &str,
+    manifest: &mut SyncManifest,
+    cancel_token: &str,
+    skip_non_markdown: bool,
+) -> StreamingDownloadResult {
+    let root_dir = workspace_root_dir(workspace_root);
+
+    let mut adaptive = load_adaptive_state(namespace_id);
+    adaptive.batch_size = adaptive.batch_size.clamp(MIN_BATCH_SIZE, MAX_BATCH_SIZE);
+    adaptive.concurrency = adaptive.concurrency.clamp(MIN_CONCURRENCY, MAX_CONCURRENCY);
+
+    let mut pulled = 0usize;
+    let mut skipped_resume = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    let mut deferred: Vec<String> = Vec::new();
+    let mut cancelled = false;
+
+    // Buffered queues across pages.
+    let mut pending_small: Vec<ServerEntry> = Vec::new();
+    let mut pending_large: Vec<ServerEntry> = Vec::new();
+    let mut total_seen: usize = 0;
+    let mut total_to_pull: usize = 0;
+
+    let mut offset = 0u32;
+
+    'pages: loop {
+        if !cancel_token.is_empty() && host::cancellation::is_cancelled(cancel_token) {
+            cancelled = true;
+            break 'pages;
+        }
+
+        let page = match fetch_server_page(namespace_id, offset, PULL_PAGE_LIMIT) {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(format!("list page offset={offset}: {e}"));
+                break 'pages;
+            }
+        };
+
+        let count = page.entries.len();
+        total_seen += count;
+        emit_sync_progress(
+            stream_percent(pulled, total_to_pull),
+            pulled,
+            total_to_pull.max(1),
+            "manifest",
+            &format!("Discovered {total_seen} remote files..."),
+            None,
+        );
+
+        for entry in page.entries {
+            if skip_non_markdown && !entry.key.ends_with(".md") {
+                deferred.push(entry.key);
+                continue;
+            }
+            if manifest_already_satisfies(manifest, &entry) {
+                skipped_resume += 1;
+                continue;
+            }
+            total_to_pull += 1;
+            if entry.size_bytes >= LARGE_FILE_THRESHOLD {
+                pending_large.push(entry);
+            } else {
+                pending_small.push(entry);
+            }
+        }
+
+        // Drain small-file waves while we have enough buffered to fill a wave.
+        let wave_target = adaptive
+            .batch_size
+            .saturating_mul(adaptive.concurrency as usize);
+        while pending_small.len() >= wave_target {
+            if !cancel_token.is_empty() && host::cancellation::is_cancelled(cancel_token) {
+                cancelled = true;
+                break 'pages;
+            }
+            let drained: Vec<ServerEntry> = pending_small.drain(..wave_target).collect();
+            run_small_wave(
+                namespace_id,
+                &root_dir,
+                drained,
+                manifest,
+                &mut adaptive,
+                &mut pulled,
+                &mut errors,
+                total_to_pull,
+            );
+            // Checkpoint after every wave.
+            manifest.save();
+        }
+
+        if !page.has_more {
+            break 'pages;
+        }
+        offset = offset.saturating_add(PULL_PAGE_LIMIT);
+    }
+
+    // Drain remaining small files (possibly with smaller wave size).
+    while !pending_small.is_empty() {
+        if !cancel_token.is_empty() && host::cancellation::is_cancelled(cancel_token) {
+            cancelled = true;
+            break;
+        }
+        let take = pending_small.len().min(
+            adaptive
+                .batch_size
+                .saturating_mul(adaptive.concurrency as usize),
+        );
+        let drained: Vec<ServerEntry> = pending_small.drain(..take).collect();
+        run_small_wave(
+            namespace_id,
+            &root_dir,
+            drained,
+            manifest,
+            &mut adaptive,
+            &mut pulled,
+            &mut errors,
+            total_to_pull,
+        );
+        manifest.save();
+    }
+
+    // Large files — fetch one at a time (already covered by single-file path).
+    if !cancelled {
+        let server_map: BTreeMap<&str, &ServerEntry> =
+            pending_large.iter().map(|e| (e.key.as_str(), e)).collect();
+        for entry in &pending_large {
+            if !cancel_token.is_empty() && host::cancellation::is_cancelled(cancel_token) {
+                cancelled = true;
+                break;
+            }
+            let relative_path = entry.key.strip_prefix("files/").unwrap_or(&entry.key);
+            emit_sync_progress(
+                stream_percent(pulled, total_to_pull),
+                pulled,
+                total_to_pull.max(1),
+                "download",
+                &format!(
+                    "Downloading large file {} ({} bytes)",
+                    relative_path, entry.size_bytes
+                ),
+                Some(relative_path),
+            );
+            pull_single_file(
+                namespace_id,
+                &entry.key,
+                &entry.server_key,
+                relative_path,
+                &root_dir,
+                &server_map,
+                manifest,
+                &mut pulled,
+                &mut errors,
+            );
+            manifest.save();
+        }
+    }
+
+    save_adaptive_state(namespace_id, &adaptive);
+
+    if cancelled {
+        host::log::log("info", "DownloadWorkspace cancelled by host");
+    }
+
+    StreamingDownloadResult {
+        pulled,
+        skipped_resume,
+        errors,
+        deferred,
+        cancelled,
+    }
+}
+
+fn stream_percent(pulled: usize, total: usize) -> u64 {
+    if total == 0 {
+        return 15;
+    }
+    let ratio = (pulled as f64 / total as f64).clamp(0.0, 1.0);
+    15 + (ratio * 80.0) as u64
+}
+
+fn run_small_wave(
+    namespace_id: &str,
+    root_dir: &str,
+    entries: Vec<ServerEntry>,
+    manifest: &mut SyncManifest,
+    adaptive: &mut AdaptiveState,
+    pulled: &mut usize,
+    errors: &mut Vec<String>,
+    total_to_pull: usize,
+) {
+    if entries.is_empty() {
+        return;
+    }
+
+    let server_map: BTreeMap<&str, &ServerEntry> =
+        entries.iter().map(|e| (e.key.as_str(), e)).collect();
+    let api_key_to_key: BTreeMap<&str, &str> = entries
+        .iter()
+        .map(|e| (e.server_key.as_str(), e.key.as_str()))
+        .collect();
+
+    // Chunk this wave into `concurrency` batches of up to `batch_size` keys.
+    let mut batches: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    for entry in &entries {
+        if current.len() >= adaptive.batch_size {
+            batches.push(std::mem::take(&mut current));
+        }
+        current.push(entry.server_key.clone());
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+
+    let wave_bytes: u64 = entries.iter().map(|e| e.size_bytes).sum();
+    let start_ms = host::time::timestamp_millis().unwrap_or(0);
+
+    let result = host::namespace::get_objects_batches_concurrent(
+        namespace_id,
+        &batches,
+        adaptive.concurrency,
+    );
+
+    match result {
+        Ok(batch) => {
+            // Process successful downloads.
+            for (api_key, entry) in &batch.objects {
+                let key = api_key_to_key
+                    .get(api_key.as_str())
+                    .copied()
+                    .unwrap_or(api_key);
+                let relative_path = key.strip_prefix("files/").unwrap_or(key);
+                let full_path = join_workspace_path(root_dir, relative_path);
+
+                write_pulled_bytes(
+                    key,
+                    &full_path,
+                    &entry.bytes,
+                    &server_map,
+                    manifest,
+                    pulled,
+                    errors,
+                );
+            }
+
+            // Process per-key errors from the batch.
+            let mut wave_errors = 0usize;
+            for (api_key, err_msg) in &batch.errors {
+                if api_key.starts_with("__batch_error_") || api_key.starts_with("__batch_panic_") {
+                    errors.push(format!("wave: {err_msg}"));
+                    wave_errors += 1;
+                    continue;
+                }
+                let key = api_key_to_key
+                    .get(api_key.as_str())
+                    .copied()
+                    .unwrap_or(api_key);
+                if is_not_found_error(err_msg) {
+                    host::log::log(
+                        "info",
+                        &format!("pull {key}: object not found (ghost entry), cleaning up"),
+                    );
+                    let _ = host::namespace::delete_object(namespace_id, api_key);
+                } else {
+                    manifest.mark_pull_failed(key);
+                    errors.push(format!("pull {key}: {err_msg}"));
+                    wave_errors += 1;
+                }
+            }
+
+            let elapsed = host::time::timestamp_millis()
+                .unwrap_or(start_ms)
+                .saturating_sub(start_ms);
+            adapt_after_wave(adaptive, wave_bytes, elapsed, wave_errors);
+
+            emit_sync_progress(
+                stream_percent(*pulled, total_to_pull),
+                *pulled,
+                total_to_pull.max(1),
+                "download",
+                &format!("Downloaded {} files...", *pulled),
+                None,
+            );
+        }
+        Err(e) => {
+            host::log::log(
+                "warn",
+                &format!(
+                    "Wave failed ({} batches, {} keys): {e}; falling back to single-batch path",
+                    batches.len(),
+                    entries.len()
+                ),
+            );
+            // Whole-wave failure (network drop?) — fall back to sequential
+            // single-batch downloads so partial progress is still made.
+            for batch in &batches {
+                let _ = try_batch_download(
+                    namespace_id,
+                    batch,
+                    &api_key_to_key,
+                    root_dir,
+                    &server_map,
+                    manifest,
+                    pulled,
+                    errors,
+                );
+            }
+            // Treat as slow wave for adaptive tuning.
+            adapt_after_wave(adaptive, wave_bytes, ADAPTIVE_SLOW_MS, batches.len());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Full sync cycle
 // ---------------------------------------------------------------------------
 
@@ -1417,5 +1882,130 @@ mod tests {
         assert!(plan.pull.is_empty());
         assert!(plan.delete_local.is_empty());
         assert!(plan.delete_remote.is_empty());
+    }
+
+    // -- Streaming download: resumability + adaptive sizing --
+
+    fn server_sized(key: &str, hash: Option<&str>, size: u64) -> ServerEntry {
+        ServerEntry {
+            server_key: key.to_string(),
+            key: key.to_string(),
+            content_hash: hash.map(String::from),
+            size_bytes: size,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn manifest_satisfies_when_clean_and_hash_matches() {
+        let mut manifest = make_manifest();
+        manifest.mark_clean("files/a.md", "hash_v1", 100, 500);
+        let entry = server_sized("files/a.md", Some("hash_v1"), 100);
+        assert!(manifest_already_satisfies(&manifest, &entry));
+    }
+
+    #[test]
+    fn manifest_does_not_satisfy_when_hashes_differ() {
+        let mut manifest = make_manifest();
+        manifest.mark_clean("files/a.md", "hash_v1", 100, 500);
+        let entry = server_sized("files/a.md", Some("hash_v2"), 100);
+        assert!(!manifest_already_satisfies(&manifest, &entry));
+    }
+
+    #[test]
+    fn manifest_does_not_satisfy_when_pull_failed() {
+        let mut manifest = make_manifest();
+        manifest.mark_pull_failed("files/a.md");
+        let entry = server_sized("files/a.md", Some("hash_v1"), 100);
+        // PullFailed entries are never satisfied: we must re-pull.
+        assert!(!manifest_already_satisfies(&manifest, &entry));
+    }
+
+    #[test]
+    fn manifest_satisfies_when_server_omits_hash_and_local_is_clean() {
+        let mut manifest = make_manifest();
+        manifest.mark_clean("files/legacy.md", "hash_v1", 100, 500);
+        // Legacy server rows may not report content_hash; fall back to
+        // trusting the manifest rather than re-pulling redundantly.
+        let entry = server_sized("files/legacy.md", None, 100);
+        assert!(manifest_already_satisfies(&manifest, &entry));
+    }
+
+    #[test]
+    fn adaptive_state_clamps_to_bounds_after_load_corruption() {
+        // Mirror the clamp the streaming download applies on entry.
+        let mut s = AdaptiveState {
+            batch_size: 10_000,
+            concurrency: 99,
+        };
+        s.batch_size = s.batch_size.clamp(MIN_BATCH_SIZE, MAX_BATCH_SIZE);
+        s.concurrency = s.concurrency.clamp(MIN_CONCURRENCY, MAX_CONCURRENCY);
+        assert_eq!(s.batch_size, MAX_BATCH_SIZE);
+        assert_eq!(s.concurrency, MAX_CONCURRENCY);
+
+        let mut s = AdaptiveState {
+            batch_size: 0,
+            concurrency: 0,
+        };
+        s.batch_size = s.batch_size.clamp(MIN_BATCH_SIZE, MAX_BATCH_SIZE);
+        s.concurrency = s.concurrency.clamp(MIN_CONCURRENCY, MAX_CONCURRENCY);
+        assert_eq!(s.batch_size, MIN_BATCH_SIZE);
+        assert_eq!(s.concurrency, MIN_CONCURRENCY);
+    }
+
+    #[test]
+    fn adapt_after_wave_ramps_up_on_fast_clean_run() {
+        let mut s = AdaptiveState {
+            batch_size: 200,
+            concurrency: 4,
+        };
+        adapt_after_wave(&mut s, 1_000_000, 1_000, 0);
+        assert!(s.batch_size > 200, "batch_size should grow on fast wave");
+        assert_eq!(s.concurrency, 5);
+    }
+
+    #[test]
+    fn adapt_after_wave_backs_off_on_errors() {
+        let mut s = AdaptiveState {
+            batch_size: 200,
+            concurrency: 4,
+        };
+        adapt_after_wave(&mut s, 1_000_000, 1_000, 3);
+        assert_eq!(s.batch_size, 100);
+        assert_eq!(s.concurrency, 3);
+    }
+
+    #[test]
+    fn adapt_after_wave_backs_off_on_slow_run_even_without_errors() {
+        let mut s = AdaptiveState {
+            batch_size: 400,
+            concurrency: 4,
+        };
+        adapt_after_wave(&mut s, 1_000_000, ADAPTIVE_SLOW_MS + 1, 0);
+        assert_eq!(s.batch_size, 200);
+        assert_eq!(s.concurrency, 3);
+    }
+
+    #[test]
+    fn adapt_after_wave_respects_minimum_batch_size() {
+        let mut s = AdaptiveState {
+            batch_size: MIN_BATCH_SIZE,
+            concurrency: MIN_CONCURRENCY,
+        };
+        adapt_after_wave(&mut s, 1_000, 1_000, 1);
+        assert_eq!(s.batch_size, MIN_BATCH_SIZE);
+        assert_eq!(s.concurrency, MIN_CONCURRENCY);
+    }
+
+    #[test]
+    fn stream_percent_stays_in_bounds() {
+        assert_eq!(stream_percent(0, 0), 15);
+        assert_eq!(stream_percent(0, 100), 15);
+        assert_eq!(stream_percent(50, 100), 55);
+        let p = stream_percent(100, 100);
+        assert!((90..=95).contains(&p), "saturates near 95, got {p}");
+        // Doesn't underflow on weird inputs (pulled > total).
+        let p = stream_percent(200, 100);
+        assert!((90..=95).contains(&p), "clamps when overshooting, got {p}");
     }
 }

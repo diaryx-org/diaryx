@@ -5,20 +5,21 @@
 //!
 //! # Capability Tiers
 //!
-//! | Module     | Feature    | Description                          |
-//! |------------|------------|--------------------------------------|
-//! | `fs`       | `core`     | File I/O (read, write, list, delete) |
-//! | `storage`  | `core`     | Plugin-scoped key-value storage      |
-//! | `log`      | `core`     | Structured logging                   |
-//! | `time`     | `core`     | Timestamps                           |
-//! | `http`     | `http`     | HTTP requests                        |
-//! | `secrets`  | `secrets`  | Credential storage                   |
-//! | `ws`       | `ws`       | WebSocket bridge                     |
-//! | `events`   | `events`   | Event emission                       |
-//! | `plugins`  | `plugins`  | Inter-plugin commands                |
-//! | `context`  | `context`  | Runtime context                      |
-//! | `wasi`     | `wasi`     | WASI module execution                |
-//! | `files`    | `files`    | User-provided file requests          |
+//! | Module          | Feature    | Description                          |
+//! |-----------------|------------|--------------------------------------|
+//! | `fs`            | `core`     | File I/O (read, write, list, delete) |
+//! | `storage`       | `core`     | Plugin-scoped key-value storage      |
+//! | `log`           | `core`     | Structured logging                   |
+//! | `time`          | `core`     | Timestamps                           |
+//! | `cancellation`  | `core`     | Cooperative cancellation polling     |
+//! | `http`          | `http`     | HTTP requests                        |
+//! | `secrets`       | `secrets`  | Credential storage                   |
+//! | `ws`            | `ws`       | WebSocket bridge                     |
+//! | `events`        | `events`   | Event emission                       |
+//! | `plugins`       | `plugins`  | Inter-plugin commands                |
+//! | `context`       | `context`  | Runtime context                      |
+//! | `wasi`          | `wasi`     | WASI module execution                |
+//! | `files`         | `files`    | User-provided file requests          |
 
 // ---------------------------------------------------------------------------
 // Raw host function declarations
@@ -71,6 +72,7 @@ extern "ExtismHost" {
     // Namespace
     pub fn host_namespace_get_object(input: String) -> String;
     pub fn host_namespace_get_objects_batch(input: String) -> String;
+    pub fn host_namespace_get_objects_batches_concurrent(input: String) -> String;
     pub fn host_namespace_put_object(input: String) -> String;
     pub fn host_namespace_delete_object(input: String) -> String;
     pub fn host_namespace_list_objects(input: String) -> String;
@@ -79,6 +81,9 @@ extern "ExtismHost" {
     pub fn host_namespace_sync_audience(input: String) -> String;
     pub fn host_namespace_list_audiences(input: String) -> String;
     pub fn host_namespace_delete_audience(input: String) -> String;
+
+    // Cancellation
+    pub fn host_is_cancelled(input: String) -> String;
 
     // Hashing
     pub fn host_hash_file(input: String) -> String;
@@ -161,6 +166,9 @@ pub mod namespace;
 
 #[cfg(feature = "core")]
 pub mod hash;
+
+#[cfg(feature = "core")]
+pub mod cancellation;
 
 #[cfg(feature = "proxy")]
 pub mod proxy;

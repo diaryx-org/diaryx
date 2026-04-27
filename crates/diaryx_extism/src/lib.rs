@@ -93,7 +93,8 @@ pub use host_fns::{
     NamespaceEntry, NamespaceObjectMeta, NamespaceProvider, NoopEventEmitter, NoopFileProvider,
     NoopNamespaceProvider, NoopPluginCommandBridge, NoopRuntimeContextProvider, NoopSecretStore,
     NoopStorage, NoopWebSocketBridge, PermissionChecker, PluginCommandBridge, PluginSecretStore,
-    PluginStorage, RuntimeContextProvider, WebSocketBridge, parse_multipart_batch,
+    PluginStorage, RuntimeContextProvider, WebSocketBridge, cancel_plugin_operation,
+    clear_plugin_operation_cancellation, parse_multipart_batch,
 };
 pub use loader::{
     ExtismLoadError, inspect_plugin_wasm_manifest, load_plugin_from_wasm, load_plugins_from_dir,

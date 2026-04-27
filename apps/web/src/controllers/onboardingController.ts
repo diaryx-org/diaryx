@@ -628,7 +628,7 @@ export async function handleCreateWithProvider(
         },
       };
     }
-    let result: { localId: string; filesImported: number };
+    let result: { localId: string; filesImported: number; filesResumedSkip: number };
     try {
       result = await downloadWorkspace(providerId, {
         remoteId: effectiveRestoreNamespace.id,

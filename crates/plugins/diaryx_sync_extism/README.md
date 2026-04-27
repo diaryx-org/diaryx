@@ -66,6 +66,38 @@ treated as an opaque blob identified by its SHA-256 content hash.
 4. **Execute** — Push local files, pull remote files, delete as needed, then
    update the manifest.
 
+### DownloadWorkspace (large-workspace path)
+
+`DownloadWorkspace` uses a streaming pull tuned for unreliable links and
+multi-thousand-file workspaces. Instead of "list everything → pull
+everything → save manifest" it interleaves the work:
+
+- **Page-by-page listing.** Server objects are paginated (500/page) and
+  filtered against the existing manifest as each page arrives. Files
+  already present with matching hashes are skipped — this is what makes
+  the operation **resumable**: a re-run after a crash, network drop, or
+  user cancellation only pulls what's actually missing.
+- **Concurrent batches.** Each "wave" is `concurrency × batch_size` files
+  fanned out as parallel HTTP requests via the new
+  `host_namespace_get_objects_batches_concurrent` host fn. The WASM guest
+  is single-threaded, so concurrency lives entirely on the host side.
+- **Adaptive sizing.** After every wave the plugin tracks elapsed time
+  and error count, then ramps `batch_size`/`concurrency` up on fast
+  clean runs and backs off on slow runs or per-batch failures. The state
+  is persisted per-namespace under `download_adaptive::<ns>` so the next
+  run starts where the last one stabilised.
+- **Per-wave checkpoint.** The manifest is `save()`d after every wave —
+  the worst-case loss from a hard crash is one in-flight wave.
+- **Cooperative cancellation.** Callers pass `cancel_token` in the
+  command params; the plugin polls `host::cancellation::is_cancelled`
+  between waves. On cancel it persists progress and returns
+  `"DownloadWorkspace cancelled"`. Re-invoking with the same `remote_id`
+  resumes from the manifest.
+
+The host UI (`apps/web/src/lib/sync/workspaceProviderService.ts`)
+generates the cancel token, exposes a handle for cancel buttons, and
+preserves the partial workspace on cancel so resume "just works."
+
 ## Build
 
 ```bash
@@ -154,8 +186,11 @@ diaryx sync config       # Show/set config (--server, --workspace-id, --show)
 | `host_namespace_list` | List user-owned namespaces |
 | `host_namespace_list_objects` | List namespace objects with hashes and timestamps |
 | `host_namespace_get_object` | Download object bytes |
+| `host_namespace_get_objects_batch` | Download many objects in one request (server-parallel) |
+| `host_namespace_get_objects_batches_concurrent` | Fan out N batch requests host-side in parallel |
 | `host_namespace_put_object` | Upload object bytes |
 | `host_namespace_delete_object` | Delete namespace object |
+| `host_is_cancelled` | Poll whether the host has flagged an operation token as cancelled |
 
 All host functions use the Extism string ABI (`String -> String`).
 

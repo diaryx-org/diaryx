@@ -429,12 +429,15 @@ describe("workspaceProviderService", () => {
     expect(downloadedWorkspaceApi.executePluginCommand).toHaveBeenCalledWith(
       "diaryx.sync",
       "DownloadWorkspace",
-      {
+      expect.objectContaining({
         provider_id: "diaryx.sync",
         workspace_root: "/tmp/remote-notes",
         remote_id: "remote-1",
         link: true,
-      },
+        // The host generates a fresh cancellation token per call so the
+        // plugin can poll for cooperative cancellation between batches.
+        cancel_token: expect.stringMatching(/^dl:/),
+      }),
     );
     expect(mocks.setPluginMetadata).toHaveBeenCalledWith("local-1", "diaryx.sync", {
       remoteWorkspaceId: "remote-1",
@@ -456,6 +459,7 @@ describe("workspaceProviderService", () => {
     expect(result).toEqual({
       localId: "local-1",
       filesImported: 7,
+      filesResumedSkip: 0,
     });
   });
 

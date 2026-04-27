@@ -1760,3 +1760,523 @@ async fn large_binary_file_roundtrips_via_plugin() {
 
     drop(server);
 }
+
+// ---------------------------------------------------------------------------
+// Rename round-trip — A renames a file, B Syncs, B's old file is gone and
+// the new path is present with the right content.
+// ---------------------------------------------------------------------------
+
+/// `on_event("file_renamed")` (lib.rs:1193) records `delete(old) +
+/// dirty(new)` in the manifest — rename is *not* a first-class identity
+/// operation, it's a delete-then-add. This test guards two related properties:
+///
+/// 1. After A renames + Syncs, the server has only the new key (old is gone).
+/// 2. After B Syncs, B's local `hello.md` is removed and `greeting.md` exists
+///    with A's content.
+/// 3. A subsequent edit to the renamed file on A propagates to B at the new
+///    path (the post-rename manifest entry tracks the new key, not the old).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rename_round_trips_to_other_device() {
+    require_wasm!();
+
+    let server = TestServer::start().await;
+    let token = server.sign_in_dev("rename@example.com").await;
+    let provider: Arc<dyn NamespaceProvider> = Arc::new(HttpNamespaceProvider::new(
+        server.api_base_url(),
+        Some(token),
+    ));
+
+    // ---- A links workspace with hello.md --------------------------------
+    let workspace_a = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents:\n  - hello.md\n---\n\n# Root\n",
+        &[(
+            "hello.md",
+            "---\ntitle: Hello\npart_of: index.md\n---\n\n# v1 from A\n",
+        )],
+    );
+    let storage_a = Arc::new(RecordingStorage::new());
+    let harness_a = build_harness(&workspace_a, storage_a, provider.clone());
+    harness_a.init().await.expect("init A");
+    let link = harness_a
+        .command("LinkWorkspace", json!({ "name": "rename ws" }))
+        .await
+        .expect("Link Some")
+        .expect("Link ok");
+    let ns_id = link
+        .get("remote_id")
+        .and_then(|v| v.as_str())
+        .expect("remote_id")
+        .to_string();
+
+    // ---- B downloads -----------------------------------------------------
+    let workspace_b = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents: []\n---\n\n# Root B\n",
+        &[],
+    );
+    let storage_b = Arc::new(RecordingStorage::new());
+    let harness_b = build_harness(&workspace_b, storage_b, provider.clone());
+    harness_b.init().await.expect("init B");
+    harness_b
+        .command(
+            "DownloadWorkspace",
+            json!({
+                "remote_id": ns_id,
+                "workspace_root": workspace_b.to_string_lossy(),
+                "link": true,
+            }),
+        )
+        .await
+        .expect("Download Some")
+        .expect("Download ok");
+
+    // Flush the link/download index.md rewrites (see LWW test for rationale).
+    for harness in [&harness_a, &harness_b] {
+        harness.command("Sync", json!({})).await.unwrap().unwrap();
+    }
+
+    // ---- A: rename hello.md → greeting.md on disk + notify the plugin ----
+    // The plugin treats rename as `record_delete(old) + mark_dirty(new)`
+    // in the manifest, but Sync's tree-walk only discovers files reachable
+    // through `index.md`'s `contents` list — a manifest-dirty entry that
+    // isn't in the workspace tree gets silently dropped. So a realistic
+    // rename flow has the host doing three things: move the file on disk,
+    // dispatch the file_moved event, and update `index.md` to reference
+    // the new path (same shape as the multi_change_catchup test).
+    let a_root = workspace_a.parent().expect("A root");
+    let hello_on_a = a_root.join("hello.md");
+    let greeting_on_a = a_root.join("greeting.md");
+    std::fs::rename(&hello_on_a, &greeting_on_a).expect("rename on A");
+
+    harness_a
+        .send_file_moved(
+            hello_on_a.to_string_lossy().as_ref(),
+            greeting_on_a.to_string_lossy().as_ref(),
+        )
+        .await;
+
+    let index_on_a = a_root.join("index.md");
+    std::fs::write(
+        &index_on_a,
+        "---\ntitle: Root\ncontents:\n  - greeting.md\n---\n\n# Root\n",
+    )
+    .expect("update index on A");
+    harness_a
+        .send_file_saved(index_on_a.to_string_lossy().as_ref())
+        .await;
+
+    // ---- A Syncs: server should drop hello.md and gain greeting.md -------
+    let sync_a: JsonValue = harness_a
+        .command("Sync", json!({}))
+        .await
+        .expect("Sync A Some")
+        .expect("Sync A ok");
+    let pushed_a = sync_a.get("pushed").and_then(|v| v.as_u64()).unwrap_or(0);
+    let deleted_remote = sync_a
+        .get("deleted_remote")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert!(
+        pushed_a >= 1,
+        "A's Sync after rename should push greeting.md. Got: {sync_a}"
+    );
+    assert!(
+        deleted_remote >= 1,
+        "A's Sync after rename should delete hello.md from server. Got: {sync_a}"
+    );
+
+    let server_objs = provider
+        .list_objects(&ns_id, None, None, None)
+        .expect("list_objects after rename");
+    let server_keys: std::collections::BTreeSet<&str> =
+        server_objs.iter().map(|o| o.key.as_str()).collect();
+    assert!(
+        server_keys.contains("files/greeting.md"),
+        "server should have files/greeting.md after rename. Got: {server_keys:?}"
+    );
+    assert!(
+        !server_keys.contains("files/hello.md"),
+        "server should NOT have files/hello.md after rename. Got: {server_keys:?}"
+    );
+
+    // ---- B Syncs: hello.md is gone locally, greeting.md is present -------
+    let sync_b: JsonValue = harness_b
+        .command("Sync", json!({}))
+        .await
+        .expect("Sync B Some")
+        .expect("Sync B ok");
+    let pulled_b = sync_b.get("pulled").and_then(|v| v.as_u64()).unwrap_or(0);
+    let deleted_local = sync_b
+        .get("deleted_local")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert!(
+        pulled_b >= 1,
+        "B's Sync should pull greeting.md. Got: {sync_b}"
+    );
+    assert!(
+        deleted_local >= 1,
+        "B's Sync should delete hello.md locally. Got: {sync_b}"
+    );
+
+    let b_root = workspace_b.parent().expect("B root");
+    assert!(
+        !b_root.join("hello.md").exists(),
+        "B's hello.md should be removed after rename Sync"
+    );
+    let greeting_on_b = b_root.join("greeting.md");
+    assert!(
+        greeting_on_b.exists(),
+        "B's greeting.md should exist after rename Sync"
+    );
+    let greeting_contents = std::fs::read_to_string(&greeting_on_b).expect("read greeting");
+    assert!(
+        greeting_contents.contains("v1 from A"),
+        "B's greeting.md should contain A's content. Got:\n{greeting_contents}"
+    );
+
+    // ---- Edit the renamed file on A → propagates to greeting.md on B ----
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    std::fs::write(
+        &greeting_on_a,
+        "---\ntitle: Hello\npart_of: index.md\n---\n\n# v2 after rename\n",
+    )
+    .expect("write v2 to greeting on A");
+    harness_a
+        .send_file_saved(greeting_on_a.to_string_lossy().as_ref())
+        .await;
+
+    harness_a
+        .command("Sync", json!({}))
+        .await
+        .expect("Sync A2 Some")
+        .expect("Sync A2 ok");
+    harness_b
+        .command("Sync", json!({}))
+        .await
+        .expect("Sync B2 Some")
+        .expect("Sync B2 ok");
+
+    let final_b = std::fs::read_to_string(&greeting_on_b).expect("read final B greeting");
+    assert!(
+        final_b.contains("v2 after rename"),
+        "B's renamed file should reflect the post-rename edit. Got:\n{final_b}"
+    );
+
+    drop(server);
+}
+
+// ---------------------------------------------------------------------------
+// Unlink + relink to the same namespace — must be idempotent
+// ---------------------------------------------------------------------------
+
+/// `handle_unlink_workspace` (lib.rs:447) clears the `workspace_id`
+/// frontmatter and the in-state namespace pointer, but leaves both the
+/// server-side namespace and the persisted manifest in storage untouched.
+///
+/// Calling `LinkWorkspace { remote_id }` afterwards (re-linking to the same
+/// namespace) must:
+///
+/// 1. Succeed and return `created_remote = false` (we're attaching to an
+///    existing namespace, not creating one).
+/// 2. Reload the persisted manifest so the next Sync reports `pushed=0,
+///    pulled=0, deleted_remote=0, deleted_local=0` — i.e., zero spurious
+///    work.
+///
+/// This is the regression that would surface if unlink ever forgot to leave
+/// the manifest in storage, or if relink ever rebuilt the manifest from
+/// scratch and treated every clean local file as "new".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unlink_then_relink_same_namespace_is_idempotent() {
+    require_wasm!();
+
+    let server = TestServer::start().await;
+    let token = server.sign_in_dev("relink@example.com").await;
+    let provider: Arc<dyn NamespaceProvider> = Arc::new(HttpNamespaceProvider::new(
+        server.api_base_url(),
+        Some(token),
+    ));
+
+    // Shared storage across the link → unlink → relink lifecycle so the
+    // persisted manifest is the same one the relinked harness will consult.
+    let storage = Arc::new(RecordingStorage::new());
+    let workspace = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents:\n  - hello.md\n  - notes/day-1.md\n---\n\n# Root\n",
+        &[
+            (
+                "hello.md",
+                "---\ntitle: Hello\npart_of: index.md\n---\n\n# stable\n",
+            ),
+            (
+                "notes/day-1.md",
+                "---\ntitle: Day 1\npart_of: index.md\n---\n\n# also stable\n",
+            ),
+        ],
+    );
+
+    let harness = build_harness(&workspace, storage.clone(), provider.clone());
+    harness.init().await.expect("init");
+
+    let link = harness
+        .command("LinkWorkspace", json!({ "name": "relink ws" }))
+        .await
+        .expect("Link Some")
+        .expect("Link ok");
+    let ns_id = link
+        .get("remote_id")
+        .and_then(|v| v.as_str())
+        .expect("remote_id")
+        .to_string();
+
+    // Flush the post-link index.md rewrite so the persisted manifest is fully
+    // clean — otherwise the relink test would race against that lingering
+    // dirty entry.
+    harness.command("Sync", json!({})).await.unwrap().unwrap();
+
+    // ---- Unlink ----------------------------------------------------------
+    let unlink = harness
+        .command("UnlinkWorkspace", json!({}))
+        .await
+        .expect("Unlink Some")
+        .expect("Unlink ok");
+    assert_eq!(
+        unlink.get("ok").and_then(|v| v.as_bool()),
+        Some(true),
+        "Unlink should report ok=true. Got: {unlink}"
+    );
+
+    // The manifest must still be persisted in storage — otherwise relink
+    // can't possibly be idempotent. (This guards against a future "unlink
+    // also wipes the manifest" change that would silently break this path.)
+    let snapshot_after_unlink = storage.data_snapshot();
+    assert!(
+        snapshot_after_unlink
+            .iter()
+            .any(|(k, _)| k.ends_with("sync_manifest")),
+        "post-unlink storage should still contain the sync_manifest \
+         (relink relies on it). Got keys: {:?}",
+        snapshot_after_unlink.keys().collect::<Vec<_>>()
+    );
+
+    // Server-side namespace and objects must also still be there.
+    let server_objs = provider
+        .list_objects(&ns_id, None, None, None)
+        .expect("list_objects post-unlink");
+    let server_keys: std::collections::BTreeSet<&str> =
+        server_objs.iter().map(|o| o.key.as_str()).collect();
+    assert!(
+        server_keys.contains("files/hello.md") && server_keys.contains("files/notes/day-1.md"),
+        "post-unlink server should still hold A's files. Got: {server_keys:?}"
+    );
+
+    // ---- Relink to the same namespace ------------------------------------
+    let relink = harness
+        .command(
+            "LinkWorkspace",
+            json!({ "remote_id": ns_id, "name": "relink ws" }),
+        )
+        .await
+        .expect("Relink Some")
+        .expect("Relink ok");
+    assert_eq!(
+        relink.get("remote_id").and_then(|v| v.as_str()),
+        Some(ns_id.as_str()),
+        "Relink should reattach to the same namespace ID. Got: {relink}"
+    );
+    assert_eq!(
+        relink.get("created_remote").and_then(|v| v.as_bool()),
+        Some(false),
+        "Relink should NOT create a new remote namespace. Got: {relink}"
+    );
+
+    // ---- Post-relink: flush, then assert the next Sync is a true no-op --
+    // Like LinkWorkspace, relink rewrites `workspace_id` into index.md's
+    // frontmatter AFTER its initial sync (lib.rs:436), so the immediately-
+    // following Sync may push exactly 1 file (the rewritten index.md).
+    // That mirrors the flush pattern used in `sync_with_no_changes_is_noop`.
+    let flush: JsonValue = harness
+        .command("Sync", json!({}))
+        .await
+        .expect("flush Sync Some")
+        .expect("flush Sync ok");
+    let flushed = flush.get("pushed").and_then(|v| v.as_u64()).unwrap_or(0);
+    assert!(
+        flushed <= 1,
+        "post-relink flush Sync should push at most 1 (rewritten index.md). \
+         Got: {flush}"
+    );
+
+    // Now the real assertion: relink+flush left the workspace clean, so a
+    // follow-up Sync must be a complete no-op. A non-zero value here means
+    // relink rebuilt the manifest from scratch and treated clean local
+    // files as new — the regression this test exists to catch.
+    let sync_after_flush: JsonValue = harness
+        .command("Sync", json!({}))
+        .await
+        .expect("Sync Some")
+        .expect("Sync ok");
+    for field in ["pushed", "pulled", "deleted_remote", "deleted_local"] {
+        let val = sync_after_flush
+            .get(field)
+            .and_then(|v| v.as_u64())
+            .unwrap_or(999);
+        assert_eq!(
+            val, 0,
+            "post-relink steady-state Sync should be a no-op ({field}=0). \
+             Got {field}={val} in {sync_after_flush}"
+        );
+    }
+
+    drop(server);
+}
+
+// ---------------------------------------------------------------------------
+// Pagination — workspace larger than one page round-trips end-to-end
+// ---------------------------------------------------------------------------
+
+/// `fetch_server_manifest` (sync_engine.rs:240) pages through `list_objects`
+/// at `limit=500`. Every existing test fits in one page, so the pagination
+/// loop has zero coverage. This test pushes >500 files from A and verifies
+/// B's catch-up Sync pulls *all* of them.
+///
+/// 600 files keeps the test under a few seconds even with HTTP overhead;
+/// the bug class we're guarding against (off-by-one on the offset, missing
+/// `has_more` handling, dropping the final partial page) shows up at any
+/// count > limit, so 600 is the smallest defensible value.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn large_workspace_paginates_correctly() {
+    require_wasm!();
+
+    let server = TestServer::start().await;
+    let token = server.sign_in_dev("pagination@example.com").await;
+    let provider: Arc<dyn NamespaceProvider> = Arc::new(HttpNamespaceProvider::new(
+        server.api_base_url(),
+        Some(token),
+    ));
+
+    // Build an index.md that references 600 child files so the plugin's
+    // tree-walk picks them all up. `contents:` is a YAML list — one entry
+    // per file.
+    const FILE_COUNT: usize = 600;
+    let mut contents_yaml = String::new();
+    for i in 0..FILE_COUNT {
+        contents_yaml.push_str(&format!("  - notes/n-{i:04}.md\n"));
+    }
+    let root_md = format!("---\ntitle: Root\ncontents:\n{contents_yaml}---\n\n# Root\n");
+
+    let mut child_files: Vec<(String, String)> = Vec::with_capacity(FILE_COUNT);
+    for i in 0..FILE_COUNT {
+        child_files.push((
+            format!("notes/n-{i:04}.md"),
+            format!("---\ntitle: N{i}\npart_of: index.md\n---\n\n# note {i}\n"),
+        ));
+    }
+    // `create_workspace` takes &[(&str, &str)], so build a borrowed view.
+    let child_refs: Vec<(&str, &str)> = child_files
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let workspace_a = create_workspace("index.md", &root_md, &child_refs);
+    let storage_a = Arc::new(RecordingStorage::new());
+    let harness_a = build_harness(&workspace_a, storage_a, provider.clone());
+    harness_a.init().await.expect("init A");
+
+    let link = harness_a
+        .command("LinkWorkspace", json!({ "name": "pagination" }))
+        .await
+        .expect("Link Some")
+        .expect("Link ok");
+    let ns_id = link
+        .get("remote_id")
+        .and_then(|v| v.as_str())
+        .expect("remote_id")
+        .to_string();
+
+    // Sanity: the server actually received >500 keys (otherwise the
+    // pagination assertion below is meaningless). The server's default
+    // list_objects page is 100 (objects.rs:401), so we have to paginate
+    // here too — same pattern the plugin's `fetch_server_manifest` uses.
+    //
+    // Important: the server applies `prefix` filtering *after* pagination
+    // (objects.rs:421 — filter runs on the post-`limit` slice), so passing
+    // a prefix here would make the "page is short ⇒ done" signal unreliable.
+    // Page on the unfiltered listing and apply the prefix client-side.
+    let mut server_note_count = 0usize;
+    let mut offset: u32 = 0;
+    let page: u32 = 500;
+    loop {
+        let chunk = provider
+            .list_objects(&ns_id, None, Some(page), Some(offset))
+            .expect("list_objects post-link");
+        let returned = chunk.len();
+        server_note_count += chunk
+            .iter()
+            .filter(|o| o.key.starts_with("files/notes/"))
+            .count();
+        if (returned as u32) < page {
+            break;
+        }
+        offset += page;
+    }
+    assert_eq!(
+        server_note_count, FILE_COUNT,
+        "server should hold all {FILE_COUNT} note files after Link. \
+         Got: {server_note_count}"
+    );
+
+    // ---- B downloads — exercises the paginated fetch end-to-end ---------
+    let workspace_b = create_workspace(
+        "index.md",
+        "---\ntitle: Root\ncontents: []\n---\n\n# Root B\n",
+        &[],
+    );
+    let storage_b = Arc::new(RecordingStorage::new());
+    let harness_b = build_harness(&workspace_b, storage_b, provider.clone());
+    harness_b.init().await.expect("init B");
+
+    let download: JsonValue = harness_b
+        .command(
+            "DownloadWorkspace",
+            json!({
+                "remote_id": ns_id,
+                "workspace_root": workspace_b.to_string_lossy(),
+                "link": true,
+            }),
+        )
+        .await
+        .expect("Download Some")
+        .expect("Download ok");
+    let imported = download
+        .get("files_imported")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert!(
+        imported >= FILE_COUNT as u64,
+        "B should import all {FILE_COUNT} note files (plus index.md). \
+         Got files_imported={imported} in {download}"
+    );
+
+    // Spot-check the boundary cases: first, mid-page, last-of-first-page,
+    // first-of-second-page, last. Reading every file would be wasteful and
+    // wouldn't catch additional bugs the boundary checks miss.
+    let b_root = workspace_b.parent().expect("B root");
+    for i in [0usize, 250, 499, 500, 599] {
+        let path = b_root.join(format!("notes/n-{i:04}.md"));
+        assert!(
+            path.exists(),
+            "B should have notes/n-{i:04}.md after pagination download. \
+             Path: {path:?}"
+        );
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read notes/n-{i:04}.md: {e}"));
+        assert!(
+            body.contains(&format!("# note {i}\n")),
+            "notes/n-{i:04}.md should contain its own marker body. Got:\n{body}"
+        );
+    }
+
+    drop(server);
+}

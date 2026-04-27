@@ -73,8 +73,23 @@ interface LinkWorkspaceResponse {
 
 interface DownloadWorkspaceResponse {
   files_imported: number;
+  /** Files skipped because the local manifest already had them (resumed download). */
+  files_resumed_skip?: number;
   /** Non-markdown file keys deferred for background download. */
   deferred_files?: string[];
+}
+
+/**
+ * Handle returned alongside a download promise so callers can cancel it.
+ *
+ * Cancellation is cooperative: the WASM plugin polls the host between batches
+ * and, on observing the flag, saves whatever progress it has and returns an
+ * error. Re-invoking `downloadWorkspace` with the same `remote_id` resumes
+ * from the persisted manifest.
+ */
+export interface DownloadCancelHandle {
+  /** Flip the cancellation flag observed by the plugin's next poll. */
+  cancel(): void;
 }
 
 function toPluginBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -403,6 +418,14 @@ export async function unlinkWorkspace(
   setPluginMetadata(localId, pluginId, null);
 }
 
+/** Generate an opaque, plugin-scoped cancellation token. */
+function generateCancelToken(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `dl:${crypto.randomUUID()}`;
+  }
+  return `dl:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
 export async function downloadWorkspace(
   pluginId: string,
   params: { remoteId: string; name: string; link?: boolean },
@@ -410,7 +433,9 @@ export async function downloadWorkspace(
   _api?: Api | null,
   /** Pre-fetched plugin wasm bytes — used when no existing workspace has the plugin installed. */
   pluginWasm?: Uint8Array | null,
-): Promise<{ localId: string; filesImported: number }> {
+  /** Optional out-param: receives a handle the caller can use to cancel the download. */
+  cancelHandleSink?: { handle: DownloadCancelHandle | null },
+): Promise<{ localId: string; filesImported: number; filesResumedSkip: number }> {
   if (isBuiltinProvider(pluginId)) {
     onProgress?.({ percent: 15, message: "Restoring workspace..." });
 
@@ -485,6 +510,7 @@ export async function downloadWorkspace(
     return {
       localId: localWs.id,
       filesImported: 0,
+      filesResumedSkip: 0,
     };
   }
 
@@ -580,9 +606,42 @@ export async function downloadWorkspace(
 
   onProgress?.({ percent: 40, message: "Downloading workspace..." });
 
+  // Cancellation: hand the caller a handle they can flip to abort the
+  // in-flight DownloadWorkspace. The plugin polls between batches and, on
+  // observing the flag, saves its manifest and returns. Calling
+  // downloadWorkspace again with the same remoteId resumes from where it
+  // left off (no need to re-download files we already have on disk).
+  const cancelToken = generateCancelToken();
+  let cancelled = false;
+  if (cancelHandleSink) {
+    cancelHandleSink.handle = {
+      cancel(): void {
+        if (cancelled) return;
+        cancelled = true;
+        // Best-effort: only the browser loader exposes a cancel registry
+        // today. On Tauri this is a no-op; resume-via-restart still works
+        // because the manifest checkpoint is persisted on every wave.
+        if (!isTauri()) {
+          import("$lib/plugins/extismBrowserLoader")
+            .then((mod) => {
+              mod.cancelPluginOperation(pluginId, cancelToken);
+            })
+            .catch(() => {
+              /* loader unavailable — cancel becomes a no-op */
+            });
+        }
+      },
+    };
+  }
+
   let result: DownloadWorkspaceResponse | null;
   try {
-    const downloadPromise = executeProviderPluginCommand<DownloadWorkspaceResponse>({
+    // No host-side timeout: the plugin checkpoints the manifest after every
+    // wave, so a stalled or interrupted download never loses more than the
+    // last in-flight wave's worth of work. If the user wants to bail, they
+    // call cancelHandle.cancel() and the plugin returns gracefully on its
+    // next poll. Re-running this function with the same remoteId resumes.
+    result = await executeProviderPluginCommand<DownloadWorkspaceResponse>({
       api: workspaceApi,
       pluginId,
       command: "DownloadWorkspace",
@@ -590,23 +649,40 @@ export async function downloadWorkspace(
         workspace_root: workspaceRoot,
         remote_id: params.remoteId,
         link: !!params.link,
+        cancel_token: cancelToken,
       },
     });
-
-    const DOWNLOAD_TIMEOUT_MS = 600_000; // 10 minutes for sequential browser pulls
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(
-        "Workspace download timed out. The server may be unreachable, the plugin may be stalled, or the workspace may be too large. Please try again.",
-      )), DOWNLOAD_TIMEOUT_MS),
-    );
-
-    result = await Promise.race([downloadPromise, timeoutPromise]);
   } catch (err) {
-    // Rollback: remove the half-created workspace from the registry and reset backend
-    console.error("[workspaceProviderService] DownloadWorkspace failed, rolling back:", err);
-    removeLocalWorkspace(localWs.id);
-    resetBackend();
+    const wasCancelled =
+      cancelled ||
+      (err instanceof Error &&
+        /DownloadWorkspace cancelled/i.test(err.message));
+    if (wasCancelled) {
+      // On user cancel, leave the partial workspace + manifest in place so
+      // the user (or a retry) can resume from the checkpoint. We still
+      // surface the cancellation to the caller.
+      console.info(
+        "[workspaceProviderService] DownloadWorkspace cancelled — workspace preserved for resume.",
+      );
+    } else {
+      // Genuine failure: rollback the half-created workspace + reset backend.
+      console.error(
+        "[workspaceProviderService] DownloadWorkspace failed, rolling back:",
+        err,
+      );
+      removeLocalWorkspace(localWs.id);
+      resetBackend();
+    }
     throw err;
+  } finally {
+    // Clear the cancel flag so the token can be reused on retry/resume.
+    if (!isTauri()) {
+      import("$lib/plugins/extismBrowserLoader")
+        .then((mod) => {
+          mod.clearPluginOperationCancellation(pluginId, cancelToken);
+        })
+        .catch(() => {});
+    }
   }
 
   // Persist default plugin permissions — but only for fresh workspaces.
@@ -661,5 +737,6 @@ export async function downloadWorkspace(
   return {
     localId: localWs.id,
     filesImported: Number(result?.files_imported ?? 0),
+    filesResumedSkip: Number(result?.files_resumed_skip ?? 0),
   };
 }

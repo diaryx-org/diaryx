@@ -176,6 +176,75 @@ pub fn get_objects_batch(ns_id: &str, keys: &[String]) -> Result<BatchGetResult,
     Ok(batch)
 }
 
+/// Download multiple groups of objects with bounded host-side concurrency.
+///
+/// The host runs up to `max_concurrency` batch requests in parallel and
+/// returns a single combined [`BatchGetResult`]. This is the WASM guest's
+/// only path to true concurrency — it is single-threaded and cannot fan out
+/// HTTP requests itself.
+///
+/// `batches` should already be chunked by the caller (typically to respect
+/// the server's per-batch key cap of 500). The host does not re-chunk.
+pub fn get_objects_batches_concurrent(
+    ns_id: &str,
+    batches: &[Vec<String>],
+    max_concurrency: u32,
+) -> Result<BatchGetResult, String> {
+    let input = serde_json::json!({
+        "ns_id": ns_id,
+        "batches": batches,
+        "max_concurrency": max_concurrency,
+    });
+    let result = unsafe { host_namespace_get_objects_batches_concurrent(input.to_string()) }
+        .map_err(|e| format!("host_namespace_get_objects_batches_concurrent failed: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse get_objects_batches_concurrent response: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+
+    let mut batch = BatchGetResult::default();
+
+    if let Some(objects) = parsed.get("objects").and_then(|v| v.as_object()) {
+        for (key, entry) in objects {
+            let data = entry
+                .get("data")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("Missing data for key {key}"))?;
+            let mime_type = entry
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let encoding = entry
+                .get("encoding")
+                .and_then(|v| v.as_str())
+                .unwrap_or("base64");
+            let bytes = if encoding == "text" {
+                data.as_bytes().to_vec()
+            } else {
+                BASE64
+                    .decode(data)
+                    .map_err(|e| format!("Failed to decode base64 for {key}: {e}"))?
+            };
+            batch
+                .objects
+                .insert(key.clone(), BatchGetEntry { bytes, mime_type });
+        }
+    }
+
+    if let Some(errors) = parsed.get("errors").and_then(|v| v.as_object()) {
+        for (key, msg) in errors {
+            batch.errors.insert(
+                key.clone(),
+                msg.as_str().unwrap_or("unknown error").to_string(),
+            );
+        }
+    }
+
+    Ok(batch)
+}
+
 /// Upload an object to a namespace with an optional audience tag.
 pub fn put_object_with_audience(
     ns_id: &str,

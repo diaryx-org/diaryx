@@ -52,11 +52,19 @@ to include index-backed directories. The browser loader therefore treats root
 so provider snapshots include workspace roots instead of uploading empty ZIPs
 for freshly created workspaces.
 
-Workspace download/bootstrap now uses a longer browser-side timeout window
-because provider restores pull files sequentially through the Extism host. The
-host still fails fast on per-request plugin/network errors, but it avoids
-aborting active restores just because a larger workspace exceeds a fixed
-two-minute wall clock budget.
+Workspace download/bootstrap is now resumable, cancellable, and concurrent
+end-to-end. The host generates a `cancel_token` per call and exposes a
+handle on `downloadWorkspace(...)` that flips a flag observed by the WASM
+plugin between batches. The plugin streams the server listing page-by-page,
+fans out concurrent batched fetches via
+`host_namespace_get_objects_batches_concurrent`, adapts batch size and
+concurrency from the previous wave's elapsed time + error count, and
+checkpoints its manifest to plugin storage after every wave. The host no
+longer enforces a hard 10-minute timeout — a re-invocation with the same
+`remote_id` resumes from the persisted manifest and skips files already on
+disk. On user cancel, the partial workspace is left in place so resume
+"just works." On genuine failure, the half-created workspace and backend
+are still rolled back as before.
 
 Bootstrap loads that use `loadPluginWithCustomInit(...)` also seed the guest's
 requested permission defaults into the in-memory runtime config for that

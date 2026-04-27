@@ -25,7 +25,7 @@ See the module-level docs in `src/lib.rs` for a full example.
 
 | Feature   | What it enables                          |
 |-----------|------------------------------------------|
-| `core`    | File I/O, storage, logging, timestamps   |
+| `core`    | File I/O, storage, logging, timestamps, cooperative cancellation |
 | `http`    | HTTP requests via the host               |
 | `secrets` | Plugin-scoped secret storage             |
 | `ws`      | WebSocket bridge                         |

@@ -158,6 +158,68 @@ pub trait NamespaceProvider: Send + Sync {
     /// Download multiple objects in a single request.
     fn get_objects_batch(&self, ns_id: &str, keys: &[String]) -> Result<BatchGetResult, String>;
 
+    /// Download multiple groups of objects with bounded host-side concurrency.
+    ///
+    /// Default impl runs `max_concurrency` batches in parallel via threads,
+    /// each calling [`get_objects_batch`]. Implementations may override to
+    /// pool connections or share state between batches.
+    ///
+    /// The trait already requires `Send + Sync`, so the default implementation
+    /// is safe to call through `Arc<dyn NamespaceProvider>`.
+    fn get_objects_batches_concurrent(
+        &self,
+        ns_id: &str,
+        batches: &[Vec<String>],
+        max_concurrency: u32,
+    ) -> BatchGetResult {
+        let mut combined = BatchGetResult::default();
+        if batches.is_empty() {
+            return combined;
+        }
+        let concurrency = max_concurrency.clamp(1, 8) as usize;
+
+        // Process in waves of `concurrency` batches at a time. Each batch runs
+        // on its own thread; results are merged after each wave.
+        std::thread::scope(|scope| {
+            let mut iter = batches.iter();
+            loop {
+                let wave: Vec<&Vec<String>> = (&mut iter).take(concurrency).collect();
+                if wave.is_empty() {
+                    break;
+                }
+                let handles: Vec<_> = wave
+                    .into_iter()
+                    .map(|keys| scope.spawn(move || self.get_objects_batch(ns_id, keys)))
+                    .collect();
+                for h in handles {
+                    match h.join() {
+                        Ok(Ok(batch)) => {
+                            combined.objects.extend(batch.objects);
+                            combined.errors.extend(batch.errors);
+                        }
+                        Ok(Err(e)) => {
+                            // Whole-batch failure: record one synthetic error
+                            // so the caller sees something. Per-key attribution
+                            // is lost but the alternative (silently dropping
+                            // the batch) is worse.
+                            combined
+                                .errors
+                                .insert(format!("__batch_error_{}", combined.errors.len()), e);
+                        }
+                        Err(_) => {
+                            combined.errors.insert(
+                                format!("__batch_panic_{}", combined.errors.len()),
+                                "batch worker panicked".to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+        });
+
+        combined
+    }
+
     /// List all namespaces owned by the authenticated user.
     fn list_namespaces(&self) -> Result<Vec<NamespaceEntry>, String>;
 }
@@ -660,6 +722,57 @@ pub const DEFAULT_STORAGE_QUOTA_BYTES: u64 = 1024 * 1024;
 /// plugin from claiming unlimited disk via the permission system.
 pub const MAX_STORAGE_QUOTA_BYTES: u64 = 1024 * 1024 * 1024;
 
+// ----------------------------------------------------------------------------
+// Cancellation registry — host-side cooperative cancellation for plugin work.
+//
+// Plugins poll `host_is_cancelled(token)` between units of work. The host UI
+// flips a flag here when the user cancels a long-running operation. Tokens
+// are scoped to `(plugin_id, token)` so plugins cannot observe each other's
+// signals.
+// ----------------------------------------------------------------------------
+
+static CANCELLED_TOKENS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+> = std::sync::OnceLock::new();
+
+fn cancellation_registry() -> &'static std::sync::Mutex<std::collections::HashSet<(String, String)>>
+{
+    CANCELLED_TOKENS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Flag a plugin operation as cancelled. The plugin observes this on its
+/// next `host_is_cancelled` poll and aborts gracefully.
+pub fn cancel_plugin_operation(plugin_id: &str, token: &str) {
+    if plugin_id.is_empty() || token.is_empty() {
+        return;
+    }
+    if let Ok(mut set) = cancellation_registry().lock() {
+        set.insert((plugin_id.to_string(), token.to_string()));
+    }
+}
+
+/// Clear the cancellation flag for an operation. Call this once the operation
+/// has completed (success or graceful abort) so the token can be reused.
+pub fn clear_plugin_operation_cancellation(plugin_id: &str, token: &str) {
+    if plugin_id.is_empty() || token.is_empty() {
+        return;
+    }
+    if let Ok(mut set) = cancellation_registry().lock() {
+        set.remove(&(plugin_id.to_string(), token.to_string()));
+    }
+}
+
+fn is_plugin_operation_cancelled(plugin_id: &str, token: &str) -> bool {
+    if plugin_id.is_empty() || token.is_empty() {
+        return false;
+    }
+    cancellation_registry()
+        .lock()
+        .ok()
+        .map(|set| set.contains(&(plugin_id.to_string(), token.to_string())))
+        .unwrap_or(false)
+}
+
 impl HostContext {
     /// Create a context with just a filesystem (backwards compatible).
     pub fn with_fs(fs: Arc<dyn AsyncFileSystem>) -> Self {
@@ -953,6 +1066,20 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_namespace_get_objects_batch,
+        )
+        .with_function(
+            "host_namespace_get_objects_batches_concurrent",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_get_objects_batches_concurrent,
+        )
+        .with_function(
+            "host_is_cancelled",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_is_cancelled,
         )
         .with_function(
             "host_namespace_list_objects",
@@ -2762,6 +2889,112 @@ fn host_namespace_get_objects_batch(
         Err(e) => serde_json::json!({ "error": e }),
     };
     plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_get_objects_batches_concurrent(input: {ns_id, batches, max_concurrency}) -> {objects, errors}`
+fn host_namespace_get_objects_batches_concurrent(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    use base64::Engine as _;
+
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+        batches: Vec<Vec<String>>,
+        #[serde(default)]
+        max_concurrency: Option<u32>,
+    }
+
+    let parsed: Input = serde_json::from_str(&input).map_err(|e| {
+        ExtismError::msg(format!(
+            "host_namespace_get_objects_batches_concurrent: invalid input: {e}"
+        ))
+    })?;
+
+    // Snapshot the namespace_provider Arc and drop the lock before spawning
+    // worker threads — the trait method blocks on HTTP, and holding the
+    // mutex across thread joins would serialise everything we just tried
+    // to parallelise.
+    let provider = {
+        let ctx = user_data.get()?;
+        let ctx = ctx.lock().map_err(|e| {
+            ExtismError::msg(format!(
+                "host_namespace_get_objects_batches_concurrent: lock: {e}"
+            ))
+        })?;
+        ctx.namespace_provider.clone()
+    };
+
+    let batch = provider.get_objects_batches_concurrent(
+        &parsed.ns_id,
+        &parsed.batches,
+        parsed.max_concurrency.unwrap_or(4),
+    );
+
+    let objects: serde_json::Map<String, serde_json::Value> = batch
+        .objects
+        .into_iter()
+        .map(|(key, entry)| {
+            let is_text = entry.mime_type.starts_with("text/");
+            let val = if is_text {
+                serde_json::json!({
+                    "data": String::from_utf8_lossy(&entry.bytes),
+                    "mime_type": entry.mime_type,
+                    "encoding": "text",
+                })
+            } else {
+                serde_json::json!({
+                    "data": base64::engine::general_purpose::STANDARD.encode(&entry.bytes),
+                    "mime_type": entry.mime_type,
+                    "encoding": "base64",
+                })
+            };
+            (key, val)
+        })
+        .collect();
+
+    let mut resp = serde_json::json!({ "objects": objects });
+    if !batch.errors.is_empty() {
+        resp["errors"] = serde_json::json!(batch.errors);
+    }
+    plugin.memory_set_val(&mut outputs[0], resp.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_is_cancelled(input: {token}) -> {cancelled: bool}`
+fn host_is_cancelled(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize, Default)]
+    struct Input {
+        #[serde(default)]
+        token: String,
+    }
+
+    let parsed: Input = serde_json::from_str(&input).unwrap_or_default();
+
+    let plugin_id = {
+        let ctx = user_data.get()?;
+        let ctx = ctx
+            .lock()
+            .map_err(|e| ExtismError::msg(format!("host_is_cancelled: lock: {e}")))?;
+        ctx.plugin_id.clone()
+    };
+
+    let cancelled = is_plugin_operation_cancelled(&plugin_id, parsed.token.trim());
+    let resp = serde_json::json!({ "cancelled": cancelled });
+    plugin.memory_set_val(&mut outputs[0], resp.to_string().as_str())?;
     Ok(())
 }
 

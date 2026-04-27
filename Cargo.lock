@@ -2661,7 +2661,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_publish_extism"
-version = "0.2.10"
+version = "0.2.11"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync_extism"
-version = "0.2.25"
+version = "0.2.26"
 dependencies = [
  "base64 0.22.1",
  "diaryx_core",

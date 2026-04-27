@@ -170,6 +170,47 @@ const STORAGE_QUOTA_BYTES = 1024 * 1024;
 const MAX_PLUGIN_COMMAND_DEPTH = 8;
 let pluginCommandDepth = 0;
 
+// ----------------------------------------------------------------------------
+// Cancellation registry — host-side cooperative cancellation for plugin work.
+//
+// Plugins poll `host_is_cancelled(token)` between units of work. The host UI
+// flips a flag here when the user cancels a long-running operation. Tokens
+// are scoped to `pluginId` so plugins cannot observe each other's signals.
+// ----------------------------------------------------------------------------
+
+const cancelledTokens = new Map<string, Set<string>>();
+
+/** Flag a plugin operation as cancelled. The plugin observes this on its next
+ *  `host_is_cancelled` poll and aborts gracefully. */
+export function cancelPluginOperation(pluginId: string, token: string): void {
+  if (!pluginId || !token) return;
+  let set = cancelledTokens.get(pluginId);
+  if (!set) {
+    set = new Set();
+    cancelledTokens.set(pluginId, set);
+  }
+  set.add(token);
+}
+
+/** Clear the cancellation flag for an operation. Call this when the operation
+ *  completes (success or graceful abort) so the token can be reused. */
+export function clearPluginOperationCancellation(
+  pluginId: string,
+  token: string,
+): void {
+  if (!pluginId || !token) return;
+  const set = cancelledTokens.get(pluginId);
+  if (!set) return;
+  set.delete(token);
+  if (set.size === 0) cancelledTokens.delete(pluginId);
+}
+
+function isPluginOperationCancelled(pluginId: string, token: string): boolean {
+  if (!pluginId || !token) return false;
+  const set = cancelledTokens.get(pluginId);
+  return set ? set.has(token) : false;
+}
+
 /** Reject HTTP headers containing forbidden characters (newlines, null bytes). */
 function validateHttpHeaders(headers: Record<string, string>): void {
   for (const [name, value] of Object.entries(headers)) {
@@ -1825,6 +1866,164 @@ function buildHostFunctions(
           return cp.store(resp);
         } catch (e) {
           return cp.store(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+        }
+      },
+      async host_namespace_get_objects_batches_concurrent(
+        cp: CallContext,
+        offs: bigint,
+      ) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { ns_id: string; batches: string[][]; max_concurrency?: number }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify({ error: "no input" }));
+
+          const batches = Array.isArray(input.batches)
+            ? input.batches.filter((b) => Array.isArray(b) && b.length > 0)
+            : [];
+          if (batches.length === 0) {
+            return cp.store(JSON.stringify({ objects: {}, errors: {} }));
+          }
+          const concurrency = Math.max(
+            1,
+            Math.min(8, Math.trunc(input.max_concurrency ?? 4)),
+          );
+
+          const serverBase = await getNamespaceServerBase();
+          const nsPath = encodeURIComponent(input.ns_id);
+
+          // Run one batch as a fetch. Tries multipart first, falls back to JSON.
+          // Each batch has its own AbortController so a single slow batch
+          // doesn't stall the others.
+          const runBatch = async (
+            keys: string[],
+          ): Promise<{
+            objects: Record<
+              string,
+              { data: string; mime_type: string; encoding: string }
+            >;
+            errors: Record<string, string>;
+          }> => {
+            const ac =
+              typeof AbortController === "function"
+                ? new AbortController()
+                : null;
+            const tid =
+              ac !== null
+                ? globalThis.setTimeout(
+                    () => ac.abort(),
+                    NAMESPACE_REQUEST_TIMEOUT_MS,
+                  )
+                : null;
+            try {
+              const resp = await fetch(
+                `${serverBase}/namespaces/${nsPath}/batch/objects/multipart`,
+                {
+                  method: "POST",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ keys }),
+                  signal: ac?.signal,
+                },
+              );
+              if (resp.ok) {
+                const contentType = resp.headers.get("content-type") ?? "";
+                const boundaryMatch = contentType.match(/boundary=(.+)/);
+                if (boundaryMatch) {
+                  const boundary = boundaryMatch[1].trim();
+                  const buffer = new Uint8Array(await resp.arrayBuffer());
+                  if (tid !== null) globalThis.clearTimeout(tid);
+                  return parseMultipartBatch(buffer, boundary);
+                }
+              }
+            } catch {
+              // Fall through to JSON path.
+            } finally {
+              if (tid !== null) globalThis.clearTimeout(tid);
+            }
+
+            const text = await namespaceFetchText(
+              "POST",
+              `/namespaces/${nsPath}/batch/objects`,
+              {
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ keys }),
+              },
+            );
+            try {
+              const parsed = JSON.parse(text);
+              return {
+                objects: (parsed && parsed.objects) || {},
+                errors: (parsed && parsed.errors) || {},
+              };
+            } catch {
+              const errs: Record<string, string> = {};
+              for (const k of keys) errs[k] = "invalid response";
+              return { objects: {}, errors: errs };
+            }
+          };
+
+          // Cap in-flight batches at `concurrency`.
+          const combinedObjects: Record<
+            string,
+            { data: string; mime_type: string; encoding: string }
+          > = {};
+          const combinedErrors: Record<string, string> = {};
+          let nextIndex = 0;
+
+          const worker = async (): Promise<void> => {
+            while (true) {
+              const i = nextIndex++;
+              if (i >= batches.length) return;
+              const batch = batches[i];
+              try {
+                const out = await runBatch(batch);
+                Object.assign(combinedObjects, out.objects);
+                Object.assign(combinedErrors, out.errors);
+              } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                for (const k of batch) {
+                  if (!(k in combinedObjects) && !(k in combinedErrors)) {
+                    combinedErrors[k] = msg;
+                  }
+                }
+              }
+            }
+          };
+
+          const workerCount = Math.min(concurrency, batches.length);
+          await Promise.all(
+            Array.from({ length: workerCount }, () => worker()),
+          );
+
+          return cp.store(
+            JSON.stringify({
+              objects: combinedObjects,
+              errors: combinedErrors,
+            }),
+          );
+        } catch (e) {
+          return cp.store(
+            JSON.stringify({
+              error: e instanceof Error ? e.message : String(e),
+            }),
+          );
+        }
+      },
+      async host_is_cancelled(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { token?: string }
+            | undefined;
+          const token = (input?.token ?? "").trim();
+          if (!token) {
+            return cp.store(JSON.stringify({ cancelled: false }));
+          }
+          const pluginId = opts?.getPluginId() ?? "";
+          const cancelled = isPluginOperationCancelled(pluginId, token);
+          return cp.store(JSON.stringify({ cancelled }));
+        } catch {
+          return cp.store(JSON.stringify({ cancelled: false }));
         }
       },
       async host_namespace_put_object(cp: CallContext, offs: bigint) {

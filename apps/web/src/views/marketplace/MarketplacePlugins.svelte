@@ -53,7 +53,7 @@
       ];
     },
     getTimestamp(plugin) {
-      return Date.parse(plugin.artifact.published_at) || 0;
+      return (plugin.artifact.published_at && Date.parse(plugin.artifact.published_at)) || 0;
     },
     sortOptions: ["name", "recent", "version"],
     sourceFilterOptions: [
@@ -291,7 +291,7 @@
         </div>
         <div class="rounded-md border p-1.5">
           <p class="text-muted-foreground">Published</p>
-          <p class="font-medium">{new Date(plugin.artifact.published_at).toLocaleDateString()}</p>
+          <p class="font-medium">{plugin.artifact.published_at ? new Date(plugin.artifact.published_at).toLocaleDateString() : "—"}</p>
         </div>
       </div>
 

@@ -13,7 +13,7 @@ export interface PluginArtifact {
   url: string;
   sha256: string;
   size: number;
-  published_at: string;
+  published_at: string | null;
 }
 
 export interface RegistryUiEntry {
@@ -87,6 +87,12 @@ function readOptionalString(
   return value;
 }
 
+function readPublishedAt(value: unknown): string | null {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString();
+  return null;
+}
+
 function readStringArray(obj: Record<string, unknown>, key: string): string[] {
   const value = obj[key];
   if (!Array.isArray(value)) return [];
@@ -135,7 +141,7 @@ function validateMarketplaceEntry(input: unknown): MarketplaceEntry {
       url: readString(artifactRaw, "url"),
       sha256: readString(artifactRaw, "sha256").toLowerCase(),
       size,
-      published_at: readString(artifactRaw, "published_at"),
+      published_at: readPublishedAt(artifactRaw.published_at),
     },
     repository: readOptionalString(input, "repository"),
     categories: readStringArray(input, "categories"),
@@ -169,10 +175,20 @@ function validateMarketplaceRegistry(frontmatter: Record<string, unknown>): Mark
     throw new Error("Plugin registry validation error: 'plugins' must be an array");
   }
 
+  const plugins: MarketplaceEntry[] = [];
+  for (const raw of pluginsRaw) {
+    try {
+      plugins.push(validateMarketplaceEntry(raw));
+    } catch (err) {
+      const id = isRecord(raw) && typeof raw.id === "string" ? raw.id : "<unknown>";
+      console.warn(`Skipping invalid plugin registry entry '${id}':`, err);
+    }
+  }
+
   return {
     schema_version: 2,
     generated_at: generatedAt,
-    plugins: pluginsRaw.map((plugin) => validateMarketplaceEntry(plugin)),
+    plugins,
   };
 }
 

@@ -1,6 +1,6 @@
 ---
 schema_version: 2
-generated_at: '2026-04-18T01:13:48.377597+00:00'
+generated_at: '2026-04-23T15:04:14.404573+00:00'
 cdn_base: https://app.diaryx.org/cdn
 plugins:
 - id: diaryx.ai
@@ -78,7 +78,7 @@ plugins:
     published_at: '2026-03-16T22:28:40Z'
 - id: diaryx.daily
   name: Daily
-  version: 0.1.7
+  version: 0.1.8
   description: Daily entry plugin with date hierarchy, navigation, and CLI surface
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -95,10 +95,10 @@ plugins:
   - custom_commands
   summary: Daily entry workflow and navigation.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.daily/0.1.7/diaryx_daily_extism.wasm
-    sha256: 3f2a6c4c2c09081e2590f4226954d2c65f2c3322471135145f46d69ed02f4942
-    size: 905436
-    published_at: '2026-03-16T19:41:22Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.daily/0.1.8/diaryx_daily_extism.wasm
+    sha256: de50ee7a5cf8ece933a93eb7a094cb2fb4145490dd38998053d4e0be0a60f2b5
+    size: 695548
+    published_at: 2026-04-19 22:01:30+00:00
   ui:
   - slot: SidebarTab
     id: daily-panel
@@ -275,7 +275,7 @@ plugins:
     label: Math Block
 - id: diaryx.pandoc
   name: Pandoc
-  version: 0.1.1
+  version: 0.1.2
   description: Convert your documents to any file format
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -289,10 +289,10 @@ plugins:
   capabilities: []
   summary: This experimental plugin uses Pandoc for file conversion.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.pandoc/0.1.1/diaryx_pandoc_extism.wasm
-    sha256: d961594bc366beedf2c0bb7359ee0a44b3c292e9aac5fed3f0bd1b31ce2a5cbf
-    size: 843901
-    published_at: '2026-04-06T22:50:48Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.pandoc/0.1.2/diaryx_pandoc_extism.wasm
+    sha256: 221256810301f43c3b47e5f478674ea51c708e1190b8d680fbd1a773f70022d4
+    size: 634067
+    published_at: 2026-04-23 15:03:32+00:00
 - id: diaryx.publish
   name: Publish
   version: 0.2.10
@@ -663,7 +663,7 @@ plugins:
 
 # Diaryx Plugin Registry
 
-Generated at 2026-04-18T01:13:48.377597+00:00
+Generated at 2026-04-23T15:04:14.404573+00:00
 
 **16** plugins available.
 
@@ -676,7 +676,7 @@ Chat assistant plugin for Diaryx.
 This plugin adds audio capturing to Diaryx!
 
 ## Daily
-**ID:** `diaryx.daily` | **Version:** 0.1.7
+**ID:** `diaryx.daily` | **Version:** 0.1.8
 Daily entry workflow and navigation.
 
 ## Drawing
@@ -700,7 +700,7 @@ Import entries from external formats.
 Render inline and block LaTeX.
 
 ## Pandoc
-**ID:** `diaryx.pandoc` | **Version:** 0.1.1
+**ID:** `diaryx.pandoc` | **Version:** 0.1.2
 This experimental plugin uses Pandoc for file conversion.
 
 ## Publish

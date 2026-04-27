@@ -148,8 +148,8 @@
       if (sortBy === "version") {
         return b.version.localeCompare(a.version);
       }
-      const aTs = Date.parse(a.artifact.published_at) || 0;
-      const bTs = Date.parse(b.artifact.published_at) || 0;
+      const aTs = (a.artifact.published_at && Date.parse(a.artifact.published_at)) || 0;
+      const bTs = (b.artifact.published_at && Date.parse(b.artifact.published_at)) || 0;
       return bTs - aTs;
     });
 
@@ -678,7 +678,7 @@
       </div>
       <div class="rounded-md border p-2">
         <p class="text-muted-foreground">Published</p>
-        <p class="font-medium">{new Date(plugin.artifact.published_at).toLocaleDateString()}</p>
+        <p class="font-medium">{plugin.artifact.published_at ? new Date(plugin.artifact.published_at).toLocaleDateString() : "—"}</p>
       </div>
     </div>
 

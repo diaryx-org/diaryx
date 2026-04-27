@@ -13,6 +13,7 @@ mod sync_versions;
 mod tauri;
 mod update_agents_index;
 mod util;
+mod web;
 
 use std::env;
 use std::fs;
@@ -55,6 +56,7 @@ fn main() -> ExitCode {
         "sync-versions" => sync_versions::run(rest),
         "tauri" => tauri::run(rest),
         "update-agents-index" => update_agents_index::run(rest),
+        "web" => web::run(rest),
         "help" | "-h" | "--help" => {
             print_help();
             cleanup_stray(stray_target.as_deref());
@@ -176,4 +178,7 @@ fn print_help() {
         "                               render-updater-config. See `cargo xtask tauri --help`."
     );
     eprintln!("  update-agents-index          Refresh the workspace tree in AGENTS.md");
+    eprintln!(
+        "  web [script] [args...]       Run `bun run <script>` in apps/web (defaults to `dev`)"
+    );
 }

@@ -8,6 +8,7 @@ repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
 license-file.workspace = true
+publish = false
 
 [dependencies]
 # Internal crates

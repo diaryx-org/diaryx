@@ -5,6 +5,7 @@ edition = "2021"
 description = "Local Tauri plugin for Apple In-App Purchases via StoreKit 2"
 license = "MIT"
 links = "tauri-plugin-iap"
+publish = false
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }

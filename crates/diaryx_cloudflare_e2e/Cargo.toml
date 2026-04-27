@@ -31,14 +31,12 @@ serde_json = { workspace = true }
 [dev-dependencies]
 diaryx_server = { workspace = true, features = ["reqwest-dispatcher"] }
 # Needed by `tests/sync_plugin_e2e.rs` to drive the sync plugin WASM against
-# wrangler dev. Mirrors the deps used by `crates/plugins/diaryx_sync_extism`
-# for its own sync_server-based E2E.
+# wrangler dev. The `e2e-scenarios` feature pulls in the shared scenario
+# bodies from `diaryx_sync_extism::e2e_scenarios` so the same suite drives
+# both sync_server (in-process) and cloudflare (wrangler dev).
 diaryx_extism = { workspace = true, features = ["testing", "http"] }
-diaryx_sync_extism = { path = "../plugins/diaryx_sync_extism" }
+diaryx_sync_extism = { path = "../plugins/diaryx_sync_extism", features = ["e2e-scenarios"] }
 # FutureExt::catch_unwind in tests/contract.rs so a single failed assertion
 # doesn't abort the rest of the suite (wrangler startup is 60s+; we want to
 # see every drift in one run, not one-at-a-time).
 futures = "0.3"
-# The URL-corpus fuzz scenario in tests/sync_plugin_e2e.rs decodes bodies
-# returned as base64 by the plugin's NsGetObject command.
-base64 = "0.22"

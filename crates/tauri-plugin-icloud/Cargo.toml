@@ -5,6 +5,7 @@ edition = "2021"
 description = "Local Tauri plugin for iCloud Drive workspace storage"
 license = "MIT"
 links = "tauri-plugin-icloud"
+publish = false
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }

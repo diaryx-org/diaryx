@@ -5,6 +5,7 @@ edition = "2021"
 description = "Native iOS keyboard toolbar for the TipTap editor"
 license = "MIT"
 links = "tauri-plugin-editor-toolbar"
+publish = false
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }

@@ -2469,7 +2469,6 @@ dependencies = [
 name = "diaryx_cloudflare_e2e"
 version = "1.4.5"
 dependencies = [
- "base64 0.22.1",
  "diaryx_extism",
  "diaryx_server",
  "diaryx_sync_extism",
@@ -2764,6 +2763,7 @@ dependencies = [
  "diaryx_core",
  "diaryx_extism",
  "diaryx_plugin_sdk",
+ "diaryx_sync_extism",
  "diaryx_sync_server",
  "extism-pdk",
  "indexmap 2.13.1",

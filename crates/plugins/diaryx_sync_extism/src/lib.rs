@@ -21,6 +21,12 @@ pub mod state;
 pub mod sync_engine;
 pub mod sync_manifest;
 
+// Backend-agnostic E2E scenario bodies. Compiled only when the
+// `e2e-scenarios` feature is enabled by a downstream test crate, and only on
+// native targets — the wasm32 build of this plugin doesn't host tests.
+#[cfg(all(feature = "e2e-scenarios", not(target_arch = "wasm32")))]
+pub mod e2e_scenarios;
+
 use diaryx_plugin_sdk::prelude::*;
 
 use extism_pdk::*;

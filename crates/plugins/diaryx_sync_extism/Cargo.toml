@@ -20,7 +20,27 @@ indexmap = { workspace = true }
 log = "0.4"
 percent-encoding = "2.3"
 
+# Optional native-only deps used by the `e2e-scenarios` feature. Cargo skips
+# these on wasm32 because the feature itself is gated `not(target_arch =
+# "wasm32")` at the source level.
+diaryx_extism = { workspace = true, features = ["testing", "http"], optional = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net"], optional = true }
+
+[features]
+# Exposes `e2e_scenarios::*` — backend-agnostic scenario bodies for the sync
+# plugin's end-to-end suite. Off by default so the wasm build (which ignores
+# them anyway via `#[cfg(not(target_arch = "wasm32"))]`) doesn't pull
+# host-only deps. Enabled by both `tests/sync_e2e.rs` (against
+# `diaryx_sync_server::testing::TestServer`) and the
+# `diaryx_cloudflare_e2e/tests/sync_plugin_e2e.rs` suite (against
+# `wrangler dev`), so the same suite exercises both backends.
+e2e-scenarios = ["dep:diaryx_extism", "dep:tokio"]
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 diaryx_extism = { workspace = true, features = ["testing", "http"] }
 diaryx_sync_server = { path = "../../diaryx_sync_server" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net"] }
+# `tests/sync_e2e.rs` enables the `e2e-scenarios` feature on this crate
+# itself so the scenario bodies are available. Self-dev-dep is the standard
+# Cargo idiom for "let my own tests opt into a feature on me".
+diaryx_sync_extism = { path = ".", features = ["e2e-scenarios"] }

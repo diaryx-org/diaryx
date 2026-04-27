@@ -7,7 +7,7 @@
    */
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";
-  import { AlertTriangle, Cloud, Loader2, Unlink, Link2, Trash2 } from "@lucide/svelte";
+  import { AlertTriangle, Cloud, Loader2, Unlink, Link2, Plus, Trash2 } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import {
     getPrimaryWorkspaceProviderLink,
@@ -27,6 +27,7 @@
     isProviderAvailableHere,
   } from "$lib/sync/builtinProviders";
   import { deleteNamespace } from "$lib/namespace/namespaceService";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 
   interface Props {
     workspaceId: string;
@@ -37,12 +38,20 @@
 
   let authState = $derived(getAuthState());
   let providerLink = $derived(getPrimaryWorkspaceProviderLink(workspaceId));
+  const pluginStore = getPluginStore();
+  let availableProviders = $derived(
+    pluginStore.workspaceProviders.filter((p) =>
+      isProviderAvailableHere(String(p.pluginId)),
+    ),
+  );
 
   // Remote namespace picker state
   let showPicker = $state(false);
   let availableNamespaces = $state<NamespaceEntry[]>([]);
   let loadingNamespaces = $state(false);
   let linking = $state(false);
+  let creating = $state(false);
+  let showProviderChooser = $state(false);
   let unlinking = $state(false);
 
   // Disable-sync (delete remote + unlink) state
@@ -98,6 +107,33 @@
       toast.error(e instanceof Error ? e.message : "Failed to link workspace");
     } finally {
       linking = false;
+    }
+  }
+
+  function handleStartCreate() {
+    if (availableProviders.length === 1) {
+      void handleCreate(String(availableProviders[0].pluginId));
+    } else {
+      showProviderChooser = true;
+    }
+  }
+
+  async function handleCreate(providerId: string) {
+    creating = true;
+    try {
+      await linkWorkspace(providerId, {
+        localId: workspaceId,
+        name: workspaceName,
+      });
+      showProviderChooser = false;
+      showPicker = false;
+      toast.success("Remote workspace created", {
+        description: `"${workspaceName}" is now synced.`,
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to create remote workspace");
+    } finally {
+      creating = false;
     }
   }
 
@@ -195,36 +231,95 @@
       Sign in to link this workspace to a remote workspace.
     </p>
   {:else if showPicker}
-    {#if loadingNamespaces}
-      <div class="flex items-center gap-2 text-xs text-muted-foreground px-1 py-2">
-        <Loader2 class="size-3.5 animate-spin" />
-        Loading remote workspaces...
-      </div>
-    {:else if availableNamespaces.length === 0}
+    {#if showProviderChooser}
       <p class="text-xs text-muted-foreground px-1">
-        No unlinked remote workspaces available.
+        Choose a workspace provider for the new remote workspace:
       </p>
-      <Button variant="ghost" size="sm" onclick={() => { showPicker = false; }}>
-        Cancel
-      </Button>
-    {:else}
-      <div class="space-y-1 max-h-48 overflow-y-auto px-1">
-        {#each availableNamespaces as ns (ns.id)}
+      <div class="space-y-1 px-1">
+        {#each availableProviders as provider (provider.pluginId)}
           <button
             type="button"
-            class="flex items-center gap-2 w-full px-3 py-2 rounded-md text-left hover:bg-accent transition-colors disabled:opacity-60"
-            disabled={linking}
-            onclick={() => handleLink(ns)}
+            class="flex items-start gap-2 w-full px-3 py-2 rounded-md text-left hover:bg-accent transition-colors disabled:opacity-60"
+            disabled={creating}
+            onclick={() => handleCreate(String(provider.pluginId))}
           >
-            <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
-            <span class="text-sm truncate flex-1">{ns.metadata?.name ?? ns.id}</span>
-            {#if linking}
-              <Loader2 class="size-3 animate-spin shrink-0" />
+            <Cloud class="size-3.5 shrink-0 text-muted-foreground mt-0.5" />
+            <div class="flex-1 min-w-0">
+              <div class="text-sm truncate">{provider.contribution.label}</div>
+              {#if provider.contribution.description}
+                <div class="text-xs text-muted-foreground truncate">
+                  {provider.contribution.description}
+                </div>
+              {/if}
+            </div>
+            {#if creating}
+              <Loader2 class="size-3 animate-spin shrink-0 mt-1" />
             {/if}
           </button>
         {/each}
       </div>
-      <Button variant="ghost" size="sm" onclick={() => { showPicker = false; }}>
+      <Button
+        variant="ghost"
+        size="sm"
+        onclick={() => { showProviderChooser = false; }}
+        disabled={creating}
+      >
+        Back
+      </Button>
+    {:else if loadingNamespaces}
+      <div class="flex items-center gap-2 text-xs text-muted-foreground px-1 py-2">
+        <Loader2 class="size-3.5 animate-spin" />
+        Loading remote workspaces...
+      </div>
+    {:else}
+      {#if availableProviders.length > 0}
+        <Button
+          variant="outline"
+          size="sm"
+          class="w-full mx-1"
+          onclick={handleStartCreate}
+          disabled={creating || linking}
+        >
+          {#if creating}
+            <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+            Creating...
+          {:else}
+            <Plus class="size-3.5 mr-1.5" />
+            Create new remote workspace
+          {/if}
+        </Button>
+      {/if}
+      {#if availableNamespaces.length > 0}
+        <p class="text-xs text-muted-foreground px-1 pt-2">
+          Or link to an existing remote workspace:
+        </p>
+        <div class="space-y-1 max-h-48 overflow-y-auto px-1">
+          {#each availableNamespaces as ns (ns.id)}
+            <button
+              type="button"
+              class="flex items-center gap-2 w-full px-3 py-2 rounded-md text-left hover:bg-accent transition-colors disabled:opacity-60"
+              disabled={linking || creating}
+              onclick={() => handleLink(ns)}
+            >
+              <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
+              <span class="text-sm truncate flex-1">{ns.metadata?.name ?? ns.id}</span>
+              {#if linking}
+                <Loader2 class="size-3 animate-spin shrink-0" />
+              {/if}
+            </button>
+          {/each}
+        </div>
+      {:else if availableProviders.length === 0}
+        <p class="text-xs text-muted-foreground px-1">
+          No workspace providers are available.
+        </p>
+      {/if}
+      <Button
+        variant="ghost"
+        size="sm"
+        onclick={() => { showPicker = false; }}
+        disabled={creating || linking}
+      >
         Cancel
       </Button>
     {/if}

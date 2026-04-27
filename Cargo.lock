@@ -2398,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2467,7 +2467,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_cloudflare_e2e"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "diaryx_extism",
  "diaryx_server",
@@ -2480,7 +2480,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_core"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2531,7 +2531,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_extism"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2620,7 +2620,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_native"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "diaryx_core",
  "dirs 6.0.0",
@@ -2649,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_plugin_sdk"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "base64 0.22.1",
  "extism-pdk",
@@ -2681,7 +2681,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_server"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -2776,7 +2776,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync_server"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "async-stripe",
  "async-trait",
@@ -2826,7 +2826,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_tauri"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2886,7 +2886,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_wasm"
-version = "1.4.5"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "chrono",

@@ -8,6 +8,7 @@ import {
   getWorkspaceStorageType,
   getWorkspaceStoragePluginId,
 } from "$lib/storage/localWorkspaceRegistry.svelte";
+import { hydrateProviderLinksFromFrontmatter } from "./hydrateProviderLinks";
 
 export interface SwitchWorkspaceOptions {
   onTeardownComplete?: () => void;
@@ -36,7 +37,9 @@ export async function switchWorkspace(
     getWorkspaceStoragePluginId(workspaceId),
   );
   workspaceStore.setBackend(backend);
-  await getPluginStore().init(createApi(backend));
+  const api = createApi(backend);
+  await getPluginStore().init(api);
+  await hydrateProviderLinksFromFrontmatter(workspaceId, api, backend);
 
   options?.onReady?.();
 }

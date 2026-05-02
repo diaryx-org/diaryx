@@ -207,8 +207,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         let content = self.read_raw(path).await?;
         match frontmatter::parse(&content) {
             Ok(parsed) => Ok(parsed.frontmatter),
-            Err(DiaryxError::NoFrontmatter(_)) => Ok(IndexMap::new()),
-            Err(e) => Err(e),
+            Err(bookmatter::FrontmatterError::NoFrontmatter) => Ok(IndexMap::new()),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -248,8 +248,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let mut parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
-            Err(e) => return Err(e),
+            Err(bookmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(e) => return Err(e.into()),
         };
 
         frontmatter::remove_property(&mut parsed.frontmatter, key);
@@ -266,8 +266,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
-            Err(e) => return Err(e),
+            Err(bookmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(e) => return Err(e.into()),
         };
 
         let mut reordered = IndexMap::new();
@@ -523,8 +523,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let mut parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
-            Err(e) => return Err(e),
+            Err(bookmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(e) => return Err(e.into()),
         };
 
         if let Some(YamlValue::Sequence(list)) = parsed.frontmatter.get_mut("attachments") {
@@ -559,8 +559,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
-            Err(e) => return Err(e),
+            Err(bookmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(e) => return Err(e.into()),
         };
 
         let sorted_frontmatter = match pattern {

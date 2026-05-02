@@ -21,6 +21,17 @@ use std::path::PathBuf;
 use serde::Serialize;
 use thiserror::Error;
 
+impl From<bookmatter::FrontmatterError> for DiaryxError {
+    fn from(err: bookmatter::FrontmatterError) -> Self {
+        match err {
+            bookmatter::FrontmatterError::NoFrontmatter => {
+                DiaryxError::NoFrontmatter(PathBuf::new())
+            }
+            bookmatter::FrontmatterError::Yaml(e) => DiaryxError::Yaml(e),
+        }
+    }
+}
+
 /// Unified error type for Diaryx operations
 ///
 /// Many of these are necessary because of the abstracted FileSystem in `fs.rs`.

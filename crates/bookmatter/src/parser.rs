@@ -1,14 +1,12 @@
-//! Shared frontmatter parsing and manipulation utilities.
+//! Frontmatter parsing and manipulation utilities.
 //!
 //! This module provides low-level functions for working with YAML frontmatter
-//! in markdown files. It extracts common parsing logic used across the codebase.
+//! in markdown files.
 
 use indexmap::IndexMap;
-use std::path::PathBuf;
 
+use crate::error::{FrontmatterError, Result};
 use crate::yaml_value::YamlValue;
-
-use crate::error::{DiaryxError, Result};
 
 /// Result of parsing a markdown file with frontmatter.
 #[derive(Debug, Clone)]
@@ -26,7 +24,7 @@ pub struct ParsedFile {
 pub fn parse(content: &str) -> Result<ParsedFile> {
     // Check if content starts with frontmatter delimiter
     if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
-        return Err(DiaryxError::NoFrontmatter(PathBuf::new()));
+        return Err(FrontmatterError::NoFrontmatter);
     }
 
     // Find the closing delimiter
@@ -34,7 +32,7 @@ pub fn parse(content: &str) -> Result<ParsedFile> {
     let end_idx = rest
         .find("\n---\n")
         .or_else(|| rest.find("\n---\r\n"))
-        .ok_or_else(|| DiaryxError::NoFrontmatter(PathBuf::new()))?;
+        .ok_or(FrontmatterError::NoFrontmatter)?;
 
     let frontmatter_str = &rest[..end_idx];
     let body = &rest[end_idx + 5..]; // Skip "\n---\n"

@@ -1,0 +1,35 @@
+[package]
+name = "bookmatter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+description = "Order-preserving, round-trip metadata parser for markdown — frontmatter, endmatter, fenced blocks, YAML/TOML/JSON"
+keywords = ["frontmatter", "markdown", "yaml", "metadata"]
+categories = ["text-processing", "parsing"]
+
+[dependencies]
+indexmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+# Used by YamlValue::Display to format f64 values without pulling in
+# core::num::flt2dec (Rust's stdlib Dragon4/Grisu float formatter, ~15 KB
+# of WASM code).
+ryu = "1"
+
+# Optional: TypeScript binding generation
+ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"], optional = true }
+
+[features]
+default = []
+
+# TypeScript binding generation (build-time only, not needed in WASM)
+typescript = ["dep:ts-rs"]
+
+[package.metadata.release]
+# This crate is intended to be published to crates.io
+publish = true

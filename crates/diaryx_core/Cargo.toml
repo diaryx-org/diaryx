@@ -11,6 +11,7 @@ keywords = ["diary", "journal", "markdown", "frontmatter"]
 categories = ["text-processing"]
 
 [dependencies]
+bookmatter.workspace = true
 chrono.workspace = true
 indexmap.workspace = true
 log = "0.4"
@@ -39,7 +40,7 @@ ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-se
 
 [features]
 # TypeScript binding generation (build-time only, not needed in WASM)
-typescript = ["dep:ts-rs"]
+typescript = ["dep:ts-rs", "bookmatter/typescript"]
 
 # UUID generation for workspace registry IDs
 uuid = ["dep:uuid"]

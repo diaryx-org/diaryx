@@ -42,7 +42,7 @@ pub mod search;
 ///
 /// Re-exported from the [`bookmatter`] crate, where this module now lives.
 pub mod frontmatter {
-    pub use bookmatter::parser::*;
+    pub use bookmatter::frontmatter::yaml::*;
 }
 
 /// Audience visibility directive filtering for markdown bodies
@@ -77,13 +77,12 @@ pub mod types;
 /// Plugin architecture for modular feature composition
 pub mod plugin;
 
-/// Minimal YAML value type for dynamic frontmatter manipulation.
+/// YAML format primitives (Value, Mapping, Error, from_str, to_string).
 ///
 /// Re-exported from the [`bookmatter`] crate, where this module now lives.
-pub mod yaml_value {
-    pub use bookmatter::yaml_value::*;
+pub mod yaml {
+    pub use bookmatter::yaml::*;
 }
-pub use yaml_value::YamlValue;
 
 // Re-exports for backwards compatibility
 pub use utils::date;

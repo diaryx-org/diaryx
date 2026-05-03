@@ -7,7 +7,7 @@
 //! `wasm32-unknown-unknown`. HTML bodies are passed through as-is when no
 //! `text/plain` alternative is available.
 
-use diaryx_core::yaml_value::YamlValue;
+use diaryx_core::yaml;
 use indexmap::IndexMap;
 use mailparse::{MailHeaderMap, ParsedMail, parse_mail};
 
@@ -31,13 +31,13 @@ pub fn parse_eml(bytes: &[u8]) -> Result<ImportedEntry, String> {
 
     let mut metadata = IndexMap::new();
     if let Some(from) = parsed.headers.get_first_value("From") {
-        metadata.insert("from".to_string(), YamlValue::String(from));
+        metadata.insert("from".to_string(), yaml::Value::String(from));
     }
     if let Some(to) = parsed.headers.get_first_value("To") {
-        metadata.insert("to".to_string(), YamlValue::String(to));
+        metadata.insert("to".to_string(), yaml::Value::String(to));
     }
     if let Some(cc) = parsed.headers.get_first_value("Cc") {
-        metadata.insert("cc".to_string(), YamlValue::String(cc));
+        metadata.insert("cc".to_string(), yaml::Value::String(cc));
     }
 
     let (body_text, attachments) = extract_body_and_attachments(&parsed)?;
@@ -180,11 +180,11 @@ mod tests {
         assert_eq!(entry.title, "Hello World");
         assert_eq!(
             entry.metadata.get("from").unwrap(),
-            &YamlValue::String("alice@example.com".to_string())
+            &yaml::Value::String("alice@example.com".to_string())
         );
         assert_eq!(
             entry.metadata.get("to").unwrap(),
-            &YamlValue::String("bob@example.com".to_string())
+            &yaml::Value::String("bob@example.com".to_string())
         );
         assert!(entry.body.contains("This is the body."));
         assert!(entry.attachments.is_empty());

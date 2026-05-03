@@ -423,28 +423,25 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         filtered: &[String],
         options: &ExportOptions,
     ) -> Result<String> {
-        // Parse frontmatter
-        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
-            return Ok(content.to_string());
-        }
-
-        let rest = &content[4..];
-        let end_idx = rest
-            .find("\n---\n")
-            .or_else(|| rest.find("\n---\r\n"))
-            .ok_or_else(|| DiaryxError::InvalidFrontmatter(PathBuf::from("export")))?;
-
-        let frontmatter_str = &rest[..end_idx];
-        let body = &rest[end_idx + 5..];
-
-        // Parse as YAML
-        let mut frontmatter: crate::yaml_value::YamlValue =
-            serde_yaml_ng::from_str(frontmatter_str)?;
+        let parsed = match bookmatter::frontmatter::yaml::parse(content) {
+            Ok(p) => p,
+            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => {
+                // Distinguish "no opener at all" (pass through) from "opened but
+                // never closed" (hard error) — preserves pre-migration behavior.
+                if content.starts_with("---\n") || content.starts_with("---\r\n") {
+                    return Err(DiaryxError::InvalidFrontmatter(PathBuf::from("export")));
+                }
+                return Ok(content.to_string());
+            }
+            Err(bookmatter::frontmatter::yaml::FrontmatterError::Yaml(err)) => {
+                return Err(DiaryxError::Yaml(err));
+            }
+        };
+        let mut frontmatter = parsed.frontmatter;
+        let body = parsed.body;
 
         // Filter contents array
-        if let Some(contents) = frontmatter
-            .as_mapping_mut()
-            .and_then(|m| m.get_mut("contents"))
+        if let Some(contents) = frontmatter.get_mut("contents")
             && let Some(arr) = contents.as_sequence_mut()
         {
             arr.retain(|item| {
@@ -457,55 +454,39 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         }
 
         // Optionally remove audience property
-        if !options.keep_audience
-            && let Some(map) = frontmatter.as_mapping_mut()
-        {
-            map.shift_remove("audience");
+        if !options.keep_audience {
+            frontmatter.shift_remove("audience");
         }
 
-        // Reconstruct file
-        let new_frontmatter = serde_yaml_ng::to_string(&frontmatter)?;
-        // Remove trailing newline from YAML output for cleaner formatting
-        let new_frontmatter = new_frontmatter.trim_end();
-
-        Ok(format!("---\n{}\n---\n{}", new_frontmatter, body))
+        Ok(bookmatter::frontmatter::yaml::serialize(
+            &frontmatter,
+            &body,
+        )?)
     }
 
     /// Remove audience property from a file.
     fn remove_audience_property(&self, content: &str) -> Result<String> {
-        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
-            return Ok(content.to_string());
-        }
-
-        let rest = &content[4..];
-        let end_idx = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n"));
-
-        let Some(end_idx) = end_idx else {
-            return Ok(content.to_string());
-        };
-
-        let frontmatter_str = &rest[..end_idx];
-        let body = &rest[end_idx + 5..];
-
-        // Parse as YAML
-        let mut frontmatter: crate::yaml_value::YamlValue =
-            serde_yaml_ng::from_str(frontmatter_str)?;
-
-        // Remove audience property
-        if let Some(map) = frontmatter.as_mapping_mut() {
-            let had_audience = map.shift_remove("audience").is_some();
-
-            if !had_audience {
-                // No audience property, return original
+        let parsed = match bookmatter::frontmatter::yaml::parse(content) {
+            Ok(p) => p,
+            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => {
                 return Ok(content.to_string());
             }
+            Err(bookmatter::frontmatter::yaml::FrontmatterError::Yaml(err)) => {
+                return Err(DiaryxError::Yaml(err));
+            }
+        };
+        let mut frontmatter = parsed.frontmatter;
+        let body = parsed.body;
+
+        if frontmatter.shift_remove("audience").is_none() {
+            // No audience property — preserve original byte-for-byte
+            return Ok(content.to_string());
         }
 
-        // Reconstruct file
-        let new_frontmatter = serde_yaml_ng::to_string(&frontmatter)?;
-        let new_frontmatter = new_frontmatter.trim_end();
-
-        Ok(format!("---\n{}\n---\n{}", new_frontmatter, body))
+        Ok(bookmatter::frontmatter::yaml::serialize(
+            &frontmatter,
+            &body,
+        )?)
     }
 }
 

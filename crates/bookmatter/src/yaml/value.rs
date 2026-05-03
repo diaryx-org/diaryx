@@ -1,4 +1,4 @@
-//! A minimal YAML value type for dynamic frontmatter manipulation.
+//! Dynamic YAML value type with order-preserving mappings.
 //!
 //! Replaces `serde_yaml_ng::Value` with a lightweight enum that uses String keys
 //! in mappings (rather than `serde_yaml_ng::Value` keys) and separates integers
@@ -21,10 +21,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
     ts(
         export,
         export_to = "bindings/",
+        rename = "YamlValue",
         type = "null | boolean | number | string | YamlValue[] | { [key: string]: YamlValue }"
     )
 )]
-pub enum YamlValue {
+pub enum Value {
     /// YAML null (`~`, `null`)
     Null,
     /// YAML boolean
@@ -36,34 +37,34 @@ pub enum YamlValue {
     /// YAML string
     String(String),
     /// YAML sequence (`- item`)
-    Sequence(Vec<YamlValue>),
+    Sequence(Vec<Value>),
     /// YAML mapping (`key: value`) with ordered string keys
-    Mapping(IndexMap<String, YamlValue>),
+    Mapping(IndexMap<String, Value>),
 }
 
 /// Type alias for YAML mappings (preserves key ordering).
-pub type YamlMapping = IndexMap<String, YamlValue>;
+pub type Mapping = IndexMap<String, Value>;
 
 // ============================================================================
 // Serialize
 // ============================================================================
 
-impl Serialize for YamlValue {
+impl Serialize for Value {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            YamlValue::Null => serializer.serialize_none(),
-            YamlValue::Bool(b) => serializer.serialize_bool(*b),
-            YamlValue::Int(i) => serializer.serialize_i64(*i),
-            YamlValue::Float(f) => serializer.serialize_f64(*f),
-            YamlValue::String(s) => serializer.serialize_str(s),
-            YamlValue::Sequence(seq) => {
+            Value::Null => serializer.serialize_none(),
+            Value::Bool(b) => serializer.serialize_bool(*b),
+            Value::Int(i) => serializer.serialize_i64(*i),
+            Value::Float(f) => serializer.serialize_f64(*f),
+            Value::String(s) => serializer.serialize_str(s),
+            Value::Sequence(seq) => {
                 let mut s = serializer.serialize_seq(Some(seq.len()))?;
                 for item in seq {
                     s.serialize_element(item)?;
                 }
                 s.end()
             }
-            YamlValue::Mapping(map) => {
+            Value::Mapping(map) => {
                 let mut m = serializer.serialize_map(Some(map.len()))?;
                 for (k, v) in map {
                     m.serialize_entry(k, v)?;
@@ -78,75 +79,75 @@ impl Serialize for YamlValue {
 // Deserialize
 // ============================================================================
 
-impl<'de> Deserialize<'de> for YamlValue {
+impl<'de> Deserialize<'de> for Value {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(YamlValueVisitor)
+        deserializer.deserialize_any(ValueVisitor)
     }
 }
 
-struct YamlValueVisitor;
+struct ValueVisitor;
 
-impl<'de> Visitor<'de> for YamlValueVisitor {
-    type Value = YamlValue;
+impl<'de> Visitor<'de> for ValueVisitor {
+    type Value = Value;
 
     fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("any YAML value")
     }
 
-    fn visit_unit<E: de::Error>(self) -> Result<YamlValue, E> {
-        Ok(YamlValue::Null)
+    fn visit_unit<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
     }
 
-    fn visit_none<E: de::Error>(self) -> Result<YamlValue, E> {
-        Ok(YamlValue::Null)
+    fn visit_none<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
     }
 
-    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<YamlValue, D::Error> {
+    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
         Deserialize::deserialize(deserializer)
     }
 
-    fn visit_bool<E: de::Error>(self, v: bool) -> Result<YamlValue, E> {
-        Ok(YamlValue::Bool(v))
+    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value, E> {
+        Ok(Value::Bool(v))
     }
 
-    fn visit_i64<E: de::Error>(self, v: i64) -> Result<YamlValue, E> {
-        Ok(YamlValue::Int(v))
+    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value, E> {
+        Ok(Value::Int(v))
     }
 
-    fn visit_u64<E: de::Error>(self, v: u64) -> Result<YamlValue, E> {
+    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value, E> {
         if v <= i64::MAX as u64 {
-            Ok(YamlValue::Int(v as i64))
+            Ok(Value::Int(v as i64))
         } else {
-            Ok(YamlValue::Float(v as f64))
+            Ok(Value::Float(v as f64))
         }
     }
 
-    fn visit_f64<E: de::Error>(self, v: f64) -> Result<YamlValue, E> {
-        Ok(YamlValue::Float(v))
+    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> {
+        Ok(Value::Float(v))
     }
 
-    fn visit_str<E: de::Error>(self, v: &str) -> Result<YamlValue, E> {
-        Ok(YamlValue::String(v.to_owned()))
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<Value, E> {
+        Ok(Value::String(v.to_owned()))
     }
 
-    fn visit_string<E: de::Error>(self, v: String) -> Result<YamlValue, E> {
-        Ok(YamlValue::String(v))
+    fn visit_string<E: de::Error>(self, v: String) -> Result<Value, E> {
+        Ok(Value::String(v))
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<YamlValue, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
         let mut values = Vec::with_capacity(seq.size_hint().unwrap_or(0));
         while let Some(elem) = seq.next_element()? {
             values.push(elem);
         }
-        Ok(YamlValue::Sequence(values))
+        Ok(Value::Sequence(values))
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<YamlValue, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
         let mut values = IndexMap::with_capacity(map.size_hint().unwrap_or(0));
-        while let Some((key, value)) = map.next_entry::<String, YamlValue>()? {
+        while let Some((key, value)) = map.next_entry::<String, Value>()? {
             values.insert(key, value);
         }
-        Ok(YamlValue::Mapping(values))
+        Ok(Value::Mapping(values))
     }
 }
 
@@ -154,11 +155,11 @@ impl<'de> Visitor<'de> for YamlValueVisitor {
 // Convenience methods
 // ============================================================================
 
-impl YamlValue {
+impl Value {
     /// Returns the string value, if this is a `String`.
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            YamlValue::String(s) => Some(s),
+            Value::String(s) => Some(s),
             _ => None,
         }
     }
@@ -166,7 +167,7 @@ impl YamlValue {
     /// Returns the boolean value, if this is a `Bool`.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
-            YamlValue::Bool(b) => Some(*b),
+            Value::Bool(b) => Some(*b),
             _ => None,
         }
     }
@@ -174,8 +175,8 @@ impl YamlValue {
     /// Returns the value as `i64`, if this is an `Int` or a lossless `Float`.
     pub fn as_i64(&self) -> Option<i64> {
         match self {
-            YamlValue::Int(i) => Some(*i),
-            YamlValue::Float(f) => {
+            Value::Int(i) => Some(*i),
+            Value::Float(f) => {
                 let i = *f as i64;
                 if (i as f64) == *f { Some(i) } else { None }
             }
@@ -186,7 +187,7 @@ impl YamlValue {
     /// Returns the value as `u64`, if this is a non-negative `Int`.
     pub fn as_u64(&self) -> Option<u64> {
         match self {
-            YamlValue::Int(i) if *i >= 0 => Some(*i as u64),
+            Value::Int(i) if *i >= 0 => Some(*i as u64),
             _ => None,
         }
     }
@@ -194,96 +195,94 @@ impl YamlValue {
     /// Returns the value as `f64`, if this is a `Float` or `Int`.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            YamlValue::Float(f) => Some(*f),
-            YamlValue::Int(i) => Some(*i as f64),
+            Value::Float(f) => Some(*f),
+            Value::Int(i) => Some(*i as f64),
             _ => None,
         }
     }
 
     /// Returns the sequence, if this is a `Sequence`.
-    pub fn as_sequence(&self) -> Option<&Vec<YamlValue>> {
+    pub fn as_sequence(&self) -> Option<&Vec<Value>> {
         match self {
-            YamlValue::Sequence(v) => Some(v),
+            Value::Sequence(v) => Some(v),
             _ => None,
         }
     }
 
     /// Returns a mutable reference to the sequence, if this is a `Sequence`.
-    pub fn as_sequence_mut(&mut self) -> Option<&mut Vec<YamlValue>> {
+    pub fn as_sequence_mut(&mut self) -> Option<&mut Vec<Value>> {
         match self {
-            YamlValue::Sequence(v) => Some(v),
+            Value::Sequence(v) => Some(v),
             _ => None,
         }
     }
 
     /// Returns the mapping, if this is a `Mapping`.
-    pub fn as_mapping(&self) -> Option<&IndexMap<String, YamlValue>> {
+    pub fn as_mapping(&self) -> Option<&IndexMap<String, Value>> {
         match self {
-            YamlValue::Mapping(m) => Some(m),
+            Value::Mapping(m) => Some(m),
             _ => None,
         }
     }
 
     /// Returns a mutable reference to the mapping, if this is a `Mapping`.
-    pub fn as_mapping_mut(&mut self) -> Option<&mut IndexMap<String, YamlValue>> {
+    pub fn as_mapping_mut(&mut self) -> Option<&mut IndexMap<String, Value>> {
         match self {
-            YamlValue::Mapping(m) => Some(m),
+            Value::Mapping(m) => Some(m),
             _ => None,
         }
     }
 
     /// Returns `true` if this value is `Null`.
     pub fn is_null(&self) -> bool {
-        matches!(self, YamlValue::Null)
+        matches!(self, Value::Null)
     }
 
     /// Returns `true` if this value is a `String`.
     pub fn is_string(&self) -> bool {
-        matches!(self, YamlValue::String(_))
+        matches!(self, Value::String(_))
     }
 
     /// Returns `true` if this value is a `Sequence`.
     pub fn is_sequence(&self) -> bool {
-        matches!(self, YamlValue::Sequence(_))
+        matches!(self, Value::Sequence(_))
     }
 
     /// Returns `true` if this value is a `Mapping`.
     pub fn is_mapping(&self) -> bool {
-        matches!(self, YamlValue::Mapping(_))
+        matches!(self, Value::Mapping(_))
     }
 
     /// Returns `true` if this value is a number (`Int` or `Float`).
     pub fn is_number(&self) -> bool {
-        matches!(self, YamlValue::Int(_) | YamlValue::Float(_))
+        matches!(self, Value::Int(_) | Value::Float(_))
     }
 
     /// Access a mapping value by key.
-    pub fn get(&self, key: &str) -> Option<&YamlValue> {
+    pub fn get(&self, key: &str) -> Option<&Value> {
         self.as_mapping().and_then(|m| m.get(key))
     }
 }
 
-impl std::fmt::Display for YamlValue {
+impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            YamlValue::Null => write!(f, "null"),
-            YamlValue::Bool(b) => write!(f, "{b}"),
-            YamlValue::Int(i) => write!(f, "{i}"),
+            Value::Null => write!(f, "null"),
+            Value::Bool(b) => write!(f, "{b}"),
+            Value::Int(i) => write!(f, "{i}"),
             // Format floats via ryu (already a transitive dep of serde_json)
             // rather than the stdlib `Display` impl. Avoids pulling
             // `core::num::flt2dec` (the Dragon4/Grisu float formatter,
             // ~15 KB of WASM code) into the binary.
-            YamlValue::Float(v) => {
+            Value::Float(v) => {
                 let mut buf = ryu::Buffer::new();
                 f.write_str(buf.format(*v))
             }
-            YamlValue::String(s) => write!(f, "{s}"),
-            YamlValue::Sequence(_) | YamlValue::Mapping(_) => {
-                match serde_yaml_ng::to_string(self) {
-                    Ok(s) => write!(f, "{}", s.trim()),
-                    Err(_) => write!(f, "<complex value>"),
-                }
-            }
+            Value::String(s) => write!(f, "{s}"),
+            Value::Sequence(_) | Value::Mapping(_) => match serde_yaml_ng::to_string(self) {
+                Ok(s) => write!(f, "{}", s.trim()),
+                Err(_) => write!(f, "<complex value>"),
+            },
         }
     }
 }
@@ -292,49 +291,49 @@ impl std::fmt::Display for YamlValue {
 // Conversions
 // ============================================================================
 
-impl From<serde_json::Value> for YamlValue {
+#[cfg(feature = "json")]
+impl From<serde_json::Value> for Value {
     fn from(json: serde_json::Value) -> Self {
         match json {
-            serde_json::Value::Null => YamlValue::Null,
-            serde_json::Value::Bool(b) => YamlValue::Bool(b),
+            serde_json::Value::Null => Value::Null,
+            serde_json::Value::Bool(b) => Value::Bool(b),
             serde_json::Value::Number(n) => {
                 if let Some(i) = n.as_i64() {
-                    YamlValue::Int(i)
+                    Value::Int(i)
                 } else if let Some(f) = n.as_f64() {
-                    YamlValue::Float(f)
+                    Value::Float(f)
                 } else {
-                    YamlValue::Null
+                    Value::Null
                 }
             }
-            serde_json::Value::String(s) => YamlValue::String(s),
+            serde_json::Value::String(s) => Value::String(s),
             serde_json::Value::Array(arr) => {
-                YamlValue::Sequence(arr.into_iter().map(YamlValue::from).collect())
+                Value::Sequence(arr.into_iter().map(Value::from).collect())
             }
             serde_json::Value::Object(map) => {
-                let m: IndexMap<String, YamlValue> = map
-                    .into_iter()
-                    .map(|(k, v)| (k, YamlValue::from(v)))
-                    .collect();
-                YamlValue::Mapping(m)
+                let m: IndexMap<String, Value> =
+                    map.into_iter().map(|(k, v)| (k, Value::from(v))).collect();
+                Value::Mapping(m)
             }
         }
     }
 }
 
-impl From<YamlValue> for serde_json::Value {
-    fn from(yaml: YamlValue) -> Self {
+#[cfg(feature = "json")]
+impl From<Value> for serde_json::Value {
+    fn from(yaml: Value) -> Self {
         match yaml {
-            YamlValue::Null => serde_json::Value::Null,
-            YamlValue::Bool(b) => serde_json::Value::Bool(b),
-            YamlValue::Int(i) => serde_json::Value::Number(i.into()),
-            YamlValue::Float(f) => serde_json::Number::from_f64(f)
+            Value::Null => serde_json::Value::Null,
+            Value::Bool(b) => serde_json::Value::Bool(b),
+            Value::Int(i) => serde_json::Value::Number(i.into()),
+            Value::Float(f) => serde_json::Number::from_f64(f)
                 .map(serde_json::Value::Number)
                 .unwrap_or(serde_json::Value::Null),
-            YamlValue::String(s) => serde_json::Value::String(s),
-            YamlValue::Sequence(arr) => {
+            Value::String(s) => serde_json::Value::String(s),
+            Value::Sequence(arr) => {
                 serde_json::Value::Array(arr.into_iter().map(serde_json::Value::from).collect())
             }
-            YamlValue::Mapping(map) => {
+            Value::Mapping(map) => {
                 let obj: serde_json::Map<String, serde_json::Value> = map
                     .into_iter()
                     .map(|(k, v)| (k, serde_json::Value::from(v)))
@@ -345,33 +344,33 @@ impl From<YamlValue> for serde_json::Value {
     }
 }
 
-impl From<&str> for YamlValue {
+impl From<&str> for Value {
     fn from(s: &str) -> Self {
-        YamlValue::String(s.to_string())
+        Value::String(s.to_string())
     }
 }
 
-impl From<String> for YamlValue {
+impl From<String> for Value {
     fn from(s: String) -> Self {
-        YamlValue::String(s)
+        Value::String(s)
     }
 }
 
-impl From<bool> for YamlValue {
+impl From<bool> for Value {
     fn from(b: bool) -> Self {
-        YamlValue::Bool(b)
+        Value::Bool(b)
     }
 }
 
-impl From<i64> for YamlValue {
+impl From<i64> for Value {
     fn from(i: i64) -> Self {
-        YamlValue::Int(i)
+        Value::Int(i)
     }
 }
 
-impl From<f64> for YamlValue {
+impl From<f64> for Value {
     fn from(f: f64) -> Self {
-        YamlValue::Float(f)
+        Value::Float(f)
     }
 }
 
@@ -382,7 +381,7 @@ mod tests {
     #[test]
     fn round_trip_yaml() {
         let yaml = "title: Hello\ncount: 42\ntags:\n- a\n- b\n";
-        let value: YamlValue = serde_yaml_ng::from_str(yaml).unwrap();
+        let value: Value = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert!(value.is_mapping());
         let map = value.as_mapping().unwrap();
@@ -391,15 +390,16 @@ mod tests {
         assert!(map.get("tags").unwrap().is_sequence());
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn json_round_trip() {
-        let yaml_val = YamlValue::Mapping(IndexMap::from([
-            ("key".to_string(), YamlValue::String("value".to_string())),
-            ("num".to_string(), YamlValue::Int(42)),
+        let yaml_val = Value::Mapping(IndexMap::from([
+            ("key".to_string(), Value::String("value".to_string())),
+            ("num".to_string(), Value::Int(42)),
         ]));
 
         let json: serde_json::Value = yaml_val.clone().into();
-        let back: YamlValue = json.into();
+        let back: Value = json.into();
         assert_eq!(yaml_val, back);
     }
 }

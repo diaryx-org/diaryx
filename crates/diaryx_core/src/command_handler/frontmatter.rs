@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::yaml_value::YamlValue;
+use crate::yaml;
 
 use crate::command::Response;
 use crate::diaryx::Diaryx;
@@ -125,7 +125,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .get_frontmatter_property(file_path, key)
             .await?;
         let mut items = match existing {
-            Some(YamlValue::Sequence(items)) => items,
+            Some(yaml::Value::Sequence(items)) => items,
             Some(_) => Vec::new(),
             None => Vec::new(),
         };
@@ -140,9 +140,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
 
         let formatted = self.format_link_for_file(target_canonical, &file_canonical);
-        items.push(YamlValue::String(formatted));
+        items.push(yaml::Value::String(formatted));
         self.entry()
-            .set_frontmatter_property(file_path, key, YamlValue::Sequence(items))
+            .set_frontmatter_property(file_path, key, yaml::Value::Sequence(items))
             .await?;
         Ok(true)
     }
@@ -158,12 +158,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .entry()
             .get_frontmatter_property(file_path, key)
             .await?;
-        let Some(YamlValue::Sequence(items)) = existing else {
+        let Some(yaml::Value::Sequence(items)) = existing else {
             return Ok(false);
         };
         let original_len = items.len();
 
-        let filtered: Vec<YamlValue> = items
+        let filtered: Vec<yaml::Value> = items
             .into_iter()
             .filter(|item| {
                 !item.as_str().is_some_and(|s| {
@@ -183,7 +183,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 .await?;
         } else {
             self.entry()
-                .set_frontmatter_property(file_path, key, YamlValue::Sequence(filtered))
+                .set_frontmatter_property(file_path, key, yaml::Value::Sequence(filtered))
                 .await?;
         }
         Ok(true)
@@ -196,7 +196,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .get_frontmatter_property(file_path, "link")
             .await?
         {
-            Some(YamlValue::String(existing))
+            Some(yaml::Value::String(existing))
                 if self.resolve_frontmatter_link_target(&existing, &canonical_path)
                     == canonical_path =>
             {
@@ -206,7 +206,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             None => {
                 let formatted = self.format_link_for_file(&canonical_path, &canonical_path);
                 self.entry()
-                    .set_frontmatter_property(file_path, "link", YamlValue::String(formatted))
+                    .set_frontmatter_property(file_path, "link", yaml::Value::String(formatted))
                     .await?;
                 Ok(true)
             }
@@ -222,7 +222,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         &self,
         path: String,
         key: String,
-        value: YamlValue,
+        value: yaml::Value,
         root_index_path: Option<String>,
     ) -> Result<Response> {
         // Handle link/part_of/contents/attachments specially - normalize and
@@ -231,17 +231,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             let canonical_path = self.get_canonical_path(&path);
 
             if key == "link" {
-                if let YamlValue::String(ref s) = value {
+                if let yaml::Value::String(ref s) = value {
                     let canonical_target = self.resolve_frontmatter_link_target(s, &canonical_path);
                     let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
-                    let yaml_value = YamlValue::String(formatted);
+                    let yaml_value = yaml::Value::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
                     return Ok(Response::Ok);
                 }
             } else if key == "attachment" {
-                if let YamlValue::String(ref s) = value {
+                if let yaml::Value::String(ref s) = value {
                     let canonical_target = self.resolve_attachment_link_target_with_hint(
                         s,
                         &canonical_path,
@@ -249,17 +249,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     );
                     let formatted =
                         self.format_attachment_link_for_file(&canonical_target, &canonical_path);
-                    let yaml_value = YamlValue::String(formatted);
+                    let yaml_value = yaml::Value::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
                     return Ok(Response::Ok);
                 }
             } else if key == "part_of" {
-                if let YamlValue::String(ref s) = value {
+                if let yaml::Value::String(ref s) = value {
                     let canonical_target = self.resolve_frontmatter_link_target(s, &canonical_path);
                     let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
-                    let yaml_value = YamlValue::String(formatted);
+                    let yaml_value = yaml::Value::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
@@ -270,11 +270,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 || key == "link_of"
                 || key == "attachment_of"
             {
-                if let YamlValue::Sequence(ref arr) = value {
-                    let mut formatted_links: Vec<YamlValue> = Vec::new();
+                if let yaml::Value::Sequence(ref arr) = value {
+                    let mut formatted_links: Vec<yaml::Value> = Vec::new();
 
                     for item in arr {
-                        if let YamlValue::String(s) = item {
+                        if let yaml::Value::String(s) = item {
                             let canonical_target = self.resolve_attachment_link_target_with_hint(
                                 s,
                                 &canonical_path,
@@ -282,11 +282,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             );
                             let formatted =
                                 self.format_link_for_file(&canonical_target, &canonical_path);
-                            formatted_links.push(YamlValue::String(formatted));
+                            formatted_links.push(yaml::Value::String(formatted));
                         }
                     }
 
-                    let yaml_value = YamlValue::Sequence(formatted_links);
+                    let yaml_value = yaml::Value::Sequence(formatted_links);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
@@ -294,32 +294,32 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
             } else if key == "attachments" {
                 // Attachments now point to attachment notes, not binary assets.
-                if let YamlValue::Sequence(ref arr) = value {
-                    let mut formatted_links: Vec<YamlValue> = Vec::new();
+                if let yaml::Value::Sequence(ref arr) = value {
+                    let mut formatted_links: Vec<yaml::Value> = Vec::new();
 
                     for item in arr {
-                        if let YamlValue::String(s) = item {
+                        if let yaml::Value::String(s) = item {
                             let canonical_target =
                                 self.resolve_frontmatter_link_target(s, &canonical_path);
                             let formatted =
                                 self.format_link_for_file(&canonical_target, &canonical_path);
-                            formatted_links.push(YamlValue::String(formatted));
+                            formatted_links.push(yaml::Value::String(formatted));
                         }
                     }
 
-                    let yaml_value = YamlValue::Sequence(formatted_links);
+                    let yaml_value = yaml::Value::Sequence(formatted_links);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
                     return Ok(Response::Ok);
-                } else if let YamlValue::String(ref s) = value {
+                } else if let yaml::Value::String(ref s) = value {
                     let canonical_target = self.resolve_attachment_link_target_with_hint(
                         s,
                         &canonical_path,
                         Some(self.link_format()),
                     );
                     let formatted = self.format_link_for_file(&canonical_target, &canonical_path);
-                    let yaml_value = YamlValue::String(formatted);
+                    let yaml_value = yaml::Value::String(formatted);
                     self.entry()
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
@@ -331,7 +331,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         // Auto-rename on title change + sync heading
         if key == "title"
             && let Some(ref rip) = root_index_path
-            && let YamlValue::String(ref new_title) = value
+            && let yaml::Value::String(ref new_title) = value
             && !new_title.trim().is_empty()
         {
             use crate::entry::apply_filename_style;

@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::yaml_value::YamlValue;
+use crate::yaml;
 
 use crate::link_parser::{self, LinkFormat};
 use crate::plugin::permissions::PluginConfig;
@@ -65,17 +65,17 @@ fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<String>,
 where
     D: Deserializer<'de>,
 {
-    let value: Option<YamlValue> = Option::deserialize(deserializer)?;
+    let value: Option<yaml::Value> = Option::deserialize(deserializer)?;
     match value {
-        None | Some(YamlValue::Null) => Ok(None),
-        Some(YamlValue::String(s)) => Ok(Some(s)),
-        Some(YamlValue::Int(n)) => Ok(Some(n.to_string())),
-        Some(YamlValue::Sequence(seq)) => {
+        None | Some(yaml::Value::Null) => Ok(None),
+        Some(yaml::Value::String(s)) => Ok(Some(s)),
+        Some(yaml::Value::Int(n)) => Ok(Some(n.to_string())),
+        Some(yaml::Value::Sequence(seq)) => {
             // Take the first string-shaped element from the array
             for item in seq {
                 match item {
-                    YamlValue::String(s) => return Ok(Some(s)),
-                    YamlValue::Int(n) => return Ok(Some(n.to_string())),
+                    yaml::Value::String(s) => return Ok(Some(s)),
+                    yaml::Value::Int(n) => return Ok(Some(n.to_string())),
                     _ => continue,
                 }
             }
@@ -102,17 +102,17 @@ fn deserialize_vec_string_lenient<'de, D>(deserializer: D) -> Result<Option<Vec<
 where
     D: Deserializer<'de>,
 {
-    let value: Option<YamlValue> = Option::deserialize(deserializer)?;
+    let value: Option<yaml::Value> = Option::deserialize(deserializer)?;
     match value {
-        None | Some(YamlValue::Null) => Ok(None),
-        Some(YamlValue::String(s)) => Ok(Some(vec![s])),
-        Some(YamlValue::Int(n)) => Ok(Some(vec![n.to_string()])),
-        Some(YamlValue::Sequence(seq)) => {
+        None | Some(yaml::Value::Null) => Ok(None),
+        Some(yaml::Value::String(s)) => Ok(Some(vec![s])),
+        Some(yaml::Value::Int(n)) => Ok(Some(vec![n.to_string()])),
+        Some(yaml::Value::Sequence(seq)) => {
             let strings = seq
                 .into_iter()
                 .filter_map(|v| match v {
-                    YamlValue::String(s) => Some(s),
-                    YamlValue::Int(n) => Some(n.to_string()),
+                    yaml::Value::String(s) => Some(s),
+                    yaml::Value::Int(n) => Some(n.to_string()),
                     // Floats / bools / nested shapes are silently dropped
                     // (see module-level note).
                     _ => None,
@@ -212,7 +212,7 @@ pub struct IndexFrontmatter {
 
     /// Additional frontmatter properties
     #[serde(flatten)]
-    pub extra: HashMap<String, YamlValue>,
+    pub extra: HashMap<String, yaml::Value>,
 }
 
 impl IndexFrontmatter {
@@ -554,14 +554,14 @@ mod tests {
     fn test_audience_bare_string_deserialized_as_vec() {
         // audience: private (bare string) should become vec!["private"]
         let yaml = "audience: private\n";
-        let fm: IndexFrontmatter = serde_yaml_ng::from_str(yaml).unwrap();
+        let fm: IndexFrontmatter = bookmatter::yaml::from_str(yaml).unwrap();
         assert_eq!(fm.audience, Some(vec!["private".to_string()]));
     }
 
     #[test]
     fn test_audience_array_deserialized_normally() {
         let yaml = "audience:\n  - family\n  - private\n";
-        let fm: IndexFrontmatter = serde_yaml_ng::from_str(yaml).unwrap();
+        let fm: IndexFrontmatter = bookmatter::yaml::from_str(yaml).unwrap();
         assert_eq!(
             fm.audience,
             Some(vec!["family".to_string(), "private".to_string()])

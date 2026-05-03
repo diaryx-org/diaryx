@@ -116,7 +116,7 @@ fn resolve_root_index_path() -> Option<String> {
 
 /// Read `workspace_id` from root frontmatter at `plugins."diaryx.sync".workspace_id`.
 fn read_workspace_id_from_frontmatter() -> Option<String> {
-    use diaryx_core::yaml_value::YamlValue;
+    use diaryx_core::yaml;
 
     let root = resolve_root_index_path()?;
     let content = host::fs::read_file(&root).ok()?;
@@ -128,7 +128,7 @@ fn read_workspace_id_from_frontmatter() -> Option<String> {
         .and_then(|v| v.get(PLUGIN_KEY))
         .and_then(|v| v.get("workspace_id"))
         .and_then(|v| match v {
-            YamlValue::String(s) if !s.trim().is_empty() => Some(s.clone()),
+            yaml::Value::String(s) if !s.trim().is_empty() => Some(s.clone()),
             _ => None,
         })
 }
@@ -136,7 +136,7 @@ fn read_workspace_id_from_frontmatter() -> Option<String> {
 /// Write `workspace_id` to root frontmatter at `plugins."diaryx.sync".workspace_id`.
 /// Pass `None` to clear it.
 fn write_workspace_id_to_frontmatter(workspace_id: Option<&str>) {
-    use diaryx_core::yaml_value::YamlValue;
+    use diaryx_core::yaml;
     use indexmap::IndexMap;
 
     let root = match resolve_root_index_path() {
@@ -156,17 +156,17 @@ fn write_workspace_id_to_frontmatter(workspace_id: Option<&str>) {
 
     let plugins_val = fm
         .entry("plugins".to_string())
-        .or_insert_with(|| YamlValue::Mapping(IndexMap::new()));
+        .or_insert_with(|| yaml::Value::Mapping(IndexMap::new()));
     if let Some(plugins_map) = plugins_val.as_mapping_mut() {
         let entry = plugins_map
             .entry(PLUGIN_KEY.to_string())
-            .or_insert_with(|| YamlValue::Mapping(IndexMap::new()));
+            .or_insert_with(|| yaml::Value::Mapping(IndexMap::new()));
         if let Some(sync_map) = entry.as_mapping_mut() {
             match workspace_id {
                 Some(id) => {
                     sync_map.insert(
                         "workspace_id".to_string(),
-                        YamlValue::String(id.to_string()),
+                        yaml::Value::String(id.to_string()),
                     );
                 }
                 None => {
@@ -181,7 +181,7 @@ fn write_workspace_id_to_frontmatter(workspace_id: Option<&str>) {
     }
 
     // Clean up empty plugins map.
-    if let Some(YamlValue::Mapping(m)) = fm.get("plugins") {
+    if let Some(yaml::Value::Mapping(m)) = fm.get("plugins") {
         if m.is_empty() {
             fm.swap_remove("plugins");
         }

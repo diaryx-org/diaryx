@@ -133,9 +133,9 @@ impl FileMetadata {
     ///
     /// Tries a fast JSON round-trip first, then falls back to manual field extraction.
     /// Unknown frontmatter keys are preserved in `extra`.
-    pub fn from_frontmatter(fm: &indexmap::IndexMap<String, crate::yaml_value::YamlValue>) -> Self {
+    pub fn from_frontmatter(fm: &indexmap::IndexMap<String, crate::yaml::Value>) -> Self {
         /// Parse the frontmatter "updated" value into a timestamp (ms).
-        fn parse_updated_value(value: &crate::yaml_value::YamlValue) -> Option<i64> {
+        fn parse_updated_value(value: &crate::yaml::Value) -> Option<i64> {
             if let Some(num) = value.as_i64() {
                 return Some(num);
             }
@@ -253,9 +253,9 @@ impl FileMetadata {
             metadata.attachments = seq
                 .iter()
                 .filter_map(|value| {
-                    use crate::yaml_value::YamlValue;
+                    use crate::yaml;
                     match value {
-                        YamlValue::String(path) => Some(BinaryRef {
+                        yaml::Value::String(path) => Some(BinaryRef {
                             path: path.clone(),
                             source: "local".to_string(),
                             hash: String::new(),
@@ -264,7 +264,7 @@ impl FileMetadata {
                             uploaded_at: None,
                             deleted: false,
                         }),
-                        YamlValue::Mapping(map) => {
+                        yaml::Value::Mapping(map) => {
                             let path = map.get("path").and_then(|v| v.as_str())?;
                             let source = map
                                 .get("source")

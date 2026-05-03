@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::plugin::{FileCreatedEvent, FileDeletedEvent, FileMovedEvent, FileSavedEvent};
-use crate::yaml_value::YamlValue;
+use crate::yaml;
 
 impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     pub(crate) async fn cmd_get_entry(&self, path: String) -> Result<Response> {
@@ -78,7 +78,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .ok()
                     .flatten()
                     .and_then(|v| {
-                        if let YamlValue::String(s) = v {
+                        if let yaml::Value::String(s) = v {
                             Some(s)
                         } else {
                             None
@@ -91,7 +91,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .set_frontmatter_property(
                             &path,
                             "title",
-                            YamlValue::String(h1_title.clone()),
+                            yaml::Value::String(h1_title.clone()),
                         )
                         .await?;
 
@@ -227,7 +227,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 self.format_link_for_file(parent, canonical_path)
             };
             self.entry()
-                .set_frontmatter_property(&path, "part_of", YamlValue::String(formatted_link))
+                .set_frontmatter_property(&path, "part_of", yaml::Value::String(formatted_link))
                 .await?;
         }
 
@@ -289,7 +289,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         use crate::entry::prettify_filename;
         let title = prettify_filename(new_filename.trim_end_matches(".md"));
         self.entry()
-            .set_frontmatter_property(&path, "title", YamlValue::String(title.clone()))
+            .set_frontmatter_property(&path, "title", yaml::Value::String(title.clone()))
             .await?;
 
         // Use rename_entry which handles both leaf files and index files
@@ -331,7 +331,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         // Add empty contents array to frontmatter
         self.entry()
-            .set_frontmatter_property(&path, "contents", YamlValue::Sequence(vec![]))
+            .set_frontmatter_property(&path, "contents", yaml::Value::Sequence(vec![]))
             .await?;
 
         Ok(Response::String(path))

@@ -42,7 +42,7 @@ pub fn run(_args: &[String]) -> Result<(), String> {
     let now = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     // Mirror `diaryx property set`: parse the value through serde_yaml_ng so it
     // round-trips as whatever scalar type YAML infers (string here).
-    let yaml_now: diaryx_core::YamlValue =
+    let yaml_now: diaryx_core::yaml::Value =
         serde_yaml_ng::from_str(&now).map_err(|e| format!("parse timestamp as YAML: {e}"))?;
     diaryx_app()
         .set_frontmatter_property(agents_str, "updated", yaml_now)

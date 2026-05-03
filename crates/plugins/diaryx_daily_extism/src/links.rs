@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use diaryx_core::link_parser::{LinkFormat, format_link_with_format, parse_link};
-use diaryx_core::yaml_value::YamlValue;
+use diaryx_core::yaml;
 use diaryx_plugin_sdk::prelude::*;
 
 use crate::markdown_io::parse_markdown;
@@ -37,20 +37,20 @@ pub fn read_link_format(state: &DailyState) -> LinkFormat {
 
     // Check workspace_config mapping or file link
     match fm.get("workspace_config") {
-        Some(YamlValue::Mapping(config_map)) => {
-            if let Some(YamlValue::String(s)) = config_map.get("link_format") {
+        Some(yaml::Value::Mapping(config_map)) => {
+            if let Some(yaml::Value::String(s)) = config_map.get("link_format") {
                 if let Some(fmt) = parse_link_format_str(s) {
                     return fmt;
                 }
             }
         }
-        Some(YamlValue::String(link_str)) => {
+        Some(yaml::Value::String(link_str)) => {
             // File link to workspace config (e.g., "[Config](/Meta/Config.md)")
             let config_rel = resolve_link_path(link_str, &root_rel);
             let config_fs = to_fs_path(&config_rel, state.workspace_root.as_deref());
             if let Ok(config_content) = host::fs::read_file(&config_fs) {
                 if let Ok((config_fm, _)) = parse_markdown(&config_content) {
-                    if let Some(YamlValue::String(s)) = config_fm.get("link_format") {
+                    if let Some(yaml::Value::String(s)) = config_fm.get("link_format") {
                         if let Some(fmt) = parse_link_format_str(s) {
                             return fmt;
                         }
@@ -62,7 +62,7 @@ pub fn read_link_format(state: &DailyState) -> LinkFormat {
     }
 
     // Fall back to top-level link_format
-    if let Some(YamlValue::String(s)) = fm.get("link_format") {
+    if let Some(yaml::Value::String(s)) = fm.get("link_format") {
         if let Some(fmt) = parse_link_format_str(s) {
             return fmt;
         }

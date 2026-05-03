@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use diaryx_core::yaml_value::YamlValue;
+use diaryx_core::yaml;
 use indexmap::IndexMap;
 
 /// Trait for rendering body templates at publish/export time.
@@ -18,7 +18,7 @@ pub trait BodyRenderer: Send + Sync {
     fn render_body(
         &self,
         body: &str,
-        frontmatter: &IndexMap<String, YamlValue>,
+        frontmatter: &IndexMap<String, yaml::Value>,
         file_path: &Path,
         workspace_root: Option<&Path>,
         audience: Option<&str>,
@@ -36,7 +36,7 @@ impl BodyRenderer for NoopBodyRenderer {
     fn render_body(
         &self,
         body: &str,
-        _frontmatter: &IndexMap<String, YamlValue>,
+        _frontmatter: &IndexMap<String, yaml::Value>,
         _file_path: &Path,
         _workspace_root: Option<&Path>,
         _audience: Option<&str>,

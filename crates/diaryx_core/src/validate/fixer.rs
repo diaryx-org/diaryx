@@ -87,11 +87,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
 
     /// Get a frontmatter property from a file. Returns `None` if the file
     /// doesn't exist, has no frontmatter, or the key is missing.
-    async fn get_frontmatter_property(
-        &self,
-        path: &Path,
-        key: &str,
-    ) -> Option<crate::yaml_value::YamlValue> {
+    async fn get_frontmatter_property(&self, path: &Path, key: &str) -> Option<crate::yaml::Value> {
         let content = self.fs.read_to_string(path).await.ok()?;
         let parsed = crate::frontmatter::parse_or_empty(&content).ok()?;
         crate::frontmatter::get_property(&parsed.frontmatter, key).cloned()
@@ -103,7 +99,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         &self,
         path: &Path,
         key: &str,
-        value: crate::yaml_value::YamlValue,
+        value: crate::yaml::Value,
     ) -> Result<()> {
         let (mut frontmatter, body) = match self.fs.read_to_string(path).await {
             Ok(content) => {
@@ -223,11 +219,11 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// Fix a broken `contents` reference by removing it from the index.
     pub async fn fix_broken_contents_ref(&self, index: &Path, target: &str) -> FixResult {
         match self.get_frontmatter_property(index, "contents").await {
-            Some(crate::yaml_value::YamlValue::Sequence(items)) => {
-                let filtered: Vec<crate::yaml_value::YamlValue> = items
+            Some(crate::yaml::Value::Sequence(items)) => {
+                let filtered: Vec<crate::yaml::Value> = items
                     .into_iter()
                     .filter(|item| {
-                        if let crate::yaml_value::YamlValue::String(s) = item {
+                        if let crate::yaml::Value::String(s) = item {
                             s != target
                         } else {
                             true
@@ -239,7 +235,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     .set_frontmatter_property(
                         index,
                         "contents",
-                        crate::yaml_value::YamlValue::Sequence(filtered),
+                        crate::yaml::Value::Sequence(filtered),
                     )
                     .await
                 {
@@ -262,11 +258,11 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// Fix a broken `attachments` reference by removing it.
     pub async fn fix_broken_attachment(&self, file: &Path, attachment: &str) -> FixResult {
         match self.get_frontmatter_property(file, "attachments").await {
-            Some(crate::yaml_value::YamlValue::Sequence(items)) => {
-                let filtered: Vec<crate::yaml_value::YamlValue> = items
+            Some(crate::yaml::Value::Sequence(items)) => {
+                let filtered: Vec<crate::yaml::Value> = items
                     .into_iter()
                     .filter(|item| {
-                        if let crate::yaml_value::YamlValue::String(s) = item {
+                        if let crate::yaml::Value::String(s) = item {
                             s != attachment
                         } else {
                             true
@@ -280,7 +276,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     self.set_frontmatter_property(
                         file,
                         "attachments",
-                        crate::yaml_value::YamlValue::Sequence(filtered),
+                        crate::yaml::Value::Sequence(filtered),
                     )
                     .await
                 };
@@ -319,7 +315,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     .set_frontmatter_property(
                         file,
                         "part_of",
-                        crate::yaml_value::YamlValue::String(new_value.to_string()),
+                        crate::yaml::Value::String(new_value.to_string()),
                     )
                     .await
                 {
@@ -340,16 +336,14 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             }
             "contents" | "attachments" | "links" | "link_of" => {
                 match self.get_frontmatter_property(file, property).await {
-                    Some(crate::yaml_value::YamlValue::Sequence(items)) => {
-                        let updated: Vec<crate::yaml_value::YamlValue> = items
+                    Some(crate::yaml::Value::Sequence(items)) => {
+                        let updated: Vec<crate::yaml::Value> = items
                             .into_iter()
                             .map(|item| {
-                                if let crate::yaml_value::YamlValue::String(ref s) = item
+                                if let crate::yaml::Value::String(ref s) = item
                                     && s == old_value
                                 {
-                                    return crate::yaml_value::YamlValue::String(
-                                        new_value.to_string(),
-                                    );
+                                    return crate::yaml::Value::String(new_value.to_string());
                                 }
                                 item
                             })
@@ -359,7 +353,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                             .set_frontmatter_property(
                                 file,
                                 property,
-                                crate::yaml_value::YamlValue::Sequence(updated),
+                                crate::yaml::Value::Sequence(updated),
                             )
                             .await
                         {
@@ -413,13 +407,13 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         let formatted = self.format_link(file, index).await;
 
         match self.get_frontmatter_property(index, "contents").await {
-            Some(crate::yaml_value::YamlValue::Sequence(mut items)) => {
-                items.push(crate::yaml_value::YamlValue::String(formatted.clone()));
+            Some(crate::yaml::Value::Sequence(mut items)) => {
+                items.push(crate::yaml::Value::String(formatted.clone()));
                 match self
                     .set_frontmatter_property(
                         index,
                         "contents",
-                        crate::yaml_value::YamlValue::Sequence(items),
+                        crate::yaml::Value::Sequence(items),
                     )
                     .await
                 {
@@ -441,9 +435,9 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     .set_frontmatter_property(
                         index,
                         "contents",
-                        crate::yaml_value::YamlValue::Sequence(vec![
-                            crate::yaml_value::YamlValue::String(formatted.clone()),
-                        ]),
+                        crate::yaml::Value::Sequence(vec![crate::yaml::Value::String(
+                            formatted.clone(),
+                        )]),
                     )
                     .await
                 {
@@ -545,17 +539,18 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         let note_link = self.format_link(&note_path, index).await;
 
         match self.get_frontmatter_property(index, "attachments").await {
-            Some(crate::yaml_value::YamlValue::Sequence(mut items)) => {
-                if !items.iter().any(
-                    |v| matches!(v, crate::yaml_value::YamlValue::String(s) if s == &note_link),
-                ) {
-                    items.push(crate::yaml_value::YamlValue::String(note_link.clone()));
+            Some(crate::yaml::Value::Sequence(mut items)) => {
+                if !items
+                    .iter()
+                    .any(|v| matches!(v, crate::yaml::Value::String(s) if s == &note_link))
+                {
+                    items.push(crate::yaml::Value::String(note_link.clone()));
                 }
                 match self
                     .set_frontmatter_property(
                         index,
                         "attachments",
-                        crate::yaml_value::YamlValue::Sequence(items),
+                        crate::yaml::Value::Sequence(items),
                     )
                     .await
                 {
@@ -575,9 +570,9 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                 .set_frontmatter_property(
                     index,
                     "attachments",
-                    crate::yaml_value::YamlValue::Sequence(vec![
-                        crate::yaml_value::YamlValue::String(note_link.clone()),
-                    ]),
+                    crate::yaml::Value::Sequence(vec![crate::yaml::Value::String(
+                        note_link.clone(),
+                    )]),
                 )
                 .await
             {
@@ -629,14 +624,14 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         let note_link = self.format_link(&note_path, index).await;
 
         match self.get_frontmatter_property(index, "attachments").await {
-            Some(crate::yaml_value::YamlValue::Sequence(items)) => {
+            Some(crate::yaml::Value::Sequence(items)) => {
                 let mut replaced = false;
-                let mut rewritten: Vec<crate::yaml_value::YamlValue> = items
+                let mut rewritten: Vec<crate::yaml::Value> = items
                     .into_iter()
                     .map(|item| match item {
-                        crate::yaml_value::YamlValue::String(s) if s == target => {
+                        crate::yaml::Value::String(s) if s == target => {
                             replaced = true;
-                            crate::yaml_value::YamlValue::String(note_link.clone())
+                            crate::yaml::Value::String(note_link.clone())
                         }
                         other => other,
                     })
@@ -651,7 +646,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                 // Drop any duplicates of the new note link that may now exist.
                 let mut seen_note_link = false;
                 rewritten.retain(|item| match item {
-                    crate::yaml_value::YamlValue::String(s) if s == &note_link => {
+                    crate::yaml::Value::String(s) if s == &note_link => {
                         if seen_note_link {
                             false
                         } else {
@@ -665,7 +660,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     .set_frontmatter_property(
                         index,
                         "attachments",
-                        crate::yaml_value::YamlValue::Sequence(rewritten),
+                        crate::yaml::Value::Sequence(rewritten),
                     )
                     .await
                 {
@@ -719,7 +714,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             .set_frontmatter_property(
                 file,
                 "part_of",
-                crate::yaml_value::YamlValue::String(formatted.clone()),
+                crate::yaml::Value::String(formatted.clone()),
             )
             .await
         {
@@ -739,11 +734,11 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// Fix a broken `links` reference by removing it.
     pub async fn fix_broken_link_ref(&self, file: &Path, target: &str) -> FixResult {
         match self.get_frontmatter_property(file, "links").await {
-            Some(crate::yaml_value::YamlValue::Sequence(items)) => {
-                let filtered: Vec<crate::yaml_value::YamlValue> = items
+            Some(crate::yaml::Value::Sequence(items)) => {
+                let filtered: Vec<crate::yaml::Value> = items
                     .into_iter()
                     .filter(|item| match item {
-                        crate::yaml_value::YamlValue::String(s) => s != target,
+                        crate::yaml::Value::String(s) => s != target,
                         _ => true,
                     })
                     .collect();
@@ -766,7 +761,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                         .set_frontmatter_property(
                             file,
                             "links",
-                            crate::yaml_value::YamlValue::Sequence(filtered),
+                            crate::yaml::Value::Sequence(filtered),
                         )
                         .await
                     {
@@ -792,11 +787,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         let formatted = self.format_self_link(file).await;
 
         match self
-            .set_frontmatter_property(
-                file,
-                "link",
-                crate::yaml_value::YamlValue::String(formatted.clone()),
-            )
+            .set_frontmatter_property(file, "link", crate::yaml::Value::String(formatted.clone()))
             .await
         {
             Ok(_) => {
@@ -811,14 +802,10 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// Fix a missing backlink by appending the suggested source link to `link_of`.
     pub async fn fix_missing_backlink(&self, file: &Path, suggested: &str) -> FixResult {
         match self.get_frontmatter_property(file, "link_of").await {
-            Some(crate::yaml_value::YamlValue::Sequence(mut items)) => {
-                items.push(crate::yaml_value::YamlValue::String(suggested.to_string()));
+            Some(crate::yaml::Value::Sequence(mut items)) => {
+                items.push(crate::yaml::Value::String(suggested.to_string()));
                 match self
-                    .set_frontmatter_property(
-                        file,
-                        "link_of",
-                        crate::yaml_value::YamlValue::Sequence(items),
-                    )
+                    .set_frontmatter_property(file, "link_of", crate::yaml::Value::Sequence(items))
                     .await
                 {
                     Ok(_) => FixResult::success(format!(
@@ -837,9 +824,9 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                 .set_frontmatter_property(
                     file,
                     "link_of",
-                    crate::yaml_value::YamlValue::Sequence(vec![
-                        crate::yaml_value::YamlValue::String(suggested.to_string()),
-                    ]),
+                    crate::yaml::Value::Sequence(vec![crate::yaml::Value::String(
+                        suggested.to_string(),
+                    )]),
                 )
                 .await
             {
@@ -861,11 +848,11 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// Fix a stale backlink by removing it from `link_of`.
     pub async fn fix_stale_backlink(&self, file: &Path, value: &str) -> FixResult {
         match self.get_frontmatter_property(file, "link_of").await {
-            Some(crate::yaml_value::YamlValue::Sequence(items)) => {
-                let filtered: Vec<crate::yaml_value::YamlValue> = items
+            Some(crate::yaml::Value::Sequence(items)) => {
+                let filtered: Vec<crate::yaml::Value> = items
                     .into_iter()
                     .filter(|item| match item {
-                        crate::yaml_value::YamlValue::String(s) => s != value,
+                        crate::yaml::Value::String(s) => s != value,
                         _ => true,
                     })
                     .collect();
@@ -888,7 +875,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                         .set_frontmatter_property(
                             file,
                             "link_of",
-                            crate::yaml_value::YamlValue::Sequence(filtered),
+                            crate::yaml::Value::Sequence(filtered),
                         )
                         .await
                     {
@@ -913,13 +900,13 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// link to the attachment note's `attachment_of`.
     pub async fn fix_missing_attachment_backlink(&self, file: &Path, suggested: &str) -> FixResult {
         match self.get_frontmatter_property(file, "attachment_of").await {
-            Some(crate::yaml_value::YamlValue::Sequence(mut items)) => {
-                items.push(crate::yaml_value::YamlValue::String(suggested.to_string()));
+            Some(crate::yaml::Value::Sequence(mut items)) => {
+                items.push(crate::yaml::Value::String(suggested.to_string()));
                 match self
                     .set_frontmatter_property(
                         file,
                         "attachment_of",
-                        crate::yaml_value::YamlValue::Sequence(items),
+                        crate::yaml::Value::Sequence(items),
                     )
                     .await
                 {
@@ -939,9 +926,9 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                 .set_frontmatter_property(
                     file,
                     "attachment_of",
-                    crate::yaml_value::YamlValue::Sequence(vec![
-                        crate::yaml_value::YamlValue::String(suggested.to_string()),
-                    ]),
+                    crate::yaml::Value::Sequence(vec![crate::yaml::Value::String(
+                        suggested.to_string(),
+                    )]),
                 )
                 .await
             {
@@ -966,11 +953,11 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// Fix a stale attachment backlink by removing it from `attachment_of`.
     pub async fn fix_stale_attachment_backlink(&self, file: &Path, value: &str) -> FixResult {
         match self.get_frontmatter_property(file, "attachment_of").await {
-            Some(crate::yaml_value::YamlValue::Sequence(items)) => {
-                let filtered: Vec<crate::yaml_value::YamlValue> = items
+            Some(crate::yaml::Value::Sequence(items)) => {
+                let filtered: Vec<crate::yaml::Value> = items
                     .into_iter()
                     .filter(|item| match item {
-                        crate::yaml_value::YamlValue::String(s) => s != value,
+                        crate::yaml::Value::String(s) => s != value,
                         _ => true,
                     })
                     .collect();
@@ -996,7 +983,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                         .set_frontmatter_property(
                             file,
                             "attachment_of",
-                            crate::yaml_value::YamlValue::Sequence(filtered),
+                            crate::yaml::Value::Sequence(filtered),
                         )
                         .await
                     {
@@ -1028,7 +1015,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// the first is kept. Non-string entries pass through untouched.
     pub async fn fix_duplicate_list_entry(&self, file: &Path, property: &str) -> FixResult {
         let items = match self.get_frontmatter_property(file, property).await {
-            Some(crate::yaml_value::YamlValue::Sequence(items)) => items,
+            Some(crate::yaml::Value::Sequence(items)) => items,
             _ => {
                 return FixResult::failure(format!(
                     "Could not read {} list from {}",
@@ -1044,11 +1031,11 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         let mut seen_canonical: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         let original_len = items.len();
-        let mut deduped: Vec<crate::yaml_value::YamlValue> = Vec::with_capacity(original_len);
+        let mut deduped: Vec<crate::yaml::Value> = Vec::with_capacity(original_len);
 
         for item in items {
             match &item {
-                crate::yaml_value::YamlValue::String(raw) => {
+                crate::yaml::Value::String(raw) => {
                     let canonical = canonicalize_link_value(raw, &file_canonical, link_format);
                     if seen_canonical.insert(canonical) {
                         deduped.push(item);
@@ -1068,11 +1055,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         }
 
         match self
-            .set_frontmatter_property(
-                file,
-                property,
-                crate::yaml_value::YamlValue::Sequence(deduped),
-            )
+            .set_frontmatter_property(file, property, crate::yaml::Value::Sequence(deduped))
             .await
         {
             Ok(_) => FixResult::success(format!(
@@ -1099,11 +1082,11 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         contents_ref_to_remove: &str,
     ) -> FixResult {
         match self.get_frontmatter_property(file, "contents").await {
-            Some(crate::yaml_value::YamlValue::Sequence(items)) => {
-                let filtered: Vec<crate::yaml_value::YamlValue> = items
+            Some(crate::yaml::Value::Sequence(items)) => {
+                let filtered: Vec<crate::yaml::Value> = items
                     .into_iter()
                     .filter(|item| {
-                        if let crate::yaml_value::YamlValue::String(s) = item {
+                        if let crate::yaml::Value::String(s) = item {
                             s != contents_ref_to_remove
                         } else {
                             true
@@ -1115,7 +1098,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     .set_frontmatter_property(
                         file,
                         "contents",
-                        crate::yaml_value::YamlValue::Sequence(filtered),
+                        crate::yaml::Value::Sequence(filtered),
                     )
                     .await
                 {

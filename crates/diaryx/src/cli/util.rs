@@ -1,11 +1,11 @@
 //! Shared utilities for CLI commands
 
-use diaryx_core::YamlValue;
 use diaryx_core::config::Config;
 use diaryx_core::entry::prettify_filename;
 use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::link_parser::{self, LinkFormat};
 use diaryx_core::workspace::Workspace;
+use diaryx_core::yaml;
 use diaryx_native::{NativeConfigExt, RealFileSystem};
 use glob::glob;
 use std::io::{self, Write};
@@ -235,7 +235,7 @@ pub fn rename_file_with_refs(
 
     // Read source file's frontmatter to find its part_of (parent)
     let parent_path = match app.get_frontmatter_property(&source_str, "part_of") {
-        Ok(Some(YamlValue::String(part_of))) => {
+        Ok(Some(yaml::Value::String(part_of))) => {
             if let (Some(formatter), Some(source_rel)) =
                 (formatter.as_ref(), source_workspace_relative.as_ref())
             {
@@ -318,10 +318,10 @@ pub fn rename_file_with_refs(
 
     // Get children before moving (need to update their part_of after move)
     let children: Vec<PathBuf> = match app.get_frontmatter_property(&source_str, "contents") {
-        Ok(Some(YamlValue::Sequence(contents))) => contents
+        Ok(Some(yaml::Value::Sequence(contents))) => contents
             .iter()
             .filter_map(|v| {
-                if let YamlValue::String(s) = v {
+                if let yaml::Value::String(s) = v {
                     if let (Some(formatter), Some(source_rel)) =
                         (formatter.as_ref(), source_workspace_relative.as_ref())
                     {
@@ -379,7 +379,7 @@ pub fn rename_file_with_refs(
         && parent.exists()
     {
         let parent_str = parent.to_string_lossy();
-        if let Ok(Some(YamlValue::Sequence(mut items))) =
+        if let Ok(Some(yaml::Value::Sequence(mut items))) =
             app.get_frontmatter_property(&parent_str, "contents")
         {
             let parent_workspace_relative = formatter
@@ -394,7 +394,7 @@ pub fn rename_file_with_refs(
 
             let mut updated = false;
             for item in &mut items {
-                if let YamlValue::String(s) = item {
+                if let yaml::Value::String(s) = item {
                     let mut matches_old = *s == old_relative;
                     let mut replacement = new_relative.clone();
 
@@ -438,7 +438,7 @@ pub fn rename_file_with_refs(
                 if let Err(e) = app.set_frontmatter_property(
                     &parent_str,
                     "contents",
-                    YamlValue::Sequence(items),
+                    yaml::Value::Sequence(items),
                 ) {
                     eprintln!("⚠ Error updating parent contents: {}", e);
                 } else {
@@ -484,7 +484,7 @@ pub fn rename_file_with_refs(
             calculate_relative_path(dest_path, parent)
         };
         if let Err(e) =
-            app.set_frontmatter_property(&dest_str, "part_of", YamlValue::String(new_part_of))
+            app.set_frontmatter_property(&dest_str, "part_of", yaml::Value::String(new_part_of))
         {
             eprintln!("⚠ Error updating part_of in moved file: {}", e);
         }
@@ -499,7 +499,7 @@ pub fn rename_file_with_refs(
             calculate_relative_path(child, dest_path)
         };
         if let Err(e) =
-            app.set_frontmatter_property(&child_str, "part_of", YamlValue::String(new_part_of))
+            app.set_frontmatter_property(&child_str, "part_of", yaml::Value::String(new_part_of))
         {
             eprintln!("⚠ Error updating part_of in '{}': {}", child.display(), e);
         } else {
@@ -776,11 +776,11 @@ fn extract_title_from_file(path: &Path) -> Option<String> {
     let frontmatter_str = &rest[..end_idx];
 
     // Parse YAML
-    let frontmatter: YamlValue = serde_yaml_ng::from_str(frontmatter_str).ok()?;
+    let frontmatter: yaml::Value = serde_yaml_ng::from_str(frontmatter_str).ok()?;
 
     // Extract title
-    if let YamlValue::Mapping(map) = frontmatter
-        && let Some(YamlValue::String(title)) = map.get("title")
+    if let yaml::Value::Mapping(map) = frontmatter
+        && let Some(yaml::Value::String(title)) = map.get("title")
     {
         return Some(title.clone());
     }
@@ -868,10 +868,10 @@ pub fn apply_workspace_config(config: Config) -> Config {
 }
 
 /// Format a YAML value for display
-pub fn format_value(value: &YamlValue) -> String {
+pub fn format_value(value: &yaml::Value) -> String {
     match value {
-        YamlValue::String(s) => s.clone(),
-        YamlValue::Sequence(items) => {
+        yaml::Value::String(s) => s.clone(),
+        yaml::Value::Sequence(items) => {
             let items_str: Vec<String> = items.iter().map(format_value).collect();
             format!("[{}]", items_str.join(", "))
         }

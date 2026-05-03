@@ -31,7 +31,7 @@ use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
 use crate::plugin::PluginRegistry;
-use crate::yaml_value::YamlValue;
+use crate::yaml;
 
 /// The main Diaryx instance.
 ///
@@ -203,11 +203,13 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     /// Get all frontmatter properties for a file.
     ///
     /// Returns an empty map if no frontmatter exists.
-    pub async fn get_frontmatter(&self, path: &str) -> Result<IndexMap<String, YamlValue>> {
+    pub async fn get_frontmatter(&self, path: &str) -> Result<IndexMap<String, yaml::Value>> {
         let content = self.read_raw(path).await?;
         match frontmatter::parse(&content) {
             Ok(parsed) => Ok(parsed.frontmatter),
-            Err(bookmatter::FrontmatterError::NoFrontmatter) => Ok(IndexMap::new()),
+            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => {
+                Ok(IndexMap::new())
+            }
             Err(e) => Err(e.into()),
         }
     }
@@ -219,7 +221,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         &self,
         path: &str,
         key: &str,
-    ) -> Result<Option<YamlValue>> {
+    ) -> Result<Option<yaml::Value>> {
         let frontmatter = self.get_frontmatter(path).await?;
         Ok(frontmatter.get(key).cloned())
     }
@@ -231,7 +233,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         &self,
         path: &str,
         key: &str,
-        value: YamlValue,
+        value: yaml::Value,
     ) -> Result<()> {
         let content = self.read_raw_or_empty(path).await?;
         let mut parsed = frontmatter::parse_or_empty(&content)?;
@@ -248,7 +250,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let mut parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(bookmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
 
@@ -266,7 +268,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(bookmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
 
@@ -312,7 +314,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         // Prepare target frontmatter
         let target_fm = match &section_value {
-            YamlValue::Mapping(map) => {
+            yaml::Value::Mapping(map) => {
                 // Nested section: write nested keys as top-level frontmatter in target
                 map.clone()
             }
@@ -365,7 +367,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         let link = format!("[{}]({})", title, target_path);
         source_parsed
             .frontmatter
-            .insert(section_key.to_string(), YamlValue::String(link));
+            .insert(section_key.to_string(), yaml::Value::String(link));
 
         self.write_parsed(source_path, &source_parsed).await
     }
@@ -413,7 +415,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     /// Update the 'updated' timestamp to the current time.
     pub async fn touch_updated(&self, path: &str) -> Result<()> {
         let timestamp = date::current_local_timestamp_rfc3339();
-        self.set_frontmatter_property(path, "updated", YamlValue::String(timestamp))
+        self.set_frontmatter_property(path, "updated", yaml::Value::String(timestamp))
             .await
     }
 
@@ -493,11 +495,11 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         let attachments = parsed
             .frontmatter
             .entry("attachments".to_string())
-            .or_insert(YamlValue::Sequence(vec![]));
+            .or_insert(yaml::Value::Sequence(vec![]));
 
-        if let YamlValue::Sequence(list) = attachments {
+        if let yaml::Value::Sequence(list) = attachments {
             let exists = list.iter().any(|item| {
-                if let YamlValue::String(existing) = item {
+                if let yaml::Value::String(existing) = item {
                     let parsed_existing = link_parser::parse_link(existing);
                     return link_parser::to_canonical(&parsed_existing, Path::new(path))
                         == target_canonical;
@@ -505,7 +507,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
                 false
             });
             if !exists {
-                list.push(YamlValue::String(attachment_path.to_string()));
+                list.push(yaml::Value::String(attachment_path.to_string()));
             }
         }
 
@@ -523,13 +525,13 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let mut parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(bookmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
 
-        if let Some(YamlValue::Sequence(list)) = parsed.frontmatter.get_mut("attachments") {
+        if let Some(yaml::Value::Sequence(list)) = parsed.frontmatter.get_mut("attachments") {
             list.retain(|item| {
-                if let YamlValue::String(s) = item {
+                if let yaml::Value::String(s) = item {
                     let parsed_existing = link_parser::parse_link(s);
                     link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
                 } else {
@@ -559,7 +561,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(bookmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
 
@@ -780,7 +782,7 @@ mod tests {
         crate::fs::block_on_test(diaryx.entry().set_frontmatter_property(
             "test.md",
             "title",
-            YamlValue::String("Updated".to_string()),
+            yaml::Value::String("Updated".to_string()),
         ))
         .unwrap();
 

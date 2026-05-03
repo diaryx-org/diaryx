@@ -29,7 +29,7 @@ use crate::validate::{
     FixResult, ValidationError, ValidationResult, ValidationResultWithMeta, ValidationWarning,
 };
 use crate::workspace::{TreeNode, WorkspaceConfig};
-use crate::yaml_value::YamlValue;
+use crate::yaml;
 
 // ============================================================================
 // Command Types
@@ -298,7 +298,7 @@ pub enum Command {
         /// Property key.
         key: String,
         /// Property value.
-        value: YamlValue,
+        value: yaml::Value,
         /// Optional workspace root index path for reading workspace config.
         /// When provided, `sync_title_to_heading` is respected for title changes.
         #[serde(default)]
@@ -963,7 +963,7 @@ pub enum Response {
     Tree(TreeNode),
 
     /// Frontmatter response.
-    Frontmatter(IndexMap<String, YamlValue>),
+    Frontmatter(IndexMap<String, yaml::Value>),
 
     /// Search results response.
     SearchResults(SearchResults),
@@ -1028,7 +1028,7 @@ pub struct EntryData {
     /// Title from frontmatter.
     pub title: Option<String>,
     /// All frontmatter properties.
-    pub frontmatter: IndexMap<String, YamlValue>,
+    pub frontmatter: IndexMap<String, yaml::Value>,
     /// Body content (after frontmatter).
     pub content: String,
 }

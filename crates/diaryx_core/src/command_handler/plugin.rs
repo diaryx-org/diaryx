@@ -4,7 +4,7 @@ use crate::command::Response;
 use crate::diaryx::Diaryx;
 use crate::error::{DiaryxError, Result};
 use crate::fs::AsyncFileSystem;
-use crate::yaml_value::{YamlMapping, YamlValue};
+use crate::yaml;
 
 impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     pub(crate) async fn cmd_plugin_command(
@@ -78,7 +78,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .set_frontmatter_property(
                         &root_index_path,
                         "plugins",
-                        YamlValue::Mapping(next_plugins),
+                        yaml::Value::Mapping(next_plugins),
                     )
                     .await?;
             }
@@ -96,7 +96,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .set_frontmatter_property(
                         &root_index_path,
                         "disabled_plugins",
-                        YamlValue::Sequence(next_disabled),
+                        yaml::Value::Sequence(next_disabled),
                     )
                     .await?;
             }
@@ -106,25 +106,25 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 }
 
-fn remove_plugin_from_mapping(value: YamlValue, plugin: &str) -> Option<YamlMapping> {
+fn remove_plugin_from_mapping(value: yaml::Value, plugin: &str) -> Option<yaml::Mapping> {
     let mut mapping = match value {
-        YamlValue::Mapping(mapping) => mapping,
+        yaml::Value::Mapping(mapping) => mapping,
         _ => return None,
     };
     let removed = mapping.shift_remove(plugin).is_some();
     if removed { Some(mapping) } else { None }
 }
 
-fn remove_plugin_from_disabled_list(value: YamlValue, plugin: &str) -> Option<Vec<YamlValue>> {
+fn remove_plugin_from_disabled_list(value: yaml::Value, plugin: &str) -> Option<Vec<yaml::Value>> {
     let items = match value {
-        YamlValue::Sequence(items) => items,
+        yaml::Value::Sequence(items) => items,
         _ => return None,
     };
     let mut removed = false;
     let filtered = items
         .into_iter()
         .filter(|item| {
-            let should_keep = !matches!(item, YamlValue::String(id) if id == plugin);
+            let should_keep = !matches!(item, yaml::Value::String(id) if id == plugin);
             if !should_keep {
                 removed = true;
             }
@@ -137,18 +137,21 @@ fn remove_plugin_from_disabled_list(value: YamlValue, plugin: &str) -> Option<Ve
 #[cfg(test)]
 mod tests {
     use super::{remove_plugin_from_disabled_list, remove_plugin_from_mapping};
-    use crate::yaml_value::{YamlMapping, YamlValue};
+    use crate::yaml;
 
     #[test]
     fn remove_plugin_from_mapping_drops_target_entry_only() {
-        let mut mapping = YamlMapping::new();
-        mapping.insert("diaryx.sync".to_string(), YamlValue::String("sync".into()));
+        let mut mapping = yaml::Mapping::new();
+        mapping.insert(
+            "diaryx.sync".to_string(),
+            yaml::Value::String("sync".into()),
+        );
         mapping.insert(
             "diaryx.daily".to_string(),
-            YamlValue::String("daily".into()),
+            yaml::Value::String("daily".into()),
         );
 
-        let result = remove_plugin_from_mapping(YamlValue::Mapping(mapping), "diaryx.sync")
+        let result = remove_plugin_from_mapping(yaml::Value::Mapping(mapping), "diaryx.sync")
             .expect("removed");
 
         assert!(!result.contains_key("diaryx.sync"));
@@ -158,14 +161,14 @@ mod tests {
     #[test]
     fn remove_plugin_from_disabled_list_filters_target() {
         let result = remove_plugin_from_disabled_list(
-            YamlValue::Sequence(vec![
-                YamlValue::String("diaryx.sync".into()),
-                YamlValue::String("diaryx.daily".into()),
+            yaml::Value::Sequence(vec![
+                yaml::Value::String("diaryx.sync".into()),
+                yaml::Value::String("diaryx.daily".into()),
             ]),
             "diaryx.sync",
         )
         .expect("removed");
 
-        assert_eq!(result, vec![YamlValue::String("diaryx.daily".into())]);
+        assert_eq!(result, vec![yaml::Value::String("diaryx.daily".into())]);
     }
 }

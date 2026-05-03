@@ -1,6 +1,6 @@
 //! One-time migration of legacy workspace frontmatter keys into plugin storage.
 
-use diaryx_core::yaml_value::YamlValue;
+use diaryx_core::yaml;
 use diaryx_plugin_sdk::prelude::*;
 
 use crate::markdown_io::{parse_markdown, write_markdown};
@@ -24,7 +24,7 @@ pub fn migrate_legacy_config(state_value: &mut DailyState) -> Result<(), String>
         let (mut fm, body) = parse_markdown(&content)?;
         let mut file_changed = false;
 
-        if let Some(YamlValue::String(folder)) = fm.shift_remove("daily_entry_folder") {
+        if let Some(yaml::Value::String(folder)) = fm.shift_remove("daily_entry_folder") {
             if state_value
                 .config
                 .entry_folder
@@ -38,7 +38,7 @@ pub fn migrate_legacy_config(state_value: &mut DailyState) -> Result<(), String>
             migrated_any = true;
         }
 
-        if let Some(YamlValue::String(template)) = fm.shift_remove("daily_template") {
+        if let Some(yaml::Value::String(template)) = fm.shift_remove("daily_template") {
             if state_value
                 .config
                 .entry_template

@@ -13,19 +13,24 @@ categories = ["text-processing", "parsing"]
 [dependencies]
 indexmap.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 serde_yaml_ng.workspace = true
 thiserror.workspace = true
-# Used by YamlValue::Display to format f64 values without pulling in
+# Used by Value::Display to format f64 values without pulling in
 # core::num::flt2dec (Rust's stdlib Dragon4/Grisu float formatter, ~15 KB
 # of WASM code).
 ryu = "1"
+
+# Optional: serde_json interop (From conversions between yaml::Value and serde_json::Value)
+serde_json = { workspace = true, optional = true }
 
 # Optional: TypeScript binding generation
 ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"], optional = true }
 
 [features]
 default = []
+
+# Enables `From<serde_json::Value>` conversions on `yaml::Value`.
+json = ["dep:serde_json"]
 
 # TypeScript binding generation (build-time only, not needed in WASM)
 typescript = ["dep:ts-rs"]

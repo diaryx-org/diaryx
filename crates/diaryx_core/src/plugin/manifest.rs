@@ -823,8 +823,8 @@ pub struct PluginWorkspaceMetadata {
     pub body: String,
 }
 
-/// Convert a `YamlValue` to a `serde_json::Value`.
-fn yaml_to_json(yaml: &crate::yaml_value::YamlValue) -> Result<serde_json::Value, DiaryxError> {
+/// Convert a `yaml::Value` to a `serde_json::Value`.
+fn yaml_to_json(yaml: &crate::yaml::Value) -> Result<serde_json::Value, DiaryxError> {
     Ok(serde_json::Value::from(yaml.clone()))
 }
 
@@ -990,9 +990,9 @@ impl PluginWorkspaceMetadata {
 }
 
 /// Extract a string array from an optional YAML value.
-fn yaml_string_array(value: Option<&crate::yaml_value::YamlValue>) -> Vec<String> {
+fn yaml_string_array(value: Option<&crate::yaml::Value>) -> Vec<String> {
     match value {
-        Some(crate::yaml_value::YamlValue::Sequence(seq)) => seq
+        Some(crate::yaml::Value::Sequence(seq)) => seq
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect(),

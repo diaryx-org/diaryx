@@ -1,7 +1,7 @@
 use crate::build_plugin;
 use crate::util::{diaryx_app, run_checked, workspace_root};
 use chrono::Utc;
-use diaryx_core::YamlValue;
+use diaryx_core::yaml;
 use indexmap::IndexMap;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -326,27 +326,31 @@ fn update_existing_registry_entry(
         .to_str()
         .ok_or_else(|| format!("non-UTF8 path: {}", plugin_file.display()))?;
 
-    app.set_frontmatter_property(path_str, "version", YamlValue::String(version.to_string()))
-        .map_err(|e| format!("set version: {e}"))?;
+    app.set_frontmatter_property(
+        path_str,
+        "version",
+        yaml::Value::String(version.to_string()),
+    )
+    .map_err(|e| format!("set version: {e}"))?;
 
     let fm = app
         .get_all_frontmatter(path_str)
         .map_err(|e| format!("read frontmatter: {e}"))?;
-    let mut artifact: IndexMap<String, YamlValue> = match fm.get("artifact") {
-        Some(YamlValue::Mapping(m)) => m.clone(),
+    let mut artifact: IndexMap<String, yaml::Value> = match fm.get("artifact") {
+        Some(yaml::Value::Mapping(m)) => m.clone(),
         _ => IndexMap::new(),
     };
     artifact.insert(
         "url".to_string(),
-        YamlValue::String(download_url.to_string()),
+        yaml::Value::String(download_url.to_string()),
     );
-    artifact.insert("sha256".to_string(), YamlValue::String(sha.to_string()));
-    artifact.insert("size".to_string(), YamlValue::Int(size as i64));
+    artifact.insert("sha256".to_string(), yaml::Value::String(sha.to_string()));
+    artifact.insert("size".to_string(), yaml::Value::Int(size as i64));
     artifact.insert(
         "published_at".to_string(),
-        YamlValue::String(now.to_string()),
+        yaml::Value::String(now.to_string()),
     );
-    app.set_frontmatter_property(path_str, "artifact", YamlValue::Mapping(artifact))
+    app.set_frontmatter_property(path_str, "artifact", yaml::Value::Mapping(artifact))
         .map_err(|e| format!("set artifact: {e}"))?;
 
     Ok(())

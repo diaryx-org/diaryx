@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 
 use diaryx_core::entry::prettify_filename;
 use diaryx_core::frontmatter;
-use diaryx_core::yaml_value::YamlValue as Value;
+use diaryx_core::yaml::Value;
 
 use crate::types::ImportResult;
 use diaryx_plugin_sdk::host;

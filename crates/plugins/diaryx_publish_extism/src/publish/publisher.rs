@@ -667,9 +667,9 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
 
         let nav_title = frontmatter::get_string(&parsed.frontmatter, "nav_title").map(String::from);
         let nav_order = parsed.frontmatter.get("nav_order").and_then(|v| match v {
-            diaryx_core::yaml_value::YamlValue::Int(i) => Some(*i as i32),
-            diaryx_core::yaml_value::YamlValue::Float(f) => Some(*f as i32),
-            diaryx_core::yaml_value::YamlValue::String(s) => s.parse::<i32>().ok(),
+            diaryx_core::yaml::Value::Int(i) => Some(*i as i32),
+            diaryx_core::yaml::Value::Float(f) => Some(*f as i32),
+            diaryx_core::yaml::Value::String(s) => s.parse::<i32>().ok(),
             _ => None,
         });
         let hide_from_nav = parsed
@@ -714,7 +714,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
     /// Build navigation links from contents property
     async fn build_contents_links(
         &self,
-        fm: &indexmap::IndexMap<String, diaryx_core::yaml_value::YamlValue>,
+        fm: &indexmap::IndexMap<String, diaryx_core::yaml::Value>,
         current_path: &Path,
         path_to_filename: &HashMap<PathBuf, String>,
         workspace_dir: &Path,
@@ -751,7 +751,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
     /// Build parent navigation link from part_of property
     async fn build_parent_link(
         &self,
-        fm: &indexmap::IndexMap<String, diaryx_core::yaml_value::YamlValue>,
+        fm: &indexmap::IndexMap<String, diaryx_core::yaml::Value>,
         current_path: &Path,
         path_to_filename: &HashMap<PathBuf, String>,
         workspace_dir: &Path,

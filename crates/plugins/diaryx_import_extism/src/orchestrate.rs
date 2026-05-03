@@ -4,7 +4,7 @@
 
 use std::{collections::HashSet, path::Path};
 
-use diaryx_core::yaml_value::YamlValue as Value;
+use diaryx_core::yaml::Value;
 use indexmap::IndexMap;
 
 use diaryx_core::entry::slugify;

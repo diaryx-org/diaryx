@@ -20,7 +20,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
-use crate::yaml_value::YamlValue;
+use crate::yaml;
 
 use crate::command::{Command, Response};
 use crate::diaryx::Diaryx;
@@ -1078,7 +1078,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 source_format_hint,
             );
             if converted != link_str {
-                fm.insert("link".to_string(), YamlValue::String(converted));
+                fm.insert("link".to_string(), yaml::Value::String(converted));
                 links_converted += 1;
                 modified = true;
             }
@@ -1096,7 +1096,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     source_format_hint,
                 );
                 if converted != part_of_str {
-                    fm.insert("part_of".to_string(), YamlValue::String(converted));
+                    fm.insert("part_of".to_string(), yaml::Value::String(converted));
                     links_converted += 1;
                     modified = true;
                 }
@@ -1118,14 +1118,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             part_of_changed = true;
                             links_converted += 1;
                         }
-                        new_part_of.push(YamlValue::String(converted));
+                        new_part_of.push(yaml::Value::String(converted));
                     } else {
                         new_part_of.push(item.clone());
                     }
                 }
 
                 if part_of_changed {
-                    fm.insert("part_of".to_string(), YamlValue::Sequence(new_part_of));
+                    fm.insert("part_of".to_string(), yaml::Value::Sequence(new_part_of));
                     modified = true;
                 }
             }
@@ -1151,14 +1151,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         contents_changed = true;
                         links_converted += 1;
                     }
-                    new_contents.push(YamlValue::String(converted));
+                    new_contents.push(yaml::Value::String(converted));
                 } else {
                     new_contents.push(item.clone());
                 }
             }
 
             if contents_changed {
-                fm.insert("contents".to_string(), YamlValue::Sequence(new_contents));
+                fm.insert("contents".to_string(), yaml::Value::Sequence(new_contents));
                 modified = true;
             }
         }
@@ -1183,14 +1183,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         links_changed = true;
                         links_converted += 1;
                     }
-                    new_links.push(YamlValue::String(converted));
+                    new_links.push(yaml::Value::String(converted));
                 } else {
                     new_links.push(item.clone());
                 }
             }
 
             if links_changed {
-                fm.insert("links".to_string(), YamlValue::Sequence(new_links));
+                fm.insert("links".to_string(), yaml::Value::Sequence(new_links));
                 modified = true;
             }
         }
@@ -1215,14 +1215,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         link_of_changed = true;
                         links_converted += 1;
                     }
-                    new_link_of.push(YamlValue::String(converted));
+                    new_link_of.push(yaml::Value::String(converted));
                 } else {
                     new_link_of.push(item.clone());
                 }
             }
 
             if link_of_changed {
-                fm.insert("link_of".to_string(), YamlValue::Sequence(new_link_of));
+                fm.insert("link_of".to_string(), yaml::Value::Sequence(new_link_of));
                 modified = true;
             }
         }
@@ -1255,7 +1255,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         attachments_changed = true;
                         links_converted += 1;
                     }
-                    new_attachments.push(YamlValue::String(converted));
+                    new_attachments.push(yaml::Value::String(converted));
                 } else {
                     new_attachments.push(item.clone());
                 }
@@ -1264,7 +1264,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             if attachments_changed {
                 fm.insert(
                     "attachments".to_string(),
-                    YamlValue::Sequence(new_attachments),
+                    yaml::Value::Sequence(new_attachments),
                 );
                 modified = true;
             }
@@ -1924,9 +1924,7 @@ mod tests {
                 .execute(Command::SetFrontmatterProperty {
                     path: "_attachments/icon.png.md".to_string(),
                     key: "attachment".to_string(),
-                    value: crate::yaml_value::YamlValue::String(
-                        "apps/web/public/icon.png".to_string(),
-                    ),
+                    value: crate::yaml::Value::String("apps/web/public/icon.png".to_string()),
                     root_index_path: None,
                 })
                 .await

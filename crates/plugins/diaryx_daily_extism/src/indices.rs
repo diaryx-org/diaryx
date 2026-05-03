@@ -4,7 +4,7 @@ use std::path::Path;
 
 use chrono::{Datelike, NaiveDate};
 use diaryx_core::link_parser::{parse_link, to_canonical_with_link_format};
-use diaryx_core::yaml_value::YamlValue;
+use diaryx_core::yaml;
 use diaryx_plugin_sdk::prelude::*;
 use indexmap::IndexMap;
 
@@ -38,31 +38,32 @@ pub fn ensure_index_file(
 
     let mut changed = !exists;
 
-    if fm.get("title").and_then(YamlValue::as_str) != Some(title) {
-        fm.insert("title".to_string(), YamlValue::String(title.to_string()));
+    if fm.get("title").and_then(yaml::Value::as_str) != Some(title) {
+        fm.insert("title".to_string(), yaml::Value::String(title.to_string()));
         changed = true;
     }
 
     if let Some(desc) = description
-        && fm.get("description").and_then(YamlValue::as_str) != Some(desc)
+        && fm.get("description").and_then(yaml::Value::as_str) != Some(desc)
     {
         fm.insert(
             "description".to_string(),
-            YamlValue::String(desc.to_string()),
+            yaml::Value::String(desc.to_string()),
         );
         changed = true;
     }
 
     if let Some((parent_rel, parent_title)) = part_of {
         let parent_link = format_link_for(rel_path, parent_rel, parent_title, state.link_format);
-        if fm.get("part_of").and_then(YamlValue::as_str) != Some(parent_link.as_str()) {
-            fm.insert("part_of".to_string(), YamlValue::String(parent_link));
+        if fm.get("part_of").and_then(yaml::Value::as_str) != Some(parent_link.as_str()) {
+            fm.insert("part_of".to_string(), yaml::Value::String(parent_link));
             changed = true;
         }
     }
 
     let contents = ensure_sequence(&mut fm, "contents");
-    if fm.get("contents").is_none() || !matches!(fm.get("contents"), Some(YamlValue::Sequence(_))) {
+    if fm.get("contents").is_none() || !matches!(fm.get("contents"), Some(yaml::Value::Sequence(_)))
+    {
         save_sequence(&mut fm, "contents", &contents);
         changed = true;
     }
@@ -139,11 +140,11 @@ pub fn set_part_of(
     let (mut fm, body) = parse_markdown(&content)?;
     let new_part_of = format_link_for(child_rel, parent_rel, parent_title, state.link_format);
 
-    if fm.get("part_of").and_then(YamlValue::as_str) == Some(&new_part_of) {
+    if fm.get("part_of").and_then(yaml::Value::as_str) == Some(&new_part_of) {
         return Ok(());
     }
 
-    fm.insert("part_of".to_string(), YamlValue::String(new_part_of));
+    fm.insert("part_of".to_string(), yaml::Value::String(new_part_of));
     write_markdown(&fs_path, &fm, &body)
 }
 

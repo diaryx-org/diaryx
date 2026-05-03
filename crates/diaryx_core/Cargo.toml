@@ -17,13 +17,12 @@ indexmap.workspace = true
 log = "0.4"
 pathdiff = "0.2"
 # ryu is already a transitive dep via serde_json. Depending on it directly
-# lets us format f64 values for user-visible display (YamlValue::Display)
+# lets us format f64 values for user-visible display (yaml::Value::Display)
 # without pulling in `core::num::flt2dec` — Rust's stdlib Dragon4/Grisu
 # float formatter is ~15 KB of WASM code, which we avoid this way.
 ryu = "1"
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml_ng.workspace = true
 sha2 = "0.10"
 thiserror.workspace = true
 async-trait = "0.1"

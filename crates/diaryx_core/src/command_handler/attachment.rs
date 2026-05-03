@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::yaml_value::YamlValue;
+use crate::yaml;
 
 use crate::command::{ResolvedAttachmentRef, Response};
 use crate::diaryx::Diaryx;
@@ -119,7 +119,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .get_frontmatter_property(note_path, "attachment_of")
             .await?;
         let mut items = match existing {
-            Some(YamlValue::Sequence(items)) => items,
+            Some(yaml::Value::Sequence(items)) => items,
             _ => Vec::new(),
         };
         let exists = items.iter().any(|item| {
@@ -129,9 +129,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         });
         if !exists {
             let formatted = self.format_link_for_file(&source_canonical, &note_canonical);
-            items.push(YamlValue::String(formatted));
+            items.push(yaml::Value::String(formatted));
             self.entry()
-                .set_frontmatter_property(note_path, "attachment_of", YamlValue::Sequence(items))
+                .set_frontmatter_property(note_path, "attachment_of", yaml::Value::Sequence(items))
                 .await?;
         }
         Ok(())
@@ -148,10 +148,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .entry()
             .get_frontmatter_property(note_path, "attachment_of")
             .await?;
-        let Some(YamlValue::Sequence(items)) = existing else {
+        let Some(yaml::Value::Sequence(items)) = existing else {
             return Ok(0);
         };
-        let filtered: Vec<YamlValue> = items
+        let filtered: Vec<yaml::Value> = items
             .into_iter()
             .filter(|item| {
                 !item.as_str().is_some_and(|s| {
@@ -166,7 +166,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 .await?;
         } else {
             self.entry()
-                .set_frontmatter_property(note_path, "attachment_of", YamlValue::Sequence(filtered))
+                .set_frontmatter_property(
+                    note_path,
+                    "attachment_of",
+                    yaml::Value::Sequence(filtered),
+                )
                 .await?;
         }
         Ok(remaining)
@@ -481,7 +485,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 .set_frontmatter_property(
                     &source_canonical,
                     "attachments",
-                    YamlValue::Sequence(rewritten.into_iter().map(YamlValue::String).collect()),
+                    yaml::Value::Sequence(rewritten.into_iter().map(yaml::Value::String).collect()),
                 )
                 .await?;
         }

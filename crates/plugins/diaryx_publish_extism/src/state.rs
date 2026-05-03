@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
 
-use diaryx_core::yaml_value::YamlValue;
+use diaryx_core::yaml;
 use indexmap::IndexMap;
 
 use crate::publish::BodyRenderer;
@@ -33,7 +33,7 @@ impl BodyRenderer for PluginBodyRenderer {
     fn render_body(
         &self,
         body: &str,
-        frontmatter: &IndexMap<String, YamlValue>,
+        frontmatter: &IndexMap<String, yaml::Value>,
         file_path: &Path,
         workspace_root: Option<&Path>,
         audience: Option<&str>,

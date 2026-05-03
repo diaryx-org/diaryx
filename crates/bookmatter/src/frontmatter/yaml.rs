@@ -1,18 +1,34 @@
-//! Frontmatter parsing and manipulation utilities.
+//! YAML frontmatter parsing and manipulation.
 //!
-//! This module provides low-level functions for working with YAML frontmatter
-//! in markdown files.
+//! Functions in this module work on markdown content delimited by a pair of
+//! `---` fences and a YAML body in between. For format-only parsing (no
+//! delimiter handling), see [`crate::yaml`].
 
 use indexmap::IndexMap;
+use thiserror::Error;
 
-use crate::error::{FrontmatterError, Result};
-use crate::yaml_value::YamlValue;
+use crate::yaml::{self, Value};
+
+/// Errors that can occur while parsing or serializing YAML frontmatter.
+#[derive(Debug, Error)]
+pub enum FrontmatterError {
+    /// The input did not contain valid frontmatter delimiters (`---` ... `---`).
+    #[error("file has no frontmatter delimiters")]
+    NoFrontmatter,
+
+    /// The frontmatter YAML failed to parse or serialize.
+    #[error("YAML parsing error: {0}")]
+    Yaml(#[from] yaml::Error),
+}
+
+/// Convenience `Result` alias parameterized by [`FrontmatterError`].
+pub type Result<T> = std::result::Result<T, FrontmatterError>;
 
 /// Result of parsing a markdown file with frontmatter.
 #[derive(Debug, Clone)]
 pub struct ParsedFile {
     /// The parsed frontmatter as an ordered map.
-    pub frontmatter: IndexMap<String, YamlValue>,
+    pub frontmatter: IndexMap<String, Value>,
     /// The body content after the frontmatter.
     pub body: String,
 }
@@ -22,12 +38,10 @@ pub struct ParsedFile {
 /// Returns `Ok(ParsedFile)` with the frontmatter and body.
 /// Returns `Err(NoFrontmatter)` if the content doesn't have valid frontmatter delimiters.
 pub fn parse(content: &str) -> Result<ParsedFile> {
-    // Check if content starts with frontmatter delimiter
     if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
         return Err(FrontmatterError::NoFrontmatter);
     }
 
-    // Find the closing delimiter
     let rest = &content[4..]; // Skip first "---\n"
     let end_idx = rest
         .find("\n---\n")
@@ -37,8 +51,7 @@ pub fn parse(content: &str) -> Result<ParsedFile> {
     let frontmatter_str = &rest[..end_idx];
     let body = &rest[end_idx + 5..]; // Skip "\n---\n"
 
-    // Parse YAML frontmatter into IndexMap to preserve order
-    let frontmatter: IndexMap<String, YamlValue> = serde_yaml_ng::from_str(frontmatter_str)?;
+    let frontmatter: IndexMap<String, Value> = yaml::from_str(frontmatter_str)?;
 
     Ok(ParsedFile {
         frontmatter,
@@ -51,16 +64,13 @@ pub fn parse(content: &str) -> Result<ParsedFile> {
 /// Unlike `parse()`, this function never returns an error for missing frontmatter.
 /// Use this for operations that should work on files without frontmatter.
 pub fn parse_or_empty(content: &str) -> Result<ParsedFile> {
-    // Check if content starts with frontmatter delimiter
     if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
-        // No frontmatter - return empty frontmatter and entire content as body
         return Ok(ParsedFile {
             frontmatter: IndexMap::new(),
             body: content.to_string(),
         });
     }
 
-    // Find the closing delimiter
     let rest = &content[4..]; // Skip first "---\n"
     let end_idx = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n"));
 
@@ -69,9 +79,7 @@ pub fn parse_or_empty(content: &str) -> Result<ParsedFile> {
             let frontmatter_str = &rest[..idx];
             let body = &rest[idx + 5..]; // Skip "\n---\n"
 
-            // Parse YAML frontmatter into IndexMap to preserve order
-            let frontmatter: IndexMap<String, YamlValue> =
-                serde_yaml_ng::from_str(frontmatter_str)?;
+            let frontmatter: IndexMap<String, Value> = yaml::from_str(frontmatter_str)?;
 
             Ok(ParsedFile {
                 frontmatter,
@@ -89,8 +97,8 @@ pub fn parse_or_empty(content: &str) -> Result<ParsedFile> {
 }
 
 /// Serialize frontmatter and body back to markdown content.
-pub fn serialize(frontmatter: &IndexMap<String, YamlValue>, body: &str) -> Result<String> {
-    let yaml_str = serde_yaml_ng::to_string(frontmatter)?;
+pub fn serialize(frontmatter: &IndexMap<String, Value>, body: &str) -> Result<String> {
+    let yaml_str = yaml::to_string(frontmatter)?;
     Ok(format!("---\n{}---\n{}", yaml_str, body))
 }
 
@@ -99,12 +107,28 @@ pub fn serialize(frontmatter: &IndexMap<String, YamlValue>, body: &str) -> Resul
 /// Returns the YAML text without the `---` delimiters, or `None` if no
 /// valid frontmatter delimiters are found.
 pub fn extract_yaml(content: &str) -> Option<&str> {
+    split(content).map(|(yaml, _)| yaml)
+}
+
+/// Split a markdown string into `(frontmatter_yaml, body)` without parsing
+/// the YAML. Returns `None` if `content` does not start with a `---` opening
+/// delimiter or has no closing `---` delimiter.
+///
+/// Slicing is byte-identical to [`parse`] / [`parse_or_empty`]: this is the
+/// shared primitive that all delimiter-based extraction in this module uses.
+///
+/// Use this when you want to defer YAML deserialization to the caller — for
+/// example, to deserialize the frontmatter into a typed Serde struct rather
+/// than the dynamic [`Value`].
+pub fn split(content: &str) -> Option<(&str, &str)> {
     if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
         return None;
     }
-    let rest = &content[4..];
+    let rest = &content[4..]; // matches parse()/parse_or_empty()
     let end = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n"))?;
-    Some(&rest[..end])
+    let yaml = &rest[..end];
+    let body = &rest[end + 5..];
+    Some((yaml, body))
 }
 
 /// Parse a typed struct from YAML frontmatter in a markdown file.
@@ -113,17 +137,27 @@ pub fn extract_yaml(content: &str) -> Option<&str> {
 /// If no frontmatter delimiters are found, attempts to parse the entire content as YAML.
 pub fn parse_typed<T: serde::de::DeserializeOwned>(
     content: &str,
-) -> std::result::Result<T, serde_yaml_ng::Error> {
-    let yaml = extract_yaml(content).unwrap_or(content);
-    serde_yaml_ng::from_str(yaml)
+) -> std::result::Result<T, yaml::Error> {
+    let s = extract_yaml(content).unwrap_or(content);
+    yaml::from_str(s)
 }
 
 /// Serialize a typed struct as YAML frontmatter in a markdown file.
-pub fn serialize_typed<T: serde::Serialize>(
+pub fn serialize_typed<T: serde::Serialize>(value: &T) -> std::result::Result<String, yaml::Error> {
+    let s = yaml::to_string(value)?;
+    Ok(format!("---\n{}---\n", s))
+}
+
+/// Serialize any Serde-serializable value as YAML frontmatter, with the given body.
+///
+/// Like [`serialize`], but accepts any `T: Serialize` rather than requiring the
+/// dynamic [`Mapping`]. Useful for round-tripping typed frontmatter structs.
+pub fn serialize_with_body<T: serde::Serialize>(
     value: &T,
-) -> std::result::Result<String, serde_yaml_ng::Error> {
-    let yaml = serde_yaml_ng::to_string(value)?;
-    Ok(format!("---\n{}---\n", yaml))
+    body: &str,
+) -> std::result::Result<String, yaml::Error> {
+    let s = yaml::to_string(value)?;
+    Ok(format!("---\n{}---\n{}", s, body))
 }
 
 /// Extract only the body from markdown content, stripping frontmatter.
@@ -136,7 +170,6 @@ pub fn extract_body(content: &str) -> &str {
 
     let rest = &content[4..];
     if let Some(end_idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
-        // Skip past the closing delimiter
         let body_start = end_idx + 5;
         if body_start < rest.len() {
             &rest[body_start..]
@@ -149,35 +182,29 @@ pub fn extract_body(content: &str) -> &str {
 }
 
 /// Get a property from frontmatter.
-pub fn get_property<'a>(
-    frontmatter: &'a IndexMap<String, YamlValue>,
-    key: &str,
-) -> Option<&'a YamlValue> {
+pub fn get_property<'a>(frontmatter: &'a IndexMap<String, Value>, key: &str) -> Option<&'a Value> {
     frontmatter.get(key)
 }
 
 /// Set a property in frontmatter (in place).
-pub fn set_property(frontmatter: &mut IndexMap<String, YamlValue>, key: &str, value: YamlValue) {
+pub fn set_property(frontmatter: &mut IndexMap<String, Value>, key: &str, value: Value) {
     frontmatter.insert(key.to_string(), value);
 }
 
 /// Remove a property from frontmatter (in place).
-pub fn remove_property(
-    frontmatter: &mut IndexMap<String, YamlValue>,
-    key: &str,
-) -> Option<YamlValue> {
+pub fn remove_property(frontmatter: &mut IndexMap<String, Value>, key: &str) -> Option<Value> {
     frontmatter.shift_remove(key)
 }
 
 /// Get a string property value.
-pub fn get_string<'a>(frontmatter: &'a IndexMap<String, YamlValue>, key: &str) -> Option<&'a str> {
+pub fn get_string<'a>(frontmatter: &'a IndexMap<String, Value>, key: &str) -> Option<&'a str> {
     frontmatter.get(key).and_then(|v| v.as_str())
 }
 
 /// Get an array property as a Vec of strings.
-pub fn get_string_array(frontmatter: &IndexMap<String, YamlValue>, key: &str) -> Vec<String> {
+pub fn get_string_array(frontmatter: &IndexMap<String, Value>, key: &str) -> Vec<String> {
     match frontmatter.get(key) {
-        Some(YamlValue::Sequence(seq)) => seq
+        Some(Value::Sequence(seq)) => seq
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect(),
@@ -186,7 +213,7 @@ pub fn get_string_array(frontmatter: &IndexMap<String, YamlValue>, key: &str) ->
 }
 
 /// Replace only the body portion of a markdown string, preserving the raw
-/// frontmatter block byte-for-byte. This avoids a `serde_yaml_ng` round-trip.
+/// frontmatter block byte-for-byte. This avoids a YAML round-trip.
 ///
 /// If `content` has no frontmatter (or has a malformed opening/closing
 /// delimiter), returns `new_body` as-is.
@@ -206,7 +233,6 @@ pub fn replace_body(content: &str, new_body: &str) -> String {
     } else if let Some(idx) = rest.find("\n---\r\n") {
         open_len + idx + 6 // through "\n---\r\n"
     } else {
-        // Malformed frontmatter — no closing delimiter
         return new_body.to_string();
     };
 
@@ -214,9 +240,7 @@ pub fn replace_body(content: &str, new_body: &str) -> String {
 }
 
 /// Sort frontmatter keys alphabetically.
-pub fn sort_alphabetically(
-    frontmatter: IndexMap<String, YamlValue>,
-) -> IndexMap<String, YamlValue> {
+pub fn sort_alphabetically(frontmatter: IndexMap<String, Value>) -> IndexMap<String, Value> {
     let mut pairs: Vec<_> = frontmatter.into_iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     pairs.into_iter().collect()
@@ -227,9 +251,9 @@ pub fn sort_alphabetically(
 /// Pattern is comma-separated keys, with "*" meaning "rest alphabetically".
 /// Example: "title,description,*" puts title first, description second, rest alphabetically
 pub fn sort_by_pattern(
-    frontmatter: IndexMap<String, YamlValue>,
+    frontmatter: IndexMap<String, Value>,
     pattern: &str,
-) -> IndexMap<String, YamlValue> {
+) -> IndexMap<String, Value> {
     let priority_keys: Vec<&str> = pattern.split(',').map(|s| s.trim()).collect();
 
     let mut result = IndexMap::new();
@@ -237,7 +261,6 @@ pub fn sort_by_pattern(
 
     for key in &priority_keys {
         if *key == "*" {
-            // Insert remaining keys alphabetically
             let mut rest: Vec<_> = remaining.drain(..).collect();
             rest.sort_by(|a, b| a.0.cmp(&b.0));
             for (k, v) in rest {
@@ -249,7 +272,6 @@ pub fn sort_by_pattern(
         }
     }
 
-    // If no "*" was in pattern, append any remaining keys alphabetically.
     if !remaining.is_empty() {
         let mut rest: Vec<_> = remaining.drain(..).collect();
         rest.sort_by(|a, b| a.0.cmp(&b.0));
@@ -294,7 +316,7 @@ mod tests {
     #[test]
     fn test_serialize() {
         let mut fm = IndexMap::new();
-        fm.insert("title".to_string(), YamlValue::String("Test".to_string()));
+        fm.insert("title".to_string(), Value::String("Test".to_string()));
         let result = serialize(&fm, "\nBody").unwrap();
         assert!(result.starts_with("---\n"));
         assert!(result.contains("title: Test"));
@@ -316,9 +338,9 @@ mod tests {
     #[test]
     fn test_sort_alphabetically() {
         let mut fm = IndexMap::new();
-        fm.insert("zebra".to_string(), YamlValue::Null);
-        fm.insert("apple".to_string(), YamlValue::Null);
-        fm.insert("banana".to_string(), YamlValue::Null);
+        fm.insert("zebra".to_string(), Value::Null);
+        fm.insert("apple".to_string(), Value::Null);
+        fm.insert("banana".to_string(), Value::Null);
 
         let sorted = sort_alphabetically(fm);
         let keys: Vec<_> = sorted.keys().collect();
@@ -372,9 +394,9 @@ mod tests {
     #[test]
     fn test_sort_by_pattern() {
         let mut fm = IndexMap::new();
-        fm.insert("zebra".to_string(), YamlValue::Null);
-        fm.insert("title".to_string(), YamlValue::Null);
-        fm.insert("apple".to_string(), YamlValue::Null);
+        fm.insert("zebra".to_string(), Value::Null);
+        fm.insert("title".to_string(), Value::Null);
+        fm.insert("apple".to_string(), Value::Null);
 
         let sorted = sort_by_pattern(fm, "title,*");
         let keys: Vec<_> = sorted.keys().collect();

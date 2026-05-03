@@ -7,10 +7,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use diaryx_core::YamlValue;
 use diaryx_core::config::Config;
 use diaryx_core::entry::{DiaryxApp, slugify_title, sync_h1_in_body};
 use diaryx_core::workspace::{Workspace, prepare_delete_plan, selection_includes_descendants};
+use diaryx_core::yaml;
 use diaryx_native::NativeConfigExt;
 
 use crate::cli::{CliWorkspace, block_on};
@@ -129,7 +129,7 @@ pub fn exec_rename(
         block_on(rws.set_frontmatter_property(
             path,
             "title",
-            YamlValue::String(new_title.to_string()),
+            yaml::Value::String(new_title.to_string()),
         ))
         .map_err(|e| format!("Rename failed: {}", e))?;
 
@@ -156,7 +156,7 @@ pub fn exec_rename(
     block_on(rws.set_frontmatter_property(
         &new_path,
         "title",
-        YamlValue::String(new_title.to_string()),
+        yaml::Value::String(new_title.to_string()),
     ))
     .map_err(|e| format!("Title update failed: {}", e))?;
 

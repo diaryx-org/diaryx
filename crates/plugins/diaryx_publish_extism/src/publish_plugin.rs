@@ -210,7 +210,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     .get("plugins")
                     .and_then(|v| v.get("diaryx.publish"))
                     .and_then(|v| {
-                        // Convert YamlValue to JSON then deserialize
+                        // Convert yaml::Value to JSON then deserialize
                         serde_json::to_value(v)
                             .ok()
                             .and_then(|jv| serde_json::from_value::<PublishPluginConfig>(jv).ok())
@@ -237,22 +237,20 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
 
         let config = self.config.read().unwrap().clone();
         let config_yaml_str = serde_yaml_ng::to_string(&config).map_err(DiaryxError::Yaml)?;
-        let config_yaml: diaryx_core::yaml_value::YamlValue =
+        let config_yaml: diaryx_core::yaml::Value =
             serde_yaml_ng::from_str(&config_yaml_str).map_err(DiaryxError::Yaml)?;
 
         // Store config under `plugins."diaryx.publish"` (dotted key, matching
         // the canonical plugin ID used by the permissions system).
         let plugins_key = "plugins".to_string();
-        let plugins_val = fm.entry(plugins_key).or_insert_with(|| {
-            diaryx_core::yaml_value::YamlValue::Mapping(indexmap::IndexMap::new())
-        });
+        let plugins_val = fm
+            .entry(plugins_key)
+            .or_insert_with(|| diaryx_core::yaml::Value::Mapping(indexmap::IndexMap::new()));
         if let Some(plugins_map) = plugins_val.as_mapping_mut() {
             // Merge into existing "diaryx.publish" entry (preserves permissions).
             let entry = plugins_map
                 .entry("diaryx.publish".into())
-                .or_insert_with(|| {
-                    diaryx_core::yaml_value::YamlValue::Mapping(indexmap::IndexMap::new())
-                });
+                .or_insert_with(|| diaryx_core::yaml::Value::Mapping(indexmap::IndexMap::new()));
             if let (Some(existing), Some(config_map)) =
                 (entry.as_mapping_mut(), config_yaml.as_mapping())
             {

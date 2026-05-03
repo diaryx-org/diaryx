@@ -784,7 +784,7 @@ fn persist_requested_permission_defaults(
             message: format!("Failed to serialize plugin permissions: {e}"),
             path: Some(root_index_path.clone()),
         })?;
-        diaryx_core::YamlValue::from(json_val)
+        diaryx_core::yaml::Value::from(json_val)
     };
 
     futures_lite::future::block_on(workspace.set_frontmatter_property(

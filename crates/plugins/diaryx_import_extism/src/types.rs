@@ -1,6 +1,6 @@
 //! Shared types for import parsers and orchestration.
 
-use diaryx_core::yaml_value::YamlValue;
+use diaryx_core::yaml;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,7 @@ pub struct ImportedEntry {
     /// Markdown body content.
     pub body: String,
     /// Extra frontmatter fields (from, to, cc, etc.).
-    pub metadata: IndexMap<String, YamlValue>,
+    pub metadata: IndexMap<String, yaml::Value>,
     /// Binary attachments extracted from the source.
     pub attachments: Vec<ImportedAttachment>,
 }

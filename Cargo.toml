@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/bookmatter",
+    "crates/crossfs",
     "crates/diaryx_server",
     "crates/diaryx_core",
     "crates/diaryx_native",
@@ -56,6 +57,7 @@ indexmap = { version = "2.0", features = ["serde"] }
 
 # Internal crates - version must match workspace.package.version for publishing
 bookmatter = { path = "crates/bookmatter", version = "1.5.0", features = ["json"] }
+crossfs = { path = "crates/crossfs", version = "1.5.0", default-features = false }
 diaryx_server = { path = "crates/diaryx_server", version = "1.5.0" }
 diaryx_core = { path = "crates/diaryx_core", version = "1.5.0", default-features = false }
 diaryx_native = { path = "crates/diaryx_native", version = "1.5.0" }

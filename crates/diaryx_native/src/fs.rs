@@ -6,9 +6,11 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{Error, ErrorKind, Read, Result, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+#[allow(deprecated)]
 use diaryx_core::fs::FileSystem;
+use diaryx_core::fs::{DirEntry, FileType, Metadata};
 
 /// Synchronous [`FileSystem`] implementation backed by [`std::fs`].
 ///
@@ -16,58 +18,102 @@ use diaryx_core::fs::FileSystem;
 #[derive(Clone, Copy)]
 pub struct RealFileSystem;
 
+fn file_type_from_std(ft: std::fs::FileType) -> FileType {
+    if ft.is_symlink() {
+        FileType::symlink()
+    } else if ft.is_dir() {
+        FileType::dir()
+    } else {
+        FileType::file()
+    }
+}
+
+fn metadata_from_std(m: std::fs::Metadata) -> Metadata {
+    Metadata::new(
+        file_type_from_std(m.file_type()),
+        m.len(),
+        m.modified().ok(),
+    )
+}
+
+impl RealFileSystem {
+    /// Compute the SHA-256 hash of a file (streaming) and return it as
+    /// lowercase hex. Provided as an inherent method since `crossfs` does
+    /// not include hashing in its trait surface.
+    pub fn sha256_hex(path: &Path) -> Result<String> {
+        use sha2::{Digest, Sha256};
+
+        let mut file = fs::File::open(path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+
+        let hash = hasher.finalize();
+        Ok(hash.iter().fold(String::with_capacity(64), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{:02x}", b);
+            s
+        }))
+    }
+}
+
+#[allow(deprecated)]
 impl FileSystem for RealFileSystem {
+    fn read(&self, path: &Path) -> Result<Vec<u8>> {
+        fs::read(path)
+    }
+
     fn read_to_string(&self, path: &Path) -> Result<String> {
         fs::read_to_string(path)
     }
 
-    fn write_file(&self, path: &Path, content: &str) -> Result<()> {
+    fn read_dir(&self, dir: &Path) -> Result<Vec<DirEntry>> {
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            entries.push(DirEntry::new(entry.path(), file_type_from_std(ft)));
+        }
+        Ok(entries)
+    }
+
+    fn write(&self, path: &Path, contents: &[u8]) -> Result<()> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, content)
+        fs::write(path, contents)
     }
 
-    fn delete_file(&self, path: &Path) -> Result<()> {
-        fs::remove_file(path)
-    }
-
-    fn create_new(&self, path: &Path, content: &str) -> Result<()> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
-        // This atomic check prevents race conditions
-        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-        file.write_all(content.as_bytes())
-    }
-
-    fn list_md_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
-        if dir.is_dir() {
-            for entry in fs::read_dir(dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "md") {
-                    files.push(path);
-                }
-            }
-        }
-        Ok(files)
-    }
-
-    fn exists(&self, path: &Path) -> bool {
-        path.exists()
+    fn create_dir(&self, path: &Path) -> Result<()> {
+        fs::create_dir(path)
     }
 
     fn create_dir_all(&self, path: &Path) -> Result<()> {
         fs::create_dir_all(path)
     }
 
-    fn move_file(&self, from: &Path, to: &Path) -> Result<()> {
+    fn remove_file(&self, path: &Path) -> Result<()> {
+        fs::remove_file(path)
+    }
+
+    fn remove_dir(&self, path: &Path) -> Result<()> {
+        fs::remove_dir(path)
+    }
+
+    fn remove_dir_all(&self, path: &Path) -> Result<()> {
+        fs::remove_dir_all(path)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         if !from.exists() {
             return Err(Error::new(
                 ErrorKind::NotFound,
@@ -90,73 +136,22 @@ impl FileSystem for RealFileSystem {
         fs::rename(from, to)
     }
 
-    fn is_dir(&self, path: &Path) -> bool {
-        path.is_dir()
+    fn metadata(&self, path: &Path) -> Result<Metadata> {
+        fs::metadata(path).map(metadata_from_std)
     }
 
-    fn is_symlink(&self, path: &Path) -> bool {
-        path.is_symlink()
+    fn symlink_metadata(&self, path: &Path) -> Result<Metadata> {
+        fs::symlink_metadata(path).map(metadata_from_std)
     }
 
-    fn list_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
-        if dir.is_dir() {
-            for entry in fs::read_dir(dir)? {
-                let entry = entry?;
-                files.push(entry.path());
-            }
-        }
-        Ok(files)
-    }
-
-    fn read_binary(&self, path: &Path) -> Result<Vec<u8>> {
-        fs::read(path)
-    }
-
-    fn hash_file(&self, path: &Path) -> Result<String> {
-        use sha2::{Digest, Sha256};
-
-        let mut file = fs::File::open(path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0u8; 64 * 1024];
-
-        loop {
-            let read = file.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
-
-        let hash = hasher.finalize();
-        Ok(hash.iter().fold(String::with_capacity(64), |mut s, b| {
-            use std::fmt::Write;
-            let _ = write!(s, "{:02x}", b);
-            s
-        }))
-    }
-
-    fn write_binary(&self, path: &Path, content: &[u8]) -> Result<()> {
+    fn create_new(&self, path: &Path, contents: &[u8]) -> Result<()> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, content)
-    }
-
-    fn get_modified_time(&self, path: &Path) -> Option<i64> {
-        fs::metadata(path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| {
-                t.duration_since(std::time::UNIX_EPOCH)
-                    .ok()
-                    .map(|d| d.as_millis() as i64)
-            })
-    }
-
-    fn get_file_size(&self, path: &Path) -> Option<u64> {
-        fs::metadata(path).ok().map(|m| m.len())
+        // Atomic create-new: O_CREAT | O_EXCL
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        file.write_all(contents)
     }
 }

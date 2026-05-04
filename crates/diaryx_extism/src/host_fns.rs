@@ -2286,7 +2286,10 @@ fn host_hash_file(
         return Ok(());
     }
 
-    let hash = match futures_lite::future::block_on(ctx.fs.hash_file(Path::new(&path))) {
+    let hash = match futures_lite::future::block_on(diaryx_core::fs::hash_file(
+        ctx.fs.as_ref(),
+        Path::new(&path),
+    )) {
         Ok(hash) => hash,
         Err(_) => {
             plugin.memory_set_val(&mut outputs[0], "")?;

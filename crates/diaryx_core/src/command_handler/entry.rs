@@ -208,7 +208,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         let resolved_path = self.resolve_fs_path(&path);
         self.fs()
-            .create_new(&resolved_path, &content)
+            .create_new(&resolved_path, content.as_bytes())
             .await
             .map_err(|e| crate::error::DiaryxError::FileWrite {
                 path: resolved_path.clone(),

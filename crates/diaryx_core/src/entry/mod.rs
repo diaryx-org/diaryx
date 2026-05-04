@@ -89,7 +89,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     pub async fn create_entry(&self, path: &str) -> Result<()> {
         let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", path, path);
         self.fs
-            .create_new(std::path::Path::new(path), &content)
+            .create_new(std::path::Path::new(path), content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: PathBuf::from(path),
@@ -423,7 +423,8 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     /// Create a new entry
     pub fn create_entry(&self, path: &str) -> Result<()> {
         let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", path, path);
-        self.fs.create_new(std::path::Path::new(path), &content)?;
+        self.fs
+            .create_new(std::path::Path::new(path), content.as_bytes())?;
         Ok(())
     }
 

@@ -722,46 +722,62 @@ mod tests {
     }
 
     impl FileSystem for NotFoundOnBackupMoveFs {
+        fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+            self.inner.read(path)
+        }
+
         fn read_to_string(&self, path: &Path) -> io::Result<String> {
             self.inner.read_to_string(path)
         }
 
-        fn write_file(&self, path: &Path, content: &str) -> io::Result<()> {
-            self.inner.write_file(path, content)
+        fn read_dir(&self, path: &Path) -> io::Result<Vec<crate::fs::DirEntry>> {
+            self.inner.read_dir(path)
         }
 
-        fn create_new(&self, path: &Path, content: &str) -> io::Result<()> {
-            self.inner.create_new(path, content)
+        fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+            self.inner.write(path, contents)
         }
 
-        fn delete_file(&self, path: &Path) -> io::Result<()> {
-            self.inner.delete_file(path)
+        fn create_new(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+            self.inner.create_new(path, contents)
         }
 
-        fn list_md_files(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
-            self.inner.list_md_files(dir)
-        }
-
-        fn exists(&self, path: &Path) -> bool {
-            self.inner.exists(path)
+        fn create_dir(&self, path: &Path) -> io::Result<()> {
+            self.inner.create_dir(path)
         }
 
         fn create_dir_all(&self, path: &Path) -> io::Result<()> {
             self.inner.create_dir_all(path)
         }
 
-        fn is_dir(&self, path: &Path) -> bool {
-            self.inner.is_dir(path)
+        fn remove_file(&self, path: &Path) -> io::Result<()> {
+            self.inner.remove_file(path)
         }
 
-        fn move_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+        fn remove_dir(&self, path: &Path) -> io::Result<()> {
+            self.inner.remove_dir(path)
+        }
+
+        fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+            self.inner.remove_dir_all(path)
+        }
+
+        fn metadata(&self, path: &Path) -> io::Result<crate::fs::Metadata> {
+            self.inner.metadata(path)
+        }
+
+        fn symlink_metadata(&self, path: &Path) -> io::Result<crate::fs::Metadata> {
+            self.inner.symlink_metadata(path)
+        }
+
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
             if self.should_fail_backup_move(to) {
                 return Err(io::Error::new(
                     ErrorKind::NotFound,
                     "NotFoundError: A requested file or directory could not be found",
                 ));
             }
-            self.inner.move_file(from, to)
+            self.inner.rename(from, to)
         }
     }
 

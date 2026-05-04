@@ -1,5 +1,13 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/README.md"))]
 #![warn(missing_docs)]
+// Migration from `diaryx_core::fs` legacy method names (`write_file`,
+// `delete_file`, `move_file`, `read_binary`, `write_binary`, `exists`,
+// `is_dir`, `list_files`, `list_md_files*`, `get_modified_time`,
+// `get_file_size`) and from the sync `FileSystem` trait to `crossfs`'s
+// std::fs-aligned canonical names is in progress. The legacy items are
+// `#[deprecated]` in `crossfs`; suppress the lint workspace-wide in
+// `diaryx_core` until the sweep is complete.
+#![allow(deprecated)]
 
 /// Workspace appearance: theme colors, typography, and favicon resolution
 pub mod appearance;

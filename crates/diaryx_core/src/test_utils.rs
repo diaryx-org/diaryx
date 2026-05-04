@@ -1,26 +1,29 @@
-//! Test utilities for diaryx_core
+//! Test utilities for diaryx_core.
 //!
-//! This module provides shared testing infrastructure, including a mock filesystem
-//! that can be used across all test modules.
+//! `MockFileSystem` is a tiny in-process filesystem used by unit tests in
+//! this crate. Production code should use `InMemoryFileSystem`.
 
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+#[allow(deprecated)]
 use crate::fs::FileSystem;
+use crate::fs::{DirEntry, FileType, Metadata};
 
 /// A mock filesystem for testing.
 ///
-/// Uses `Arc<Mutex<HashMap>>` for thread-safety and allows cloning
-/// while sharing the same underlying file storage.
+/// Uses `Arc<Mutex<HashMap>>` for thread-safety and allows cloning while
+/// sharing the same underlying file storage. Directories are represented
+/// as entries whose content is the sentinel `"<DIR>"`.
 #[derive(Clone, Default)]
 pub struct MockFileSystem {
     files: Arc<Mutex<HashMap<PathBuf, String>>>,
 }
 
 impl MockFileSystem {
-    /// Create a new empty mock filesystem.
+    /// Create an empty mock filesystem.
     pub fn new() -> Self {
         Self {
             files: Arc::new(Mutex::new(HashMap::new())),
@@ -44,71 +47,61 @@ impl MockFileSystem {
             .get(&PathBuf::from(path))
             .cloned()
     }
+
+    fn is_dir_sentinel(content: &str) -> bool {
+        content == "<DIR>"
+    }
 }
 
+#[allow(deprecated)]
 impl FileSystem for MockFileSystem {
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.read_to_string(path).map(|s| s.into_bytes())
+    }
+
     fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        self.files
-            .lock()
-            .unwrap()
-            .get(path)
-            .cloned()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "File not found"))
-            .and_then(|content| {
-                if content == "<DIR>" {
-                    Err(io::Error::other("Is a directory"))
-                } else {
-                    Ok(content)
-                }
-            })
-    }
-
-    fn write_file(&self, path: &Path, content: &str) -> io::Result<()> {
-        self.files
-            .lock()
-            .unwrap()
-            .insert(path.to_path_buf(), content.to_string());
-        Ok(())
-    }
-
-    fn exists(&self, path: &Path) -> bool {
-        self.files.lock().unwrap().contains_key(path)
-    }
-
-    fn create_new(&self, path: &Path, content: &str) -> io::Result<()> {
-        let mut files = self.files.lock().unwrap();
-        if files.contains_key(path) {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "File exists"));
+        let files = self.files.lock().unwrap();
+        match files.get(path) {
+            Some(content) if Self::is_dir_sentinel(content) => {
+                Err(io::Error::other("Is a directory"))
+            }
+            Some(content) => Ok(content.clone()),
+            None => Err(io::Error::new(io::ErrorKind::NotFound, "File not found")),
         }
-        files.insert(path.to_path_buf(), content.to_string());
-        Ok(())
     }
 
-    fn delete_file(&self, path: &Path) -> io::Result<()> {
-        self.files.lock().unwrap().remove(path);
-        Ok(())
-    }
-
-    fn list_files(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
+    fn read_dir(&self, dir: &Path) -> io::Result<Vec<DirEntry>> {
         let files = self.files.lock().unwrap();
         let mut result = Vec::new();
-        for path in files.keys() {
+        for (path, content) in files.iter() {
             if path.parent() == Some(dir) {
-                result.push(path.clone());
+                let ft = if Self::is_dir_sentinel(content) {
+                    FileType::dir()
+                } else {
+                    FileType::file()
+                };
+                result.push(DirEntry::new(path.clone(), ft));
             }
         }
         Ok(result)
     }
 
-    fn list_md_files(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
-        let files = self.files.lock().unwrap();
-        let mut result = Vec::new();
-        for path in files.keys() {
-            if path.parent() == Some(dir) && path.extension().is_some_and(|ext| ext == "md") {
-                result.push(path.clone());
-            }
-        }
-        Ok(result)
+    fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        let s = std::str::from_utf8(contents).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "MockFileSystem only stores UTF-8",
+            )
+        })?;
+        self.files
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), s.to_string());
+        Ok(())
+    }
+
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        self.create_dir_all(path)
     }
 
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
@@ -117,18 +110,24 @@ impl FileSystem for MockFileSystem {
         Ok(())
     }
 
-    fn is_dir(&self, path: &Path) -> bool {
-        self.files
-            .lock()
-            .unwrap()
-            .get(path)
-            .map(|content| content == "<DIR>")
-            .unwrap_or(false)
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        self.files.lock().unwrap().remove(path);
+        Ok(())
     }
 
-    fn move_file(&self, from: &Path, to: &Path) -> io::Result<()> {
-        let mut files = self.files.lock().unwrap();
+    fn remove_dir(&self, path: &Path) -> io::Result<()> {
+        self.files.lock().unwrap().remove(path);
+        Ok(())
+    }
 
+    fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        let mut files = self.files.lock().unwrap();
+        files.retain(|p, _| !p.starts_with(path) && p != path);
+        Ok(())
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let mut files = self.files.lock().unwrap();
         if !files.contains_key(from) {
             return Err(io::Error::new(io::ErrorKind::NotFound, "File not found"));
         }
@@ -138,12 +137,36 @@ impl FileSystem for MockFileSystem {
                 "Destination exists",
             ));
         }
-
         let content = files
             .remove(from)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "File not found"))?;
         files.insert(to.to_path_buf(), content);
+        Ok(())
+    }
 
+    fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+        let files = self.files.lock().unwrap();
+        match files.get(path) {
+            Some(content) if Self::is_dir_sentinel(content) => {
+                Ok(Metadata::new(FileType::dir(), 0, None))
+            }
+            Some(content) => Ok(Metadata::new(FileType::file(), content.len() as u64, None)),
+            None => Err(io::Error::new(io::ErrorKind::NotFound, "Not found")),
+        }
+    }
+
+    fn create_new(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        let mut files = self.files.lock().unwrap();
+        if files.contains_key(path) {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "File exists"));
+        }
+        let s = std::str::from_utf8(contents).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "MockFileSystem only stores UTF-8",
+            )
+        })?;
+        files.insert(path.to_path_buf(), s.to_string());
         Ok(())
     }
 }

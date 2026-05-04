@@ -1508,7 +1508,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         );
 
         self.fs
-            .create_new(&readme_path, &content)
+            .create_new(&readme_path, content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: readme_path.clone(),
@@ -3113,7 +3113,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         );
 
         self.fs
-            .create_new(&child_path, &content)
+            .create_new(&child_path, content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: child_path.clone(),
@@ -3200,7 +3200,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         );
 
         self.fs
-            .create_new(&child_path, &content)
+            .create_new(&child_path, content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: child_path.clone(),
@@ -5309,7 +5309,7 @@ audiences_migrated: true
         let scripts = tree
             .children
             .iter()
-            .find(|child| child.path == PathBuf::from("workspace/scripts/scripts.md"))
+            .find(|child| child.path == Path::new("workspace/scripts/scripts.md"))
             .expect("scripts directory should be present");
 
         let child_names: Vec<_> = scripts

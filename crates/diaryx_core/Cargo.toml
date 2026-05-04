@@ -12,6 +12,7 @@ categories = ["text-processing"]
 
 [dependencies]
 bookmatter.workspace = true
+crossfs.workspace = true
 chrono.workspace = true
 indexmap.workspace = true
 log = "0.4"

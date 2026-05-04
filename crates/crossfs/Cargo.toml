@@ -1,0 +1,43 @@
+[package]
+name = "crossfs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "std::fs / tokio::fs that also runs on OPFS, IndexedDB, and the File System Access API in the browser"
+license = "MIT OR Apache-2.0"
+keywords = ["filesystem", "wasm", "opfs", "indexeddb", "browser"]
+categories = ["filesystem", "wasm", "web-programming"]
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+
+[features]
+default = ["std"]
+
+# std::fs backend (StdFs)
+std = []
+
+# tokio::fs backend (planned for v0.2)
+tokio = []
+
+# sha256 hashing helper (free function in crossfs::hash)
+sha256 = []
+
+# Shared JS interop layer for browser backends
+js = []
+
+# Origin Private File System backend
+opfs = ["js"]
+
+# IndexedDB-backed filesystem
+indexeddb = ["js"]
+
+# File System Access API (user-picked directory)
+fsa = ["js"]
+
+[package.metadata.release]
+publish = false

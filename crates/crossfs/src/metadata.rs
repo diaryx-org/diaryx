@@ -17,17 +17,35 @@ pub struct Metadata {
     file_type: FileType,
     len: u64,
     modified: Option<SystemTime>,
+    accessed: Option<SystemTime>,
+    created: Option<SystemTime>,
 }
 
 impl Metadata {
     /// Construct a `Metadata` value. Backends use this to build the result of
-    /// `metadata()`.
+    /// `metadata()`. To attach access/creation times, chain
+    /// [`with_accessed`](Self::with_accessed) and
+    /// [`with_created`](Self::with_created).
     pub fn new(file_type: FileType, len: u64, modified: Option<SystemTime>) -> Self {
         Self {
             file_type,
             len,
             modified,
+            accessed: None,
+            created: None,
         }
+    }
+
+    /// Attach last-accessed time. Builder.
+    pub fn with_accessed(mut self, accessed: Option<SystemTime>) -> Self {
+        self.accessed = accessed;
+        self
+    }
+
+    /// Attach creation time. Builder.
+    pub fn with_created(mut self, created: Option<SystemTime>) -> Self {
+        self.created = created;
+        self
     }
 
     /// The file type (file / directory / symlink).
@@ -69,6 +87,33 @@ impl Metadata {
             io::Error::new(
                 io::ErrorKind::Unsupported,
                 "modification time not available on this backend",
+            )
+        })
+    }
+
+    /// Last access time.
+    ///
+    /// Returns `Err(io::ErrorKind::Unsupported)` on backends that do not track
+    /// access time (which is most of them — `accessed` is rarely meaningful
+    /// outside of native filesystems with `noatime` disabled).
+    pub fn accessed(&self) -> io::Result<SystemTime> {
+        self.accessed.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "access time not available on this backend",
+            )
+        })
+    }
+
+    /// Creation time (a.k.a. "birth time" / `btime`).
+    ///
+    /// Returns `Err(io::ErrorKind::Unsupported)` on backends that do not track
+    /// creation time (most non-native backends, some Linux filesystems).
+    pub fn created(&self) -> io::Result<SystemTime> {
+        self.created.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "creation time not available on this backend",
             )
         })
     }

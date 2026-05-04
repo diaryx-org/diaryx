@@ -86,6 +86,15 @@ impl<F: FileSystem + Send + Sync> AsyncFileSystem for SyncToAsyncFs<F> {
     ) -> BoxFuture<'a, std::io::Result<()>> {
         Box::pin(async move { self.inner.create_new(path, contents) })
     }
+    fn copy<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, std::io::Result<u64>> {
+        Box::pin(async move { self.inner.copy(from, to) })
+    }
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> BoxFuture<'a, std::io::Result<std::path::PathBuf>> {
+        Box::pin(async move { self.inner.canonicalize(path) })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -137,6 +146,15 @@ impl<F: FileSystem> AsyncFileSystem for SyncToAsyncFs<F> {
         contents: &'a [u8],
     ) -> BoxFuture<'a, std::io::Result<()>> {
         Box::pin(async move { self.inner.create_new(path, contents) })
+    }
+    fn copy<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, std::io::Result<u64>> {
+        Box::pin(async move { self.inner.copy(from, to) })
+    }
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> BoxFuture<'a, std::io::Result<std::path::PathBuf>> {
+        Box::pin(async move { self.inner.canonicalize(path) })
     }
 }
 

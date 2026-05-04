@@ -19,17 +19,19 @@
 //! - Safari: ❌ Not supported
 
 use std::io::{Error, ErrorKind, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use diaryx_core::fs::{AsyncFileSystem, BoxFuture};
+use diaryx_core::fs::crossfs;
+use diaryx_core::fs::{AsyncFileSystem, BoxFuture, DirEntry, FileType, Metadata};
 use futures::StreamExt;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 use opfs::persistent::{self, DirectoryHandle};
 use opfs::{
     CreateWritableOptions, DirectoryEntry, DirectoryHandle as DirectoryHandleTrait,
-    FileHandle as FileHandleTrait, GetDirectoryHandleOptions, GetFileHandleOptions,
-    WritableFileStream as WritableFileStreamTrait,
+    FileHandle as FileHandleTrait, FileSystemRemoveOptions, GetDirectoryHandleOptions,
+    GetFileHandleOptions, WritableFileStream as WritableFileStreamTrait,
 };
 
 // ============================================================================
@@ -37,9 +39,6 @@ use opfs::{
 // ============================================================================
 
 /// AsyncFileSystem implementation backed by File System Access API.
-///
-/// Allows editing files directly on the user's filesystem in a directory
-/// they select via `showDirectoryPicker()`.
 #[wasm_bindgen]
 pub struct FsaFileSystem {
     root: DirectoryHandle,
@@ -56,21 +55,17 @@ impl Clone for FsaFileSystem {
 #[wasm_bindgen]
 impl FsaFileSystem {
     /// Create a new FsaFileSystem from a user-selected directory handle.
-    ///
-    /// The handle must be obtained from `window.showDirectoryPicker()` in JavaScript.
     #[wasm_bindgen(js_name = "fromHandle")]
     pub fn from_handle(handle: web_sys::FileSystemDirectoryHandle) -> Self {
-        // Convert web_sys handle to opfs crate's DirectoryHandle
         let root = DirectoryHandle::from(handle);
         Self { root }
     }
 }
 
 // ============================================================================
-// Helper Functions (same as opfs_fs.rs)
+// Helper Functions (mirror those in opfs_fs.rs)
 // ============================================================================
 
-/// Get or create nested directories for a path.
 async fn get_or_create_parent_dir(
     root: &DirectoryHandle,
     path: &Path,
@@ -92,7 +87,6 @@ async fn get_or_create_parent_dir(
     Ok(current)
 }
 
-/// Get directory for a path (without creating).
 async fn get_parent_dir(
     root: &DirectoryHandle,
     path: &Path,
@@ -114,7 +108,6 @@ async fn get_parent_dir(
     Ok(current)
 }
 
-/// Get directory handle for a directory path (navigating to the directory itself).
 async fn get_directory(root: &DirectoryHandle, path: &Path) -> persistent::Result<DirectoryHandle> {
     let mut current = root.clone();
 
@@ -131,7 +124,10 @@ async fn get_directory(root: &DirectoryHandle, path: &Path) -> persistent::Resul
     Ok(current)
 }
 
-/// Get the filename from a path.
+fn is_root(path: &Path) -> bool {
+    path.as_os_str().is_empty() || path == Path::new(".")
+}
+
 fn get_filename(path: &Path) -> Result<String> {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -139,27 +135,15 @@ fn get_filename(path: &Path) -> Result<String> {
         .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Invalid filename"))
 }
 
-/// Convert opfs error to io::Error, mapping DOMException `NotFoundError` to
-/// `ErrorKind::NotFound` so callers can distinguish missing files from other failures.
 fn opfs_to_io_error(e: persistent::Error) -> Error {
-    let msg = format!("{:?}", e);
-    let kind = if is_not_found_js_error(&e) {
-        ErrorKind::NotFound
-    } else {
-        ErrorKind::Other
-    };
-    Error::new(kind, msg)
+    let kind = dom_exception_name(&e)
+        .map(|name| crossfs::error::dom_exception_kind(&name))
+        .unwrap_or(ErrorKind::Other);
+    Error::new(kind, format!("{:?}", e))
 }
 
-/// Check if a `JsValue` represents a DOMException with name `"NotFoundError"`.
-fn is_not_found_js_error(val: &JsValue) -> bool {
-    use wasm_bindgen::JsCast;
-    if let Some(exc) = val.dyn_ref::<web_sys::DomException>() {
-        return exc.name() == "NotFoundError";
-    }
-    // Fallback: inspect the debug representation
-    let s = format!("{:?}", val);
-    s.contains("NotFoundError")
+fn dom_exception_name(val: &JsValue) -> Option<String> {
+    val.dyn_ref::<web_sys::DomException>().map(|e| e.name())
 }
 
 // ============================================================================
@@ -167,7 +151,7 @@ fn is_not_found_js_error(val: &JsValue) -> bool {
 // ============================================================================
 
 impl AsyncFileSystem for FsaFileSystem {
-    fn read_to_string<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
+    fn read<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<Vec<u8>>> {
         Box::pin(async move {
             let dir = get_parent_dir(&self.root, path)
                 .await
@@ -180,164 +164,94 @@ impl AsyncFileSystem for FsaFileSystem {
                 .await
                 .map_err(opfs_to_io_error)?;
 
-            let data = file.read().await.map_err(opfs_to_io_error)?;
-
-            String::from_utf8(data).map_err(|e| Error::new(ErrorKind::InvalidData, e.to_string()))
+            file.read().await.map_err(opfs_to_io_error)
         })
     }
 
-    fn write_file<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, Result<()>> {
-        let content = content.to_string();
+    fn read_to_string<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
         Box::pin(async move {
-            let dir = get_or_create_parent_dir(&self.root, path)
-                .await
-                .map_err(opfs_to_io_error)?;
-            let filename = get_filename(path)?;
-
-            let file_options = GetFileHandleOptions { create: true };
-            let mut file = dir
-                .get_file_handle_with_options(&filename, &file_options)
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            let write_options = CreateWritableOptions {
-                keep_existing_data: false,
-            };
-            let mut writer = file
-                .create_writable_with_options(&write_options)
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            writer
-                .write_at_cursor_pos(content.into_bytes())
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            writer.close().await.map_err(opfs_to_io_error)?;
-
-            Ok(())
+            let bytes = self.read(path).await?;
+            String::from_utf8(bytes).map_err(|e| Error::new(ErrorKind::InvalidData, e.to_string()))
         })
     }
 
-    fn create_new<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, Result<()>> {
-        let content = content.to_string();
+    fn read_dir<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<Vec<DirEntry>>> {
         Box::pin(async move {
-            // Check if file exists first
-            if self.exists(path).await {
-                return Err(Error::new(
-                    ErrorKind::AlreadyExists,
-                    format!("File already exists: {}", path.display()),
-                ));
-            }
-
-            let dir = get_or_create_parent_dir(&self.root, path)
-                .await
-                .map_err(opfs_to_io_error)?;
-            let filename = get_filename(path)?;
-
-            let file_options = GetFileHandleOptions { create: true };
-            let mut file = dir
-                .get_file_handle_with_options(&filename, &file_options)
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            let write_options = CreateWritableOptions {
-                keep_existing_data: false,
-            };
-            let mut writer = file
-                .create_writable_with_options(&write_options)
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            writer
-                .write_at_cursor_pos(content.into_bytes())
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            writer.close().await.map_err(opfs_to_io_error)?;
-
-            Ok(())
-        })
-    }
-
-    fn delete_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            let mut dir = get_parent_dir(&self.root, path)
-                .await
-                .map_err(opfs_to_io_error)?;
-            let filename = get_filename(path)?;
-
-            dir.remove_entry(&filename)
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            Ok(())
-        })
-    }
-
-    fn list_md_files<'a>(&'a self, dir_path: &'a Path) -> BoxFuture<'a, Result<Vec<PathBuf>>> {
-        Box::pin(async move {
-            let is_root = dir_path.as_os_str().is_empty() || dir_path == Path::new(".");
-            let dir = if is_root {
+            let dir = if is_root(path) {
                 self.root.clone()
             } else {
-                get_directory(&self.root, dir_path)
+                get_directory(&self.root, path)
                     .await
                     .map_err(opfs_to_io_error)?
             };
 
             let mut entries_stream = dir.entries().await.map_err(opfs_to_io_error)?;
 
-            let mut md_files = Vec::new();
+            let mut result = Vec::new();
             while let Some(entry_result) = entries_stream.next().await {
                 if let Ok((name, entry)) = entry_result {
-                    if matches!(entry, DirectoryEntry::File(_)) && name.ends_with(".md") {
-                        if is_root {
-                            md_files.push(PathBuf::from(&name));
-                        } else {
-                            md_files.push(dir_path.join(&name));
-                        }
-                    }
+                    let full_path = if is_root(path) {
+                        std::path::PathBuf::from(&name)
+                    } else {
+                        path.join(&name)
+                    };
+                    let file_type = match entry {
+                        DirectoryEntry::File(_) => FileType::file(),
+                        DirectoryEntry::Directory(_) => FileType::dir(),
+                    };
+                    result.push(DirEntry::new(full_path, file_type));
                 }
             }
-
-            Ok(md_files)
+            Ok(result)
         })
     }
 
-    fn exists<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, bool> {
+    fn write<'a>(&'a self, path: &'a Path, contents: &'a [u8]) -> BoxFuture<'a, Result<()>> {
+        let contents = contents.to_vec();
         Box::pin(async move {
-            // Root always exists.
-            if path.as_os_str().is_empty() || path == Path::new(".") {
-                return true;
-            }
+            let dir = get_or_create_parent_dir(&self.root, path)
+                .await
+                .map_err(opfs_to_io_error)?;
+            let filename = get_filename(path)?;
 
-            // Try to get the parent directory
-            let dir = match get_parent_dir(&self.root, path).await {
-                Ok(d) => d,
-                Err(_) => return false,
-            };
-
-            let filename = match get_filename(path) {
-                Ok(f) => f,
-                Err(_) => return false,
-            };
-
-            // Try to get the file handle
-            let file_options = GetFileHandleOptions { create: false };
-            if dir
+            let file_options = GetFileHandleOptions { create: true };
+            let mut file = dir
                 .get_file_handle_with_options(&filename, &file_options)
                 .await
-                .is_ok()
-            {
-                return true;
-            }
+                .map_err(opfs_to_io_error)?;
 
-            // Check directory handle too so exists() matches trait contract.
-            let dir_options = GetDirectoryHandleOptions { create: false };
-            dir.get_directory_handle_with_options(&filename, &dir_options)
+            let write_options = CreateWritableOptions {
+                keep_existing_data: false,
+            };
+            let mut writer = file
+                .create_writable_with_options(&write_options)
                 .await
-                .is_ok()
+                .map_err(opfs_to_io_error)?;
+
+            writer
+                .write_at_cursor_pos(contents)
+                .await
+                .map_err(opfs_to_io_error)?;
+            writer.close().await.map_err(opfs_to_io_error)?;
+            Ok(())
+        })
+    }
+
+    fn create_dir<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            if is_root(path) {
+                return Ok(());
+            }
+            let parent = get_parent_dir(&self.root, path)
+                .await
+                .map_err(opfs_to_io_error)?;
+            let name = get_filename(path)?;
+            let options = GetDirectoryHandleOptions { create: true };
+            parent
+                .get_directory_handle_with_options(&name, &options)
+                .await
+                .map_err(opfs_to_io_error)?;
+            Ok(())
         })
     }
 
@@ -355,119 +269,125 @@ impl AsyncFileSystem for FsaFileSystem {
                         .map_err(opfs_to_io_error)?;
                 }
             }
-
             Ok(())
         })
     }
 
-    fn is_dir<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, bool> {
-        Box::pin(async move { get_directory(&self.root, path).await.is_ok() })
+    fn remove_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let mut dir = get_parent_dir(&self.root, path)
+                .await
+                .map_err(opfs_to_io_error)?;
+            let filename = get_filename(path)?;
+            dir.remove_entry(&filename)
+                .await
+                .map_err(opfs_to_io_error)?;
+            Ok(())
+        })
     }
 
-    fn move_file<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, Result<()>> {
+    fn remove_dir<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            if !self.exists(from).await {
+            let entries = self.read_dir(path).await?;
+            if !entries.is_empty() {
                 return Err(Error::new(
-                    ErrorKind::NotFound,
-                    format!("Source file not found: {}", from.display()),
+                    ErrorKind::DirectoryNotEmpty,
+                    format!("Directory not empty: {}", path.display()),
                 ));
             }
+            let mut parent = get_parent_dir(&self.root, path)
+                .await
+                .map_err(opfs_to_io_error)?;
+            let name = get_filename(path)?;
+            parent.remove_entry(&name).await.map_err(opfs_to_io_error)?;
+            Ok(())
+        })
+    }
 
-            if self.exists(to).await {
+    fn remove_dir_all<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let mut parent = get_parent_dir(&self.root, path)
+                .await
+                .map_err(opfs_to_io_error)?;
+            let name = get_filename(path)?;
+            let options = FileSystemRemoveOptions { recursive: true };
+            parent
+                .remove_entry_with_options(&name, &options)
+                .await
+                .map_err(opfs_to_io_error)?;
+            Ok(())
+        })
+    }
+
+    fn rename<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let meta = self.metadata(from).await?;
+            if !meta.is_file() {
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "FSA rename only supports regular files",
+                ));
+            }
+            if self.try_exists(to).await.unwrap_or(false) {
                 return Err(Error::new(
                     ErrorKind::AlreadyExists,
                     format!("Destination already exists: {}", to.display()),
                 ));
             }
-
-            // Read the source file
-            let content = self.read_to_string(from).await?;
-
-            // Write to destination
-            self.write_file(to, &content).await?;
-
-            // Delete source
-            self.delete_file(from).await?;
-
+            let bytes = self.read(from).await?;
+            self.write(to, &bytes).await?;
+            self.remove_file(from).await?;
             Ok(())
         })
     }
 
-    fn read_binary<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<Vec<u8>>> {
+    fn metadata<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<Metadata>> {
         Box::pin(async move {
-            let dir = get_parent_dir(&self.root, path)
-                .await
-                .map_err(opfs_to_io_error)?;
-            let filename = get_filename(path)?;
-
-            let options = GetFileHandleOptions { create: false };
-            let file = dir
-                .get_file_handle_with_options(&filename, &options)
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            file.read().await.map_err(opfs_to_io_error)
-        })
-    }
-
-    fn write_binary<'a>(&'a self, path: &'a Path, content: &'a [u8]) -> BoxFuture<'a, Result<()>> {
-        let content = content.to_vec();
-        Box::pin(async move {
-            let dir = get_or_create_parent_dir(&self.root, path)
-                .await
-                .map_err(opfs_to_io_error)?;
-            let filename = get_filename(path)?;
-
-            let file_options = GetFileHandleOptions { create: true };
-            let mut file = dir
-                .get_file_handle_with_options(&filename, &file_options)
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            let write_options = CreateWritableOptions {
-                keep_existing_data: false,
-            };
-            let mut writer = file
-                .create_writable_with_options(&write_options)
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            writer
-                .write_at_cursor_pos(content)
-                .await
-                .map_err(opfs_to_io_error)?;
-
-            writer.close().await.map_err(opfs_to_io_error)?;
-
-            Ok(())
-        })
-    }
-
-    fn list_files<'a>(&'a self, dir_path: &'a Path) -> BoxFuture<'a, Result<Vec<PathBuf>>> {
-        Box::pin(async move {
-            let is_root = dir_path.as_os_str().is_empty() || dir_path == Path::new(".");
-            let dir = if is_root {
-                self.root.clone()
-            } else {
-                get_directory(&self.root, dir_path)
-                    .await
-                    .map_err(opfs_to_io_error)?
-            };
-
-            let mut entries_stream = dir.entries().await.map_err(opfs_to_io_error)?;
-
-            let mut files = Vec::new();
-            while let Some(entry_result) = entries_stream.next().await {
-                if let Ok((name, _)) = entry_result {
-                    if is_root {
-                        files.push(PathBuf::from(&name));
-                    } else {
-                        files.push(dir_path.join(&name));
-                    }
-                }
+            if is_root(path) {
+                return Ok(Metadata::new(FileType::dir(), 0, None));
             }
 
-            Ok(files)
+            let parent = match get_parent_dir(&self.root, path).await {
+                Ok(d) => d,
+                Err(e) => return Err(opfs_to_io_error(e)),
+            };
+            let name = get_filename(path)?;
+
+            let file_options = GetFileHandleOptions { create: false };
+            if let Ok(file) = parent
+                .get_file_handle_with_options(&name, &file_options)
+                .await
+            {
+                let len = file.size().await.map(|s| s as u64).unwrap_or(0);
+                return Ok(Metadata::new(FileType::file(), len, None));
+            }
+
+            let dir_options = GetDirectoryHandleOptions { create: false };
+            if parent
+                .get_directory_handle_with_options(&name, &dir_options)
+                .await
+                .is_ok()
+            {
+                return Ok(Metadata::new(FileType::dir(), 0, None));
+            }
+
+            Err(Error::new(
+                ErrorKind::NotFound,
+                format!("Path not found: {}", path.display()),
+            ))
+        })
+    }
+
+    fn create_new<'a>(&'a self, path: &'a Path, contents: &'a [u8]) -> BoxFuture<'a, Result<()>> {
+        let contents = contents.to_vec();
+        Box::pin(async move {
+            if self.try_exists(path).await.unwrap_or(false) {
+                return Err(Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!("File already exists: {}", path.display()),
+                ));
+            }
+            self.write(path, &contents).await
         })
     }
 }

@@ -34,6 +34,8 @@ fn metadata_from_std(m: std::fs::Metadata) -> Metadata {
         m.len(),
         m.modified().ok(),
     )
+    .with_accessed(m.accessed().ok())
+    .with_created(m.created().ok())
 }
 
 impl RealFileSystem {
@@ -153,5 +155,22 @@ impl FileSystem for RealFileSystem {
         // Atomic create-new: O_CREAT | O_EXCL
         let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
         file.write_all(contents)
+    }
+
+    fn copy(&self, from: &Path, to: &Path) -> Result<u64> {
+        // std::fs::copy uses platform-native fast paths (clonefile / reflink /
+        // CopyFileEx) when available, so we override the default whole-buffer
+        // implementation here.
+        if let Some(parent) = to.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(from, to)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<std::path::PathBuf> {
+        // Real symlink resolution; the default impl only handles `.` / `..`.
+        fs::canonicalize(path)
     }
 }

@@ -110,19 +110,18 @@ macro_rules! delegate_fs {
 }
 
 impl AsyncFileSystem for StorageBackend {
+    delegate_fs!(read(path: Path) -> IoResult<Vec<u8>>);
     delegate_fs!(read_to_string(path: Path) -> IoResult<String>);
-    delegate_fs!(write_file(path: Path, content: str) -> IoResult<()>);
-    delegate_fs!(create_new(path: Path, content: str) -> IoResult<()>);
-    delegate_fs!(delete_file(path: Path) -> IoResult<()>);
-    delegate_fs!(list_md_files(dir: Path) -> IoResult<Vec<PathBuf>>);
-    delegate_fs!(exists(path: Path) -> bool);
+    delegate_fs!(read_dir(path: Path) -> IoResult<Vec<diaryx_core::fs::DirEntry>>);
+    delegate_fs!(write(path: Path, contents: [u8]) -> IoResult<()>);
+    delegate_fs!(create_dir(path: Path) -> IoResult<()>);
     delegate_fs!(create_dir_all(path: Path) -> IoResult<()>);
-    delegate_fs!(is_dir(path: Path) -> bool);
-    delegate_fs!(move_file(from: Path, to: Path) -> IoResult<()>);
-    delegate_fs!(read_binary(path: Path) -> IoResult<Vec<u8>>);
-    delegate_fs!(write_binary(path: Path, content: [u8]) -> IoResult<()>);
-    delegate_fs!(list_files(dir: Path) -> IoResult<Vec<PathBuf>>);
-    delegate_fs!(get_modified_time(path: Path) -> Option<i64>);
+    delegate_fs!(remove_file(path: Path) -> IoResult<()>);
+    delegate_fs!(remove_dir(path: Path) -> IoResult<()>);
+    delegate_fs!(remove_dir_all(path: Path) -> IoResult<()>);
+    delegate_fs!(rename(from: Path, to: Path) -> IoResult<()>);
+    delegate_fs!(metadata(path: Path) -> IoResult<diaryx_core::fs::Metadata>);
+    delegate_fs!(create_new(path: Path, contents: [u8]) -> IoResult<()>);
 }
 
 // ============================================================================
@@ -414,7 +413,7 @@ impl DiaryxBackend {
 
         future_to_promise(async move {
             let data = fs
-                .read_binary(&PathBuf::from(&path))
+                .read(&PathBuf::from(&path))
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(js_sys::Uint8Array::from(data.as_slice()).into())
@@ -430,7 +429,7 @@ impl DiaryxBackend {
         let data_vec = data.to_vec();
 
         future_to_promise(async move {
-            fs.write_binary(&PathBuf::from(&path), &data_vec)
+            fs.write(&PathBuf::from(&path), &data_vec)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)

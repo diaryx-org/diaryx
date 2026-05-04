@@ -28,6 +28,11 @@ mod events;
 pub use crossfs::FileSystem;
 pub use crossfs::{AsyncFileSystem, BoxFuture, DirEntry, FileType, Metadata, SyncToAsyncFs};
 
+/// Re-export of the upstream `crossfs` crate, for callers that need access to
+/// helpers (like `error::dom_exception_kind`) that are not surfaced by name in
+/// this module.
+pub use crossfs;
+
 /// Backward-compatible alias for [`crossfs::InMemoryFs`].
 pub use crossfs::InMemoryFs as InMemoryFileSystem;
 

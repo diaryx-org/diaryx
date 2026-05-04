@@ -20,6 +20,7 @@
 #![deny(rust_2018_idioms)]
 
 mod adapter;
+pub mod error;
 mod memory;
 mod metadata;
 mod traits;

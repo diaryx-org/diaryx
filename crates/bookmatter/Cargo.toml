@@ -6,7 +6,7 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 license-file.workspace = true
-description = "Order-preserving, round-trip metadata parser for markdown — frontmatter, endmatter, fenced blocks, YAML/TOML/JSON"
+description = "Order-preserving, round-trip metadata parser for plain text files"
 keywords = ["frontmatter", "markdown", "yaml", "metadata"]
 categories = ["text-processing", "parsing"]
 

@@ -148,6 +148,47 @@ pub trait AsyncFileSystem: Send + Sync {
         })
     }
 
+    /// Copy a regular file from `from` to `to`. Returns the number of bytes
+    /// copied. Mirrors [`std::fs::copy`].
+    ///
+    /// The default implementation reads the entire source into memory and
+    /// writes it to the destination, so it is appropriate for the
+    /// whole-buffer I/O surface of `crossfs` v0.1. Backends with native copy
+    /// (like `std::fs::copy` reflinks on btrfs/APFS) may override.
+    ///
+    /// Errors with `ErrorKind::IsADirectory` if `from` is a directory.
+    fn copy<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, io::Result<u64>> {
+        Box::pin(async move {
+            let meta = self.metadata(from).await?;
+            if !meta.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::IsADirectory,
+                    format!("source is not a regular file: {}", from.display()),
+                ));
+            }
+            let bytes = self.read(from).await?;
+            let len = bytes.len() as u64;
+            self.write(to, &bytes).await?;
+            Ok(len)
+        })
+    }
+
+    /// Resolve `.` / `..` components in `path`. Mirrors
+    /// [`std::fs::canonicalize`] partially: this default implementation does
+    /// **not** resolve symlinks. Backends that can resolve symlinks (notably
+    /// the native backend) should override.
+    ///
+    /// Errors with `ErrorKind::NotFound` if the resulting path does not
+    /// exist after normalization, matching `std::fs::canonicalize`'s
+    /// existence requirement.
+    fn canonicalize<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, io::Result<std::path::PathBuf>> {
+        Box::pin(async move {
+            let resolved = lexical_normalize(path);
+            self.metadata(&resolved).await?;
+            Ok(resolved)
+        })
+    }
+
     // ============================================================================
     // Legacy / deprecated method aliases
     // ============================================================================
@@ -378,6 +419,30 @@ pub trait AsyncFileSystem {
         })
     }
 
+    fn copy<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, io::Result<u64>> {
+        Box::pin(async move {
+            let meta = self.metadata(from).await?;
+            if !meta.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::IsADirectory,
+                    format!("source is not a regular file: {}", from.display()),
+                ));
+            }
+            let bytes = self.read(from).await?;
+            let len = bytes.len() as u64;
+            self.write(to, &bytes).await?;
+            Ok(len)
+        })
+    }
+
+    fn canonicalize<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, io::Result<std::path::PathBuf>> {
+        Box::pin(async move {
+            let resolved = lexical_normalize(path);
+            self.metadata(&resolved).await?;
+            Ok(resolved)
+        })
+    }
+
     #[deprecated(since = "0.1.0", note = "use `write(path, content.as_bytes())`")]
     fn write_file<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, io::Result<()>> {
         Box::pin(async move { self.write(path, content.as_bytes()).await })
@@ -581,6 +646,12 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
     fn clear_dir<'a>(&'a self, dir: &'a Path) -> BoxFuture<'a, io::Result<()>> {
         (*self).clear_dir(dir)
     }
+    fn copy<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, io::Result<u64>> {
+        (*self).copy(from, to)
+    }
+    fn canonicalize<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, io::Result<std::path::PathBuf>> {
+        (*self).canonicalize(path)
+    }
 }
 
 // Blanket impl for references — wasm.
@@ -636,6 +707,32 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
     fn clear_dir<'a>(&'a self, dir: &'a Path) -> BoxFuture<'a, io::Result<()>> {
         (*self).clear_dir(dir)
     }
+    fn copy<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, io::Result<u64>> {
+        (*self).copy(from, to)
+    }
+    fn canonicalize<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, io::Result<std::path::PathBuf>> {
+        (*self).canonicalize(path)
+    }
+}
+
+/// Pure path normalization: collapse `.` / `..` components without touching
+/// the filesystem. Shared between the default `canonicalize` impls.
+fn lexical_normalize(path: &Path) -> std::path::PathBuf {
+    let mut components: Vec<std::path::Component<'_>> = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if matches!(components.last(), Some(std::path::Component::Normal(_))) {
+                    components.pop();
+                } else {
+                    components.push(component);
+                }
+            }
+            other => components.push(other),
+        }
+    }
+    components.iter().collect()
 }
 
 // ============================================================================
@@ -680,6 +777,30 @@ pub trait FileSystem: Send + Sync {
     }
 
     fn create_new(&self, path: &Path, contents: &[u8]) -> io::Result<()>;
+
+    /// Copy a regular file. Mirrors [`std::fs::copy`].
+    fn copy(&self, from: &Path, to: &Path) -> io::Result<u64> {
+        let meta = self.metadata(from)?;
+        if !meta.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                format!("source is not a regular file: {}", from.display()),
+            ));
+        }
+        let bytes = self.read(from)?;
+        let len = bytes.len() as u64;
+        self.write(to, &bytes)?;
+        Ok(len)
+    }
+
+    /// Resolve `.` / `..` components. The default impl does not resolve
+    /// symlinks; backends with symlink support (notably the native backend)
+    /// should override.
+    fn canonicalize(&self, path: &Path) -> io::Result<std::path::PathBuf> {
+        let resolved = lexical_normalize(path);
+        self.metadata(&resolved)?;
+        Ok(resolved)
+    }
 
     // ---- legacy aliases ----
 
@@ -839,5 +960,11 @@ impl<T: FileSystem + ?Sized> FileSystem for &T {
     }
     fn create_new(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
         (*self).create_new(path, contents)
+    }
+    fn copy(&self, from: &Path, to: &Path) -> io::Result<u64> {
+        (*self).copy(from, to)
+    }
+    fn canonicalize(&self, path: &Path) -> io::Result<std::path::PathBuf> {
+        (*self).canonicalize(path)
     }
 }

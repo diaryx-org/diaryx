@@ -32,7 +32,9 @@ pub use helpers::{
 
 use crate::date;
 use crate::error::{DiaryxError, Result};
-use crate::fs::{AsyncFileSystem, FileSystem};
+use crate::fs::AsyncFileSystem;
+#[allow(deprecated)]
+use crate::fs::FileSystem;
 use crate::link_parser;
 use crate::yaml;
 use indexmap::IndexMap;
@@ -70,6 +72,7 @@ pub struct DiaryxApp<FS: AsyncFileSystem> {
 ///
 /// This preserves the prior `FileSystem`-based implementation during the async refactor.
 /// Prefer [`DiaryxApp`].
+#[allow(deprecated)]
 pub struct DiaryxAppSync<FS: FileSystem> {
     fs: FS,
 }
@@ -159,7 +162,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     ) -> Result<()> {
         let content = bookmatter::frontmatter::yaml::serialize(frontmatter, body)?;
         self.fs
-            .write_file(std::path::Path::new(path), &content)
+            .write(std::path::Path::new(path), content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: PathBuf::from(path),
@@ -409,6 +412,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     }
 }
 
+#[allow(deprecated)]
 impl<FS: FileSystem> DiaryxAppSync<FS> {
     /// DiaryxAppSync constructor
     pub fn new(fs: FS) -> Self {

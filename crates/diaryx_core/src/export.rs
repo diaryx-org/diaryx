@@ -253,7 +253,13 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
                     root_dir.join(&child_path)
                 };
 
-                if self.workspace.fs_ref().exists(&absolute_child_path).await {
+                if self
+                    .workspace
+                    .fs_ref()
+                    .try_exists(&absolute_child_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     let child_included = Box::pin(self.plan_file_recursive(
                         &absolute_child_path,
                         root_dir,
@@ -364,7 +370,14 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         options: &ExportOptions,
     ) -> Result<ExportStats> {
         // Check if destination exists
-        if self.workspace.fs_ref().exists(&plan.destination).await && !options.force {
+        if self
+            .workspace
+            .fs_ref()
+            .try_exists(&plan.destination)
+            .await
+            .unwrap_or(false)
+            && !options.force
+        {
             return Err(DiaryxError::WorkspaceAlreadyExists(
                 plan.destination.clone(),
             ));
@@ -407,7 +420,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
             // Write to destination
             self.workspace
                 .fs_ref()
-                .write_file(&export_file.dest_path, &processed_content)
+                .write(&export_file.dest_path, processed_content.as_bytes())
                 .await?;
             stats.files_exported += 1;
         }
@@ -573,7 +586,13 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
             if entry_path.extension().is_some_and(|ext| ext == "md") {
                 continue;
             }
-            if !self.workspace.fs_ref().exists(&entry_path).await {
+            if !self
+                .workspace
+                .fs_ref()
+                .try_exists(&entry_path)
+                .await
+                .unwrap_or(false)
+            {
                 continue;
             }
             if !is_binary_file(&entry_path) {
@@ -610,6 +629,7 @@ impl std::fmt::Display for ExportStats {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::fs::{FileSystem, InMemoryFileSystem, SyncToAsyncFs, block_on_test};
@@ -623,14 +643,16 @@ mod tests {
     #[test]
     fn test_audience_mismatch_excluded() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents:\n  - secret.md\naudience:\n  - family\n---\n\n# Root\n",
+            "---\ntitle: Root\ncontents:\n  - secret.md\naudience:\n  - family\n---\n\n# Root\n"
+                .as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/secret.md"),
-            "---\ntitle: Secret\npart_of: README.md\naudience:\n  - internal\n---\n\n# Secret\n",
+            "---\ntitle: Secret\npart_of: README.md\naudience:\n  - internal\n---\n\n# Secret\n"
+                .as_bytes(),
         )
         .unwrap();
 
@@ -658,14 +680,16 @@ mod tests {
     #[test]
     fn test_audience_inheritance() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents:\n  - child.md\naudience:\n  - family\n---\n\n# Root\n",
+            "---\ntitle: Root\ncontents:\n  - child.md\naudience:\n  - family\n---\n\n# Root\n"
+                .as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/child.md"),
-            "---\ntitle: Child\npart_of: README.md\n---\n\n# Child inherits family audience\n",
+            "---\ntitle: Child\npart_of: README.md\n---\n\n# Child inherits family audience\n"
+                .as_bytes(),
         )
         .unwrap();
 
@@ -687,9 +711,9 @@ mod tests {
     #[test]
     fn test_no_audience_private_by_default() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents: []\n---\n\n# Root with no audience\n",
+            "---\ntitle: Root\ncontents: []\n---\n\n# Root with no audience\n".as_bytes(),
         )
         .unwrap();
 
@@ -712,9 +736,9 @@ mod tests {
     #[test]
     fn test_no_audience_with_default_audience_included() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents: []\n---\n\n# Root with no audience\n",
+            "---\ntitle: Root\ncontents: []\n---\n\n# Root with no audience\n".as_bytes(),
         )
         .unwrap();
 
@@ -736,9 +760,9 @@ mod tests {
     #[test]
     fn test_no_audience_with_default_audience_mismatch() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents: []\n---\n\n# Root with no audience\n",
+            "---\ntitle: Root\ncontents: []\n---\n\n# Root with no audience\n".as_bytes(),
         )
         .unwrap();
 
@@ -760,9 +784,9 @@ mod tests {
     #[test]
     fn test_explicit_audience_overrides_default() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents: []\naudience:\n  - family\n---\n\n# Root\n",
+            "---\ntitle: Root\ncontents: []\naudience:\n  - family\n---\n\n# Root\n".as_bytes(),
         )
         .unwrap();
 
@@ -784,9 +808,9 @@ mod tests {
     #[test]
     fn test_wildcard_audience_includes_all() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents: []\n---\n\n# Root\n",
+            "---\ntitle: Root\ncontents: []\n---\n\n# Root\n".as_bytes(),
         )
         .unwrap();
 
@@ -808,19 +832,20 @@ mod tests {
     #[test]
     fn test_filtered_contents_tracked() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents:\n  - visible.md\n  - hidden.md\naudience:\n  - family\n---\n\n# Root\n",
+            "---\ntitle: Root\ncontents:\n  - visible.md\n  - hidden.md\naudience:\n  - family\n---\n\n# Root\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/visible.md"),
-            "---\ntitle: Visible\npart_of: README.md\n---\n\n# Visible\n",
+            "---\ntitle: Visible\npart_of: README.md\n---\n\n# Visible\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/hidden.md"),
-            "---\ntitle: Hidden\npart_of: README.md\naudience:\n  - internal\n---\n\n# Hidden\n",
+            "---\ntitle: Hidden\npart_of: README.md\naudience:\n  - internal\n---\n\n# Hidden\n"
+                .as_bytes(),
         )
         .unwrap();
 
@@ -848,14 +873,14 @@ mod tests {
     #[test]
     fn test_audience_values_trimmed_for_visibility() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents:\n  - child.md\naudience:\n  - \" family \"\n  - \" ENGL212 \"\n---\n\n# Root\n",
+            "---\ntitle: Root\ncontents:\n  - child.md\naudience:\n  - \" family \"\n  - \" ENGL212 \"\n---\n\n# Root\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/child.md"),
-            "---\ntitle: Child\npart_of: README.md\n---\n\n# Child\n",
+            "---\ntitle: Child\npart_of: README.md\n---\n\n# Child\n".as_bytes(),
         )
         .unwrap();
 
@@ -885,22 +910,29 @@ mod tests {
     #[test]
     fn test_collect_binary_attachments_uses_logical_workspace_file_set() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/Diaryx.md"),
-            "---\ntitle: Root\ncontents:\n  - notes/day.md\nattachments:\n  - assets/root.png\n---\n",
+            "---\ntitle: Root\ncontents:\n  - notes/day.md\nattachments:\n  - assets/root.png\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/workspace/notes/day.md"),
-            "---\ntitle: Day\npart_of: ../Diaryx.md\nattachments:\n  - _attachments/day.jpg\n---\n",
+            "---\ntitle: Day\npart_of: ../Diaryx.md\nattachments:\n  - _attachments/day.jpg\n---\n"
+                .as_bytes(),
         )
         .unwrap();
-        fs.write_file(Path::new("/workspace/assets/root.png"), "root")
+        fs.write(Path::new("/workspace/assets/root.png"), "root".as_bytes())
             .unwrap();
-        fs.write_file(Path::new("/workspace/notes/_attachments/day.jpg"), "day")
-            .unwrap();
-        fs.write_file(Path::new("/workspace/target/debug/app.bin"), "bin")
-            .unwrap();
+        fs.write(
+            Path::new("/workspace/notes/_attachments/day.jpg"),
+            "day".as_bytes(),
+        )
+        .unwrap();
+        fs.write(
+            Path::new("/workspace/target/debug/app.bin"),
+            "bin".as_bytes(),
+        )
+        .unwrap();
 
         let async_fs: TestFs = SyncToAsyncFs::new(fs);
         let exporter = Exporter::new(async_fs);

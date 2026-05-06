@@ -186,7 +186,7 @@ async fn handle_read_binary(
     let data = state
         .diaryx
         .fs()
-        .read_binary(&full)
+        .read(&full)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
@@ -204,7 +204,7 @@ async fn handle_write_binary(
     state
         .diaryx
         .fs()
-        .write_binary(&full, &body)
+        .write(&full, &body)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)

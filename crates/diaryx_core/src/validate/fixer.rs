@@ -120,12 +120,13 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         crate::frontmatter::set_property(&mut frontmatter, key, value);
         let new_content = crate::frontmatter::serialize(&frontmatter, &body)?;
 
-        self.fs.write_file(path, &new_content).await.map_err(|e| {
-            crate::error::DiaryxError::FileWrite {
+        self.fs
+            .write(path, new_content.as_bytes())
+            .await
+            .map_err(|e| crate::error::DiaryxError::FileWrite {
                 path: path.to_path_buf(),
                 source: e,
-            }
-        })
+            })
     }
 
     /// Remove a frontmatter property from a file. A missing file or missing
@@ -142,12 +143,13 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         crate::frontmatter::remove_property(&mut parsed.frontmatter, key);
 
         let new_content = crate::frontmatter::serialize(&parsed.frontmatter, &parsed.body)?;
-        self.fs.write_file(path, &new_content).await.map_err(|e| {
-            crate::error::DiaryxError::FileWrite {
+        self.fs
+            .write(path, new_content.as_bytes())
+            .await
+            .map_err(|e| crate::error::DiaryxError::FileWrite {
                 path: path.to_path_buf(),
                 source: e,
-            }
-        })
+            })
     }
 
     // ==================== Link Format Helpers ====================
@@ -504,13 +506,16 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             "---\ntitle: {title}\nlink: \"{self_link}\"\nattachment: \"{attachment_link}\"\nattachment_of:\n  - \"{backlink}\"\n---\n",
             title = binary_filename,
         );
-        self.fs.write_file(note_path, &content).await.map_err(|e| {
-            format!(
-                "Failed to create attachment note {}: {}",
-                note_path.display(),
-                e
-            )
-        })
+        self.fs
+            .write(note_path, content.as_bytes())
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to create attachment note {}: {}",
+                    note_path.display(),
+                    e
+                )
+            })
     }
 
     /// Wrap an orphan binary file in a markdown attachment note and add that
@@ -527,7 +532,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             Err(msg) => return FixResult::failure(msg),
         };
 
-        if !self.fs.exists(&note_path).await
+        if !self.fs.try_exists(&note_path).await.unwrap_or(false)
             && let Err(msg) = self
                 .create_attachment_wrapper_note(file, &note_path, index)
                 .await
@@ -613,7 +618,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             Err(msg) => return FixResult::failure(msg),
         };
 
-        if !self.fs.exists(&note_path).await
+        if !self.fs.try_exists(&note_path).await.unwrap_or(false)
             && let Err(msg) = self
                 .create_attachment_wrapper_note(binary, &note_path, index)
                 .await

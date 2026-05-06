@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use diaryx_core::config::Config;
 use diaryx_core::error::{DiaryxError, Result};
-use diaryx_core::fs::{FileSystem, SyncToAsyncFs};
+use diaryx_core::fs::{AsyncFileSystem, SyncToAsyncFs};
 
 use crate::fs::RealFileSystem;
 
@@ -63,14 +63,14 @@ pub trait NativeConfigExt: Sized {
     fn init(default_workspace: PathBuf) -> Result<Self>;
 
     /// Sync wrapper for [`Config::load_from`](diaryx_core::config::Config::load_from).
-    fn load_from_sync<FS: FileSystem>(fs: FS, path: &Path) -> Result<Self>;
+    fn load_from_sync<FS: AsyncFileSystem>(fs: FS, path: &Path) -> Result<Self>;
 
     /// Sync wrapper for [`Config::save_to`](diaryx_core::config::Config::save_to).
-    fn save_to_sync<FS: FileSystem>(&self, fs: FS, path: &Path) -> Result<()>;
+    fn save_to_sync<FS: AsyncFileSystem>(&self, fs: FS, path: &Path) -> Result<()>;
 
     /// Sync wrapper for
     /// [`Config::load_from_or_default`](diaryx_core::config::Config::load_from_or_default).
-    fn load_from_or_default_sync<FS: FileSystem>(
+    fn load_from_or_default_sync<FS: AsyncFileSystem>(
         fs: FS,
         path: &Path,
         default_workspace: PathBuf,
@@ -93,12 +93,12 @@ impl NativeConfigExt for Config {
         if !path.exists() {
             return Ok(default_config());
         }
-        <Self as NativeConfigExt>::load_from_sync(RealFileSystem, &path)
+        <Self as NativeConfigExt>::load_from_sync(SyncToAsyncFs::new(RealFileSystem), &path)
     }
 
     fn save(&self) -> Result<()> {
         let path = config_path().ok_or(DiaryxError::NoConfigDir)?;
-        <Self as NativeConfigExt>::save_to_sync(self, RealFileSystem, &path)
+        <Self as NativeConfigExt>::save_to_sync(self, SyncToAsyncFs::new(RealFileSystem), &path)
     }
 
     fn init(default_workspace: PathBuf) -> Result<Self> {
@@ -107,24 +107,20 @@ impl NativeConfigExt for Config {
         Ok(config)
     }
 
-    fn load_from_sync<FS: FileSystem>(fs: FS, path: &Path) -> Result<Self> {
-        futures_lite::future::block_on(Config::load_from(&SyncToAsyncFs::new(fs), path))
+    fn load_from_sync<FS: AsyncFileSystem>(fs: FS, path: &Path) -> Result<Self> {
+        futures_lite::future::block_on(Config::load_from(&fs, path))
     }
 
-    fn save_to_sync<FS: FileSystem>(&self, fs: FS, path: &Path) -> Result<()> {
-        futures_lite::future::block_on(self.save_to(&SyncToAsyncFs::new(fs), path))
+    fn save_to_sync<FS: AsyncFileSystem>(&self, fs: FS, path: &Path) -> Result<()> {
+        futures_lite::future::block_on(self.save_to(&fs, path))
     }
 
-    fn load_from_or_default_sync<FS: FileSystem>(
+    fn load_from_or_default_sync<FS: AsyncFileSystem>(
         fs: FS,
         path: &Path,
         default_workspace: PathBuf,
     ) -> Self {
-        futures_lite::future::block_on(Config::load_from_or_default(
-            &SyncToAsyncFs::new(fs),
-            path,
-            default_workspace,
-        ))
+        futures_lite::future::block_on(Config::load_from_or_default(&fs, path, default_workspace))
     }
 }
 
@@ -152,7 +148,7 @@ mod tests {
     fn round_trip_sync_wrappers() {
         use diaryx_core::fs::InMemoryFileSystem;
 
-        let fs = InMemoryFileSystem::new();
+        let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
         let cfg = Config::new(PathBuf::from("/tmp/test-ws"));
         let path = Path::new("/cfg/config.md");
 

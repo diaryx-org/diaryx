@@ -19,14 +19,14 @@ fn make_test_fs() -> InMemoryFileSystem {
 #[test]
 fn test_valid_workspace() {
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\npart_of: README.md\n---\n",
+        "---\ntitle: Note\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -42,9 +42,9 @@ fn test_valid_workspace() {
 #[test]
 fn test_broken_contents_ref() {
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - missing.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - missing.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -65,14 +65,14 @@ fn test_broken_contents_ref() {
 #[test]
 fn test_broken_part_of() {
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\npart_of: missing_parent.md\n---\n",
+        "---\ntitle: Note\npart_of: missing_parent.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -93,14 +93,14 @@ fn test_broken_part_of() {
 #[test]
 fn test_valid_self_link_passes_validation() {
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\nlink: \"[Root](/README.md)\"\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\nlink: \"[Root](/README.md)\"\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\nlink: \"[Note](/note.md)\"\npart_of: README.md\n---\n",
+        "---\ntitle: Note\nlink: \"[Note](/note.md)\"\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -120,14 +120,14 @@ fn test_valid_self_link_passes_validation() {
 #[test]
 fn test_invalid_self_link_warns_with_suggestion() {
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\nlink: \"[Wrong](/other.md)\"\npart_of: README.md\n---\n",
+        "---\ntitle: Note\nlink: \"[Wrong](/other.md)\"\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -158,9 +158,9 @@ fn test_invalid_self_link_warns_with_suggestion() {
 #[test]
 fn test_broken_link_ref_reports_error() {
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\nlinks:\n  - missing.md\n---\n",
+        "---\ntitle: Root\nlinks:\n  - missing.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -177,12 +177,12 @@ fn test_broken_link_ref_reports_error() {
 #[test]
 fn test_missing_backlink_warns() {
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\nlinks:\n  - note.md\n---\n",
+        "---\ntitle: Root\nlinks:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("note.md"), "---\ntitle: Note\n---\n")
+    fs.write(Path::new("note.md"), "---\ntitle: Note\n---\n".as_bytes())
         .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
@@ -199,9 +199,9 @@ fn test_missing_backlink_warns() {
 #[test]
 fn test_stale_backlink_warns() {
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\nlink_of:\n  - ghost.md\n---\n",
+        "---\ntitle: Root\nlink_of:\n  - ghost.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -221,17 +221,18 @@ fn test_missing_attachment_backlink_warns() {
     let fs = make_test_fs();
     // Root index references an attachment note, but the note is missing
     // `attachment_of` pointing back.
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents: []\nattachments:\n  - _attachments/pic.png.md\n---\n",
+        "---\ntitle: Root\ncontents: []\nattachments:\n  - _attachments/pic.png.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("_attachments/pic.png.md"),
-        "---\ntitle: pic\nattachment: _attachments/pic.png\n---\n",
+        "---\ntitle: pic\nattachment: _attachments/pic.png\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("_attachments/pic.png"), "PNGDATA")
+    fs.write(Path::new("_attachments/pic.png"), "PNGDATA".as_bytes())
         .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
@@ -254,17 +255,18 @@ fn test_stale_attachment_backlink_warns() {
     let fs = make_test_fs();
     // Attachment note declares `attachment_of: [ghost.md]`, but ghost.md
     // does not exist.
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents: []\n---\n",
+        "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("_attachments/pic.png.md"),
-        "---\ntitle: pic\nattachment: _attachments/pic.png\nattachment_of:\n  - ghost.md\n---\n",
+        "---\ntitle: pic\nattachment: _attachments/pic.png\nattachment_of:\n  - ghost.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("_attachments/pic.png"), "PNGDATA")
+    fs.write(Path::new("_attachments/pic.png"), "PNGDATA".as_bytes())
         .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
@@ -426,14 +428,14 @@ fn test_validation_fixer_get_canonical_strips_corrupted_workspace_prefix() {
 #[test]
 fn test_non_portable_path_in_workspace_validation() {
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\npart_of: /Users/adam/Documents/README.md\n---\n",
+        "---\ntitle: Note\npart_of: /Users/adam/Documents/README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -463,9 +465,10 @@ fn test_validate_workspace_with_plain_canonical_links() {
     let fs = make_test_fs();
 
     // Root index with link_format: plain_canonical
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\nlink_format: plain_canonical\ncontents:\n  - Folder/index.md\n---\n",
+        "---\ntitle: Root\nlink_format: plain_canonical\ncontents:\n  - Folder/index.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
 
@@ -473,16 +476,17 @@ fn test_validate_workspace_with_plain_canonical_links() {
     fs.create_dir_all(Path::new("Folder")).unwrap();
 
     // Child index in Folder - uses file-relative paths
-    fs.write_file(
+    fs.write(
         Path::new("Folder/index.md"),
-        "---\ntitle: Folder Index\npart_of: ../README.md\ncontents:\n  - Folder/child.md\n---\n",
+        "---\ntitle: Folder Index\npart_of: ../README.md\ncontents:\n  - Folder/child.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
 
     // Child file - canonical part_of path
-    fs.write_file(
+    fs.write(
         Path::new("Folder/child.md"),
-        "---\ntitle: Child\npart_of: Folder/index.md\n---\n",
+        "---\ntitle: Child\npart_of: Folder/index.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -505,32 +509,33 @@ fn test_validate_workspace_plain_canonical_deeply_nested() {
     let fs = make_test_fs();
 
     // Root with PlainCanonical format setting
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\nlink_format: plain_canonical\ncontents:\n  - A/index.md\n---\n",
+        "---\ntitle: Root\nlink_format: plain_canonical\ncontents:\n  - A/index.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
 
     fs.create_dir_all(Path::new("A/B")).unwrap();
 
     // A/index.md uses canonical contents path
-    fs.write_file(
+    fs.write(
         Path::new("A/index.md"),
-        "---\ntitle: A\npart_of: ../README.md\ncontents:\n  - A/B/index.md\n---\n",
+        "---\ntitle: A\npart_of: ../README.md\ncontents:\n  - A/B/index.md\n---\n".as_bytes(),
     )
     .unwrap();
 
     // A/B/index.md uses canonical contents path
-    fs.write_file(
+    fs.write(
         Path::new("A/B/index.md"),
-        "---\ntitle: B\npart_of: ../index.md\ncontents:\n  - A/B/note.md\n---\n",
+        "---\ntitle: B\npart_of: ../index.md\ncontents:\n  - A/B/note.md\n---\n".as_bytes(),
     )
     .unwrap();
 
     // Leaf file uses canonical part_of path
-    fs.write_file(
+    fs.write(
         Path::new("A/B/note.md"),
-        "---\ntitle: Note\npart_of: A/B/index.md\n---\n",
+        "---\ntitle: Note\npart_of: A/B/index.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -554,9 +559,9 @@ fn test_validate_workspace_with_markdown_root_and_plain_paths() {
     let fs = make_test_fs();
 
     // Root index with link_format: markdown_root and proper markdown link in contents
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Folder Index](/Folder/index.md)\"\n---\n",
+        "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Folder Index](/Folder/index.md)\"\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -565,9 +570,9 @@ fn test_validate_workspace_with_markdown_root_and_plain_paths() {
     // Child index using file-relative path for part_of
     // (The proper MarkdownRoot format would be "[Root](/README.md)" but plain
     // relative paths are also supported for backwards compatibility)
-    fs.write_file(
+    fs.write(
         Path::new("Folder/index.md"),
-        "---\ntitle: Folder Index\npart_of: ../README.md\ncontents: []\n---\n",
+        "---\ntitle: Folder Index\npart_of: ../README.md\ncontents: []\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -591,7 +596,7 @@ fn test_validate_workspace_with_actual_markdown_links_in_contents() {
     let fs = make_test_fs();
 
     // Root index with link_format: markdown_root and actual markdown links in contents
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
         r#"---
 title: Root
@@ -600,7 +605,8 @@ contents:
   - "[Daily Index](/Daily/daily_index.md)"
   - "[Creative Writing](</Creative Writing/index.md>)"
 ---
-"#,
+"#
+        .as_bytes(),
     )
     .unwrap();
 
@@ -609,15 +615,15 @@ contents:
     fs.create_dir_all(Path::new("Creative Writing")).unwrap();
 
     // Create the referenced files
-    fs.write_file(
+    fs.write(
         Path::new("Daily/daily_index.md"),
-        "---\ntitle: Daily Index\npart_of: \"[Root](/README.md)\"\n---\n",
+        "---\ntitle: Daily Index\npart_of: \"[Root](/README.md)\"\n---\n".as_bytes(),
     )
     .unwrap();
 
-    fs.write_file(
+    fs.write(
         Path::new("Creative Writing/index.md"),
-        "---\ntitle: Creative Writing\npart_of: \"[Root](/README.md)\"\n---\n",
+        "---\ntitle: Creative Writing\npart_of: \"[Root](/README.md)\"\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -640,9 +646,10 @@ fn test_validate_workspace_with_relative_format_resolves_ambiguous_relatively() 
     let fs = make_test_fs();
 
     // Root WITH link_format: plain_relative (ambiguous paths should resolve relatively)
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\nlink_format: plain_relative\ncontents:\n  - Folder/index.md\n---\n",
+        "---\ntitle: Root\nlink_format: plain_relative\ncontents:\n  - Folder/index.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
 
@@ -650,9 +657,9 @@ fn test_validate_workspace_with_relative_format_resolves_ambiguous_relatively() 
 
     // Child that uses ambiguous path for part_of
     // With plain_relative, this will resolve to Folder/README.md which doesn't exist
-    fs.write_file(
+    fs.write(
         Path::new("Folder/index.md"),
-        "---\ntitle: Folder Index\npart_of: README.md\ncontents: []\n---\n",
+        "---\ntitle: Folder Index\npart_of: README.md\ncontents: []\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -681,18 +688,18 @@ fn test_validate_workspace_default_format_with_file_relative_paths() {
     let fs = make_test_fs();
 
     // Root WITHOUT explicit link_format (defaults to MarkdownRoot)
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - Folder/index.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - Folder/index.md\n---\n".as_bytes(),
     )
     .unwrap();
 
     fs.create_dir_all(Path::new("Folder")).unwrap();
 
     // Child uses file-relative path for part_of
-    fs.write_file(
+    fs.write(
         Path::new("Folder/index.md"),
-        "---\ntitle: Folder Index\npart_of: ../README.md\ncontents: []\n---\n",
+        "---\ntitle: Folder Index\npart_of: ../README.md\ncontents: []\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -715,19 +722,21 @@ fn test_exclude_patterns_suppress_orphan_binary_warnings() {
     let fs = make_test_fs();
 
     // Root with exclude patterns
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents: []\nexclude:\n  - \"*.lock\"\n  - \"*.toml\"\n---\n",
+        "---\ntitle: Root\ncontents: []\nexclude:\n  - \"*.lock\"\n  - \"*.toml\"\n---\n"
+            .as_bytes(),
     )
     .unwrap();
 
     // Create some files that should be excluded
-    fs.write_file(Path::new("Cargo.lock"), "# lock file")
+    fs.write(Path::new("Cargo.lock"), "# lock file".as_bytes())
         .unwrap();
-    fs.write_file(Path::new("Cargo.toml"), "[package]").unwrap();
+    fs.write(Path::new("Cargo.toml"), "[package]".as_bytes())
+        .unwrap();
 
     // Create a file that should NOT be excluded
-    fs.write_file(Path::new("config.json"), "{}").unwrap();
+    fs.write(Path::new("config.json"), "{}".as_bytes()).unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
     let validator = Validator::new(async_fs);
@@ -767,20 +776,22 @@ fn test_exclude_patterns_suppress_orphan_binary_warnings() {
 fn test_root_index_excludes_apply_even_with_sibling_leaf_markdown_files() {
     let fs = make_test_fs();
 
-    fs.write_file(
+    fs.write(
         Path::new("Diaryx.md"),
-        "---\ntitle: Root\ncontents:\n  - AGENTS.md\nexclude:\n  - \"*.toml\"\n  - \"*.lock\"\n---\n",
+        "---\ntitle: Root\ncontents:\n  - AGENTS.md\nexclude:\n  - \"*.toml\"\n  - \"*.lock\"\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("AGENTS.md"),
-        "---\ntitle: Agents\npart_of: Diaryx.md\n---\n",
+        "---\ntitle: Agents\npart_of: Diaryx.md\n---\n".as_bytes(),
     )
     .unwrap();
 
-    fs.write_file(Path::new("Cargo.toml"), "[package]").unwrap();
-    fs.write_file(Path::new("flake.lock"), "lock").unwrap();
-    fs.write_file(Path::new("config.json"), "{}").unwrap();
+    fs.write(Path::new("Cargo.toml"), "[package]".as_bytes())
+        .unwrap();
+    fs.write(Path::new("flake.lock"), "lock".as_bytes())
+        .unwrap();
+    fs.write(Path::new("config.json"), "{}".as_bytes()).unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
     let validator = Validator::new(async_fs);
@@ -821,15 +832,17 @@ fn test_validate_workspace_prunes_excluded_directories_during_scan() {
 
     fs.create_dir_all(Path::new("build/nested")).unwrap();
 
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents: []\nexclude:\n  - \"build/**\"\n---\n",
+        "---\ntitle: Root\ncontents: []\nexclude:\n  - \"build/**\"\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("build/output.json"), "{}").unwrap();
-    fs.write_file(Path::new("build/nested/extra.bin"), "bin")
+    fs.write(Path::new("build/output.json"), "{}".as_bytes())
         .unwrap();
-    fs.write_file(Path::new("visible.json"), "{}").unwrap();
+    fs.write(Path::new("build/nested/extra.bin"), "bin".as_bytes())
+        .unwrap();
+    fs.write(Path::new("visible.json"), "{}".as_bytes())
+        .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
     let validator = Validator::new(async_fs);
@@ -867,14 +880,15 @@ fn test_validate_workspace_matches_excludes_against_workspace_relative_paths() {
 
     fs.create_dir_all(Path::new("crates/diaryx")).unwrap();
 
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents: []\nexclude:\n  - \"**/target\"\n  - \"**/target/**\"\n---\n",
+        "---\ntitle: Root\ncontents: []\nexclude:\n  - \"**/target\"\n  - \"**/target/**\"\n---\n"
+            .as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("crates/diaryx/target/app.bin"), "bin")
+    fs.write(Path::new("crates/diaryx/target/app.bin"), "bin".as_bytes())
         .unwrap();
-    fs.write_file(Path::new("crates/diaryx/kept.bin"), "bin")
+    fs.write(Path::new("crates/diaryx/kept.bin"), "bin".as_bytes())
         .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
@@ -912,16 +926,17 @@ fn test_validate_workspace_prunes_builtin_skip_directories_during_scan() {
     fs.create_dir_all(Path::new("target/debug")).unwrap();
     fs.create_dir_all(Path::new("node_modules/pkg")).unwrap();
 
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents: []\n---\n",
+        "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("target/debug/app.bin"), "bin")
+    fs.write(Path::new("target/debug/app.bin"), "bin".as_bytes())
         .unwrap();
-    fs.write_file(Path::new("node_modules/pkg/index.js"), "js")
+    fs.write(Path::new("node_modules/pkg/index.js"), "js".as_bytes())
         .unwrap();
-    fs.write_file(Path::new("visible.json"), "{}").unwrap();
+    fs.write(Path::new("visible.json"), "{}".as_bytes())
+        .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
     let validator = Validator::new(async_fs);
@@ -962,14 +977,15 @@ fn test_validate_workspace_prunes_hidden_directories_during_scan() {
     let fs = make_test_fs();
 
     fs.create_dir_all(Path::new(".direnv/cache")).unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents: []\n---\n",
+        "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new(".direnv/cache/stale.bin"), "bin")
+    fs.write(Path::new(".direnv/cache/stale.bin"), "bin".as_bytes())
         .unwrap();
-    fs.write_file(Path::new("visible.json"), "{}").unwrap();
+    fs.write(Path::new("visible.json"), "{}".as_bytes())
+        .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
     let validator = Validator::new(async_fs);
@@ -1008,42 +1024,42 @@ fn test_exclude_patterns_suppress_unlisted_markdown_warnings() {
     fs.create_dir_all(Path::new("docs")).unwrap();
 
     // Root index that lists the docs folder
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - docs/README.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - docs/README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
     // Docs index with exclude patterns and one listed file
-    fs.write_file(
+    fs.write(
         Path::new("docs/README.md"),
-        "---\ntitle: Docs\npart_of: ../README.md\ncontents:\n  - included.md\nexclude:\n  - \"LICENSE.md\"\n  - \"CHANGELOG.md\"\n---\n",
+        "---\ntitle: Docs\npart_of: ../README.md\ncontents:\n  - included.md\nexclude:\n  - \"LICENSE.md\"\n  - \"CHANGELOG.md\"\n---\n".as_bytes(),
     )
     .unwrap();
 
     // Create the included file (so it's listed in contents)
-    fs.write_file(
+    fs.write(
         Path::new("docs/included.md"),
-        "---\ntitle: Included\npart_of: README.md\n---\n# Included",
+        "---\ntitle: Included\npart_of: README.md\n---\n# Included".as_bytes(),
     )
     .unwrap();
 
     // Create some markdown files that should be excluded
-    fs.write_file(
+    fs.write(
         Path::new("docs/LICENSE.md"),
-        "---\ntitle: License\n---\n# License",
+        "---\ntitle: License\n---\n# License".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("docs/CHANGELOG.md"),
-        "---\ntitle: Changelog\n---\n# Changelog",
+        "---\ntitle: Changelog\n---\n# Changelog".as_bytes(),
     )
     .unwrap();
 
     // Create a markdown file that should NOT be excluded
-    fs.write_file(
+    fs.write(
         Path::new("docs/notes.md"),
-        "---\ntitle: Notes\n---\n# Notes",
+        "---\ntitle: Notes\n---\n# Notes".as_bytes(),
     )
     .unwrap();
 
@@ -1085,13 +1101,13 @@ fn test_exclude_patterns_suppress_unlisted_markdown_warnings() {
 fn test_validate_workspace_missing_part_of_in_contents() {
     // A file listed in contents but missing part_of should produce MissingPartOf warning
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
     // note.md has no part_of property
-    fs.write_file(Path::new("note.md"), "---\ntitle: Note\n---\n")
+    fs.write(Path::new("note.md"), "---\ntitle: Note\n---\n".as_bytes())
         .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
@@ -1122,14 +1138,14 @@ fn test_validate_workspace_missing_part_of_in_contents() {
 fn test_validate_workspace_no_missing_part_of_for_root() {
     // The root index should NOT produce a MissingPartOf warning
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\npart_of: README.md\n---\n",
+        "---\ntitle: Note\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1155,21 +1171,21 @@ fn test_validate_workspace_no_missing_part_of_for_sub_index() {
     // A sub-index (has contents) without part_of should NOT produce MissingPartOf
     // since it could be a valid sub-root
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - sub/index.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - sub/index.md\n---\n".as_bytes(),
     )
     .unwrap();
     fs.create_dir_all(Path::new("sub")).unwrap();
     // sub/index.md has contents but no part_of
-    fs.write_file(
+    fs.write(
         Path::new("sub/index.md"),
-        "---\ntitle: Sub\ncontents:\n  - child.md\n---\n",
+        "---\ntitle: Sub\ncontents:\n  - child.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("sub/child.md"),
-        "---\ntitle: Child\npart_of: index.md\n---\n",
+        "---\ntitle: Child\npart_of: index.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1195,19 +1211,22 @@ fn test_validate_workspace_orphan_file_missing_part_of() {
     // An orphan markdown file (not in any contents) without part_of should produce
     // both OrphanFile and MissingPartOf warnings
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\npart_of: README.md\n---\n",
+        "---\ntitle: Note\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
     // orphan.md is not listed in any contents and has no part_of
-    fs.write_file(Path::new("orphan.md"), "---\ntitle: Orphan\n---\n")
-        .unwrap();
+    fs.write(
+        Path::new("orphan.md"),
+        "---\ntitle: Orphan\n---\n".as_bytes(),
+    )
+    .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
     let validator = Validator::new(async_fs);
@@ -1243,20 +1262,20 @@ fn test_attachment_notes_excluded_from_contents_part_of_validation() {
     // Attachment notes (files with the `attachment` property) should not produce
     // OrphanFile or MissingPartOf warnings - they are managed via `attachments` lists.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\npart_of: README.md\n---\n",
+        "---\ntitle: Note\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
     // This is an attachment note - it has the `attachment` property
-    fs.write_file(
+    fs.write(
         Path::new("_attachments/photo.md"),
-        "---\ntitle: Photo\nattachment: photo.jpg\n---\n",
+        "---\ntitle: Photo\nattachment: photo.jpg\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1294,23 +1313,27 @@ fn test_attachment_binary_not_reported_as_orphan() {
     // A binary file wrapped in an attachment note (referenced via the note's
     // `attachment:` property) should not be flagged as OrphanBinaryFile.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\npart_of: README.md\nattachments:\n  - _attachments/photo.jpg.md\n---\n",
+        "---\ntitle: Note\npart_of: README.md\nattachments:\n  - _attachments/photo.jpg.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("_attachments/photo.jpg.md"),
-        "---\ntitle: Photo\nattachment: photo.jpg\n---\n",
+        "---\ntitle: Photo\nattachment: photo.jpg\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("_attachments/photo.jpg"), "binary content")
-        .unwrap();
+    fs.write(
+        Path::new("_attachments/photo.jpg"),
+        "binary content".as_bytes(),
+    )
+    .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
     let validator = Validator::new(async_fs);
@@ -1339,9 +1362,9 @@ fn test_missing_attachment_produces_broken_attachment_error() {
     // validate_workspace should flag an attachments entry that doesn't exist,
     // matching validate_file's behavior.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\nattachments:\n  - _attachments/missing.md\n---\n",
+        "---\ntitle: Root\nattachments:\n  - _attachments/missing.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1365,17 +1388,17 @@ fn test_attachments_raw_binary_entry_is_flagged() {
     // (legacy flat format). The new model requires a markdown attachment
     // note, so this should produce an InvalidAttachmentRef warning.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("pictures.md"),
-        "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - photo.HEIC\n---\n",
+        "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - photo.HEIC\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("photo.HEIC"), "binary content")
+    fs.write(Path::new("photo.HEIC"), "binary content".as_bytes())
         .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
@@ -1413,19 +1436,20 @@ fn test_attachments_markdown_without_attachment_prop_is_flagged() {
     // note — it has no `attachment:` property — so it's not a valid
     // attachment note. Must produce InvalidAttachmentRef.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("pictures.md"),
-        "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - notes.md\n---\n",
+        "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - notes.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("notes.md"),
-        "---\ntitle: Notes\n---\nJust a regular note, not an attachment note.\n",
+        "---\ntitle: Notes\n---\nJust a regular note, not an attachment note.\n".as_bytes(),
     )
     .unwrap();
 
@@ -1448,23 +1472,26 @@ fn test_attachments_valid_attachment_note_no_warning() {
     // Positive control: a proper attachment note (.md with `attachment:`
     // pointing at a binary) must NOT trigger InvalidAttachmentRef.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("pictures.md"),
-        "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - _attachments/photo.HEIC.md\n---\n",
+        "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - _attachments/photo.HEIC.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("_attachments/photo.HEIC.md"),
-        "---\ntitle: photo.HEIC\nattachment: photo.HEIC\n---\n",
+        "---\ntitle: photo.HEIC\nattachment: photo.HEIC\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("_attachments/photo.HEIC"), "binary content")
-        .unwrap();
+    fs.write(
+        Path::new("_attachments/photo.HEIC"),
+        "binary content".as_bytes(),
+    )
+    .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
     let validator = Validator::new(async_fs);
@@ -1488,31 +1515,32 @@ fn test_duplicate_list_entry_string_equality() {
     // multiple times in `attachments`. Emit one DuplicateListEntry warning
     // per distinct duplicated value, not one per duplicate occurrence.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("pictures.md"),
         "---\ntitle: Pictures\npart_of: README.md\ncontents: []\n\
          attachments:\n  - _attachments/a.md\n  - _attachments/b.md\n  \
-         - _attachments/a.md\n  - _attachments/b.md\n  - _attachments/a.md\n---\n",
+         - _attachments/a.md\n  - _attachments/b.md\n  - _attachments/a.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("_attachments/a.md"),
-        "---\ntitle: a\nattachment: a.jpg\n---\n",
+        "---\ntitle: a\nattachment: a.jpg\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("_attachments/b.md"),
-        "---\ntitle: b\nattachment: b.jpg\n---\n",
+        "---\ntitle: b\nattachment: b.jpg\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("_attachments/a.jpg"), "binary")
+    fs.write(Path::new("_attachments/a.jpg"), "binary".as_bytes())
         .unwrap();
-    fs.write_file(Path::new("_attachments/b.jpg"), "binary")
+    fs.write(Path::new("_attachments/b.jpg"), "binary".as_bytes())
         .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
@@ -1552,14 +1580,15 @@ fn test_duplicate_list_entry_canonical_equivalence() {
     // `./foo.md`) all resolve to the same canonical path and must count
     // as duplicates of one another.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - foo.md\n  - '[Foo](./foo.md)'\n  - ./foo.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - foo.md\n  - '[Foo](./foo.md)'\n  - ./foo.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("foo.md"),
-        "---\ntitle: Foo\npart_of: README.md\n---\n",
+        "---\ntitle: Foo\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1597,24 +1626,24 @@ fn test_duplicate_list_entry_canonical_equivalence() {
 fn test_no_duplicate_warning_for_unique_entries() {
     // Sanity check: a list with no duplicates produces no warning.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - a.md\n  - b.md\n  - c.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - a.md\n  - b.md\n  - c.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("a.md"),
-        "---\ntitle: a\npart_of: README.md\n---\n",
+        "---\ntitle: a\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("b.md"),
-        "---\ntitle: b\npart_of: README.md\n---\n",
+        "---\ntitle: b\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("c.md"),
-        "---\ntitle: c\npart_of: README.md\n---\n",
+        "---\ntitle: c\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1634,21 +1663,22 @@ fn test_fix_duplicate_list_entry_dedupes_attachments() {
     // The auto-fix should preserve the first occurrence of each canonical
     // value and strip the rest, leaving a clean list.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("pictures.md"),
         "---\ntitle: Pictures\ncontents: []\n\
          attachments:\n  - _attachments/a.md\n  - _attachments/b.md\n  \
-         - _attachments/a.md\n  - _attachments/b.md\n---\n",
+         - _attachments/a.md\n  - _attachments/b.md\n---\n"
+            .as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("_attachments/a.md"),
-        "---\ntitle: a\nattachment: a.jpg\n---\n",
+        "---\ntitle: a\nattachment: a.jpg\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("_attachments/b.md"),
-        "---\ntitle: b\nattachment: b.jpg\n---\n",
+        "---\ntitle: b\nattachment: b.jpg\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1677,22 +1707,22 @@ fn test_temp_files_excluded_from_validation() {
     // Temp files (.bak, .tmp, .swap) from atomic writes should not produce warnings
     let fs = make_test_fs();
 
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents: []\n---\n",
+        "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
     )
     .unwrap();
 
     // Create temp files that should be silently ignored
-    fs.write_file(Path::new("file.md.bak"), "backup content")
+    fs.write(Path::new("file.md.bak"), "backup content".as_bytes())
         .unwrap();
-    fs.write_file(Path::new("file.md.tmp"), "temp content")
+    fs.write(Path::new("file.md.tmp"), "temp content".as_bytes())
         .unwrap();
-    fs.write_file(Path::new("file.md.swap"), "swap content")
+    fs.write(Path::new("file.md.swap"), "swap content".as_bytes())
         .unwrap();
 
     // Create a real orphan for contrast
-    fs.write_file(Path::new("orphan.txt"), "real orphan")
+    fs.write(Path::new("orphan.txt"), "real orphan".as_bytes())
         .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs);
@@ -1738,16 +1768,16 @@ fn test_multiple_indexes_detection_is_content_based() {
     // has `contents:`, regardless of filename. A `README.md` WITHOUT contents
     // is not an index; a `journal.md` WITH contents is.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - journal.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - journal.md\n---\n".as_bytes(),
     )
     .unwrap();
     // journal.md is a real index (has `contents:`) even though its filename
     // doesn't match README/index/*.index.md.
-    fs.write_file(
+    fs.write(
         Path::new("journal.md"),
-        "---\ntitle: Journal\ncontents: []\npart_of: README.md\n---\n",
+        "---\ntitle: Journal\ncontents: []\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1780,14 +1810,14 @@ fn test_readme_without_contents_is_not_a_second_index() {
     // A README.md-named file without a `contents:` property is not an index;
     // having it alongside a real index should not raise MultipleIndexes.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("journal.md"),
-        "---\ntitle: Journal\ncontents:\n  - README.md\n---\n",
+        "---\ntitle: Journal\ncontents:\n  - README.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Placeholder\npart_of: journal.md\n---\nThis is not an index.\n",
+        "---\ntitle: Placeholder\npart_of: journal.md\n---\nThis is not an index.\n".as_bytes(),
     )
     .unwrap();
 
@@ -1812,14 +1842,14 @@ fn test_validate_file_works_with_in_memory_fs() {
     // silently no-ops on the real FS but makes the function unusable on
     // InMemoryFileSystem (and WASM). Confirm a plain relative path works.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\npart_of: README.md\n---\n",
+        "---\ntitle: Note\npart_of: README.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1841,17 +1871,17 @@ fn test_fix_invalid_attachment_ref_legacy_binary() {
     // The autofix should wrap the binary in a `.md` attachment note and
     // rewrite the `attachments` entry to point at the note.
     let fs = make_test_fs();
-    fs.write_file(
+    fs.write(
         Path::new("README.md"),
-        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - pictures.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("pictures.md"),
-        "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - photo.HEIC\n---\n",
+        "---\ntitle: Pictures\npart_of: README.md\ncontents: []\nattachments:\n  - photo.HEIC\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(Path::new("photo.HEIC"), "binary content")
+    fs.write(Path::new("photo.HEIC"), "binary content".as_bytes())
         .unwrap();
 
     let async_fs: TestFs = SyncToAsyncFs::new(fs.clone());
@@ -1924,14 +1954,14 @@ fn test_validate_workspace_skips_symlinks_in_contents() {
     let fs = make_test_fs();
 
     // Root index lists both the real file and a symlink to it
-    fs.write_file(
+    fs.write(
         Path::new("index.md"),
-        "---\ntitle: Root\ncontents:\n  - real.md\n  - link.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - real.md\n  - link.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("real.md"),
-        "---\ntitle: Real\npart_of: index.md\n---\n",
+        "---\ntitle: Real\npart_of: index.md\n---\n".as_bytes(),
     )
     .unwrap();
 
@@ -1956,14 +1986,14 @@ fn test_validate_workspace_skips_symlinks_in_contents() {
 fn test_validate_workspace_skips_symlinks_in_orphan_scan() {
     let fs = make_test_fs();
 
-    fs.write_file(
+    fs.write(
         Path::new("index.md"),
-        "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
     )
     .unwrap();
-    fs.write_file(
+    fs.write(
         Path::new("note.md"),
-        "---\ntitle: Note\npart_of: index.md\n---\n",
+        "---\ntitle: Note\npart_of: index.md\n---\n".as_bytes(),
     )
     .unwrap();
 

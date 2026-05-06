@@ -257,7 +257,7 @@ impl Config {
         }
 
         let contents = crate::frontmatter::serialize_typed(self)?;
-        fs.write_file(path, &contents).await?;
+        fs.write(path, contents.as_bytes()).await?;
         Ok(())
     }
 

@@ -2,7 +2,7 @@
 
 use diaryx_core::config::Config;
 use diaryx_core::entry::{prettify_filename, slugify};
-use diaryx_core::fs::{FileSystem, SyncToAsyncFs};
+use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::link_parser::LinkFormat;
 use diaryx_core::validate::ValidationFixer;
 use diaryx_core::workspace::Workspace;
@@ -2305,9 +2305,8 @@ fn create_new_index(app: &CliDiaryxAppSync, dir: &Path) -> Option<PathBuf> {
     let index_name = format!("{}.md", safe_name);
     let index_path = dir.join(&index_name);
 
-    // 2. Check existence using a local FS instance (since app.fs is private)
-    let fs = RealFileSystem;
-    if fs.exists(&index_path) {
+    // 2. Check existence
+    if index_path.exists() {
         return Some(index_path);
     }
 
@@ -2610,10 +2609,7 @@ fn convert_file_links(
     dry_run: bool,
 ) -> ConvertResult {
     use diaryx_core::frontmatter;
-    use diaryx_core::fs::FileSystem;
     use diaryx_core::link_parser;
-
-    let fs = RealFileSystem;
 
     let mut result = ConvertResult {
         links_converted: 0,
@@ -2622,7 +2618,7 @@ fn convert_file_links(
     };
 
     // Read the file
-    let content = match fs.read_to_string(file_path) {
+    let content = match std::fs::read_to_string(file_path) {
         Ok(c) => c,
         Err(_) => return result,
     };
@@ -2820,7 +2816,7 @@ fn convert_file_links(
         && !dry_run
         && let Ok(new_content) = frontmatter::serialize(&fm, &parsed.body)
     {
-        let _ = fs.write_file(file_path, &new_content);
+        let _ = std::fs::write(file_path, new_content.as_bytes());
     }
 
     result

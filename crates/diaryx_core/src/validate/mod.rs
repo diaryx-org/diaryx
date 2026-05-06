@@ -44,4 +44,5 @@ pub use types::{InvalidAttachmentRefKind, ValidationError, ValidationResult, Val
 pub use validator::Validator;
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests;

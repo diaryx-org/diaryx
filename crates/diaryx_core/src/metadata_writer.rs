@@ -477,11 +477,11 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
     let backup_path = backup_path_for(path);
 
     let safe_write_result: Result<()> = async {
-        if fs.exists(&temp_path).await {
-            let _ = fs.delete_file(&temp_path).await;
+        if fs.try_exists(&temp_path).await.unwrap_or(false) {
+            let _ = fs.remove_file(&temp_path).await;
         }
 
-        fs.write_file(&temp_path, &content)
+        fs.write(&temp_path, content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: temp_path.clone(),
@@ -489,8 +489,8 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
             })?;
 
         // Move existing file out of the way (backup) before swapping in the new content.
-        if fs.exists(path).await
-            && let Err(e) = fs.move_file(path, &backup_path).await
+        if fs.try_exists(path).await.unwrap_or(false)
+            && let Err(e) = fs.rename(path, &backup_path).await
         {
             if is_not_found_io_error(&e) {
                 // OPFS/FSA can race between exists() and move(). If the source
@@ -508,10 +508,10 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
             }
         }
 
-        if let Err(e) = fs.move_file(&temp_path, path).await {
+        if let Err(e) = fs.rename(&temp_path, path).await {
             // Attempt to restore the backup if swap failed.
-            if fs.exists(&backup_path).await {
-                let _ = fs.move_file(&backup_path, path).await;
+            if fs.try_exists(&backup_path).await.unwrap_or(false) {
+                let _ = fs.rename(&backup_path, path).await;
             }
             return Err(DiaryxError::FileWrite {
                 path: path.to_path_buf(),
@@ -519,8 +519,8 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
             });
         }
 
-        if fs.exists(&backup_path).await {
-            let _ = fs.delete_file(&backup_path).await;
+        if fs.try_exists(&backup_path).await.unwrap_or(false) {
+            let _ = fs.remove_file(&backup_path).await;
         }
 
         Ok(())
@@ -537,11 +537,11 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
             );
 
             // Best-effort cleanup before fallback.
-            if fs.exists(&temp_path).await {
-                let _ = fs.delete_file(&temp_path).await;
+            if fs.try_exists(&temp_path).await.unwrap_or(false) {
+                let _ = fs.remove_file(&temp_path).await;
             }
 
-            fs.write_file(path, &content)
+            fs.write(path, content.as_bytes())
                 .await
                 .map_err(|source| DiaryxError::FileWrite {
                     path: path.to_path_buf(),
@@ -549,8 +549,8 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
                 })?;
 
             // If fallback succeeded, stale backup should not remain.
-            if fs.exists(&backup_path).await {
-                let _ = fs.delete_file(&backup_path).await;
+            if fs.try_exists(&backup_path).await.unwrap_or(false) {
+                let _ = fs.remove_file(&backup_path).await;
             }
 
             Ok(())
@@ -660,22 +660,23 @@ fn is_not_found_io_error(err: &std::io::Error) -> bool {
 
 async fn recover_backup_if_needed<FS: AsyncFileSystem>(fs: &FS, path: &Path) -> Result<()> {
     let backup_path = backup_path_for(path);
-    if fs.exists(&backup_path).await {
-        if !fs.exists(path).await {
-            fs.move_file(&backup_path, path)
+    if fs.try_exists(&backup_path).await.unwrap_or(false) {
+        if !fs.try_exists(path).await.unwrap_or(false) {
+            fs.rename(&backup_path, path)
                 .await
                 .map_err(|e| DiaryxError::FileWrite {
                     path: path.to_path_buf(),
                     source: e,
                 })?;
         } else {
-            let _ = fs.delete_file(&backup_path).await;
+            let _ = fs.remove_file(&backup_path).await;
         }
     }
     Ok(())
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::fs::{FileSystem, InMemoryFileSystem, SyncToAsyncFs, block_on_test};
@@ -1119,7 +1120,7 @@ mod tests {
         let fs = SyncToAsyncFs::new(NotFoundOnBackupMoveFs::fail_once());
         let path = Path::new("README.md");
 
-        block_on_test(fs.write_file(path, "original")).unwrap();
+        block_on_test(fs.write(path, "original".as_bytes())).unwrap();
 
         let metadata = serde_json::json!({ "title": "My Journal" });
         block_on_test(write_file_with_metadata(
@@ -1139,7 +1140,7 @@ mod tests {
         let fs = SyncToAsyncFs::new(NotFoundOnBackupMoveFs::fail_always());
         let path = Path::new("README.md");
 
-        block_on_test(fs.write_file(path, "original")).unwrap();
+        block_on_test(fs.write(path, "original".as_bytes())).unwrap();
         let metadata = serde_json::json!({ "title": "My Journal" });
 
         block_on_test(write_file_with_metadata(&fs, path, &metadata, "# edit one")).unwrap();

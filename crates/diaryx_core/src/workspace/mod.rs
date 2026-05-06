@@ -595,8 +595,15 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     pub async fn find_root_index_in_dir(&self, dir: &Path) -> Result<Option<PathBuf>> {
         let md_files = self
             .fs
-            .list_md_files(dir)
+            .read_dir(dir)
             .await
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+                    .map(|e| e.path().to_path_buf())
+                    .collect::<Vec<_>>()
+            })
             .map_err(|e| DiaryxError::FileRead {
                 path: dir.to_path_buf(),
                 source: e,
@@ -616,8 +623,15 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     pub async fn find_any_index_in_dir(&self, dir: &Path) -> Result<Option<PathBuf>> {
         let md_files = self
             .fs
-            .list_md_files(dir)
+            .read_dir(dir)
             .await
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+                    .map(|e| e.path().to_path_buf())
+                    .collect::<Vec<_>>()
+            })
             .map_err(|e| DiaryxError::FileRead {
                 path: dir.to_path_buf(),
                 source: e,
@@ -651,8 +665,15 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     ) -> Result<Option<PathBuf>> {
         let md_files = self
             .fs
-            .list_md_files(dir)
+            .read_dir(dir)
             .await
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+                    .map(|e| e.path().to_path_buf())
+                    .collect::<Vec<_>>()
+            })
             .map_err(|e| DiaryxError::FileRead {
                 path: dir.to_path_buf(),
                 source: e,
@@ -798,7 +819,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     &index.resolve_path(part_of_ref),
                 );
 
-                if self.fs.exists(&parent_path).await {
+                if self.fs.try_exists(&parent_path).await.unwrap_or(false) {
                     current_path = parent_path;
                     continue;
                 }
@@ -872,7 +893,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             let attachment_full_path =
                 resolve_workspace_path(workspace_root, &index.resolve_path(attachment_ref));
 
-            if self.fs.exists(&attachment_full_path).await {
+            if self
+                .fs
+                .try_exists(&attachment_full_path)
+                .await
+                .unwrap_or(false)
+            {
                 files.insert(canonical_workspace_path(
                     &attachment_full_path,
                     workspace_root,
@@ -885,7 +911,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 {
                     let binary_full =
                         resolve_workspace_path(workspace_root, Path::new(&binary_canonical));
-                    if self.fs.exists(&binary_full).await {
+                    if self.fs.try_exists(&binary_full).await.unwrap_or(false) {
                         files.insert(binary_canonical);
                     }
                 }
@@ -900,7 +926,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             let child_full_path =
                 resolve_workspace_path(workspace_root, &index.resolve_path(child_ref));
 
-            if self.fs.exists(&child_full_path).await {
+            if self.fs.try_exists(&child_full_path).await.unwrap_or(false) {
                 Box::pin(self.collect_workspace_file_set_recursive(
                     &child_full_path,
                     workspace_root,
@@ -951,7 +977,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 };
 
                 // Only include if the file exists
-                if self.fs.exists(&absolute_child_path).await {
+                if self
+                    .fs
+                    .try_exists(&absolute_child_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     Box::pin(self.collect_workspace_files_recursive(
                         &absolute_child_path,
                         files,
@@ -1047,9 +1078,14 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 // If not, it might be because the path resolution logic misidentified a workspace-root path
                 // as a relative path (e.g. "Daily/2026/01.md" inside "Daily/2026/index.md" resolves to
                 // "Daily/2026/Daily/2026/01.md").
-                if !self.fs.exists(&absolute_child_path).await {
+                if !self
+                    .fs
+                    .try_exists(&absolute_child_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     let fallback_path = workspace_root.join(child_ref);
-                    if self.fs.exists(&fallback_path).await {
+                    if self.fs.try_exists(&fallback_path).await.unwrap_or(false) {
                         log::info!(
                             "Resolved '{}' using fallback workspace-root strategy to {:?}",
                             child_ref,
@@ -1111,7 +1147,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 })?;
 
         self.fs
-            .write_file(target_path, &content)
+            .write(target_path, content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: target_path.to_path_buf(),
@@ -1120,7 +1156,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // 5. Delete source index file
         self.fs
-            .delete_file(source_path)
+            .remove_file(source_path)
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: source_path.to_path_buf(),
@@ -1430,7 +1466,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let new_content = bookmatter::frontmatter::yaml::serialize(&frontmatter, &body)?;
 
         self.fs
-            .write_file(root_index_path, &new_content)
+            .write(root_index_path, new_content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: root_index_path.to_path_buf(),
@@ -1648,7 +1684,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     workspace_root.join(&child_path)
                 };
 
-                let exists = self.fs.exists(&absolute_child_path).await;
+                let exists = self
+                    .fs
+                    .try_exists(&absolute_child_path)
+                    .await
+                    .unwrap_or(false);
                 log::debug!(
                     "[build_tree] Child '{}' resolved to {:?}, exists={}",
                     child_path_str,
@@ -1808,7 +1848,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // List all entries in this directory
         let mut children = Vec::new();
-        if let Ok(entries) = self.fs.list_files(dir).await {
+        if let Ok(entries) = self.fs.read_dir(dir).await.map(|entries| {
+            entries
+                .into_iter()
+                .map(|e| e.path().to_path_buf())
+                .collect::<Vec<_>>()
+        }) {
             let mut entries: Vec<_> = entries.into_iter().collect();
             entries.sort(); // Sort alphabetically
 
@@ -1825,13 +1870,27 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 });
 
                 if hidden || temp || excluded {
-                    if excluded && self.fs.is_dir(&entry).await {
+                    if excluded
+                        && self
+                            .fs
+                            .metadata(&entry)
+                            .await
+                            .map(|m| m.is_dir())
+                            .unwrap_or(false)
+                    {
                         trace.record_pruned_excluded(&entry);
                     }
                     continue;
                 }
 
-                if self.fs.is_dir(&entry).await && is_workspace_skip_dir(&entry) {
+                if self
+                    .fs
+                    .metadata(&entry)
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+                    && is_workspace_skip_dir(&entry)
+                {
                     trace.record_pruned_skip(&entry);
                     continue;
                 }
@@ -1859,7 +1918,13 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
 
-                    if self.fs.is_dir(&entry).await {
+                    if self
+                        .fs
+                        .metadata(&entry)
+                        .await
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false)
+                    {
                         let child_exclude_patterns = self
                             .exclude_patterns_for_dir_cached(&entry, root_dir, parse_cache)
                             .await;
@@ -2268,12 +2333,14 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 let mut frontmatter = indexmap::IndexMap::new();
                 frontmatter.insert(key.to_string(), value);
                 let new_content = bookmatter::frontmatter::yaml::serialize(&frontmatter, "")?;
-                return self.fs.write_file(path, &new_content).await.map_err(|e| {
-                    DiaryxError::FileWrite {
+                return self
+                    .fs
+                    .write(path, new_content.as_bytes())
+                    .await
+                    .map_err(|e| DiaryxError::FileWrite {
                         path: path.to_path_buf(),
                         source: e,
-                    }
-                });
+                    });
             }
             Err(e) => {
                 return Err(DiaryxError::FileRead {
@@ -2291,7 +2358,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let new_content = bookmatter::frontmatter::yaml::serialize(&frontmatter, &body)?;
 
         self.fs
-            .write_file(path, &new_content)
+            .write(path, new_content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: path.to_path_buf(),
@@ -2320,7 +2387,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let new_content = bookmatter::frontmatter::yaml::serialize(&frontmatter, &body)?;
 
         self.fs
-            .write_file(path, &new_content)
+            .write(path, new_content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: path.to_path_buf(),
@@ -2561,13 +2628,13 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         use crate::path_utils::relative_path_from_file_to_target;
 
         // Validate both paths exist
-        if !self.fs.exists(entry_path).await {
+        if !self.fs.try_exists(entry_path).await.unwrap_or(false) {
             return Err(DiaryxError::FileRead {
                 path: entry_path.to_path_buf(),
                 source: std::io::Error::new(std::io::ErrorKind::NotFound, "Entry does not exist"),
             });
         }
-        if !self.fs.exists(parent_index_path).await {
+        if !self.fs.try_exists(parent_index_path).await.unwrap_or(false) {
             return Err(DiaryxError::FileRead {
                 path: parent_index_path.to_path_buf(),
                 source: std::io::Error::new(
@@ -2635,8 +2702,14 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         let entries = self
             .fs
-            .list_files(old_dir)
+            .read_dir(old_dir)
             .await
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|e| e.path().to_path_buf())
+                    .collect::<Vec<_>>()
+            })
             .map_err(|e| DiaryxError::FileRead {
                 path: old_dir.to_path_buf(),
                 source: e,
@@ -2649,11 +2722,17 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             };
             let target = new_dir.join(name);
 
-            if self.fs.is_dir(&entry).await {
+            if self
+                .fs
+                .metadata(&entry)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
+            {
                 Box::pin(self.move_dir_contents_recursive(&entry, &target)).await?;
             } else {
                 self.fs
-                    .move_file(&entry, &target)
+                    .rename(&entry, &target)
                     .await
                     .map_err(|e| DiaryxError::FileWrite {
                         path: target,
@@ -2686,7 +2765,30 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     ) -> Result<()> {
         use crate::path_utils::relative_path_from_file_to_target;
 
-        let md_files = match self.fs.list_md_files_recursive(tree_root_dir).await {
+        async fn list_md_recursive<FS: AsyncFileSystem>(
+            fs: &FS,
+            dir: &Path,
+        ) -> std::io::Result<Vec<PathBuf>> {
+            let mut all: Vec<PathBuf> = fs
+                .read_dir(dir)
+                .await?
+                .into_iter()
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+                .map(|e| e.path().to_path_buf())
+                .collect();
+            if let Ok(entries) = fs.read_dir(dir).await {
+                for entry in entries {
+                    if entry.file_type()?.is_dir()
+                        && let Ok(sub) = Box::pin(list_md_recursive(fs, entry.path())).await
+                    {
+                        all.extend(sub);
+                    }
+                }
+            }
+            Ok(all)
+        }
+
+        let md_files = match list_md_recursive(&self.fs, tree_root_dir).await {
             Ok(f) => f,
             Err(e) => {
                 log::warn!(
@@ -2773,7 +2875,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // Move the file
         self.fs
-            .move_file(from_path, to_path)
+            .rename(from_path, to_path)
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: to_path.to_path_buf(),
@@ -3022,7 +3124,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // Delete the file
         self.fs
-            .delete_file(path)
+            .remove_file(path)
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: path.to_path_buf(),
@@ -3040,7 +3142,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let mut candidate = format!("{}.md", base_name);
         let mut counter = 1;
 
-        while self.fs.exists(&parent_dir.join(&candidate)).await {
+        while self
+            .fs
+            .try_exists(&parent_dir.join(&candidate))
+            .await
+            .unwrap_or(false)
+        {
             candidate = format!("{}-{}.md", base_name, counter);
             counter += 1;
         }
@@ -3252,20 +3359,21 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 return Ok(path.to_path_buf());
             }
 
-            if self.fs.exists(&new_path).await {
+            if self.fs.try_exists(&new_path).await.unwrap_or(false) {
                 return Err(DiaryxError::InvalidPath {
                     path: new_path,
                     message: "Target file already exists".to_string(),
                 });
             }
 
-            self.fs.move_file(path, &new_path).await?;
+            self.fs.rename(path, &new_path).await?;
 
             // Update children's part_of to point to the renamed root index
             let new_path_canonical = self.get_canonical_path(&new_path);
             let new_title = self.resolve_title(&new_path_canonical).await;
             for child_path in &children_paths {
-                if child_path == &new_path || !self.fs.exists(child_path).await {
+                if child_path == &new_path || !self.fs.try_exists(child_path).await.unwrap_or(false)
+                {
                     continue;
                 }
 
@@ -3323,7 +3431,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             }
 
             // Check if target directory already exists
-            if self.fs.exists(&new_dir_path).await {
+            if self.fs.try_exists(&new_dir_path).await.unwrap_or(false) {
                 return Err(DiaryxError::InvalidPath {
                     path: new_dir_path,
                     message: "Target directory already exists".to_string(),
@@ -3334,16 +3442,21 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             self.fs.create_dir_all(&new_dir_path).await?;
 
             // Move all files/directories from old directory to new directory.
-            if let Ok(files) = self.fs.list_files(current_dir).await {
+            if let Ok(files) = self.fs.read_dir(current_dir).await.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|e| e.path().to_path_buf())
+                    .collect::<Vec<_>>()
+            }) {
                 for file in files {
                     let file_name = file.file_name().unwrap_or_default();
                     let new_path = new_dir_path.join(file_name);
 
                     // If this is the index file itself, use the new filename
                     if file == path {
-                        self.fs.move_file(&file, &new_file_path).await?;
+                        self.fs.rename(&file, &new_file_path).await?;
                     } else {
-                        self.fs.move_file(&file, &new_path).await?;
+                        self.fs.rename(&file, &new_path).await?;
                     }
                 }
             }
@@ -3366,7 +3479,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     continue;
                 }
                 if rewritten_child_path == new_file_path
-                    || !self.fs.exists(&rewritten_child_path).await
+                    || !self
+                        .fs
+                        .try_exists(&rewritten_child_path)
+                        .await
+                        .unwrap_or(false)
                 {
                     continue;
                 }
@@ -3437,8 +3554,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             }
 
             // Check if target already exists
-            if self.fs.exists(&new_path).await {
-                if !self.fs.exists(path).await {
+            if self.fs.try_exists(&new_path).await.unwrap_or(false) {
+                if !self.fs.try_exists(path).await.unwrap_or(false) {
                     // File was already renamed on disk (e.g. by OS or sync tool)
                     // but parent's contents still references the old name.
                     // Just update the parent's contents reference.
@@ -3476,7 +3593,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             }
 
             // Move the file
-            self.fs.move_file(path, &new_path).await?;
+            self.fs.rename(path, &new_path).await?;
 
             // Update parent's contents via part_of (fallback: same directory)
             if let Some(parent_index) = self.resolve_part_of_to_path(&new_path, parent).await {
@@ -3554,7 +3671,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             self.fs.create_dir_all(&new_dir_path).await?;
 
             // Copy all files from source directory to new directory
-            if let Ok(files) = self.fs.list_files(source_dir).await {
+            if let Ok(files) = self.fs.read_dir(source_dir).await.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|e| e.path().to_path_buf())
+                    .collect::<Vec<_>>()
+            }) {
                 for file in files {
                     let file_name = file
                         .file_name()
@@ -3577,12 +3699,13 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                                 path: file.clone(),
                                 source: e,
                             })?;
-                    self.fs.write_file(&new_path, &content).await.map_err(|e| {
-                        DiaryxError::FileWrite {
+                    self.fs
+                        .write(&new_path, content.as_bytes())
+                        .await
+                        .map_err(|e| DiaryxError::FileWrite {
                             path: new_path.clone(),
                             source: e,
-                        }
-                    })?;
+                        })?;
 
                     // Update part_of for child files to point to new index
                     if new_path != new_index_path {
@@ -3652,7 +3775,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                         source: e,
                     })?;
             self.fs
-                .write_file(&new_path, &content)
+                .write(&new_path, content.as_bytes())
                 .await
                 .map_err(|e| DiaryxError::FileWrite {
                     path: new_path.clone(),
@@ -3703,7 +3826,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let mut candidate = format!("{}-copy{}", base_name, extension);
         let mut counter = 2;
 
-        while self.fs.exists(&parent_dir.join(&candidate)).await {
+        while self
+            .fs
+            .try_exists(&parent_dir.join(&candidate))
+            .await
+            .unwrap_or(false)
+        {
             candidate = format!("{}-copy-{}{}", base_name, counter, extension);
             counter += 1;
         }
@@ -3752,7 +3880,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         self.fs.create_dir_all(&new_dir).await?;
 
         // Move file into directory
-        self.fs.move_file(path, &new_path).await?;
+        self.fs.rename(path, &new_path).await?;
 
         // Add contents property
         self.set_frontmatter_property(&new_path, "contents", yaml::Value::Sequence(vec![]))
@@ -3868,7 +3996,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let new_path = parent_of_dir.join(&new_filename);
 
         // Check if target already exists
-        if self.fs.exists(&new_path).await {
+        if self.fs.try_exists(&new_path).await.unwrap_or(false) {
             return Err(DiaryxError::InvalidPath {
                 path: new_path,
                 message: "Target file already exists".to_string(),
@@ -3876,7 +4004,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         }
 
         // Move file out of directory
-        self.fs.move_file(path, &new_path).await?;
+        self.fs.rename(path, &new_path).await?;
 
         // Remove contents property
         let _ = self
@@ -4017,7 +4145,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 });
             }
 
-            if self.fs.exists(&new_dir).await {
+            if self.fs.try_exists(&new_dir).await.unwrap_or(false) {
                 return Err(DiaryxError::InvalidPath {
                     path: new_dir,
                     message: "Target directory already exists".to_string(),
@@ -4095,6 +4223,7 @@ fn resolve_workspace_path(workspace_root: &Path, resolved_path: &Path) -> PathBu
 /// A root index is a markdown file whose frontmatter has a `contents` key but
 /// no `part_of` key.  This is the sync equivalent of
 /// [`Workspace::find_root_index_in_dir`].
+#[allow(deprecated)]
 pub fn find_root_index_in_dir_sync(
     fs: &dyn crate::fs::FileSystem,
     dir: &Path,
@@ -4114,6 +4243,7 @@ pub fn find_root_index_in_dir_sync(
 }
 
 /// Check whether `path` is a root index using a synchronous filesystem.
+#[allow(deprecated)]
 fn is_root_index_sync(fs: &dyn crate::fs::FileSystem, path: &Path) -> bool {
     let content = match fs.read_to_string(path) {
         Ok(c) => c,
@@ -4131,6 +4261,7 @@ fn is_root_index_sync(fs: &dyn crate::fs::FileSystem, path: &Path) -> bool {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::fs::{FileSystem, InMemoryFileSystem, SyncToAsyncFs, block_on_test};
@@ -4225,9 +4356,9 @@ mod tests {
     #[test]
     fn test_parse_index() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("test.md"),
-            "---\ntitle: Test\ncontents: []\n---\n\nBody content",
+            "---\ntitle: Test\ncontents: []\n---\n\nBody content".as_bytes(),
         )
         .unwrap();
 
@@ -4246,9 +4377,9 @@ mod tests {
     #[test]
     fn test_get_workspace_config_reads_daily_entry_folder() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents: []\ndaily_entry_folder: Journal/Daily\n---\n",
+            "---\ntitle: Root\ncontents: []\ndaily_entry_folder: Journal/Daily\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -4262,9 +4393,9 @@ mod tests {
     #[test]
     fn test_get_workspace_config_reads_theme_selection_fields() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents: []\nworkspace_config:\n  theme_mode: dark\n  theme_preset: nord\n  theme_accent_hue: 210\n---\n",
+            "---\ntitle: Root\ncontents: []\nworkspace_config:\n  theme_mode: dark\n  theme_preset: nord\n  theme_accent_hue: 210\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -4280,7 +4411,7 @@ mod tests {
     #[test]
     fn test_get_workspace_config_audiences_full_shape() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
             r#"---
 title: Root
@@ -4311,7 +4442,8 @@ audiences:
         label: "For the group chat"
 audiences_migrated: true
 ---
-"#,
+"#
+            .as_bytes(),
         )
         .unwrap();
 
@@ -4352,9 +4484,9 @@ audiences_migrated: true
     #[test]
     fn test_get_workspace_config_audiences_absent_is_none() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents: []\n---\n",
+            "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
         )
         .unwrap();
         let async_fs = SyncToAsyncFs::new(fs);
@@ -4372,9 +4504,9 @@ audiences_migrated: true
         // intentional "fail loud, don't silently accept partial garbage"
         // behavior.
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents: []\naudiences:\n  - name: Family\n    share_actions:\n      - kind: discord_webhook\n---\n",
+            "---\ntitle: Root\ncontents: []\naudiences:\n  - name: Family\n    share_actions:\n      - kind: discord_webhook\n---\n".as_bytes(),
         )
         .unwrap();
         let async_fs = SyncToAsyncFs::new(fs);
@@ -4389,9 +4521,9 @@ audiences_migrated: true
         // An audience with no `gates:` key should parse with an empty Vec
         // (== public), not fail.
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents: []\naudiences:\n  - name: Public\n---\n",
+            "---\ntitle: Root\ncontents: []\naudiences:\n  - name: Public\n---\n".as_bytes(),
         )
         .unwrap();
         let async_fs = SyncToAsyncFs::new(fs);
@@ -4408,12 +4540,12 @@ audiences_migrated: true
     #[test]
     fn test_build_tree_deduplicates_duplicate_contents_refs() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents:\n  - child.md\n  - child.md\n---\n",
+            "---\ntitle: Root\ncontents:\n  - child.md\n  - child.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(Path::new("child.md"), "---\ntitle: Child\n---\n")
+        fs.write(Path::new("child.md"), "---\ntitle: Child\n---\n".as_bytes())
             .unwrap();
 
         let async_fs = SyncToAsyncFs::new(fs);
@@ -4427,12 +4559,12 @@ audiences_migrated: true
     #[test]
     fn test_is_index_file() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("index.md"),
-            "---\ntitle: Index\ncontents: []\n---\n",
+            "---\ntitle: Index\ncontents: []\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(Path::new("leaf.md"), "---\ntitle: Leaf\n---\n")
+        fs.write(Path::new("leaf.md"), "---\ntitle: Leaf\n---\n".as_bytes())
             .unwrap();
 
         let async_fs = SyncToAsyncFs::new(fs);
@@ -4448,14 +4580,14 @@ audiences_migrated: true
     #[test]
     fn test_is_root_index() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("root.md"),
-            "---\ntitle: Root\ncontents: []\n---\n",
+            "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("child.md"),
-            "---\ntitle: Child\ncontents: []\npart_of: root.md\n---\n",
+            "---\ntitle: Child\ncontents: []\npart_of: root.md\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -4469,17 +4601,17 @@ audiences_migrated: true
     #[test]
     fn test_find_root_index_in_dir_sync() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("root.md"),
-            "---\ntitle: Root\ncontents: []\n---\n",
+            "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("child.md"),
-            "---\ntitle: Child\ncontents: []\npart_of: root.md\n---\n",
+            "---\ntitle: Child\ncontents: []\npart_of: root.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(Path::new("plain.md"), "No frontmatter here")
+        fs.write(Path::new("plain.md"), "No frontmatter here".as_bytes())
             .unwrap();
 
         let result = find_root_index_in_dir_sync(&fs, Path::new(".")).unwrap();
@@ -4489,9 +4621,9 @@ audiences_migrated: true
     #[test]
     fn test_find_root_index_in_dir_sync_returns_none_when_no_root() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("child.md"),
-            "---\ntitle: Child\ncontents: []\npart_of: root.md\n---\n",
+            "---\ntitle: Child\ncontents: []\npart_of: root.md\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -4502,14 +4634,14 @@ audiences_migrated: true
     #[test]
     fn test_rename_entry_updates_parent_contents_without_dropping_child() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents:\n  - new-entry.md\n---\n",
+            "---\ntitle: Root\ncontents:\n  - new-entry.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("new-entry.md"),
-            "---\ntitle: New Entry\npart_of: README.md\n---\n\n# New Entry\n",
+            "---\ntitle: New Entry\npart_of: README.md\n---\n\n# New Entry\n".as_bytes(),
         )
         .unwrap();
 
@@ -4547,14 +4679,15 @@ audiences_migrated: true
         let fs = InMemoryFileSystem::new();
         let root = PathBuf::from("/ws");
         fs.create_dir_all(Path::new("/ws/journal")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/ws/journal/journal.md"),
-            "---\ntitle: Journal\ncontents:\n  - \"[Old Entry](/journal/old-entry.md)\"\n---\n",
+            "---\ntitle: Journal\ncontents:\n  - \"[Old Entry](/journal/old-entry.md)\"\n---\n"
+                .as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/ws/journal/old-entry.md"),
-            "---\ntitle: Old Entry\npart_of: \"[Journal](/journal/journal.md)\"\n---\n\n# Old Entry\n",
+            "---\ntitle: Old Entry\npart_of: \"[Journal](/journal/journal.md)\"\n---\n\n# Old Entry\n".as_bytes(),
         )
         .unwrap();
 
@@ -4599,14 +4732,14 @@ audiences_migrated: true
     #[test]
     fn test_rename_root_index() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: My Site\ncontents:\n  - child.md\n---\n",
+            "---\ntitle: My Site\ncontents:\n  - child.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("child.md"),
-            "---\ntitle: Child\npart_of: README.md\n---\n",
+            "---\ntitle: Child\npart_of: README.md\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -4617,8 +4750,8 @@ audiences_migrated: true
         assert_eq!(renamed, PathBuf::from("My Site.md"));
 
         // File should exist at new path
-        assert!(fs.exists(Path::new("My Site.md")));
-        assert!(!fs.exists(Path::new("README.md")));
+        assert!(fs.try_exists(Path::new("My Site.md")).unwrap_or(false));
+        assert!(!fs.try_exists(Path::new("README.md")).unwrap_or(false));
 
         // Child's part_of should be updated to point to the new filename
         let part_of =
@@ -4637,14 +4770,14 @@ audiences_migrated: true
         let fs = InMemoryFileSystem::new();
         let root = PathBuf::from("/ws");
         fs.create_dir_all(Path::new("/ws/Section")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/ws/README.md"),
-            "---\ntitle: Root\ncontents:\n  - \"[Section](/Section/section.md)\"\n---\n",
+            "---\ntitle: Root\ncontents:\n  - \"[Section](/Section/section.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/ws/Section/section.md"),
-            "---\ntitle: Section\npart_of: \"[Root](/README.md)\"\n---\n",
+            "---\ntitle: Section\npart_of: \"[Root](/README.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -4678,19 +4811,19 @@ audiences_migrated: true
         let fs = InMemoryFileSystem::new();
         let root = PathBuf::from("/ws");
         fs.create_dir_all(Path::new("/ws/Section/Sub")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/ws/README.md"),
-            "---\ntitle: Root\ncontents:\n  - \"[Section](/Section/Section.md)\"\n---\n",
+            "---\ntitle: Root\ncontents:\n  - \"[Section](/Section/Section.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/ws/Section/Section.md"),
-            "---\ntitle: Section\npart_of: \"[Root](/README.md)\"\ncontents:\n  - \"[Sub](/Section/Sub/sub.md)\"\n---\n",
+            "---\ntitle: Section\npart_of: \"[Root](/README.md)\"\ncontents:\n  - \"[Sub](/Section/Sub/sub.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("/ws/Section/Sub/sub.md"),
-            "---\ntitle: Sub\npart_of: \"[Section](/Section/Section.md)\"\n---\n",
+            "---\ntitle: Sub\npart_of: \"[Section](/Section/Section.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -4724,14 +4857,14 @@ audiences_migrated: true
     fn test_sync_create_metadata_uses_nearest_ancestor_index() {
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("notes/deep")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents: []\n---\n",
+            "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("notes/deep/new.md"),
-            "---\ntitle: New Note\n---\n\n# New Note\n",
+            "---\ntitle: New Note\n---\n\n# New Note\n".as_bytes(),
         )
         .unwrap();
 
@@ -4768,19 +4901,19 @@ audiences_migrated: true
     fn test_sync_move_metadata_updates_hierarchy_with_nearest_ancestor_index() {
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("nested/deep")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents:\n  - old.md\n---\n",
+            "---\ntitle: Root\ncontents:\n  - old.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("old.md"),
-            "---\ntitle: Old\npart_of: README.md\n---\n\n# Old\n",
+            "---\ntitle: Old\npart_of: README.md\n---\n\n# Old\n".as_bytes(),
         )
         .unwrap();
 
         // Simulate external move (Obsidian already moved the file).
-        fs.move_file(Path::new("old.md"), Path::new("nested/deep/new.md"))
+        fs.rename(Path::new("old.md"), Path::new("nested/deep/new.md"))
             .unwrap();
 
         let async_fs = SyncToAsyncFs::new(fs);
@@ -4824,19 +4957,19 @@ audiences_migrated: true
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("section")).unwrap();
         fs.create_dir_all(Path::new("outside")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("section/index.md"),
-            "---\ntitle: Section\ncontents:\n  - child.md\n---\n",
+            "---\ntitle: Section\ncontents:\n  - child.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("section/child.md"),
-            "---\ntitle: Child\npart_of: index.md\n---\n\n# Child\n",
+            "---\ntitle: Child\npart_of: index.md\n---\n\n# Child\n".as_bytes(),
         )
         .unwrap();
 
         // Simulate external move into a location with no ancestor index.
-        fs.move_file(Path::new("section/child.md"), Path::new("outside/new.md"))
+        fs.rename(Path::new("section/child.md"), Path::new("outside/new.md"))
             .unwrap();
 
         let async_fs = SyncToAsyncFs::new(fs);
@@ -4876,19 +5009,19 @@ audiences_migrated: true
     fn test_sync_delete_metadata_uses_nearest_ancestor_index() {
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("nested/deep")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents:\n  - nested/deep/victim.md\n---\n",
+            "---\ntitle: Root\ncontents:\n  - nested/deep/victim.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("nested/deep/victim.md"),
-            "---\ntitle: Victim\npart_of: ../../README.md\n---\n\n# Victim\n",
+            "---\ntitle: Victim\npart_of: ../../README.md\n---\n\n# Victim\n".as_bytes(),
         )
         .unwrap();
 
         // Simulate external delete (Obsidian already deleted the file).
-        fs.delete_file(Path::new("nested/deep/victim.md")).unwrap();
+        fs.remove_file(Path::new("nested/deep/victim.md")).unwrap();
 
         let async_fs = SyncToAsyncFs::new(fs);
         let ws = Workspace::new(async_fs);
@@ -4935,18 +5068,21 @@ audiences_migrated: true
     fn test_attach_entry_to_parent_adds_to_new_parent_contents() {
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("section")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents: []\n---\n",
+            "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("section/index.md"),
-            "---\ntitle: Section\ncontents: []\npart_of: ../README.md\n---\n",
+            "---\ntitle: Section\ncontents: []\npart_of: ../README.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(Path::new("section/note.md"), "---\ntitle: Note\n---\n")
-            .unwrap();
+        fs.write(
+            Path::new("section/note.md"),
+            "---\ntitle: Note\n---\n".as_bytes(),
+        )
+        .unwrap();
 
         let async_fs = SyncToAsyncFs::new(fs);
         let ws = Workspace::new(async_fs);
@@ -4976,19 +5112,19 @@ audiences_migrated: true
         // should no longer reference note.md after the call.
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("section")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("section/README.md"),
-            "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+            "---\ntitle: Root\ncontents:\n  - note.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("section/index.md"),
-            "---\ntitle: Section\ncontents: []\npart_of: README.md\n---\n",
+            "---\ntitle: Section\ncontents: []\npart_of: README.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("section/note.md"),
-            "---\ntitle: Note\npart_of: README.md\n---\n",
+            "---\ntitle: Note\npart_of: README.md\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -5026,19 +5162,19 @@ audiences_migrated: true
         // entry.md lives under root and should be moved into section/.
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("section")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents:\n  - entry.md\n---\n",
+            "---\ntitle: Root\ncontents:\n  - entry.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("section/index.md"),
-            "---\ntitle: Section\ncontents: []\npart_of: ../README.md\n---\n",
+            "---\ntitle: Section\ncontents: []\npart_of: ../README.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("entry.md"),
-            "---\ntitle: Entry\npart_of: README.md\n---\n",
+            "---\ntitle: Entry\npart_of: README.md\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -5055,8 +5191,18 @@ audiences_migrated: true
         assert_eq!(new_path, PathBuf::from("section/entry.md"));
 
         // File should exist at new location
-        assert!(block_on_test(ws.fs.exists(Path::new("section/entry.md"))));
-        assert!(!block_on_test(ws.fs.exists(Path::new("entry.md"))));
+        assert!(block_on_test(async {
+            ws.fs
+                .try_exists(Path::new("section/entry.md"))
+                .await
+                .unwrap_or(false)
+        }));
+        assert!(!block_on_test(async {
+            ws.fs
+                .try_exists(Path::new("entry.md"))
+                .await
+                .unwrap_or(false)
+        }));
 
         // New parent should contain the entry
         let section_contents = get_contents_strings(&ws, "section/index.md");
@@ -5081,19 +5227,19 @@ audiences_migrated: true
         // section/leaf/leaf.md (index) and move entry.md to section/leaf/entry.md.
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("section")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents:\n  - entry.md\n  - section/leaf.md\n---\n",
+            "---\ntitle: Root\ncontents:\n  - entry.md\n  - section/leaf.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("entry.md"),
-            "---\ntitle: Entry\npart_of: README.md\n---\n",
+            "---\ntitle: Entry\npart_of: README.md\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("section/leaf.md"),
-            "---\ntitle: Leaf\npart_of: ../README.md\n---\n",
+            "---\ntitle: Leaf\npart_of: ../README.md\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -5112,10 +5258,18 @@ audiences_migrated: true
         assert!(block_on_test(
             ws.is_index_file(Path::new("section/leaf/leaf.md"))
         ));
-        assert!(block_on_test(
-            ws.fs.exists(Path::new("section/leaf/entry.md"))
-        ));
-        assert!(!block_on_test(ws.fs.exists(Path::new("entry.md"))));
+        assert!(block_on_test(async {
+            ws.fs
+                .try_exists(Path::new("section/leaf/entry.md"))
+                .await
+                .unwrap_or(false)
+        }));
+        assert!(!block_on_test(async {
+            ws.fs
+                .try_exists(Path::new("entry.md"))
+                .await
+                .unwrap_or(false)
+        }));
 
         // Old parent should no longer reference entry.md at the root level
         let root_contents = get_contents_strings(&ws, "README.md");
@@ -5137,29 +5291,29 @@ audiences_migrated: true
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("Projects/sub")).unwrap();
         fs.create_dir_all(Path::new("Archive")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("README.md"),
-            "---\ntitle: Root\ncontents:\n  - \"[Projects](/Projects/projects.md)\"\n  - \"[Archive](/Archive/archive.md)\"\n---\n",
+            "---\ntitle: Root\ncontents:\n  - \"[Projects](/Projects/projects.md)\"\n  - \"[Archive](/Archive/archive.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("Archive/archive.md"),
-            "---\ntitle: Archive\ncontents: []\npart_of: \"[Root](/README.md)\"\n---\n",
+            "---\ntitle: Archive\ncontents: []\npart_of: \"[Root](/README.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("Projects/projects.md"),
-            "---\ntitle: Projects\ncontents:\n  - \"[Sub](/Projects/sub/sub.md)\"\npart_of: \"[Root](/README.md)\"\n---\n",
+            "---\ntitle: Projects\ncontents:\n  - \"[Sub](/Projects/sub/sub.md)\"\npart_of: \"[Root](/README.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("Projects/sub/sub.md"),
-            "---\ntitle: Sub\ncontents:\n  - \"[Task](/Projects/sub/task.md)\"\npart_of: \"[Projects](/Projects/projects.md)\"\n---\n",
+            "---\ntitle: Sub\ncontents:\n  - \"[Task](/Projects/sub/task.md)\"\npart_of: \"[Projects](/Projects/projects.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("Projects/sub/task.md"),
-            "---\ntitle: Task\npart_of: \"[Sub](/Projects/sub/sub.md)\"\n---\n",
+            "---\ntitle: Task\npart_of: \"[Sub](/Projects/sub/sub.md)\"\n---\n".as_bytes(),
         )
         .unwrap();
 
@@ -5175,21 +5329,36 @@ audiences_migrated: true
         assert_eq!(new_path, PathBuf::from("Archive/Projects/projects.md"));
 
         // Folder contents moved.
-        assert!(block_on_test(
-            ws.fs.exists(Path::new("Archive/Projects/projects.md"))
-        ));
-        assert!(block_on_test(
-            ws.fs.exists(Path::new("Archive/Projects/sub/sub.md"))
-        ));
-        assert!(block_on_test(
-            ws.fs.exists(Path::new("Archive/Projects/sub/task.md"))
-        ));
-        assert!(!block_on_test(
-            ws.fs.exists(Path::new("Projects/projects.md"))
-        ));
-        assert!(!block_on_test(
-            ws.fs.exists(Path::new("Projects/sub/sub.md"))
-        ));
+        assert!(block_on_test(async {
+            ws.fs
+                .try_exists(Path::new("Archive/Projects/projects.md"))
+                .await
+                .unwrap_or(false)
+        }));
+        assert!(block_on_test(async {
+            ws.fs
+                .try_exists(Path::new("Archive/Projects/sub/sub.md"))
+                .await
+                .unwrap_or(false)
+        }));
+        assert!(block_on_test(async {
+            ws.fs
+                .try_exists(Path::new("Archive/Projects/sub/task.md"))
+                .await
+                .unwrap_or(false)
+        }));
+        assert!(!block_on_test(async {
+            ws.fs
+                .try_exists(Path::new("Projects/projects.md"))
+                .await
+                .unwrap_or(false)
+        }));
+        assert!(!block_on_test(async {
+            ws.fs
+                .try_exists(Path::new("Projects/sub/sub.md"))
+                .await
+                .unwrap_or(false)
+        }));
 
         // Moved index's own part_of now points to the new parent.
         let projects_part_of = block_on_test(
@@ -5243,24 +5412,33 @@ audiences_migrated: true
     #[test]
     fn test_collect_workspace_file_set_includes_reachable_markdown_and_attachments() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("workspace/index.md"),
-            "---\ntitle: Root\ncontents:\n  - Notes/day.md\nattachments:\n  - assets/root.png\n---\n",
+            "---\ntitle: Root\ncontents:\n  - Notes/day.md\nattachments:\n  - assets/root.png\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("workspace/Notes/day.md"),
-            "---\ntitle: Day\npart_of: /index.md\nattachments:\n  - ./_attachments/day.jpg\n  - /shared/manual.pdf\n---\n",
+            "---\ntitle: Day\npart_of: /index.md\nattachments:\n  - ./_attachments/day.jpg\n  - /shared/manual.pdf\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(Path::new("workspace/assets/root.png"), "root")
+        fs.write(Path::new("workspace/assets/root.png"), "root".as_bytes())
             .unwrap();
-        fs.write_file(Path::new("workspace/Notes/_attachments/day.jpg"), "day")
-            .unwrap();
-        fs.write_file(Path::new("workspace/shared/manual.pdf"), "manual")
-            .unwrap();
-        fs.write_file(Path::new("workspace/node_modules/nope.js"), "ignored")
-            .unwrap();
+        fs.write(
+            Path::new("workspace/Notes/_attachments/day.jpg"),
+            "day".as_bytes(),
+        )
+        .unwrap();
+        fs.write(
+            Path::new("workspace/shared/manual.pdf"),
+            "manual".as_bytes(),
+        )
+        .unwrap();
+        fs.write(
+            Path::new("workspace/node_modules/nope.js"),
+            "ignored".as_bytes(),
+        )
+        .unwrap();
 
         let async_fs = SyncToAsyncFs::new(fs);
         let ws = Workspace::new(async_fs);
@@ -5284,19 +5462,19 @@ audiences_migrated: true
     fn test_build_filesystem_tree_inherits_nested_index_excludes() {
         let fs = InMemoryFileSystem::new();
         fs.create_dir_all(Path::new("workspace/scripts")).unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("workspace/Diaryx.md"),
-            "---\ntitle: Root\ncontents: []\nexclude:\n  - \"**/target\"\n---\n",
+            "---\ntitle: Root\ncontents: []\nexclude:\n  - \"**/target\"\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(
+        fs.write(
             Path::new("workspace/scripts/scripts.md"),
-            "---\ntitle: Scripts\ncontents: []\nexclude:\n  - \"*.sh\"\n---\n",
+            "---\ntitle: Scripts\ncontents: []\nexclude:\n  - \"*.sh\"\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(Path::new("workspace/scripts/keep.txt"), "keep")
+        fs.write(Path::new("workspace/scripts/keep.txt"), "keep".as_bytes())
             .unwrap();
-        fs.write_file(Path::new("workspace/scripts/run.sh"), "echo hi")
+        fs.write(Path::new("workspace/scripts/run.sh"), "echo hi".as_bytes())
             .unwrap();
 
         let async_fs = SyncToAsyncFs::new(fs);
@@ -5332,17 +5510,23 @@ audiences_migrated: true
     #[test]
     fn test_build_filesystem_tree_prunes_builtin_skip_directories() {
         let fs = InMemoryFileSystem::new();
-        fs.write_file(
+        fs.write(
             Path::new("workspace/Diaryx.md"),
-            "---\ntitle: Root\ncontents: []\n---\n",
+            "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
         )
         .unwrap();
-        fs.write_file(Path::new("workspace/visible.txt"), "ok")
+        fs.write(Path::new("workspace/visible.txt"), "ok".as_bytes())
             .unwrap();
-        fs.write_file(Path::new("workspace/target/debug/app.bin"), "bin")
-            .unwrap();
-        fs.write_file(Path::new("workspace/node_modules/pkg/index.js"), "js")
-            .unwrap();
+        fs.write(
+            Path::new("workspace/target/debug/app.bin"),
+            "bin".as_bytes(),
+        )
+        .unwrap();
+        fs.write(
+            Path::new("workspace/node_modules/pkg/index.js"),
+            "js".as_bytes(),
+        )
+        .unwrap();
 
         let async_fs = SyncToAsyncFs::new(fs);
         let ws = Workspace::new(async_fs);

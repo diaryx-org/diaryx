@@ -16,6 +16,7 @@ use std::io;
 use std::path::Path;
 use std::pin::Pin;
 
+use crate::file::{File, OpenOptions, default_open};
 use crate::metadata::{DirEntry, Metadata};
 
 /// A boxed future for object-safe async methods.
@@ -187,6 +188,24 @@ pub trait AsyncFileSystem: Send + Sync {
             self.metadata(&resolved).await?;
             Ok(resolved)
         })
+    }
+
+    /// Open a file with the given [`OpenOptions`]. Mirrors
+    /// [`std::fs::OpenOptions::open`] / [`tokio::fs::OpenOptions::open`].
+    ///
+    /// The returned [`File`] implements [`futures_io::AsyncRead`],
+    /// [`futures_io::AsyncWrite`], and [`futures_io::AsyncSeek`].
+    ///
+    /// The default implementation uses an in-memory buffer that loads the
+    /// entire file on open and writes it back on `close`. Backends with
+    /// real streaming support (native OS files, OPFS sync access handles,
+    /// FSA writable streams) should override this method.
+    fn open<'a>(
+        &'a self,
+        path: &'a Path,
+        options: OpenOptions,
+    ) -> BoxFuture<'a, io::Result<File<'a>>> {
+        Box::pin(default_open(self, path, options))
     }
 
     // ============================================================================
@@ -443,6 +462,14 @@ pub trait AsyncFileSystem {
         })
     }
 
+    fn open<'a>(
+        &'a self,
+        path: &'a Path,
+        options: OpenOptions,
+    ) -> BoxFuture<'a, io::Result<File<'a>>> {
+        Box::pin(default_open(self, path, options))
+    }
+
     #[deprecated(since = "0.1.0", note = "use `write(path, content.as_bytes())`")]
     fn write_file<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, io::Result<()>> {
         Box::pin(async move { self.write(path, content.as_bytes()).await })
@@ -652,6 +679,13 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
     fn canonicalize<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, io::Result<std::path::PathBuf>> {
         (*self).canonicalize(path)
     }
+    fn open<'a>(
+        &'a self,
+        path: &'a Path,
+        options: OpenOptions,
+    ) -> BoxFuture<'a, io::Result<File<'a>>> {
+        (*self).open(path, options)
+    }
 }
 
 // Blanket impl for references — wasm.
@@ -712,6 +746,13 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
     }
     fn canonicalize<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, io::Result<std::path::PathBuf>> {
         (*self).canonicalize(path)
+    }
+    fn open<'a>(
+        &'a self,
+        path: &'a Path,
+        options: OpenOptions,
+    ) -> BoxFuture<'a, io::Result<File<'a>>> {
+        (*self).open(path, options)
     }
 }
 

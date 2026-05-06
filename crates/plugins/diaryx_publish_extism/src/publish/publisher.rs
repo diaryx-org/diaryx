@@ -409,10 +409,10 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 if let Some(parent) = dest.parent() {
                     self.fs.create_dir_all(parent).await?;
                 }
-                match self.fs.read_binary(src).await {
+                match self.fs.read(src).await {
                     Ok(bytes) => {
                         let prepared = prepare_published_attachment_bytes(dest_rel, &bytes);
-                        self.fs.write_binary(&dest, &prepared).await?;
+                        self.fs.write(&dest, &prepared).await?;
                         attachments_copied += 1;
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -899,7 +899,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 self.fs.create_dir_all(parent).await?;
             }
 
-            self.fs.write_file(&dest_path, &rendered).await?;
+            self.fs.write(&dest_path, rendered.as_bytes()).await?;
 
             // Write root page under its original filename too, so both
             // localhost/ and localhost/readme.html (or similar) work
@@ -914,7 +914,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                     && name != index_filename
                 {
                     let alias_path = destination.join(&name);
-                    self.fs.write_file(&alias_path, &rendered).await?;
+                    self.fs.write(&alias_path, rendered.as_bytes()).await?;
                 }
             }
         }
@@ -922,13 +922,13 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
         // Write supplementary files (sitemap, feeds, robots.txt)
         for (filename, content) in self.format.supplementary_files(pages, options) {
             let supp_path = destination.join(filename);
-            self.fs.write_binary(&supp_path, &content).await?;
+            self.fs.write(&supp_path, &content).await?;
         }
 
         // Write static assets (e.g., CSS for HTML format)
         for (filename, content) in self.format.static_assets() {
             let asset_path = destination.join(filename);
-            self.fs.write_binary(&asset_path, &content).await?;
+            self.fs.write(&asset_path, &content).await?;
         }
 
         Ok(())
@@ -956,7 +956,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
             self.fs.create_dir_all(parent).await?;
         }
 
-        self.fs.write_file(destination, &rendered).await?;
+        self.fs.write(destination, rendered.as_bytes()).await?;
 
         Ok(())
     }
@@ -1241,6 +1241,7 @@ pub(crate) fn hex_val(b: u8) -> Option<u8> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -1442,19 +1443,19 @@ mod tests {
         fs.create_dir_all(&workspace_dir.join("_attachments"))
             .unwrap();
         fs.create_dir_all(&workspace_dir.join("public")).unwrap();
-        fs.write_file(
+        fs.write(
             &workspace_root,
-            "---\ntitle: Test Site\ncontents: []\nattachments:\n  - '[Icon](/public/icon.svg)'\n---\n\n![photo](_attachments/image.png)\n\n<img src=\"public/banner.jpg\" alt=\"banner\">\n",
+            "---\ntitle: Test Site\ncontents: []\nattachments:\n  - '[Icon](/public/icon.svg)'\n---\n\n![photo](_attachments/image.png)\n\n<img src=\"public/banner.jpg\" alt=\"banner\">\n".as_bytes(),
         )
         .unwrap();
-        fs.write_binary(
+        fs.write(
             &workspace_dir.join("_attachments/image.png"),
             b"fake-png-data",
         )
         .unwrap();
-        fs.write_binary(&workspace_dir.join("public/icon.svg"), b"<svg>icon</svg>")
+        fs.write(&workspace_dir.join("public/icon.svg"), b"<svg>icon</svg>")
             .unwrap();
-        fs.write_binary(&workspace_dir.join("public/banner.jpg"), b"fake-jpg-data")
+        fs.write(&workspace_dir.join("public/banner.jpg"), b"fake-jpg-data")
             .unwrap();
 
         let async_fs = diaryx_core::fs::SyncToAsyncFs::new(fs.clone());
@@ -1473,16 +1474,15 @@ mod tests {
                 .unwrap();
         assert_eq!(result.attachments_copied, 3);
         assert_eq!(
-            fs.read_binary(&dest.join("_attachments/image.png"))
-                .unwrap(),
+            fs.read(&dest.join("_attachments/image.png")).unwrap(),
             b"fake-png-data"
         );
         assert_eq!(
-            fs.read_binary(&dest.join("public/icon.svg")).unwrap(),
+            fs.read(&dest.join("public/icon.svg")).unwrap(),
             b"<svg>icon</svg>"
         );
         assert_eq!(
-            fs.read_binary(&dest.join("public/banner.jpg")).unwrap(),
+            fs.read(&dest.join("public/banner.jpg")).unwrap(),
             b"fake-jpg-data"
         );
 
@@ -1497,10 +1497,7 @@ mod tests {
             futures_lite::future::block_on(publisher.publish(&workspace_root, dest2, &options2))
                 .unwrap();
         assert_eq!(result2.attachments_copied, 0);
-        assert!(
-            fs.read_binary(&dest2.join("_attachments/image.png"))
-                .is_err()
-        );
+        assert!(fs.read(&dest2.join("_attachments/image.png")).is_err());
     }
 
     #[test]
@@ -1514,12 +1511,13 @@ mod tests {
         fs.create_dir_all(workspace_dir).unwrap();
         fs.create_dir_all(&workspace_dir.join("_attachments"))
             .unwrap();
-        fs.write_file(
+        fs.write(
             &workspace_root,
-            "---\ntitle: Test Site\ncontents: []\n---\n\n![demo](_attachments/demo.html)\n",
+            "---\ntitle: Test Site\ncontents: []\n---\n\n![demo](_attachments/demo.html)\n"
+                .as_bytes(),
         )
         .unwrap();
-        fs.write_binary(
+        fs.write(
             &workspace_dir.join("_attachments/demo.html"),
             br#"<!doctype html><html><body><main>Demo</main></body></html>"#,
         )
@@ -1542,11 +1540,8 @@ mod tests {
         ))
         .unwrap();
 
-        let published = String::from_utf8(
-            fs.read_binary(&dest.join("_attachments/demo.html"))
-                .unwrap(),
-        )
-        .unwrap();
+        let published =
+            String::from_utf8(fs.read(&dest.join("_attachments/demo.html")).unwrap()).unwrap();
         assert!(published.contains("data-diaryx-published-html-bridge"));
         assert!(published.contains("diaryx-html-attachment-size"));
     }
@@ -1570,12 +1565,13 @@ mod tests {
         fs.create_dir_all(workspace_dir).unwrap();
         fs.create_dir_all(&workspace_dir.join("_attachments"))
             .unwrap();
-        fs.write_file(
+        fs.write(
             &workspace_root,
-            "---\ntitle: Test Site\ncontents: []\n---\n\n![photo](_attachments/image.png)\n",
+            "---\ntitle: Test Site\ncontents: []\n---\n\n![photo](_attachments/image.png)\n"
+                .as_bytes(),
         )
         .unwrap();
-        fs.write_binary(
+        fs.write(
             &workspace_dir.join("_attachments/image.png"),
             b"fake-png-data",
         )

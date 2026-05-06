@@ -294,13 +294,27 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     // Skip directories - we don't emit warnings for them.
                     // If a directory has an unlinked index file, OrphanFile covers it.
                     // If a directory has no index file, it's just a regular folder.
-                    if self.ws.fs_ref().is_dir(&entry).await {
+                    if self
+                        .ws
+                        .fs_ref()
+                        .metadata(&entry)
+                        .await
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false)
+                    {
                         continue;
                     }
 
                     // Skip symlinks - they're filesystem implementation details.
                     // The real file is what matters for the hierarchy.
-                    if self.ws.fs_ref().is_symlink(&entry).await {
+                    if self
+                        .ws
+                        .fs_ref()
+                        .symlink_metadata(&entry)
+                        .await
+                        .map(|m| m.is_symlink())
+                        .unwrap_or(false)
+                    {
                         continue;
                     }
 
@@ -385,18 +399,37 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         let mut all_entries = Vec::new();
         trace.record_explored(dir);
 
-        if let Ok(entries) = self.ws.fs_ref().list_files(dir).await {
+        if let Ok(entries) = self.ws.fs_ref().read_dir(dir).await.map(|entries| {
+            entries
+                .into_iter()
+                .map(|e| e.path().to_path_buf())
+                .collect::<Vec<_>>()
+        }) {
             for entry in entries {
                 // Skip symlinks entirely - they're filesystem implementation details.
                 // Also avoids potential infinite loops from circular symlinks.
-                if self.ws.fs_ref().is_symlink(&entry).await {
+                if self
+                    .ws
+                    .fs_ref()
+                    .symlink_metadata(&entry)
+                    .await
+                    .map(|m| m.is_symlink())
+                    .unwrap_or(false)
+                {
                     continue;
                 }
 
                 if let Some(name) = entry.file_name().and_then(|n| n.to_str())
                     && name.starts_with('.')
                 {
-                    if self.ws.fs_ref().is_dir(&entry).await {
+                    if self
+                        .ws
+                        .fs_ref()
+                        .metadata(&entry)
+                        .await
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false)
+                    {
                         trace.record_pruned_hidden(&entry);
                     }
                     continue;
@@ -413,14 +446,28 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 if exclude_patterns.iter().any(|pattern| {
                     self.path_matches_exclude(pattern, workspace_root, &entry, file_name)
                 }) {
-                    if self.ws.fs_ref().is_dir(&entry).await {
+                    if self
+                        .ws
+                        .fs_ref()
+                        .metadata(&entry)
+                        .await
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false)
+                    {
                         trace.record_pruned_excluded(&entry);
                     }
                     continue;
                 }
 
                 // Recurse into subdirectories
-                if self.ws.fs_ref().is_dir(&entry).await {
+                if self
+                    .ws
+                    .fs_ref()
+                    .metadata(&entry)
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+                {
                     if self.should_skip_workspace_dir(&entry) {
                         trace.record_pruned_skip(&entry);
                         continue;
@@ -461,7 +508,14 @@ impl<FS: AsyncFileSystem> Validator<FS> {
     ) -> Result<()> {
         // Skip symlinks - they're filesystem implementation details.
         // The real file (the symlink target) is what matters for the hierarchy.
-        if self.ws.fs_ref().is_symlink(path).await {
+        if self
+            .ws
+            .fs_ref()
+            .symlink_metadata(path)
+            .await
+            .map(|m| m.is_symlink())
+            .unwrap_or(false)
+        {
             return Ok(());
         }
 
@@ -541,7 +595,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     ctx.workspace_root.join(&target_path)
                 };
 
-                if !self.ws.fs_ref().exists(&absolute_target_path).await {
+                if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_target_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     ctx.result.errors.push(ValidationError::BrokenLinkRef {
                         file: path.to_path_buf(),
                         target: link_ref.clone(),
@@ -587,7 +647,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     ctx.workspace_root.join(&source_path)
                 };
 
-                let stale = if !self.ws.fs_ref().exists(&absolute_source_path).await {
+                let stale = if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_source_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     true
                 } else if let Ok(source_index) = self
                     .ws
@@ -637,7 +703,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     ctx.result.warnings.push(warning);
                 }
 
-                if !self.ws.fs_ref().exists(&absolute_child_path).await {
+                if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_child_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     ctx.result.errors.push(ValidationError::BrokenContentsRef {
                         index: path.to_path_buf(),
                         target: child_ref.clone(),
@@ -690,7 +762,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     } else {
                         ctx.workspace_root.join(&parent_path)
                     };
-                    if !self.ws.fs_ref().exists(&absolute_parent_path).await {
+                    if !self
+                        .ws
+                        .fs_ref()
+                        .try_exists(&absolute_parent_path)
+                        .await
+                        .unwrap_or(false)
+                    {
                         ctx.result.errors.push(ValidationError::BrokenPartOf {
                             file: path.to_path_buf(),
                             target: part_of.clone(),
@@ -733,7 +811,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 } else {
                     ctx.workspace_root.join(&attachment_path)
                 };
-                if !self.ws.fs_ref().exists(&absolute_attachment_path).await {
+                if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_attachment_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     ctx.result.errors.push(ValidationError::BrokenAttachment {
                         file: path.to_path_buf(),
                         attachment: attachment.clone(),
@@ -815,7 +899,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     ctx.workspace_root.join(&source_path)
                 };
 
-                let stale = if !self.ws.fs_ref().exists(&absolute_source_path).await {
+                let stale = if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_source_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     true
                 } else if let Ok(source_index) = self
                     .ws
@@ -912,7 +1002,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         } else {
             workspace_root.join(&binary_path)
         };
-        if self.ws.fs_ref().exists(&absolute_binary_path).await {
+        if self
+            .ws
+            .fs_ref()
+            .try_exists(&absolute_binary_path)
+            .await
+            .unwrap_or(false)
+        {
             visited.insert(absolute_binary_path);
         }
     }
@@ -961,7 +1057,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         // to its own conventions, and the validator is agnostic.
         let path = normalize_path(file_path);
 
-        if !self.ws.fs_ref().exists(&path).await {
+        if !self.ws.fs_ref().try_exists(&path).await.unwrap_or(false) {
             return Err(crate::error::DiaryxError::InvalidPath {
                 path: path.clone(),
                 message: "File not found".to_string(),
@@ -1040,7 +1136,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     workspace_root.join(&target_path)
                 };
 
-                if !self.ws.fs_ref().exists(&absolute_target_path).await {
+                if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_target_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     result.errors.push(ValidationError::BrokenLinkRef {
                         file: path.clone(),
                         target: link_ref.clone(),
@@ -1082,7 +1184,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     workspace_root.join(&source_path)
                 };
 
-                let stale = if !self.ws.fs_ref().exists(&absolute_source_path).await {
+                let stale = if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_source_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     true
                 } else if let Ok(source_index) = self
                     .ws
@@ -1117,7 +1225,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     workspace_root.join(&source_path)
                 };
 
-                let stale = if !self.ws.fs_ref().exists(&absolute_source_path).await {
+                let stale = if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_source_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     true
                 } else if let Ok(source_index) = self
                     .ws
@@ -1176,7 +1290,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     workspace_root.join(&child_path)
                 };
 
-                if !self.ws.fs_ref().exists(&absolute_child_path).await {
+                if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_child_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     result.errors.push(ValidationError::BrokenContentsRef {
                         index: path.clone(),
                         target: child_ref.clone(),
@@ -1211,7 +1331,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     } else {
                         workspace_root.join(&parent_path)
                     };
-                    if !self.ws.fs_ref().exists(&absolute_parent_path).await {
+                    if !self
+                        .ws
+                        .fs_ref()
+                        .try_exists(&absolute_parent_path)
+                        .await
+                        .unwrap_or(false)
+                    {
                         result.errors.push(ValidationError::BrokenPartOf {
                             file: path.clone(),
                             target: part_of.clone(),
@@ -1268,7 +1394,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 }
 
                 // Check if attachment exists
-                if !self.ws.fs_ref().exists(&absolute_attachment_path).await {
+                if !self
+                    .ws
+                    .fs_ref()
+                    .try_exists(&absolute_attachment_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     result.errors.push(ValidationError::BrokenAttachment {
                         file: path.clone(),
                         attachment: attachment.clone(),
@@ -1295,7 +1427,12 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             // Check for unlisted .md files in the same directory
             // Only if this file has contents (is an index)
             if index.frontmatter.is_index()
-                && let Ok(entries) = self.ws.fs_ref().list_files(dir).await
+                && let Ok(entries) = self.ws.fs_ref().read_dir(dir).await.map(|entries| {
+                    entries
+                        .into_iter()
+                        .map(|e| e.path().to_path_buf())
+                        .collect::<Vec<_>>()
+                })
             {
                 let this_filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
@@ -1337,7 +1474,14 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
                 for entry_path in entries {
                     // Skip symlinks - they're filesystem implementation details
-                    if self.ws.fs_ref().is_symlink(&entry_path).await {
+                    if self
+                        .ws
+                        .fs_ref()
+                        .symlink_metadata(&entry_path)
+                        .await
+                        .map(|m| m.is_symlink())
+                        .unwrap_or(false)
+                    {
                         continue;
                     }
 
@@ -1359,7 +1503,14 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         continue;
                     }
 
-                    if self.ws.fs_ref().is_dir(&entry_path).await {
+                    if self
+                        .ws
+                        .fs_ref()
+                        .metadata(&entry_path)
+                        .await
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false)
+                    {
                         if !self.should_skip_workspace_dir(&entry_path) {
                             subdirs_to_check.push(entry_path);
                         }
@@ -1467,15 +1618,34 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 // no index file at all; those are caught by workspace-level
                 // validation's orphan scan.
                 for subdir in subdirs_to_check {
-                    let Ok(sub_entries) = self.ws.fs_ref().list_files(&subdir).await else {
+                    let Ok(sub_entries) = self.ws.fs_ref().read_dir(&subdir).await.map(|entries| {
+                        entries
+                            .into_iter()
+                            .map(|e| e.path().to_path_buf())
+                            .collect::<Vec<_>>()
+                    }) else {
                         continue;
                     };
 
                     for sub_entry in sub_entries {
-                        if self.ws.fs_ref().is_symlink(&sub_entry).await {
+                        if self
+                            .ws
+                            .fs_ref()
+                            .symlink_metadata(&sub_entry)
+                            .await
+                            .map(|m| m.is_symlink())
+                            .unwrap_or(false)
+                        {
                             continue;
                         }
-                        if self.ws.fs_ref().is_dir(&sub_entry).await {
+                        if self
+                            .ws
+                            .fs_ref()
+                            .metadata(&sub_entry)
+                            .await
+                            .map(|m| m.is_dir())
+                            .unwrap_or(false)
+                        {
                             continue;
                         }
                         let Some(fname) = sub_entry.file_name().and_then(|n| n.to_str()) else {

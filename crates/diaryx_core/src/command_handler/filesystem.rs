@@ -9,7 +9,7 @@ use crate::types::FileInfo;
 impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     pub(crate) async fn cmd_file_exists(&self, path: String) -> Result<Response> {
         let resolved_path = self.resolve_fs_path(&path);
-        let exists = self.fs().exists(&resolved_path).await;
+        let exists = self.fs().try_exists(&resolved_path).await.unwrap_or(false);
         Ok(Response::Bool(exists))
     }
 
@@ -20,13 +20,25 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
     pub(crate) async fn cmd_get_file_info(&self, path: String) -> Result<Response> {
         let resolved_path = self.resolve_fs_path(&path);
-        let exists = self.fs().exists(&resolved_path).await;
+        let exists = self.fs().try_exists(&resolved_path).await.unwrap_or(false);
         if !exists {
             return Ok(Response::FileInfo(FileInfo::default()));
         }
 
-        let size_bytes = self.fs().get_file_size(&resolved_path).await;
-        let modified_at_ms = self.fs().get_modified_time(&resolved_path).await;
+        let size_bytes = self
+            .fs()
+            .metadata(&resolved_path)
+            .await
+            .ok()
+            .map(|m| m.len());
+        let modified_at_ms = self
+            .fs()
+            .metadata(&resolved_path)
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|d| i64::try_from(d.as_millis()).ok());
         Ok(Response::FileInfo(FileInfo {
             exists,
             size_bytes,
@@ -37,7 +49,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     pub(crate) async fn cmd_write_file(&self, path: String, content: String) -> Result<Response> {
         let resolved_path = self.resolve_fs_path(&path);
         self.fs()
-            .write_file(&resolved_path, &content)
+            .write(&resolved_path, content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: resolved_path.clone(),
@@ -49,7 +61,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     pub(crate) async fn cmd_delete_file(&self, path: String) -> Result<Response> {
         let resolved_path = self.resolve_fs_path(&path);
         self.fs()
-            .delete_file(&resolved_path)
+            .remove_file(&resolved_path)
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: resolved_path,

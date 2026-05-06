@@ -161,7 +161,7 @@ pub async fn resolve_favicon<FS: AsyncFileSystem>(
     let themes_dir = workspace_dir.join(THEMES_DIR);
     for (filename, mime_type) in FAVICON_CANDIDATES {
         let path = themes_dir.join(filename);
-        if let Ok(data) = fs.read_binary(&path).await {
+        if let Ok(data) = fs.read(&path).await {
             return Some(FaviconAsset {
                 filename: filename.to_string(),
                 mime_type: mime_type.to_string(),

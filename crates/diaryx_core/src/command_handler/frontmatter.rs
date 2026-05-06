@@ -426,13 +426,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ) -> Result<Response> {
         let source_fs_path = self.resolve_fs_path(&source_path);
         let target_fs_path = self.resolve_fs_path(&target_path);
-        if !self.fs().exists(&source_fs_path).await {
+        if !self.fs().try_exists(&source_fs_path).await.unwrap_or(false) {
             return Err(DiaryxError::Validation(format!(
                 "Source entry not found: {}",
                 Path::new(&source_path).display()
             )));
         }
-        if !self.fs().exists(&target_fs_path).await {
+        if !self.fs().try_exists(&target_fs_path).await.unwrap_or(false) {
             return Err(DiaryxError::Validation(format!(
                 "Target entry not found: {}",
                 Path::new(&target_path).display()
@@ -462,7 +462,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         content: Option<String>,
     ) -> Result<Response> {
         let source_fs_path = self.resolve_fs_path(&source_path);
-        if !self.fs().exists(&source_fs_path).await {
+        if !self.fs().try_exists(&source_fs_path).await.unwrap_or(false) {
             return Err(DiaryxError::Validation(format!(
                 "Source entry not found: {}",
                 Path::new(&source_path).display()
@@ -484,7 +484,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             .await?;
 
         let target_fs_path = self.resolve_fs_path(&target_path);
-        if self.fs().exists(&target_fs_path).await {
+        if self.fs().try_exists(&target_fs_path).await.unwrap_or(false) {
             changed |= self
                 .remove_frontmatter_link_array_item(&target_path, "link_of", &source_canonical)
                 .await?;

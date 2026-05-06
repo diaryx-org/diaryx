@@ -392,6 +392,7 @@ impl<FS: AsyncFileSystem> Searcher<FS> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::fs::{FileSystem, InMemoryFileSystem, SyncToAsyncFs, block_on_test};
@@ -405,9 +406,10 @@ mod tests {
     #[test]
     fn test_search_content() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/test/entry.md"),
-            "---\ntitle: Test Entry\n---\n\nThis is some content.\nWith multiple lines.\n",
+            "---\ntitle: Test Entry\n---\n\nThis is some content.\nWith multiple lines.\n"
+                .as_bytes(),
         )
         .unwrap();
 
@@ -428,9 +430,9 @@ mod tests {
     #[test]
     fn test_search_content_case_insensitive() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/test/entry.md"),
-            "---\ntitle: Test\n---\n\nHello WORLD and world.\n",
+            "---\ntitle: Test\n---\n\nHello WORLD and world.\n".as_bytes(),
         )
         .unwrap();
 
@@ -449,9 +451,9 @@ mod tests {
     #[test]
     fn test_search_content_case_sensitive() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/test/entry.md"),
-            "---\ntitle: Test\n---\n\nHello WORLD and world.\n",
+            "---\ntitle: Test\n---\n\nHello WORLD and world.\n".as_bytes(),
         )
         .unwrap();
 
@@ -470,9 +472,9 @@ mod tests {
     #[test]
     fn test_search_frontmatter() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/test/entry.md"),
-            "---\ntitle: Important Meeting\ndescription: A very important meeting\n---\n\nBody content here.\n",
+            "---\ntitle: Important Meeting\ndescription: A very important meeting\n---\n\nBody content here.\n".as_bytes(),
         )
         .unwrap();
 
@@ -491,9 +493,9 @@ mod tests {
     #[test]
     fn test_search_specific_property() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/test/entry.md"),
-            "---\ntitle: Meeting Notes\ntags:\n  - important\n  - work\n---\n\nSome important content.\n",
+            "---\ntitle: Meeting Notes\ntags:\n  - important\n  - work\n---\n\nSome important content.\n".as_bytes(),
         )
         .unwrap();
 
@@ -513,9 +515,9 @@ mod tests {
     #[test]
     fn test_search_no_frontmatter() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/test/entry.md"),
-            "Just plain content.\nNo frontmatter.\n",
+            "Just plain content.\nNo frontmatter.\n".as_bytes(),
         )
         .unwrap();
 
@@ -534,9 +536,9 @@ mod tests {
     #[test]
     fn test_extract_title_with_quotes() {
         let fs = make_test_fs();
-        fs.write_file(
+        fs.write(
             Path::new("/test/entry.md"),
-            "---\ntitle: \"Quoted Title\"\n---\n\nContent.\n",
+            "---\ntitle: \"Quoted Title\"\n---\n\nContent.\n".as_bytes(),
         )
         .unwrap();
 

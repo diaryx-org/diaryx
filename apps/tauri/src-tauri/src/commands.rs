@@ -26,7 +26,7 @@ use diaryx_core::{
     diaryx::Diaryx,
     error::{DiaryxError, SerializableError},
     frontmatter,
-    fs::{FileSystem, InMemoryFileSystem, SyncToAsyncFs},
+    fs::{InMemoryFileSystem, SyncToAsyncFs},
     plugin::permissions::{PermissionRule, PermissionType, PluginConfig, PluginPermissions},
     workspace::Workspace,
 };
@@ -4119,8 +4119,6 @@ pub async fn import_from_zip(
 ) -> Result<ImportResult, SerializableError> {
     use std::io::Read;
 
-    let fs = RealFileSystem;
-
     // Get workspace path
     let workspace = match workspace_path {
         Some(p) => PathBuf::from(p),
@@ -4223,12 +4221,11 @@ pub async fn import_from_zip(
                 path: Some(file_path.clone()),
             })?;
 
-        fs.write_binary(&file_path, &contents)
-            .map_err(|e| SerializableError {
-                kind: "ImportError".to_string(),
-                message: format!("Failed to write file: {}", e),
-                path: Some(file_path.clone()),
-            })?;
+        std::fs::write(&file_path, &contents).map_err(|e| SerializableError {
+            kind: "ImportError".to_string(),
+            message: format!("Failed to write file: {}", e),
+            path: Some(file_path.clone()),
+        })?;
 
         files_imported += 1;
 
@@ -4265,8 +4262,6 @@ pub async fn pick_and_import_zip<R: Runtime>(
 ) -> Result<ImportResult, SerializableError> {
     use std::io::Read;
     use tauri_plugin_dialog::DialogExt;
-
-    let fs = RealFileSystem;
 
     // Get workspace path
     let workspace = match workspace_path {
@@ -4397,12 +4392,11 @@ pub async fn pick_and_import_zip<R: Runtime>(
                 path: Some(file_path.clone()),
             })?;
 
-        fs.write_binary(&file_path, &contents)
-            .map_err(|e| SerializableError {
-                kind: "ImportError".to_string(),
-                message: format!("Failed to write file: {}", e),
-                path: Some(file_path.clone()),
-            })?;
+        std::fs::write(&file_path, &contents).map_err(|e| SerializableError {
+            kind: "ImportError".to_string(),
+            message: format!("Failed to write file: {}", e),
+            path: Some(file_path.clone()),
+        })?;
 
         files_imported += 1;
 
@@ -4439,8 +4433,6 @@ pub async fn import_from_zip_data(
 ) -> Result<ImportResult, SerializableError> {
     use base64::Engine;
     use std::io::{Cursor, Read};
-
-    let fs = RealFileSystem;
 
     // Get workspace path
     let workspace = match workspace_path {
@@ -4552,12 +4544,11 @@ pub async fn import_from_zip_data(
                 path: Some(file_path.clone()),
             })?;
 
-        fs.write_binary(&file_path, &contents)
-            .map_err(|e| SerializableError {
-                kind: "ImportError".to_string(),
-                message: format!("Failed to write file: {}", e),
-                path: Some(file_path.clone()),
-            })?;
+        std::fs::write(&file_path, &contents).map_err(|e| SerializableError {
+            kind: "ImportError".to_string(),
+            message: format!("Failed to write file: {}", e),
+            path: Some(file_path.clone()),
+        })?;
 
         files_imported += 1;
 
@@ -4670,8 +4661,6 @@ pub async fn finish_import_upload<R: Runtime>(
     workspace_path: Option<String>,
 ) -> Result<ImportResult, SerializableError> {
     use std::io::Read;
-
-    let fs = RealFileSystem;
 
     // Get workspace path
     let workspace = match workspace_path {
@@ -4814,12 +4803,11 @@ pub async fn finish_import_upload<R: Runtime>(
                 path: Some(file_path.clone()),
             })?;
 
-        fs.write_binary(&file_path, &contents)
-            .map_err(|e| SerializableError {
-                kind: "ImportError".to_string(),
-                message: format!("Failed to write file: {}", e),
-                path: Some(file_path.clone()),
-            })?;
+        std::fs::write(&file_path, &contents).map_err(|e| SerializableError {
+            kind: "ImportError".to_string(),
+            message: format!("Failed to write file: {}", e),
+            path: Some(file_path.clone()),
+        })?;
 
         files_imported += 1;
 
@@ -4873,7 +4861,6 @@ pub async fn export_to_zip<R: Runtime>(
     app: AppHandle<R>,
     workspace_path: Option<String>,
 ) -> Result<ExportResult, SerializableError> {
-    use diaryx_core::fs::FileSystem;
     use std::io::Write;
     use tauri_plugin_dialog::DialogExt;
     use zip::ZipWriter;
@@ -4937,16 +4924,27 @@ pub async fn export_to_zip<R: Runtime>(
         .compression_method(zip::CompressionMethod::Deflated)
         .compression_level(Some(6));
 
-    let fs = RealFileSystem;
-
     // Get all files in workspace
-    let all_files = fs
-        .list_all_files_recursive(&workspace)
-        .map_err(|e| SerializableError {
-            kind: "ExportError".to_string(),
-            message: format!("Failed to list files: {}", e),
-            path: None,
-        })?;
+    fn list_all_sync(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+        let mut all = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                all.push(path.clone());
+                if entry.file_type()?.is_dir()
+                    && let Ok(sub) = list_all_sync(&path)
+                {
+                    all.extend(sub);
+                }
+            }
+        }
+        Ok(all)
+    }
+    let all_files = list_all_sync(&workspace).map_err(|e| SerializableError {
+        kind: "ExportError".to_string(),
+        message: format!("Failed to list files: {}", e),
+        path: None,
+    })?;
 
     let mut files_exported = 0;
 
@@ -4966,7 +4964,7 @@ pub async fn export_to_zip<R: Runtime>(
         let relative_str = relative_path.to_string_lossy().to_string();
 
         // Read file content
-        let content = match fs.read_binary(&file_path) {
+        let content = match std::fs::read(&file_path) {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("[Export] Failed to read {:?}: {}", file_path, e);
@@ -5158,11 +5156,10 @@ pub async fn export_to_format<R: Runtime>(
         .compression_method(zip::CompressionMethod::Deflated)
         .compression_level(Some(6));
 
-    let fs = RealFileSystem;
     let mut files_exported = 0;
 
     for included in &plan.included {
-        let content = match fs.read_to_string(&included.source_path) {
+        let content = match std::fs::read_to_string(&included.source_path) {
             Ok(c) => c,
             Err(e) => {
                 log::warn!(

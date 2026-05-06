@@ -376,7 +376,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     } else {
                         workspace_root.join(&child_path)
                     };
-                    if ws.fs_ref().exists(&absolute_child_path).await {
+                    if ws
+                        .fs_ref()
+                        .try_exists(&absolute_child_path)
+                        .await
+                        .unwrap_or(false)
+                    {
                         Box::pin(Self::collect_audiences_recursive(
                             ws,
                             &absolute_child_path,
@@ -1275,7 +1280,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             let new_content = frontmatter::serialize(&fm, &parsed.body)?;
             // Use write_file directly to write the full content (frontmatter + body)
             // Note: save_content only saves the body and preserves existing frontmatter
-            self.fs().write_file(file_path, &new_content).await?;
+            self.fs().write(file_path, new_content.as_bytes()).await?;
         }
 
         Ok((links_converted, modified))
@@ -1283,6 +1288,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
@@ -1484,15 +1490,18 @@ mod tests {
 
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     &root_path,
-                    "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Child](/child.md)\"\n---\n\n# Root\n",
+                    "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Child](/child.md)\"\n---\n\n# Root\n".as_bytes(),
                 )
                 .await
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(&child_path, "---\ntitle: Child\n---\n\n# Child\n")
+                .write(
+                    &child_path,
+                    "---\ntitle: Child\n---\n\n# Child\n".as_bytes(),
+                )
                 .await
                 .unwrap();
 
@@ -1540,17 +1549,18 @@ mod tests {
 
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     &root_path,
-                    "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Child](/child.md)\"\n---\n\n# Root\n",
+                    "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Child](/child.md)\"\n---\n\n# Root\n".as_bytes(),
                 )
                 .await
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     &child_path,
-                    "---\ntitle: Child\npart_of: \"[Root](/diaryx.md)\"\n---\n\n# Child\n",
+                    "---\ntitle: Child\npart_of: \"[Root](/diaryx.md)\"\n---\n\n# Child\n"
+                        .as_bytes(),
                 )
                 .await
                 .unwrap();
@@ -1585,7 +1595,10 @@ mod tests {
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(Path::new("notes/day.md"), "---\ntitle: Day\n---\n\n# Day\n")
+                .write(
+                    Path::new("notes/day.md"),
+                    "---\ntitle: Day\n---\n\n# Day\n".as_bytes(),
+                )
                 .await
                 .unwrap();
 
@@ -1644,7 +1657,10 @@ mod tests {
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(Path::new("notes/day.md"), "---\ntitle: Day\n---\n\n# Day\n")
+                .write(
+                    Path::new("notes/day.md"),
+                    "---\ntitle: Day\n---\n\n# Day\n".as_bytes(),
+                )
                 .await
                 .unwrap();
 
@@ -1688,7 +1704,10 @@ mod tests {
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(Path::new("notes/day.md"), "---\ntitle: Day\n---\n\n# Day\n")
+                .write(
+                    Path::new("notes/day.md"),
+                    "---\ntitle: Day\n---\n\n# Day\n".as_bytes(),
+                )
                 .await
                 .unwrap();
 
@@ -1743,17 +1762,17 @@ mod tests {
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     Path::new("README.md"),
-                    "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Day](/notes/day.md)\"\n---\n\n# Root\n",
+                    "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Day](/notes/day.md)\"\n---\n\n# Root\n".as_bytes(),
                 )
                 .await
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     Path::new("notes/day.md"),
-                    "---\ntitle: Day\npart_of: \"[Root](/README.md)\"\nattachments:\n  - \"[Image](/notes/_attachments/a.png)\"\n  - \"/notes/_attachments/report.pdf\"\n---\n\n# Day\n",
+                    "---\ntitle: Day\npart_of: \"[Root](/README.md)\"\nattachments:\n  - \"[Image](/notes/_attachments/a.png)\"\n  - \"/notes/_attachments/report.pdf\"\n---\n\n# Day\n".as_bytes(),
                 )
                 .await
                 .unwrap();
@@ -1826,12 +1845,12 @@ mod tests {
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(Path::new("Diaryx.md"), "# Diaryx\n")
+                .write(Path::new("Diaryx.md"), "# Diaryx\n".as_bytes())
                 .await
                 .unwrap();
             diaryx
                 .fs()
-                .write_binary(Path::new("apps/web/public/icon.png"), b"png-bytes")
+                .write(Path::new("apps/web/public/icon.png"), b"png-bytes")
                 .await
                 .unwrap();
 
@@ -1869,23 +1888,24 @@ mod tests {
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     Path::new("Diaryx.md"),
-                    "---\nattachments:\n  - \"[Diaryx light logo](/_attachments/icon.png.md)\"\n---\n# Diaryx\n",
+                    "---\nattachments:\n  - \"[Diaryx light logo](/_attachments/icon.png.md)\"\n---\n# Diaryx\n".as_bytes(),
                 )
                 .await
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     Path::new("_attachments/icon.png.md"),
-                    "---\ntitle: Diaryx light logo\nattachment: apps/web/public/icon.png\n---\n",
+                    "---\ntitle: Diaryx light logo\nattachment: apps/web/public/icon.png\n---\n"
+                        .as_bytes(),
                 )
                 .await
                 .unwrap();
             diaryx
                 .fs()
-                .write_binary(Path::new("apps/web/public/icon.png"), b"png-bytes")
+                .write(Path::new("apps/web/public/icon.png"), b"png-bytes")
                 .await
                 .unwrap();
 
@@ -1913,9 +1933,9 @@ mod tests {
 
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     Path::new("_attachments/icon.png.md"),
-                    "---\ntitle: Diaryx light logo\n---\n",
+                    "---\ntitle: Diaryx light logo\n---\n".as_bytes(),
                 )
                 .await
                 .unwrap();
@@ -1949,17 +1969,17 @@ mod tests {
 
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     Path::new("source.md"),
-                    "---\ntitle: Source\n---\n\nSee [Target](/target.md).\n",
+                    "---\ntitle: Source\n---\n\nSee [Target](/target.md).\n".as_bytes(),
                 )
                 .await
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     Path::new("target.md"),
-                    "---\ntitle: Target\n---\n\n# Target\n",
+                    "---\ntitle: Target\n---\n\n# Target\n".as_bytes(),
                 )
                 .await
                 .unwrap();
@@ -2038,17 +2058,17 @@ mod tests {
 
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     Path::new("source.md"),
-                    "---\ntitle: Source\nlinks:\n  - \"[Target](/target.md)\"\n---\n\nOne [Target](/target.md) two [Target](/target.md)\n",
+                    "---\ntitle: Source\nlinks:\n  - \"[Target](/target.md)\"\n---\n\nOne [Target](/target.md) two [Target](/target.md)\n".as_bytes(),
                 )
                 .await
                 .unwrap();
             diaryx
                 .fs()
-                .write_file(
+                .write(
                     Path::new("target.md"),
-                    "---\ntitle: Target\nlink: \"[Target](/target.md)\"\nlink_of:\n  - \"[Source](/source.md)\"\n---\n\n# Target\n",
+                    "---\ntitle: Target\nlink: \"[Target](/target.md)\"\nlink_of:\n  - \"[Source](/source.md)\"\n---\n\n# Target\n".as_bytes(),
                 )
                 .await
                 .unwrap();

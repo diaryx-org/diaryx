@@ -1256,7 +1256,7 @@ fn host_read_binary(
         return Ok(());
     }
 
-    match futures_lite::future::block_on(ctx.fs.read_binary(Path::new(&path))) {
+    match futures_lite::future::block_on(ctx.fs.read(Path::new(&path))) {
         Ok(bytes) => {
             let json = serde_json::json!({
                 "data": base64::engine::general_purpose::STANDARD.encode(&bytes)
@@ -1303,14 +1303,20 @@ fn host_list_dir(
         plugin.memory_set_val(&mut outputs[0], err.as_str())?;
         return Ok(());
     }
-    let files = match futures_lite::future::block_on(ctx.fs.list_files(Path::new(&dir_path))) {
-        Ok(files) => files,
-        Err(e) => {
-            let err = serde_json::json!({ "error": format!("host_list_dir: {e}") }).to_string();
-            plugin.memory_set_val(&mut outputs[0], err.as_str())?;
-            return Ok(());
-        }
-    };
+    let files =
+        match futures_lite::future::block_on(ctx.fs.read_dir(Path::new(&dir_path))).map(|entries| {
+            entries
+                .into_iter()
+                .map(|e| e.path().to_path_buf())
+                .collect::<Vec<_>>()
+        }) {
+            Ok(files) => files,
+            Err(e) => {
+                let err = serde_json::json!({ "error": format!("host_list_dir: {e}") }).to_string();
+                plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+                return Ok(());
+            }
+        };
 
     let file_strings: Vec<String> = files
         .iter()
@@ -1352,16 +1358,36 @@ fn host_list_files(
         plugin.memory_set_val(&mut outputs[0], err.as_str())?;
         return Ok(());
     }
-    let files =
-        match futures_lite::future::block_on(ctx.fs.list_all_files_recursive(Path::new(&prefix))) {
-            Ok(files) => files,
-            Err(e) => {
-                let err =
-                    serde_json::json!({ "error": format!("host_list_files: {e}") }).to_string();
-                plugin.memory_set_val(&mut outputs[0], err.as_str())?;
-                return Ok(());
+    fn list_all<'a>(
+        fs: &'a dyn AsyncFileSystem,
+        dir: &'a Path,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = std::io::Result<Vec<PathBuf>>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let mut all = Vec::new();
+            if let Ok(entries) = fs.read_dir(dir).await {
+                for entry in entries {
+                    let path = entry.path().to_path_buf();
+                    all.push(path.clone());
+                    if entry.file_type()?.is_dir()
+                        && let Ok(sub) = list_all(fs, &path).await
+                    {
+                        all.extend(sub);
+                    }
+                }
             }
-        };
+            Ok(all)
+        })
+    }
+    let files = match futures_lite::future::block_on(list_all(&*ctx.fs, Path::new(&prefix))) {
+        Ok(files) => files,
+        Err(e) => {
+            let err = serde_json::json!({ "error": format!("host_list_files: {e}") }).to_string();
+            plugin.memory_set_val(&mut outputs[0], err.as_str())?;
+            return Ok(());
+        }
+    };
 
     let file_strings: Vec<String> = files
         .iter()
@@ -1469,7 +1495,8 @@ fn host_file_exists(
         plugin.memory_set_val(&mut outputs[0], "false")?;
         return Ok(());
     }
-    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&path)));
+    let exists =
+        futures_lite::future::block_on(ctx.fs.try_exists(Path::new(&path))).unwrap_or(false);
 
     let json = serde_json::to_string(&exists)
         .map_err(|e| ExtismError::msg(format!("host_file_exists: serialize: {e}")))?;
@@ -1518,10 +1545,16 @@ fn host_file_metadata(
         return Ok(());
     }
     let path = Path::new(&validated_path);
-    let exists = futures_lite::future::block_on(ctx.fs.exists(path));
+    let exists = futures_lite::future::block_on(ctx.fs.try_exists(path)).unwrap_or(false);
     let json = if exists {
-        let size_bytes = futures_lite::future::block_on(ctx.fs.get_file_size(path));
-        let modified_at_ms = futures_lite::future::block_on(ctx.fs.get_modified_time(path));
+        let size_bytes = futures_lite::future::block_on(ctx.fs.metadata(path))
+            .ok()
+            .map(|m| m.len());
+        let modified_at_ms = futures_lite::future::block_on(ctx.fs.metadata(path))
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|d| i64::try_from(d.as_millis()).ok());
         serde_json::json!({
             "exists": true,
             "size_bytes": size_bytes,
@@ -1561,7 +1594,8 @@ fn host_write_file(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_write_file: lock: {e}")))?;
-    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&path)));
+    let exists =
+        futures_lite::future::block_on(ctx.fs.try_exists(Path::new(&path))).unwrap_or(false);
     let perm = if exists {
         PermissionType::EditFiles
     } else {
@@ -1577,7 +1611,7 @@ fn host_write_file(
     // returning the error message in the output the guest SDK can surface it
     // as a normal `Result::Err` that callers can recover from.
     if let Err(e) =
-        futures_lite::future::block_on(ctx.fs.write_file(Path::new(&path), &parsed.content))
+        futures_lite::future::block_on(ctx.fs.write(Path::new(&path), parsed.content.as_bytes()))
     {
         let msg = format!("host_write_file: {e}");
         plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
@@ -1619,7 +1653,7 @@ fn host_delete_file(
     }
     // Return filesystem errors as a recoverable string — see host_write_file
     // comment for rationale.
-    if let Err(e) = futures_lite::future::block_on(ctx.fs.delete_file(Path::new(&path))) {
+    if let Err(e) = futures_lite::future::block_on(ctx.fs.remove_file(Path::new(&path))) {
         let msg = format!("host_delete_file: {e}");
         plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
         return Ok(());
@@ -1662,7 +1696,8 @@ fn host_write_binary(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_write_binary: lock: {e}")))?;
-    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&path)));
+    let exists =
+        futures_lite::future::block_on(ctx.fs.try_exists(Path::new(&path))).unwrap_or(false);
     let perm = if exists {
         PermissionType::EditFiles
     } else {
@@ -1674,7 +1709,7 @@ fn host_write_binary(
     }
     // Return filesystem errors as a recoverable string — see host_write_file
     // comment for rationale.
-    if let Err(e) = futures_lite::future::block_on(ctx.fs.write_binary(Path::new(&path), &bytes)) {
+    if let Err(e) = futures_lite::future::block_on(ctx.fs.write(Path::new(&path), &bytes)) {
         let msg = format!("host_write_binary: {e}");
         plugin.memory_set_val(&mut outputs[0], msg.as_str())?;
         return Ok(());

@@ -21,13 +21,19 @@
 
 mod adapter;
 pub mod error;
+mod file;
 mod memory;
 mod metadata;
 mod traits;
 
 pub use adapter::SyncToAsyncFs;
+pub use file::{AsyncFile, File, MemFile, OpenOptions};
 pub use memory::InMemoryFs;
 pub use metadata::{DirEntry, FileType, Metadata};
 #[allow(deprecated)]
 pub use traits::FileSystem;
 pub use traits::{AsyncFileSystem, BoxFuture};
+
+/// Re-export of [`futures_io`] so callers can name `AsyncRead` / `AsyncWrite`
+/// / `AsyncSeek` without taking a separate dep on it.
+pub use futures_io;

@@ -12,6 +12,7 @@ categories = ["filesystem", "wasm", "web-programming"]
 publish = false
 
 [dependencies]
+futures-io = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 

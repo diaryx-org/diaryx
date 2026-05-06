@@ -46,7 +46,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Body HTML/media embeds still point directly at binary assets.
                 // Allow those refs for read/preview flows while frontmatter
                 // `attachments[]` remains note-backed.
-                if self.fs().exists(&note_fs_path).await {
+                if self.fs().try_exists(&note_fs_path).await.unwrap_or(false) {
                     return Ok((note_canonical.clone(), note_canonical, None));
                 }
                 return Err(DiaryxError::Validation(format!(
@@ -91,7 +91,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let note_canonical = self.attachment_note_canonical_path(entry_path, filename);
         let note_fs_path = self.resolve_fs_path(&note_canonical);
 
-        if !self.fs().exists(&note_fs_path).await {
+        if !self.fs().try_exists(&note_fs_path).await.unwrap_or(false) {
             let title = filename.to_string();
             let note_link = self.format_link_for_file(&note_canonical, &note_canonical);
             let attachment_link =
@@ -100,7 +100,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 "---\ntitle: {title}\nlink: \"{note_link}\"\nattachment: \"{attachment_link}\"\n---\n"
             );
             self.fs()
-                .write_file(&note_fs_path, &content)
+                .write(&note_fs_path, content.as_bytes())
                 .await
                 .map_err(|e| DiaryxError::FileWrite {
                     path: note_fs_path.clone(),
@@ -301,9 +301,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         if remaining == 0 {
             let binary_full_path = self.resolve_fs_path(&binary_canonical);
-            if self.fs().exists(&binary_full_path).await {
+            if self
+                .fs()
+                .try_exists(&binary_full_path)
+                .await
+                .unwrap_or(false)
+            {
                 self.fs()
-                    .delete_file(&binary_full_path)
+                    .remove_file(&binary_full_path)
                     .await
                     .map_err(|e| DiaryxError::FileWrite {
                         path: binary_full_path,
@@ -311,8 +316,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     })?;
             }
             let note_full_path = self.resolve_fs_path(&note_canonical);
-            if self.fs().exists(&note_full_path).await {
-                self.fs().delete_file(&note_full_path).await.map_err(|e| {
+            if self.fs().try_exists(&note_full_path).await.unwrap_or(false) {
+                self.fs().remove_file(&note_full_path).await.map_err(|e| {
                     DiaryxError::FileWrite {
                         path: note_full_path,
                         source: e,
@@ -336,7 +341,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         let data = self
             .fs()
-            .read_binary(&full_path)
+            .read(&full_path)
             .await
             .map_err(|e| DiaryxError::FileRead {
                 path: full_path,
@@ -393,7 +398,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let target_attachment_path = self.resolve_fs_path(&target_binary_canonical);
 
         // Check for collision at destination
-        if self.fs().exists(&target_attachment_path).await {
+        if self
+            .fs()
+            .try_exists(&target_attachment_path)
+            .await
+            .unwrap_or(false)
+        {
             return Err(DiaryxError::InvalidPath {
                 path: target_attachment_path,
                 message: "File already exists at destination".to_string(),
@@ -401,14 +411,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
 
         // Read the source file data
-        let data = self
-            .fs()
-            .read_binary(&source_attachment_path)
-            .await
-            .map_err(|e| DiaryxError::FileRead {
-                path: source_attachment_path.clone(),
-                source: e,
-            })?;
+        let data =
+            self.fs()
+                .read(&source_attachment_path)
+                .await
+                .map_err(|e| DiaryxError::FileRead {
+                    path: source_attachment_path.clone(),
+                    source: e,
+                })?;
 
         // Create target _attachments directory if needed
         let resolved_target_attachments_dir = self.resolve_fs_path(&target_attachments_dir);
@@ -418,7 +428,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         // Write to target location
         self.fs()
-            .write_binary(&target_attachment_path, &data)
+            .write(&target_attachment_path, &data)
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: target_attachment_path.clone(),
@@ -455,7 +465,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             "---\ntitle: {note_title}\nlink: \"{target_note_link}\"\nattachment: \"{target_attachment_link}\"\n{attachment_of_lines}---\n"
         );
         self.fs()
-            .write_file(&target_note_full_path, &note_content)
+            .write(&target_note_full_path, note_content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: target_note_full_path.clone(),
@@ -492,16 +502,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         // Delete the original file
         self.fs()
-            .delete_file(&source_attachment_path)
+            .remove_file(&source_attachment_path)
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: source_attachment_path,
                 source: e,
             })?;
 
-        if self.fs().exists(&note_full_path).await {
+        if self.fs().try_exists(&note_full_path).await.unwrap_or(false) {
             self.fs()
-                .delete_file(&note_full_path)
+                .remove_file(&note_full_path)
                 .await
                 .map_err(|e| DiaryxError::FileWrite {
                     path: note_full_path,

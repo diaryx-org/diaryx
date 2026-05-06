@@ -261,7 +261,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
         }
 
         let new_content = diaryx_core::frontmatter::serialize(&fm, &parsed.body)?;
-        self.fs.write_file(&root, &new_content).await?;
+        self.fs.write(&root, new_content.as_bytes()).await?;
         Ok(())
     }
 
@@ -689,14 +689,14 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     // Upload attachments (images, PDFs, etc.)
                     for (src_path, dest_rel) in &attachment_paths {
                         let key = format!("{}/{}", audience_name, dest_rel.display());
-                        if !self.fs.exists(src_path).await {
+                        if !self.fs.try_exists(src_path).await.unwrap_or(false) {
                             log::warn!(
                                 "Skipping attachment {}: source file does not exist",
                                 src_path.display()
                             );
                             continue;
                         }
-                        match self.fs.read_binary(src_path).await {
+                        match self.fs.read(src_path).await {
                             Ok(bytes) => {
                                 let mime = mime_type_from_ext(dest_rel);
                                 let prepared = prepare_published_attachment_bytes(dest_rel, &bytes);
@@ -986,12 +986,8 @@ mod tests {
         let root_index = PathBuf::from("workspace/Diaryx.md");
         let workspace_dir = PathBuf::from("workspace");
 
-        block_on(
-            plugin
-                .fs
-                .write_file(&root_index, "---\ncontents: []\n---\n"),
-        )
-        .expect("root index write should succeed");
+        block_on(plugin.fs.write(&root_index, b"---\ncontents: []\n---\n"))
+            .expect("root index write should succeed");
         *plugin.workspace_root.write().unwrap() = Some(workspace_dir);
         plugin.config.write().unwrap().namespace_id = Some("ns_123".into());
 
@@ -1017,12 +1013,8 @@ mod tests {
         let plugin = create_test_plugin();
         let root_index = PathBuf::from("workspace/Diaryx.md");
 
-        block_on(
-            plugin
-                .fs
-                .write_file(&root_index, "---\ncontents: []\n---\n"),
-        )
-        .expect("root index write should succeed");
+        block_on(plugin.fs.write(&root_index, b"---\ncontents: []\n---\n"))
+            .expect("root index write should succeed");
         *plugin.workspace_root.write().unwrap() = Some(PathBuf::from("workspace"));
 
         let resolved =

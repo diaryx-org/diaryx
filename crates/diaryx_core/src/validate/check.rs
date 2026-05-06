@@ -320,7 +320,12 @@ pub(super) async fn find_index_in_directory<FS: AsyncFileSystem>(
 ) -> Option<PathBuf> {
     let mut indexes = Vec::new();
 
-    if let Ok(entries) = ws.fs_ref().list_files(dir).await {
+    if let Ok(entries) = ws.fs_ref().read_dir(dir).await.map(|entries| {
+        entries
+            .into_iter()
+            .map(|e| e.path().to_path_buf())
+            .collect::<Vec<_>>()
+    }) {
         for entry_path in entries {
             if let Some(excl) = exclude
                 && entry_path == excl
@@ -331,7 +336,13 @@ pub(super) async fn find_index_in_directory<FS: AsyncFileSystem>(
             if entry_path.extension().is_none_or(|ext| ext != "md") {
                 continue;
             }
-            if ws.fs_ref().is_dir(&entry_path).await {
+            if ws
+                .fs_ref()
+                .metadata(&entry_path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
+            {
                 continue;
             }
             if let Ok(index) = ws.parse_index(&entry_path).await

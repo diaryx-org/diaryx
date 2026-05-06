@@ -328,7 +328,13 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         // Write or update target file
         let target_resolved = self.resolve_path(target_path);
-        if self.diaryx.fs.exists(&target_resolved).await {
+        if self
+            .diaryx
+            .fs
+            .try_exists(&target_resolved)
+            .await
+            .unwrap_or(false)
+        {
             let target_content = self.read_raw_or_empty(target_path).await?;
             let mut target_parsed = frontmatter::parse_or_empty(&target_content)?;
             for (k, v) in target_fm {
@@ -469,7 +475,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         let resolved = self.resolve_path(path);
         self.diaryx
             .fs
-            .write_file(&resolved, &content)
+            .write(&resolved, content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: resolved,

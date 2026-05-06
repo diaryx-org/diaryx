@@ -321,11 +321,21 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         loop {
             // Look for index files in this directory
-            if let Ok(files) = ws.fs_ref().list_files(&current).await {
+            if let Ok(files) = ws.fs_ref().read_dir(&current).await.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|e| e.path().to_path_buf())
+                    .collect::<Vec<_>>()
+            }) {
                 for file_path in files {
                     // Check if it's a markdown file
                     if file_path.extension().is_some_and(|ext| ext == "md")
-                        && !ws.fs_ref().is_dir(&file_path).await
+                        && !ws
+                            .fs_ref()
+                            .metadata(&file_path)
+                            .await
+                            .map(|m| m.is_dir())
+                            .unwrap_or(false)
                     {
                         // Try to parse and check if it has contents (is an index)
                         if let Ok(index) = ws.parse_index(&file_path).await
@@ -353,7 +363,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         // Always include the workspace root if not already present
         let root_str = root_index.to_string_lossy().to_string();
-        if !parents.contains(&root_str) && ws.fs_ref().exists(root_index).await {
+        if !parents.contains(&root_str) && ws.fs_ref().try_exists(root_index).await.unwrap_or(false)
+        {
             parents.push(root_str);
         }
 

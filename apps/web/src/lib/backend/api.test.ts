@@ -168,6 +168,58 @@ describe('api', () => {
       expect(mockBackend.execute).toHaveBeenCalledTimes(2)
       expect(result).toEqual({ ok: true })
     })
+
+    it('normalizes custom root-index permission requests before persisting a decision', async () => {
+      mockBackend.getWorkspacePath = vi
+        .fn()
+        .mockReturnValue("/private/var/mobile/Containers/Data/Application/app/Documents/Adam's Archive")
+      vi.mocked(mockBackend.execute)
+        .mockRejectedValueOnce(
+          new BackendError(
+            "Permission not configured for plugin 'diaryx.daily': read_files on '/private/var/mobile/Containers/Data/Application/app/Documents/Adam's Archive/Adam's Archive.md'",
+            'PluginError',
+          ),
+        )
+        .mockResolvedValueOnce({
+          type: 'PluginResult',
+          data: { ok: true },
+        } as any)
+
+      await api.executePluginCommand('diaryx.daily', 'OpenToday', {})
+
+      expect(permissionStoreMocks.permissionStore.requestPermission).toHaveBeenCalledWith(
+        'diaryx.daily',
+        'diaryx.daily',
+        'read_files',
+        "Adam's Archive.md",
+      )
+    })
+
+    it('normalizes iOS permission targets even after the leading slash was stripped', async () => {
+      mockBackend.getWorkspacePath = vi
+        .fn()
+        .mockReturnValue("/private/var/mobile/Containers/Data/Application/app/Documents/Adam's Archive")
+      vi.mocked(mockBackend.execute)
+        .mockRejectedValueOnce(
+          new BackendError(
+            "Permission not configured for plugin 'diaryx.daily': edit_files on 'private/var/mobile/Containers/Data/Application/app/Documents/Adam's Archive/Adam's Archive.md'",
+            'PluginError',
+          ),
+        )
+        .mockResolvedValueOnce({
+          type: 'PluginResult',
+          data: { ok: true },
+        } as any)
+
+      await api.executePluginCommand('diaryx.daily', 'OpenToday', {})
+
+      expect(permissionStoreMocks.permissionStore.requestPermission).toHaveBeenCalledWith(
+        'diaryx.daily',
+        'diaryx.daily',
+        'edit_files',
+        "Adam's Archive.md",
+      )
+    })
   })
 
   describe('saveEntry', () => {

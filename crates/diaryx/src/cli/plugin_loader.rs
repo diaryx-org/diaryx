@@ -106,6 +106,7 @@ impl CliNamespaceProvider {
     fn agent() -> ureq::Agent {
         ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(120)))
+            .http_status_as_error(false)
             .build()
             .into()
     }

@@ -225,7 +225,10 @@ flow for browser and Tauri installs.
 - `api.ts` now also treats Tauri Extism "Permission not configured" plugin
   errors like the browser host does: it normalizes the requested target,
   triggers the shared permission banner UI, and retries the plugin command or
-  component render once after the user allows it.
+  component render once after the user allows it. File targets are normalized
+  against the active workspace directory, including custom root index filenames
+  and iOS paths that have already lost their leading slash, before any
+  permission decision is persisted into root frontmatter.
 - `api.ts` also exposes `resolveWorkspaceRootIndexPath(...)`, which normalizes
   workspace-directory vs root-index-file inputs before frontmatter or workspace
   config flows run. It recognizes standard roots (`README.md`, `index.md`) and

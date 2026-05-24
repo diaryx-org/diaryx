@@ -302,9 +302,20 @@ fn dispatch_core_command(cli: Cli) -> bool {
             plugin_manager::handle_plugin_command(command);
             true
         }
-        Commands::Login { email, server } => account::handle_login(&email, server.as_deref()),
+        Commands::Login {
+            email,
+            server,
+            device_name,
+            replace_device,
+        } => account::handle_login(
+            &email,
+            server.as_deref(),
+            device_name.as_deref(),
+            replace_device.as_deref(),
+        ),
         Commands::Logout => account::handle_logout(),
         Commands::Whoami => account::handle_whoami(),
+        Commands::Devices { command } => account::handle_devices_command(command),
 
         Commands::Namespace { command } => namespace::handle_namespace_command(command),
 

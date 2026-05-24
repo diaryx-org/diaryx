@@ -57,6 +57,25 @@ Built-in import and sync modules have been removed from the CLI. Those workflows
 now come entirely from installed plugins such as `diaryx.sync` and
 format-specific import plugins.
 
+CLI auth and plugin-provided sync commands preserve server error bodies for
+non-2xx HTTP responses. This is important for actionable server-side failures
+such as expired sessions and device-limit login blocks, which include useful
+JSON messages even when the status code is 4xx.
+
+## Account and Device Commands
+
+- `diaryx login <email>` requests a magic link, prompts for the 6-digit code,
+  and registers the CLI as a device named `Diaryx CLI` by default.
+- `diaryx login <email> --device-name "Work Mac"` registers a custom device
+  name.
+- `diaryx login <email> --replace-device <device_id>` replaces a known device
+  while verifying. If verification hits the device limit without this flag, the
+  CLI lists the server-provided devices and prompts for one to replace, then
+  retries verification with the same code.
+- `diaryx devices list [--json]` lists registered account devices.
+- `diaryx devices rename <device_id> <name>` renames a registered device.
+- `diaryx devices remove <device_id> [-y]` removes a registered device.
+
 `publish` and `preview` remain native helper implementations, but they are
 reached through plugin-declared commands rather than top-level built-in clap
 subcommands.

@@ -137,9 +137,12 @@ GET /auth/me
 Authorization: Bearer <session_token>
 ```
 
-Free and Plus accounts can register up to two devices for sync. Signing in on a third
-device returns `403` until an existing device is removed with
-`DELETE /auth/devices/{device_id}`.
+Free accounts can register up to two devices for sync; Plus accounts can
+register up to ten. Signing in past the current account's limit returns `403`
+with the existing device list. Clients can either delete a device with
+`DELETE /auth/devices/{device_id}` or retry verification with
+`replace_device_id`. Deleting or replacing a device also deletes that device's
+active sessions.
 
 #### Logout
 

@@ -16,6 +16,7 @@ import { mirrorCurrentWorkspaceMutationToLinkedProviders } from '$lib/sync/brows
 import {
   isMarkdownPath,
   isRootIndexPath,
+  getWorkspaceDirectoryPath,
   normalizeSlashes,
   normalizeWorkspacePathCandidate,
   normalizeWorkspaceRootPath,
@@ -128,6 +129,39 @@ type TauriPluginPermissionError = {
   target: string;
 };
 
+function stripWorkspaceRootPrefix(path: string, workspaceRoot: string): string | null {
+  const normalizedPath = normalizeSlashes(path);
+  const normalizedRoot = normalizeSlashes(workspaceRoot).replace(/\/+$/, '');
+  if (!normalizedRoot) {
+    return null;
+  }
+
+  const candidates = new Set([normalizedRoot]);
+  const rootWithoutLeadingSlash = normalizedRoot.replace(/^\/+/, '');
+  if (rootWithoutLeadingSlash !== normalizedRoot) {
+    candidates.add(rootWithoutLeadingSlash);
+  }
+  if (!normalizedRoot.startsWith('/')) {
+    candidates.add(`/${normalizedRoot}`);
+  }
+
+  for (const candidate of candidates) {
+    if (normalizedPath === candidate) {
+      return '';
+    }
+    const prefix = `${candidate}/`;
+    if (normalizedPath.startsWith(prefix)) {
+      return normalizedPath.slice(prefix.length).replace(/^\.\/+/, '').replace(/^\/+/, '');
+    }
+  }
+
+  return null;
+}
+
+function lastPathSegment(path: string): string {
+  return normalizeSlashes(path).replace(/\/+$/, '').split('/').pop() ?? path;
+}
+
 function normalizePluginPermissionTarget(
   backend: Backend,
   permissionType: PermissionType,
@@ -139,17 +173,23 @@ function normalizePluginPermissionTarget(
 
   const normalizedTarget = normalizeSlashes(target);
   const workspacePath = normalizeSlashes(backend.getWorkspacePath?.() ?? '').replace(/\/+$/, '');
-  const workspaceRoot = normalizeWorkspaceRootPath(workspacePath);
+  const workspaceRoot = workspacePath ? getWorkspaceDirectoryPath(workspacePath) : null;
 
-  if (workspacePath && normalizedTarget === workspacePath) {
-    return workspacePath.slice(workspacePath.lastIndexOf('/') + 1);
+  if (workspaceRoot) {
+    const relative = stripWorkspaceRootPrefix(normalizedTarget, workspaceRoot);
+    if (relative !== null) {
+      return relative || lastPathSegment(workspacePath);
+    }
   }
 
-  if (workspaceRoot && normalizedTarget.startsWith(`${workspaceRoot}/`)) {
-    return normalizedTarget.slice(workspaceRoot.length + 1);
+  if (workspacePath) {
+    const relative = stripWorkspaceRootPrefix(normalizedTarget, workspacePath);
+    if (relative !== null) {
+      return relative || lastPathSegment(workspacePath);
+    }
   }
 
-  return normalizedTarget;
+  return normalizedTarget.replace(/^\/+/, '');
 }
 
 function parseTauriPluginPermissionError(error: unknown): TauriPluginPermissionError | null {
@@ -160,7 +200,7 @@ function parseTauriPluginPermissionError(error: unknown): TauriPluginPermissionE
   }
 
   const match = message.match(
-    /Permission (not configured|denied) for plugin '([^']+)': ([a-z_]+) on '([^']+)'/,
+    /Permission (not configured|denied) for plugin '([^']+)': ([a-z_]+) on '(.+)'/,
   );
   if (!match) {
     return null;

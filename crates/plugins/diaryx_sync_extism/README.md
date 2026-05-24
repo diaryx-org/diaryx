@@ -230,6 +230,9 @@ Two layers:
 - **Fail-fast bootstrap** — `LinkWorkspace` and `UploadWorkspaceSnapshot`
   return command errors on partial upload/delete failures instead of reporting
   success with an incomplete remote snapshot.
+- **Current-file LWW timestamps** — When local and remote both changed, conflict
+  resolution compares the server timestamp against the current local filesystem
+  scan timestamp, not the manifest's stale last-clean timestamp.
 - **Percent-encoding normalization** — Server keys may use `+` or `%20` for
   spaces; `decode_server_key` normalizes both forms so local/remote comparisons
   work regardless of which client uploaded.

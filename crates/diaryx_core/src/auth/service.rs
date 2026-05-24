@@ -266,7 +266,7 @@ impl<C: AuthenticatedClient> AuthService<C> {
     pub async fn get_devices(&self) -> Result<Vec<Device>, AuthError> {
         let resp = self.client.get("/auth/devices").await?;
         if !resp.is_success() {
-            return Err(AuthError::new("Failed to get devices", resp.status));
+            return Err(parse_error_response(&resp, "Failed to get devices"));
         }
         resp.json()
     }
@@ -278,7 +278,7 @@ impl<C: AuthenticatedClient> AuthService<C> {
 
         let resp = self.client.patch(&path, Some(&body)).await?;
         if !resp.is_success() {
-            return Err(AuthError::new("Failed to rename device", resp.status));
+            return Err(parse_error_response(&resp, "Failed to rename device"));
         }
         Ok(())
     }
@@ -288,7 +288,7 @@ impl<C: AuthenticatedClient> AuthService<C> {
         let path = format!("/auth/devices/{}", device_id);
         let resp = self.client.delete(&path).await?;
         if !resp.is_success() {
-            return Err(AuthError::new("Failed to delete device", resp.status));
+            return Err(parse_error_response(&resp, "Failed to delete device"));
         }
         Ok(())
     }
@@ -564,6 +564,55 @@ mod tests {
             let result = service.verify_magic_link("bad-token", None, None).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().is_unauthorized());
+        });
+    }
+
+    #[test]
+    fn test_verify_code_device_limit_returns_devices() {
+        run(async {
+            let client = MockClient::new(vec![HttpResponse {
+                status: 403,
+                body: r#"{
+                    "error": "Device limit reached",
+                    "devices": [
+                        {
+                            "id": "dev-1",
+                            "name": "Mac",
+                            "last_seen_at": "2026-05-24T10:00:00Z"
+                        }
+                    ]
+                }"#
+                .to_string(),
+            }]);
+            let service = AuthService::new(client);
+
+            let err = service
+                .verify_code("123456", "user@example.com", Some("CLI"), None)
+                .await
+                .unwrap_err();
+
+            assert_eq!(err.status_code, 403);
+            assert_eq!(err.message, "Device limit reached");
+            let devices = err.devices.unwrap();
+            assert_eq!(devices.len(), 1);
+            assert_eq!(devices[0].id, "dev-1");
+        });
+    }
+
+    #[test]
+    fn test_get_devices_surfaces_server_error_body() {
+        run(async {
+            let client = MockClient::new(vec![HttpResponse {
+                status: 404,
+                body: r#"{"error":"Invalid or expired session"}"#.to_string(),
+            }])
+            .with_session("expired-tok");
+            let service = AuthService::new(client);
+
+            let err = service.get_devices().await.unwrap_err();
+
+            assert_eq!(err.status_code, 404);
+            assert_eq!(err.message, "Invalid or expired session");
         });
     }
 

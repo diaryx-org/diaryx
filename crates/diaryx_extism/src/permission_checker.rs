@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use diaryx_core::frontmatter;
 use diaryx_core::fs::SyncToAsyncFs;
+use diaryx_core::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
 use diaryx_core::plugin::permissions::{
     PermissionCheck, PermissionType, PluginConfig, check_permission,
 };
@@ -150,48 +151,28 @@ impl PermissionChecker for FrontmatterPermissionChecker {
 
 fn normalize_workspace_file_target(root_index_path: Option<&Path>, target: &str) -> String {
     let normalized_target = target.replace('\\', "/");
-    let fallback = normalized_target
-        .trim_start_matches("./")
-        .trim_start_matches('/')
-        .to_string();
+    let fallback = normalize_sync_path(&normalized_target);
 
     let Some(root_index_path) = root_index_path else {
         return fallback;
     };
 
     let workspace_root = root_index_path.parent().unwrap_or(root_index_path);
-    let target_path = Path::new(target);
-    if target_path.is_absolute()
-        && let Ok(stripped) = target_path.strip_prefix(workspace_root)
-    {
-        return stripped
-            .to_string_lossy()
-            .replace('\\', "/")
-            .trim_start_matches("./")
-            .trim_start_matches('/')
-            .to_string();
-    }
-
-    // Fallback to normalized string matching for cross-platform absolute paths.
-    let normalized_root = workspace_root
-        .to_string_lossy()
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_string();
-    if !normalized_root.is_empty() {
-        let prefix = format!("{normalized_root}/");
-        if normalized_target.starts_with(&prefix) {
-            return normalized_target[prefix.len()..]
-                .trim_start_matches("./")
-                .trim_start_matches('/')
-                .to_string();
-        }
+    if let Some(relative) = strip_workspace_root_prefix(target, workspace_root) {
+        return normalize_sync_path(&relative);
     }
 
     fallback
 }
 
 fn find_root_index_path(workspace_root: &Path) -> Option<PathBuf> {
+    if workspace_root
+        .extension()
+        .is_some_and(|extension| extension == "md")
+    {
+        return Some(workspace_root.to_path_buf());
+    }
+
     let fs = SyncToAsyncFs::new(RealFileSystem);
     let workspace = Workspace::new(fs);
     futures_lite::future::block_on(workspace.find_root_index_in_dir(workspace_root))
@@ -225,6 +206,33 @@ mod tests {
 
         assert_eq!(daily, "Daily/daily_index.md");
         assert_eq!(root, "README.md");
+    }
+
+    #[test]
+    fn normalize_workspace_file_target_strips_corrupted_absolute_workspace_prefix() {
+        let root_index = Path::new("/Users/test/journal/README.md");
+
+        let daily = normalize_workspace_file_target(
+            Some(root_index),
+            "Users/test/journal/Daily/daily_index.md",
+        );
+        let root =
+            normalize_workspace_file_target(Some(root_index), "Users/test/journal/README.md");
+
+        assert_eq!(daily, "Daily/daily_index.md");
+        assert_eq!(root, "README.md");
+    }
+
+    #[test]
+    fn normalize_workspace_file_target_handles_custom_root_index_names() {
+        let root_index = Path::new("/Users/test/journal/Adam's Archive.md");
+
+        let root = normalize_workspace_file_target(
+            Some(root_index),
+            "/Users/test/journal/Adam's Archive.md",
+        );
+
+        assert_eq!(root, "Adam's Archive.md");
     }
 
     #[test]

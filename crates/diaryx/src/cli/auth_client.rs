@@ -71,6 +71,7 @@ impl FsAuthenticatedClient {
 
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(15)))
+            .http_status_as_error(false)
             .build()
             .new_agent();
 

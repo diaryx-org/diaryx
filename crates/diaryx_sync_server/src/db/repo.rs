@@ -299,6 +299,7 @@ impl AuthRepo {
     /// Delete a device (and its sessions)
     pub fn delete_device(&self, device_id: &str) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM auth_sessions WHERE device_id = ?", [device_id])?;
         conn.execute("DELETE FROM devices WHERE id = ?", [device_id])?;
         Ok(())
     }
@@ -996,6 +997,27 @@ mod tests {
         repo.delete_session(&token).unwrap();
         let deleted = repo.validate_session(&token).unwrap();
         assert!(deleted.is_none());
+    }
+
+    #[test]
+    fn test_delete_device_deletes_sessions() {
+        let repo = setup_test_db();
+
+        let user_id = repo
+            .get_or_create_user("delete-device@example.com")
+            .unwrap();
+        let device_id = repo
+            .create_device(&user_id, Some("Old Phone"), None)
+            .unwrap();
+        let expires = Utc::now() + chrono::Duration::days(30);
+        let session_token = repo.create_session(&user_id, &device_id, expires).unwrap();
+
+        assert!(repo.validate_session(&session_token).unwrap().is_some());
+
+        repo.delete_device(&device_id).unwrap();
+
+        assert!(repo.validate_session(&session_token).unwrap().is_none());
+        assert!(repo.get_user_devices(&user_id).unwrap().is_empty());
     }
 
     #[test]

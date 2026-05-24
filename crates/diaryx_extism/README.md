@@ -68,7 +68,9 @@ Provided checkers:
   where no root frontmatter exists yet
 - `FrontmatterPermissionChecker` — reads root frontmatter `plugins` config and
   normalizes workspace file targets to workspace-relative paths before
-  delegating to `diaryx_core::plugin::permissions::check_permission`
+  delegating to `diaryx_core::plugin::permissions::check_permission`. The
+  normalization also handles custom root index filenames and absolute paths
+  whose leading slash was already stripped by an earlier caller.
 
 Workspace write/delete host functions return permission and filesystem failures
 to the guest as ordinary error strings instead of trapping the whole Extism

@@ -30,6 +30,15 @@ Optional features:
 - `cargo install diaryx --features plugins` enables Extism plugin management and plugin-declared CLI commands.
 - `cargo install diaryx --features "edit plugins"` enables both optional surfaces.
 
+## Account and Sync Login
+
+Use `diaryx login <email>` to sign in to the Diaryx sync server. The CLI prompts
+for the 6-digit email code and registers itself as a device. If the account is
+already at its device limit, login shows the existing devices and lets you pick
+one to replace, matching the replacement flow in the web app. Authenticated
+cleanup is available through `diaryx devices list`, `diaryx devices rename`, and
+`diaryx devices remove`.
+
 ## A Brief Introduction (to the CLI)
 
 Diaryx saves entries as markdown files in a folder, and provides tools for modifying frontmatter properties. It also provides a "workspace" feature for defining relationships between different entries. In this way it is similar to other "knowledge management" tools like Obsidian. But it differs by defining these relationships primarily in the frontmatter in the form of `part_of` and `contents` properties.

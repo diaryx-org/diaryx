@@ -39,6 +39,11 @@ account is at its device limit. On a 403 response, the service parses the
 server's `devices` array into `AuthError.devices`, letting UIs drive a
 retry loop without reimplementing the parse.
 
+Device management methods (`get_devices`, `rename_device`, `delete_device`)
+also preserve server error bodies on non-2xx responses so CLI and UI callers
+can show actionable session or validation errors instead of generic HTTP
+status messages.
+
 ## Concrete implementations
 
 - **CLI** — `FsAuthenticatedClient` in `crates/diaryx/src/cli/auth_client.rs`

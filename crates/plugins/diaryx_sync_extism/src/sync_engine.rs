@@ -321,20 +321,14 @@ pub fn compute_diff(
                     (true, true) => {
                         // Conflict: last-writer-wins by wall-clock time.
                         //
-                        // Units trap: `me.modified_at` comes from the host's
-                        // filesystem metadata via `FileMetadata.modified_at_ms`
-                        // — it's **milliseconds** since the Unix epoch. But
-                        // `se.updated_at` comes from the server, which
-                        // persists Unix timestamps in **seconds** (both
-                        // `diaryx_sync_server`'s rusqlite `upsert_object` and
-                        // `diaryx_cloudflare`'s D1 schema use
-                        // `chrono::Utc::now().timestamp()`). Without this
-                        // conversion the raw `local_ts >= se.updated_at`
-                        // comparison is biased ~1000× in favour of push —
-                        // the local side always "wins" and pulls never
-                        // happen. Surfaced by the `lww_resolves_conflict…`
-                        // E2E test once it was un-ignored.
-                        let local_ts_secs = (me.modified_at / 1000) as i64;
+                        // Units trap: `local_info.modified_at` comes from the
+                        // current host filesystem scan via
+                        // `FileMetadata.modified_at_ms` — it's milliseconds
+                        // since the Unix epoch. `se.updated_at` comes from the
+                        // server in seconds. Use the current scan value, not
+                        // the manifest entry's last-clean timestamp; otherwise
+                        // newer local edits can lose to an older remote change.
+                        let local_ts_secs = (local_info.modified_at / 1000) as i64;
                         if local_ts_secs >= se.updated_at {
                             plan.push.push(key.clone());
                         } else {
@@ -1623,10 +1617,14 @@ mod tests {
     }
 
     fn local(hash: &str, size: u64) -> LocalFileInfo {
+        local_at(hash, size, 500)
+    }
+
+    fn local_at(hash: &str, size: u64, modified_at: u64) -> LocalFileInfo {
         LocalFileInfo {
             hash: hash.to_string(),
             size,
-            modified_at: 500,
+            modified_at,
         }
     }
 
@@ -1754,7 +1752,10 @@ mod tests {
         manifest.mark_dirty("files/doc.md");
 
         let mut local_scan = BTreeMap::new();
-        local_scan.insert("files/doc.md".to_string(), local("hash_v2_local", 120));
+        local_scan.insert(
+            "files/doc.md".to_string(),
+            local_at("hash_v2_local", 120, 700_000),
+        );
 
         let server = vec![server("files/doc.md", Some("hash_v2_remote"), 600)];
 
@@ -1771,7 +1772,10 @@ mod tests {
         manifest.mark_dirty("files/doc.md");
 
         let mut local_scan = BTreeMap::new();
-        local_scan.insert("files/doc.md".to_string(), local("hash_v2_local", 120));
+        local_scan.insert(
+            "files/doc.md".to_string(),
+            local_at("hash_v2_local", 120, 400_000),
+        );
 
         let server = vec![server("files/doc.md", Some("hash_v2_remote"), 600)];
 
@@ -1795,7 +1799,10 @@ mod tests {
         manifest.mark_dirty("files/doc.md");
 
         let mut local_scan = BTreeMap::new();
-        local_scan.insert("files/doc.md".to_string(), local("hash_v2_local", 120));
+        local_scan.insert(
+            "files/doc.md".to_string(),
+            local_at("hash_v2_local", 120, 1_760_000_000_000),
+        );
 
         // Server mtime is 1 second newer (in seconds). 1_760_000_000 ms
         // < 1_760_000_001 s when compared in seconds.
@@ -1812,6 +1819,32 @@ mod tests {
             "server (newer by 1s) must win; previously lost to unit-mismatch"
         );
         assert!(plan.push.is_empty());
+    }
+
+    #[test]
+    fn conflict_lww_uses_current_local_mtime_not_stale_manifest_mtime() {
+        let mut manifest = make_manifest();
+        // The manifest still records the old last-clean timestamp. mark_dirty
+        // intentionally does not stat the file; the current scan is the
+        // authoritative source for local LWW time.
+        manifest.mark_clean("files/doc.md", "hash_v1", 100, 100_000);
+        manifest.mark_dirty("files/doc.md");
+
+        let mut local_scan = BTreeMap::new();
+        local_scan.insert(
+            "files/doc.md".to_string(),
+            local_at("hash_v2_local", 120, 900_000),
+        );
+
+        let server = vec![server("files/doc.md", Some("hash_v2_remote"), 600)];
+
+        let plan = compute_diff(&manifest, &local_scan, &server, "");
+        assert_eq!(
+            plan.push,
+            vec!["files/doc.md"],
+            "local scan mtime is newer than remote and must win despite stale manifest mtime"
+        );
+        assert!(plan.pull.is_empty());
     }
 
     #[test]

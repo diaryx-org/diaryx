@@ -20,3 +20,8 @@ Authentication handling for the sync server.
 ## Device limit & replacement
 
 When a user hits the device limit during sign-in (magic link, verification code, or passkey), all three verification methods accept an optional `replace_device_id` parameter. If supplied, the old device is deleted and the new one is registered atomically. The `DeviceLimitReached` error includes the list of existing devices so the client can prompt the user to choose which device to replace.
+
+Device deletion is expected to invalidate that device's active sessions, not
+just free a slot in the device list. Native SQLite and Cloudflare D1 adapters
+delete `auth_sessions` rows explicitly before deleting the device row so this
+does not depend on per-connection foreign-key cascade settings.

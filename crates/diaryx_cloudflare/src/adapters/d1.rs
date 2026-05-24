@@ -20,6 +20,27 @@ fn e(err: impl std::fmt::Display) -> ServerCoreError {
     ServerCoreError::internal(err.to_string())
 }
 
+async fn delete_device_and_sessions(
+    db: &D1Database,
+    device_id: &str,
+) -> Result<(), ServerCoreError> {
+    db.prepare("DELETE FROM auth_sessions WHERE device_id = ?1")
+        .bind(&[device_id.into()])
+        .map_err(e)?
+        .run()
+        .await
+        .map_err(e)?;
+
+    db.prepare("DELETE FROM devices WHERE id = ?1")
+        .bind(&[device_id.into()])
+        .map_err(e)?
+        .run()
+        .await
+        .map_err(e)?;
+
+    Ok(())
+}
+
 /// Convert an i64 timestamp to a D1-compatible JsValue.
 /// D1 does not support bigint; cast to f64 (safe for Unix timestamps).
 fn ts(epoch: i64) -> worker::wasm_bindgen::JsValue {
@@ -575,14 +596,7 @@ impl AuthStore for D1AuthStore {
     }
 
     async fn delete_device(&self, device_id: &str) -> Result<(), ServerCoreError> {
-        self.db
-            .prepare("DELETE FROM devices WHERE id = ?1")
-            .bind(&[device_id.into()])
-            .map_err(e)?
-            .run()
-            .await
-            .map_err(e)?;
-        Ok(())
+        delete_device_and_sessions(&self.db, device_id).await
     }
 
     async fn get_user_tier(&self, user_id: &str) -> Result<UserTier, ServerCoreError> {
@@ -1340,14 +1354,7 @@ impl DeviceStore for D1DeviceStore {
     }
 
     async fn delete_device(&self, device_id: &str) -> Result<(), ServerCoreError> {
-        self.db
-            .prepare("DELETE FROM devices WHERE id = ?1")
-            .bind(&[device_id.into()])
-            .map_err(e)?
-            .run()
-            .await
-            .map_err(e)?;
-        Ok(())
+        delete_device_and_sessions(&self.db, device_id).await
     }
 }
 

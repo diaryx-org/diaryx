@@ -54,6 +54,7 @@ impl HttpNamespaceProvider {
         }
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
+            .http_status_as_error(false)
             .build()
             .into();
         Self {

@@ -249,6 +249,14 @@ pub enum Commands {
         /// Sync server URL (default: https://app.diaryx.org/api)
         #[arg(short, long)]
         server: Option<String>,
+
+        /// Display name to register for this CLI device
+        #[arg(long)]
+        device_name: Option<String>,
+
+        /// Existing device ID to replace if the account is at its device limit
+        #[arg(long)]
+        replace_device: Option<String>,
     },
 
     /// Sign out and clear stored session
@@ -257,6 +265,13 @@ pub enum Commands {
     /// Show current account info
     #[command(alias = "me")]
     Whoami,
+
+    /// Manage account devices
+    #[command(alias = "device")]
+    Devices {
+        #[command(subcommand)]
+        command: DeviceCommands,
+    },
 
     /// Manage server namespaces (list, delete)
     #[command(aliases = ["ns"])]
@@ -973,6 +988,37 @@ pub enum NamespaceCommands {
     Subdomain {
         #[command(subcommand)]
         command: NamespaceSubdomainCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DeviceCommands {
+    /// List registered devices
+    #[command(alias = "ls")]
+    List {
+        /// Output JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Rename a registered device
+    Rename {
+        /// Device ID
+        id: String,
+
+        /// New device name
+        name: String,
+    },
+
+    /// Remove a registered device
+    #[command(aliases = ["delete", "rm"])]
+    Remove {
+        /// Device ID
+        id: String,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 }
 

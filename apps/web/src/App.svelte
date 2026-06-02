@@ -37,7 +37,7 @@
   import EditorFooter from "./views/editor/EditorFooter.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
   import WelcomeScreen from "./views/WelcomeScreen.svelte";
-  import type { BundleSelectInfo } from "./views/BundleCarousel.svelte";
+  import type { BundleSelectInfo, PluginOverride } from "./views/BundleCarousel.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
   import FindBar from "$lib/components/FindBar.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
@@ -2256,6 +2256,66 @@
     return autoCreateDefaultWorkspaceController(buildAutoCreateDeps(), bundle);
   }
 
+  type FolderWorkspaceProgress = { percent: number; message: string; detail?: string };
+
+  async function chooseWorkspaceFolder(
+    selectedBundle: BundleRegistryEntry | null = null,
+    pluginOverrides?: PluginOverride[],
+    onProgress?: (progress: FolderWorkspaceProgress) => void,
+  ): Promise<boolean> {
+    const target = await pickWorkspaceFolderTarget("Choose Workspace Folder");
+    if (!target) return false;
+
+    entryStore.setLoading(true);
+    try {
+      clearFileNavigationMode({ forgetStoredPath: true });
+      onProgress?.({ percent: 12, message: "Preparing folder..." });
+      const result = await handleChooseFolderWorkspaceController(
+        {
+          autoCreateDeps: buildAutoCreateDeps(),
+          installLocalPlugin: (bytes, name) => installLocalPlugin(bytes, name),
+          refreshTree,
+          getTree: () => tree,
+          expandNode: (path) => workspaceStore.expandNode(path),
+          openEntry,
+          runValidation,
+          dismissLaunchOverlay,
+        },
+        target,
+        selectedBundle,
+        pluginOverrides,
+      );
+      showWelcomeScreen = false;
+      welcomeReturnWorkspaceName = null;
+
+      if (result.spotlightSteps) {
+        await tick();
+        requestAnimationFrame(() => {
+          spotlightSteps = result.spotlightSteps;
+        });
+      }
+
+      return true;
+    } catch (e) {
+      console.error("[App] Folder workspace setup failed:", e);
+      throw e;
+    } finally {
+      entryStore.setLoading(false);
+      launchOverlay = null;
+      launchOverlayDone = false;
+    }
+  }
+
+  async function handleAddWorkspaceFromSelector(): Promise<void> {
+    try {
+      await chooseWorkspaceFolder();
+    } catch (e) {
+      toast.error("Failed to set up workspace", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   // Rename an entry by title - uses SetFrontmatterProperty which handles title→filename→H1 sync
   async function handleRenameEntry(path: string, newTitle: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
@@ -3507,49 +3567,7 @@
     bind:this={welcomeScreenRef}
     initialView={welcomeInitialView}
     onLaunch={(info) => { launchOverlay = info; }}
-    onChooseFolderWorkspace={async (selectedBundle, pluginOverrides, onProgress) => {
-      const target = await pickWorkspaceFolderTarget("Choose Workspace Folder");
-      if (!target) return false;
-
-      entryStore.setLoading(true);
-      try {
-        clearFileNavigationMode({ forgetStoredPath: true });
-        onProgress?.({ percent: 12, message: "Preparing folder..." });
-        const result = await handleChooseFolderWorkspaceController(
-          {
-            autoCreateDeps: buildAutoCreateDeps(),
-            installLocalPlugin: (bytes, name) => installLocalPlugin(bytes, name),
-            refreshTree,
-            getTree: () => tree,
-            expandNode: (path) => workspaceStore.expandNode(path),
-            openEntry,
-            runValidation,
-            dismissLaunchOverlay,
-          },
-          target,
-          selectedBundle,
-          pluginOverrides,
-        );
-        showWelcomeScreen = false;
-        welcomeReturnWorkspaceName = null;
-
-        if (result.spotlightSteps) {
-          await tick();
-          requestAnimationFrame(() => {
-            spotlightSteps = result.spotlightSteps;
-          });
-        }
-
-        return true;
-      } catch (e) {
-        console.error("[App] Folder workspace setup failed:", e);
-        throw e;
-      } finally {
-        entryStore.setLoading(false);
-        launchOverlay = null;
-        launchOverlayDone = false;
-      }
-    }}
+    onChooseFolderWorkspace={chooseWorkspaceFolder}
     onOpenFileNavigation={isTauri() && isIOS() ? async (onProgress) => {
       entryStore.setLoading(true);
       try {
@@ -3601,13 +3619,7 @@
     settingsDialogOpen={showSettingsDialog}
     marketplaceDialogOpen={showMarketplaceDialog}
     onOpenAccountSettings={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
-    onAddWorkspace={() => {
-      const wsId = getCurrentWorkspaceId();
-      const localWs = wsId ? getLocalWorkspace(wsId) : null;
-      welcomeReturnWorkspaceName = localWs?.name ?? null;
-      welcomeInitialView = 'main';
-      showWelcomeScreen = true;
-    }}
+    onAddWorkspace={handleAddWorkspaceFromSelector}
     onOpenFileFromPicker={isTauri() && isIOS() ? async () => {
       entryStore.setLoading(true);
       try {

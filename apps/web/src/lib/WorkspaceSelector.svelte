@@ -34,7 +34,7 @@
   interface Props {
     onSwitchStart?: () => void;
     onSwitchComplete?: () => void;
-    onAddWorkspace?: () => void;
+    onAddWorkspace?: () => void | Promise<void>;
     onWorkspaceMissing?: (ws: { id: string; name: string }) => void;
   }
 
@@ -165,7 +165,7 @@
   async function handleCreateWorkspace() {
     open = false;
     await tick();
-    onAddWorkspace?.();
+    await onAddWorkspace?.();
   }
 
   function startRename(ws: LocalWorkspaceEntry) {

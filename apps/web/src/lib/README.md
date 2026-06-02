@@ -71,7 +71,7 @@ intermediate click hit the backend.
 
 ## Onboarding Workspace Setup
 
-Workspace creation and restore now flow through the welcome/onboarding
+First-run and missing-workspace setup now flow through the welcome/onboarding
 experience (`views/WelcomeScreen.svelte` + `controllers/onboardingController.ts`)
 instead of a standalone add-workspace dialog.
 
@@ -102,6 +102,10 @@ app manage a separate remote workspace location.
 
 `App.svelte` now returns first-run and missing-workspace recovery flows to the
 welcome screen instead of reopening a separate add-workspace modal.
+Once a workspace is already open, the `WorkspaceSelector.svelte` New workspace
+action bypasses the welcome screen and opens the same folder picker directly;
+Diaryx then opens the selected folder if it has a root index or initializes it
+if it does not.
 
 ## Command Palette Dialog Sequencing
 
@@ -253,8 +257,8 @@ when invalid editor content makes decoration refresh fail.
   reveal the selected entry in Finder/Explorer/the system file manager via the
   backend's opener-backed `revealInFileManager()` helper. The action is hidden
   on mobile because Tauri does not support reveal flows there.
-- `WorkspaceSelector.svelte` lists registered local workspaces and routes
-  creation through the welcome screen's folder picker.
+- `WorkspaceSelector.svelte` lists registered local workspaces and routes the
+  New workspace action straight to the folder picker.
 - `windowDrag.ts` centralizes Tauri desktop window dragging for shared chrome
   surfaces. Sidebar/header/footer drag handlers use it and automatically skip
   interactive descendants such as buttons, links, inputs, and elements marked

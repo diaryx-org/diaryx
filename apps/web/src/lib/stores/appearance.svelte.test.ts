@@ -109,6 +109,21 @@ describe("appearanceStore theme library", () => {
     expect(persistFn).not.toHaveBeenCalled();
   });
 
+  it("treats undefined workspace theme fields as absent", () => {
+    const store = createAppearanceStore();
+    const persistFn = vi.fn().mockResolvedValue(undefined);
+
+    store.hydrateWorkspaceTheme({ presetId: "sepia", accentHue: 180 }, persistFn);
+    store.hydrateWorkspaceTheme(
+      { presetId: undefined, accentHue: undefined },
+      persistFn,
+    );
+
+    expect(store.presetId).toBe("default");
+    expect(store.accentHue).toBeNull();
+    expect(persistFn).not.toHaveBeenCalled();
+  });
+
   it("installs, applies, and uninstalls custom themes with fallback", () => {
     const store = createAppearanceStore();
     const customTheme = cloneCustomTheme("custom.sunset", "Sunset");
@@ -627,7 +642,7 @@ describe("appearanceStore reset", () => {
 // ===========================================================================
 
 describe("appearanceStore persistence", () => {
-  it("reloadFromWorkspace resets typography when no workspace appearance files exist", async () => {
+  it("reloadFromWorkspace resets theme and typography when no workspace appearance files exist", async () => {
     vi.mocked(readWorkspaceText)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
@@ -635,15 +650,59 @@ describe("appearanceStore persistence", () => {
       .mockResolvedValueOnce(null);
 
     const store = createAppearanceStore();
+    store.applyTheme("sepia");
+    store.setAccentHue(180);
     store.setTypographyPreset("compact-system");
     store.setBaseFontSize(14);
     vi.mocked(writeWorkspaceText).mockClear();
 
     await store.reloadFromWorkspace();
 
+    expect(store.presetId).toBe("default");
+    expect(store.accentHue).toBeNull();
     expect(store.typographyPresetId).toBe("default");
     expect(store.typographyOverrides).toEqual({});
     expect(writeWorkspaceText).toHaveBeenCalled();
+  });
+
+  it("reloadFromWorkspace preserves frontmatter-configured theme when no workspace appearance files exist", async () => {
+    vi.mocked(readWorkspaceText)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+
+    const store = createAppearanceStore();
+    const persistFn = vi.fn().mockResolvedValue(undefined);
+    store.hydrateWorkspaceTheme({ presetId: "sepia", accentHue: 180 }, persistFn);
+
+    await store.reloadFromWorkspace();
+
+    expect(store.presetId).toBe("sepia");
+    expect(store.accentHue).toBe(180);
+  });
+
+  it("reloadFromWorkspace resets theme when workspace has assets but no configured theme", async () => {
+    vi.mocked(readWorkspaceText)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("[]")
+      .mockResolvedValueOnce(JSON.stringify({
+        typographyPresetId: "compact-system",
+        typographyOverrides: { contentWidth: "wide" },
+      }))
+      .mockResolvedValueOnce("[]");
+
+    const store = createAppearanceStore();
+    store.applyTheme("sepia");
+    store.setAccentHue(180);
+    store.hydrateWorkspaceTheme({}, vi.fn().mockResolvedValue(undefined));
+
+    await store.reloadFromWorkspace();
+
+    expect(store.presetId).toBe("default");
+    expect(store.accentHue).toBeNull();
+    expect(store.typographyPresetId).toBe("compact-system");
+    expect(store.typographyOverrides).toEqual({});
   });
 
   it("reloads legacy workspace theme settings and migrates them through the workspace callback", async () => {

@@ -576,6 +576,7 @@ export function createAppearanceStore() {
       mergeTypographyMap(initialTypographyLibrary),
     ),
   );
+  let workspaceThemeConfigPresent = false;
   let persistWorkspaceTheme:
     | ((theme: { presetId: string; accentHue: number | null }) => Promise<void>)
     | null = null;
@@ -895,6 +896,12 @@ export function createAppearanceStore() {
         appearance = normalizeAppearance(
           {
             ...appearance,
+            ...(!workspaceThemeConfigPresent
+              ? {
+                  presetId: DEFAULT_APPEARANCE.presetId,
+                  accentHue: DEFAULT_APPEARANCE.accentHue,
+                }
+              : {}),
             typographyPresetId: DEFAULT_APPEARANCE.typographyPresetId,
             typographyOverrides: {},
           },
@@ -920,9 +927,18 @@ export function createAppearanceStore() {
       const legacyThemeSettings = parseThemeSettingsInput(
         rawThemeSettings ? JSON.parse(rawThemeSettings) : null,
       );
+      const themeSelection = workspaceThemeConfigPresent ||
+        legacyThemeSettings.presetId !== undefined ||
+        Object.hasOwn(legacyThemeSettings, "accentHue")
+        ? {}
+        : {
+            presetId: DEFAULT_APPEARANCE.presetId,
+            accentHue: DEFAULT_APPEARANCE.accentHue,
+          };
       appearance = normalizeAppearance(
         {
           ...appearance,
+          ...themeSelection,
           ...legacyThemeSettings,
           ...parseTypographySettingsFileInput(
             rawTypographySettings ? JSON.parse(rawTypographySettings) : null,
@@ -940,6 +956,7 @@ export function createAppearanceStore() {
         (legacyThemeSettings.presetId !== undefined ||
           Object.hasOwn(legacyThemeSettings, "accentHue"))
       ) {
+        workspaceThemeConfigPresent = true;
         void persistWorkspaceTheme?.({
           presetId: appearance.presetId,
           accentHue: appearance.accentHue,
@@ -1050,7 +1067,8 @@ export function createAppearanceStore() {
     ): void {
       persistWorkspaceTheme = persistFn;
       const hasPreset = workspaceTheme.presetId !== undefined;
-      const hasAccent = Object.hasOwn(workspaceTheme, "accentHue");
+      const hasAccent = workspaceTheme.accentHue !== undefined;
+      workspaceThemeConfigPresent = hasPreset || hasAccent;
       if (
         hasPreset ||
         hasAccent

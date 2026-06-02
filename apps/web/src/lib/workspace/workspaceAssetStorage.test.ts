@@ -142,6 +142,11 @@ describe("workspaceAssetStorage", () => {
       expect(await readWorkspaceText("missing.txt")).toBeNull();
     });
 
+    it("returns null for native no-such-file errors", async () => {
+      mockReadFile.mockRejectedValueOnce(new Error("No such file or directory (os error 2)"));
+      expect(await readWorkspaceText("missing.txt")).toBeNull();
+    });
+
     it("rethrows non-missing-file errors", async () => {
       mockReadFile.mockRejectedValueOnce(new Error("permission denied"));
       await expect(readWorkspaceText("secret.txt")).rejects.toThrow("permission denied");
@@ -216,6 +221,11 @@ describe("workspaceAssetStorage", () => {
 
     it("returns empty array when tree is null (missing dir)", async () => {
       mockGetFilesystemTree.mockRejectedValueOnce(new Error("NotFound"));
+      expect(await listWorkspaceFiles("missing")).toEqual([]);
+    });
+
+    it("returns empty array for native missing directory errors", async () => {
+      mockGetFilesystemTree.mockRejectedValueOnce(new Error("No such file or directory (os error 2)"));
       expect(await listWorkspaceFiles("missing")).toEqual([]);
     });
 

@@ -20,11 +20,14 @@ function joinPath(...parts: string[]): string {
 
 function isMissingFileError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
   return (
     message.includes("NotFound") ||
-    message.includes("not found") ||
-    message.includes("could not be found") ||
-    message.includes("object can not be found")
+    normalized.includes("not found") ||
+    normalized.includes("could not be found") ||
+    normalized.includes("object can not be found") ||
+    normalized.includes("no such file or directory") ||
+    normalized.includes("os error 2")
   );
 }
 

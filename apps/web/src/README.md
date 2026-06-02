@@ -37,7 +37,9 @@ infrastructure in the host.
 
 `App.svelte` listens to backend filesystem events and refreshes workspace tree +
 active entry state from those events, rather than wiring direct host CRDT
-bridge callbacks.
+bridge callbacks. In Tauri builds, the native backend also watches the active
+workspace directory and emits the same event shape for external file edits; the
+active editor reloads from disk only when it has no unsaved local draft.
 
 For Playwright sync coverage, `App.svelte` also exposes a localhost-only
 `globalThis.__diaryx_e2e` bridge in dev runs. That bridge is intentionally

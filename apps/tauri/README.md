@@ -11,6 +11,13 @@ exclude:
 
 The Tauri backend for Diaryx, providing native filesystem access for the web frontend.
 
+The backend also keeps a native recursive watcher on the active workspace
+directory. When a Markdown file is edited, created, removed, or renamed outside
+Diaryx, Rust emits a normalized `tauri-filesystem-event` using the same
+`FileSystemEvent` shape consumed by the shared web frontend. The editor reloads
+the active entry from disk when it is clean, while unsaved local drafts are not
+overwritten.
+
 The desktop/mobile config also enables Tauri's built-in `asset` protocol for common local-user directories so image previews can use native file-backed URLs (`convertFileSrc`) instead of copying attachment bytes through JS when the workspace path falls inside those scopes. Preview flows still fall back to the blob/binary path when a file is outside scope or native loading is unavailable. The Rust app enables the matching Tauri `protocol-asset` feature in`src-tauri/Cargo.toml`.
 
 Mac App Store / TestFlight builds now keep sandbox-safe behavior for workspace folders by persisting bookmarks for any folder chosen through the native picker. On iOS, the folder-first welcome flow presents a `UIDocumentPickerViewController` directory picker, saves the directory URL as a `.minimalBookmark`, and returns the selected folder through `pick_authorized_workspace_folder`; on macOS, shared folder-pick flows use the Tauri dialog plus `authorize_workspace_path` to persist a security-scoped bookmark. On the next launch or workspace switch, the app resolves the bookmark and re-opens access before reading the workspace-local `.diaryx` metadata directory, which keeps plugin installation working for externally chosen folders in sandboxed releases. The App Store entitlements therefore need

@@ -4,7 +4,7 @@
   "version": "1.5.1",
   "identifier": "org.diaryx.desktop",
   "build": {
-    "beforeDevCommand": "cd ../web && bun run dev --port 5174 --host",
+    "beforeDevCommand": "cd ../web && bunx vite --port 5174 --host",
     "devUrl": "http://localhost:5174",
     "beforeBuildCommand": "cd ../web && bunx vite build",
     "frontendDist": "../../web/dist"

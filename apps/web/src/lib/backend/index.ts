@@ -194,6 +194,7 @@ async function initializeBackend(workspaceId?: string, workspaceName?: string, s
  */
 export function resetBackend(): void {
   console.log("[Backend] Resetting backend instance");
+  getBackendInstance()?.destroy?.();
   setBackendInstance(null);
   setInitPromise(null);
   setBackendWorkspaceId(undefined);

@@ -26,7 +26,7 @@ use diaryx_core::{
     diaryx::Diaryx,
     error::{DiaryxError, SerializableError},
     frontmatter,
-    fs::{InMemoryFileSystem, SyncToAsyncFs},
+    fs::{FileSystemEvent, InMemoryFileSystem, SyncToAsyncFs},
     plugin::permissions::{PermissionRule, PermissionType, PluginConfig, PluginPermissions},
     workspace::Workspace,
 };
@@ -35,6 +35,11 @@ use diaryx_extism::protocol::{
     CommandResponse as ExtismCommandResponse, GuestRequestedPermissions,
 };
 use diaryx_native::{NativeConfigExt, RealFileSystem};
+use notify::{
+    Config as NotifyConfig, Event as NotifyEvent, EventKind as NotifyEventKind, RecommendedWatcher,
+    RecursiveMode, Watcher,
+    event::{ModifyKind, RenameMode},
+};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -196,6 +201,8 @@ pub struct AppState {
     /// running. This prevents a slow/stale workspace's load from clobbering a
     /// newer workspace that started loading mid-flight.
     pub plugin_load_generation: Arc<AtomicU64>,
+    /// Active native watcher for external workspace filesystem edits.
+    pub workspace_watcher: Mutex<Option<RecommendedWatcher>>,
     /// Active Apple security-scoped workspace access, when needed.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub workspace_access: Mutex<Option<ActiveSecurityScopedAccess>>,
@@ -209,6 +216,7 @@ impl AppState {
             plugins_loaded_at: Mutex::new(None),
             plugins_ready: Arc::new(PluginsReady::new()),
             plugin_load_generation: Arc::new(AtomicU64::new(0)),
+            workspace_watcher: Mutex::new(None),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             workspace_access: Mutex::new(None),
         }
@@ -360,6 +368,135 @@ fn acquire_lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, Ser
         message: format!("Failed to acquire lock: mutex is poisoned - {}", e),
         path: None,
     })
+}
+
+fn watched_relative_path(workspace_root: &Path, path: &Path) -> Option<PathBuf> {
+    let relative = path.strip_prefix(workspace_root).ok()?;
+    if relative.as_os_str().is_empty() {
+        None
+    } else {
+        Some(relative.to_path_buf())
+    }
+}
+
+fn filesystem_events_from_notify(
+    kind: &NotifyEventKind,
+    paths: Vec<PathBuf>,
+) -> Vec<FileSystemEvent> {
+    match kind {
+        NotifyEventKind::Create(_) => paths
+            .into_iter()
+            .map(FileSystemEvent::file_created)
+            .collect(),
+        NotifyEventKind::Remove(_) => paths
+            .into_iter()
+            .map(FileSystemEvent::file_deleted)
+            .collect(),
+        NotifyEventKind::Modify(ModifyKind::Name(RenameMode::Both)) if paths.len() >= 2 => {
+            vec![FileSystemEvent::file_renamed(
+                paths[0].clone(),
+                paths[1].clone(),
+            )]
+        }
+        NotifyEventKind::Modify(ModifyKind::Name(RenameMode::From)) => paths
+            .into_iter()
+            .map(FileSystemEvent::file_deleted)
+            .collect(),
+        NotifyEventKind::Modify(ModifyKind::Name(RenameMode::To)) => paths
+            .into_iter()
+            .map(FileSystemEvent::file_created)
+            .collect(),
+        NotifyEventKind::Modify(_) | NotifyEventKind::Any => paths
+            .into_iter()
+            .map(|path| FileSystemEvent::contents_changed(path, String::new()))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn emit_workspace_watch_event<R: Runtime>(
+    app: &AppHandle<R>,
+    workspace_root: &Path,
+    event: NotifyEvent,
+) {
+    let paths = event
+        .paths
+        .iter()
+        .filter_map(|path| watched_relative_path(workspace_root, path))
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return;
+    }
+
+    for fs_event in filesystem_events_from_notify(&event.kind, paths) {
+        match serde_json::to_string(&fs_event) {
+            Ok(event_json) => {
+                let _ = app.emit("tauri-filesystem-event", event_json);
+            }
+            Err(e) => {
+                log::warn!("Failed to serialize workspace filesystem event: {e}");
+            }
+        }
+    }
+}
+
+fn start_workspace_watcher<R: Runtime>(
+    app: AppHandle<R>,
+    workspace_path: PathBuf,
+) -> notify::Result<RecommendedWatcher> {
+    let watch_root = if workspace_path.is_file() {
+        workspace_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| workspace_path.clone())
+    } else {
+        workspace_path.clone()
+    };
+    let event_root = watch_root.clone();
+    let event_app = app.clone();
+    let mut watcher = RecommendedWatcher::new(
+        move |result: notify::Result<NotifyEvent>| match result {
+            Ok(event) => emit_workspace_watch_event(&event_app, &event_root, event),
+            Err(e) => log::warn!("Workspace filesystem watcher error: {e}"),
+        },
+        NotifyConfig::default(),
+    )?;
+    watcher.watch(&watch_root, RecursiveMode::Recursive)?;
+    Ok(watcher)
+}
+
+fn restart_workspace_watcher<R: Runtime>(app: &AppHandle<R>, workspace_path: &Path) {
+    let app_state = app.state::<AppState>();
+    match acquire_lock(&app_state.workspace_watcher) {
+        Ok(mut guard) => {
+            *guard = None;
+        }
+        Err(e) => {
+            log::warn!("Failed to stop previous workspace filesystem watcher: {e:?}");
+            return;
+        }
+    }
+
+    match start_workspace_watcher(app.clone(), workspace_path.to_path_buf()) {
+        Ok(watcher) => match acquire_lock(&app_state.workspace_watcher) {
+            Ok(mut guard) => {
+                *guard = Some(watcher);
+                log::info!(
+                    "Watching workspace for external filesystem edits: {}",
+                    workspace_path.display()
+                );
+            }
+            Err(e) => {
+                log::warn!("Failed to store workspace filesystem watcher: {e:?}");
+            }
+        },
+        Err(e) => {
+            log::warn!(
+                "Failed to watch workspace for external filesystem edits ({}): {e}",
+                workspace_path.display()
+            );
+        }
+    }
 }
 
 async fn save_config_file(config: &Config, config_path: &Path) -> Result<(), SerializableError> {
@@ -3118,6 +3255,7 @@ pub async fn pick_workspace_folder<R: Runtime>(
             }
             *acquire_lock(&app_state.workspace_access)? = Some(active_access);
         }
+        restart_workspace_watcher(&app, &actual_workspace);
 
         return Ok(Some(AppPaths {
             data_dir: paths.data_dir,
@@ -3232,6 +3370,7 @@ pub async fn pick_workspace_folder<R: Runtime>(
                 *acquire_lock(&app_state.workspace_access)? = active_access;
             }
         }
+        restart_workspace_watcher(&app, &actual_workspace);
 
         Ok(Some(AppPaths {
             data_dir: paths.data_dir,
@@ -3662,6 +3801,7 @@ async fn finalize_icloud_workspace_attach<R: Runtime>(
         let mut diaryx_lock = acquire_lock(&app_state.diaryx)?;
         *diaryx_lock = None;
     }
+    restart_workspace_watcher(app, &workspace_path);
 
     Ok(AppPaths {
         data_dir: paths.data_dir.clone(),
@@ -3989,6 +4129,7 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
             *acquire_lock(&app_state.workspace_access)? = active_access;
         }
     }
+    restart_workspace_watcher(&app, &actual_workspace);
 
     // Pre-warm the Diaryx instance (loads plugins, sets workspace root) so
     // the first execute() call gets a cache hit instead of a cold start.
@@ -4133,6 +4274,7 @@ pub async fn set_icloud_enabled<R: Runtime>(
             let mut diaryx_lock = acquire_lock(&app_state.diaryx)?;
             *diaryx_lock = None;
         }
+        restart_workspace_watcher(&app, &icloud_workspace);
 
         Ok(AppPaths {
             data_dir: paths.data_dir,
@@ -4201,6 +4343,7 @@ pub async fn set_icloud_enabled<R: Runtime>(
             let mut diaryx_lock = acquire_lock(&app_state.diaryx)?;
             *diaryx_lock = None;
         }
+        restart_workspace_watcher(&app, &local_workspace);
 
         Ok(AppPaths {
             data_dir: paths.data_dir,
@@ -5960,6 +6103,7 @@ pub async fn reinitialize_workspace<R: Runtime>(
             *acquire_lock(&state.workspace_access)? = active_access;
         }
     }
+    restart_workspace_watcher(&app, &ws_path);
 
     // 4. Return AppPaths
     Ok(AppPaths {

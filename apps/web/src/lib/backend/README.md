@@ -78,6 +78,14 @@ edits. `setFrontmatterProperty()` and `removeFrontmatterProperty()` always
 dispatch `file_saved` for the effective entry path, even when the change is not
 a title rename.
 
+Tauri also starts a native recursive watcher for the active workspace folder.
+Rust maps external filesystem notifications into the shared `FileSystemEvent`
+shape and emits them as `tauri-filesystem-event`; `tauri.ts` forwards those
+events through `onFileSystemEvent()` with a short duplicate filter. This keeps
+external Markdown edits, creates, deletes, and renames on the same frontend
+refresh path as plugin/core filesystem events without granting broad webview
+filesystem scope.
+
 That event contract is required for provider-owned live sync. The sync guest
 uses `file_saved` to rebuild workspace metadata from disk and propagate
 description, audience, `part_of`, `contents`, and other frontmatter changes

@@ -285,6 +285,12 @@ export interface Backend {
   isReady(): boolean;
 
   /**
+   * Release backend-owned resources such as workers, native listeners, or
+   * filesystem watchers when the singleton is reset.
+   */
+  destroy?(): void;
+
+  /**
    * Get the default workspace path for this backend.
    * For Tauri: Returns the path from config/platform (e.g., ~/diaryx)
    * For WASM: Returns "workspace" (virtual path in IndexedDB/OPFS)

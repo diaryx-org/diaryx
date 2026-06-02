@@ -64,6 +64,7 @@ type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 const EXPECTED_ERROR_KINDS = new Set(["FileRead", "NotFound", "FileNotFound", "IoError"]);
 const TAURI_INIT_TIMEOUT_MS = 15000;
 const TAURI_INIT_RETRY_DELAYS_MS = [250, 750];
+const WATCH_EVENT_DEDUPE_MS = 200;
 
 function getTimingNow(): number {
   return typeof performance !== "undefined" && typeof performance.now === "function"
@@ -178,6 +179,7 @@ export class TauriBackend implements Backend {
   private eventEmitter = new BackendEventEmitter();
   private fsEventCallbacks = new Map<number, FileSystemEventCallback>();
   private nextFsEventId = 1;
+  private recentWatchEvents = new Map<string, number>();
 
   // Sync event listeners
   private syncEventCallbacks = new Set<SyncEventCallback>();
@@ -365,7 +367,7 @@ export class TauriBackend implements Backend {
 
     const eventListenerSetupStartedAt = getTimingNow();
     await this.setupExtismEventListeners();
-    console.log("[TauriBackend] Extism event listeners ready", {
+    console.log("[TauriBackend] Event listeners ready", {
       elapsedMs: getElapsedMs(eventListenerSetupStartedAt),
     });
     this.ready = true;
@@ -393,6 +395,19 @@ export class TauriBackend implements Backend {
 
   isReady(): boolean {
     return this.ready;
+  }
+
+  destroy(): void {
+    for (const unlisten of this.extismEventUnlisteners) {
+      unlisten();
+    }
+    this.extismEventUnlisteners = [];
+    this.cleanupSyncEventListeners();
+    this.eventEmitter.removeAllListeners();
+    this.fsEventCallbacks.clear();
+    this.pluginsReadyCallbacks.clear();
+    this.pluginReadyCallbacks.clear();
+    this.ready = false;
   }
 
   private getInvoke(): InvokeFn {
@@ -471,6 +486,19 @@ export class TauriBackend implements Backend {
     );
     this.extismEventUnlisteners.push(unlistenFs);
 
+    const unlistenNativeFs = await this.listen<string>(
+      "tauri-filesystem-event",
+      (event) => {
+        try {
+          const parsed = JSON.parse(event.payload) as FileSystemEvent;
+          this.emitDedupedWatchedEvent(parsed);
+        } catch (error) {
+          console.error("[TauriBackend] Failed to parse native filesystem event:", error);
+        }
+      },
+    );
+    this.extismEventUnlisteners.push(unlistenNativeFs);
+
     // Listen for background plugin loading completion so the UI can re-render
     // with plugin support (e.g. syntax highlighting, spoiler blocks).
     const unlistenPlugins = await this.listen<void>(
@@ -501,6 +529,22 @@ export class TauriBackend implements Backend {
       },
     );
     this.extismEventUnlisteners.push(unlistenPluginReady);
+  }
+
+  private emitDedupedWatchedEvent(event: FileSystemEvent): void {
+    const key = JSON.stringify(event);
+    const now = Date.now();
+    const last = this.recentWatchEvents.get(key);
+    if (last !== undefined && now - last < WATCH_EVENT_DEDUPE_MS) {
+      return;
+    }
+    this.recentWatchEvents.set(key, now);
+    for (const [eventKey, timestamp] of this.recentWatchEvents) {
+      if (now - timestamp > WATCH_EVENT_DEDUPE_MS) {
+        this.recentWatchEvents.delete(eventKey);
+      }
+    }
+    this.emitFileSystemEvent(event);
   }
 
   /**

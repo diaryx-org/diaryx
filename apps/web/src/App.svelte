@@ -237,8 +237,9 @@
 
       const current = entryStore.currentEntry;
       const activeApi = workspaceStore.backend ? createApi(workspaceStore.backend) : null;
+      const currentIsDirty = entryStore.isDirty;
 
-      if (event?.type === "FileRenamed" && current && current.path === event.old_path && event.new_path) {
+      if (event?.type === "FileRenamed" && current && current.path === event.old_path && event.new_path && !currentIsDirty) {
         entryStore.setCurrentEntry({
           ...current,
           path: event.new_path,
@@ -254,7 +255,7 @@
           event?.old_path === current.path ||
           event?.new_path === current.path);
 
-      if (touchesCurrent && activeApi) {
+      if (touchesCurrent && activeApi && !currentIsDirty) {
         const refreshPath = event?.new_path ?? current.path;
         try {
           const refreshed = await activeApi.getEntry(refreshPath);

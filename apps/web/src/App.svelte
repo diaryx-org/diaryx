@@ -155,8 +155,7 @@
     shouldBypassWelcomeScreenForE2E,
     maybeBootstrapIosStarterWorkspace,
     autoCreateDefaultWorkspace as autoCreateDefaultWorkspaceController,
-    handleCreateFolderWorkspace as handleCreateFolderWorkspaceController,
-    handleOpenFolderWorkspace as handleOpenFolderWorkspaceController,
+    handleChooseFolderWorkspace as handleChooseFolderWorkspaceController,
     handleWelcomeComplete as handleWelcomeCompleteController,
     type AutoCreateWorkspaceDeps,
     type FolderWorkspaceTarget,
@@ -3508,7 +3507,7 @@
     bind:this={welcomeScreenRef}
     initialView={welcomeInitialView}
     onLaunch={(info) => { launchOverlay = info; }}
-    onCreateFolderWorkspace={async (selectedBundle, pluginOverrides, onProgress) => {
+    onChooseFolderWorkspace={async (selectedBundle, pluginOverrides, onProgress) => {
       const target = await pickWorkspaceFolderTarget("Choose Workspace Folder");
       if (!target) return false;
 
@@ -3516,7 +3515,7 @@
       try {
         clearFileNavigationMode({ forgetStoredPath: true });
         onProgress?.({ percent: 12, message: "Preparing folder..." });
-        const result = await handleCreateFolderWorkspaceController(
+        const result = await handleChooseFolderWorkspaceController(
           {
             autoCreateDeps: buildAutoCreateDeps(),
             installLocalPlugin: (bytes, name) => installLocalPlugin(bytes, name),
@@ -3543,38 +3542,7 @@
 
         return true;
       } catch (e) {
-        console.error("[App] Folder workspace creation failed:", e);
-        throw e;
-      } finally {
-        entryStore.setLoading(false);
-        launchOverlay = null;
-        launchOverlayDone = false;
-      }
-    }}
-    onOpenFolderWorkspace={async (onProgress) => {
-      const target = await pickWorkspaceFolderTarget("Open Workspace Folder");
-      if (!target) return false;
-
-      entryStore.setLoading(true);
-      try {
-        clearFileNavigationMode({ forgetStoredPath: true });
-        onProgress?.({ percent: 20, message: "Opening folder..." });
-        await handleOpenFolderWorkspaceController(
-          {
-            autoCreateDeps: buildAutoCreateDeps(),
-            refreshTree,
-            getTree: () => tree,
-            expandNode: (path) => workspaceStore.expandNode(path),
-            openEntry,
-            runValidation,
-          },
-          target,
-        );
-        showWelcomeScreen = false;
-        welcomeReturnWorkspaceName = null;
-        return true;
-      } catch (e) {
-        console.error("[App] Folder workspace open failed:", e);
+        console.error("[App] Folder workspace setup failed:", e);
         throw e;
       } finally {
         entryStore.setLoading(false);

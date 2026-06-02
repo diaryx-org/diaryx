@@ -29,8 +29,8 @@ View components organized by feature area.
 ## Onboarding
 
 `WelcomeScreen.svelte` owns first-run workspace setup. The active path is
-folder-first: users create a new Diaryx workspace in a selected folder or open
-an existing workspace folder.
+folder-first: users choose a workspace folder; Diaryx opens it when it already
+contains a root index, or initializes starter content when it does not.
 
 - Bundle selection is now a starter-content choice for the selected folder
   workspace.

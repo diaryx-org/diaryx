@@ -516,6 +516,28 @@ export interface OnGetStartedResult {
 
 export type OnFolderWorkspaceResult = OnGetStartedResult;
 
+async function resolveExistingWorkspaceRootIndex(
+  apiInstance: Api,
+  workspaceDir: string,
+): Promise<string | null> {
+  return await apiInstance.resolveWorkspaceRootIndexPath(workspaceDir);
+}
+
+async function openInitializedFolderWorkspace(
+  deps: OnOpenFolderWorkspaceDeps,
+  rootIndexPath: string,
+): Promise<void> {
+  deps.autoCreateDeps.setupPermissions();
+  await deps.refreshTree();
+
+  const tree = deps.getTree();
+  if (tree) {
+    deps.expandNode(tree.path);
+  }
+  await deps.openEntry(rootIndexPath);
+  await deps.runValidation();
+}
+
 /**
  * Orchestrates the "Get Started" flow from the welcome screen.
  * Creates workspace from bundle, installs overrides, triggers spotlight.
@@ -566,6 +588,72 @@ export async function handleCreateFolderWorkspace(
     : selectedBundle;
 
   const initialized = await initializeRegisteredWorkspace(deps.autoCreateDeps, target);
+  await seedWorkspaceFromBundle(
+    initialized.api,
+    initialized.backend,
+    initialized.workspaceDir,
+    initialized.name,
+    effectiveBundle,
+  );
+
+  await deps.refreshTree();
+  deps.autoCreateDeps.setupPermissions();
+
+  if (pluginOverrides?.length) {
+    for (const o of pluginOverrides) {
+      await deps.installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
+    }
+  }
+
+  if (effectiveBundle && effectiveBundle.plugins.length > 0) {
+    try {
+      await applyOnboardingBundle(effectiveBundle, deps.autoCreateDeps.persistPermissionDefaults);
+    } catch (e) {
+      console.warn("[App] Bundle apply during folder onboarding failed (non-fatal):", e);
+    }
+  }
+
+  await deps.refreshTree();
+  const tree = deps.getTree();
+  const rootIndexPath = await initialized.api.resolveWorkspaceRootIndexPath(
+    initialized.backend.getWorkspacePath(),
+  );
+  if (tree) {
+    deps.expandNode(tree.path);
+  }
+  if (rootIndexPath) {
+    await deps.openEntry(rootIndexPath);
+  }
+  await deps.runValidation();
+  await deps.dismissLaunchOverlay();
+
+  return {
+    spotlightSteps: selectedBundle?.spotlight?.length ? selectedBundle.spotlight : null,
+  };
+}
+
+export async function handleChooseFolderWorkspace(
+  deps: OnGetStartedDeps,
+  target: FolderWorkspaceTarget,
+  selectedBundle: BundleRegistryEntry | null,
+  pluginOverrides: Array<{ targetPluginId: string; bytes: ArrayBuffer; fileName: string }> | null | undefined,
+): Promise<OnFolderWorkspaceResult> {
+  const initialized = await initializeRegisteredWorkspace(deps.autoCreateDeps, target);
+  const existingRootIndexPath = await resolveExistingWorkspaceRootIndex(
+    initialized.api,
+    initialized.workspaceDir,
+  );
+
+  if (existingRootIndexPath) {
+    await openInitializedFolderWorkspace(deps, existingRootIndexPath);
+    await deps.dismissLaunchOverlay();
+    return { spotlightSteps: null };
+  }
+
+  const effectiveBundle = selectedBundle && pluginOverrides?.length
+    ? excludeOverriddenPlugins(selectedBundle, pluginOverrides)
+    : selectedBundle;
+
   await seedWorkspaceFromBundle(
     initialized.api,
     initialized.backend,

@@ -10,7 +10,7 @@
   import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Progress } from "$lib/components/ui/progress";
-  import { ArrowLeft, Loader2, FileText, FolderOpen, FolderPlus } from "@lucide/svelte";
+  import { ArrowLeft, Loader2, FileText, FolderOpen } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
   import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
@@ -21,14 +21,10 @@
   import { isAuthenticated } from "$lib/auth/authStore.svelte";
 
   interface Props {
-    /** Called to create a workspace in a user-selected folder. Returns false when cancelled. */
-    onCreateFolderWorkspace: (
+    /** Called to choose a folder, opening an existing workspace or initializing a new one. Returns false when cancelled. */
+    onChooseFolderWorkspace: (
       selectedBundle: BundleRegistryEntry | null,
       pluginOverrides?: PluginOverride[],
-      onProgress?: (progress: { percent: number; message: string; detail?: string }) => void,
-    ) => boolean | void | Promise<boolean | void>;
-    /** Called to open an existing workspace folder. Returns false when cancelled. */
-    onOpenFolderWorkspace: (
       onProgress?: (progress: { percent: number; message: string; detail?: string }) => void,
     ) => boolean | void | Promise<boolean | void>;
     /** Called to open one Markdown root file when folder access is unavailable. Returns false when cancelled. */
@@ -45,8 +41,7 @@
   }
 
   let {
-    onCreateFolderWorkspace,
-    onOpenFolderWorkspace,
+    onChooseFolderWorkspace,
     onOpenFileNavigation,
     onLaunch,
     returnWorkspaceName = null,
@@ -129,10 +124,10 @@
     });
   }
 
-  async function handleCreateFolderWorkspace(bundle: BundleRegistryEntry | null, overrides?: PluginOverride[]) {
+  async function handleChooseFolderWorkspace(bundle: BundleRegistryEntry | null, overrides?: PluginOverride[]) {
     beginSetup("Choose a folder...");
     try {
-      const run = () => onCreateFolderWorkspace(bundle, overrides, updateSetupProgress);
+      const run = () => onChooseFolderWorkspace(bundle, overrides, updateSetupProgress);
       const completed = launchInfo ? await playZoomThen(run) : await run();
       if (completed === false) {
         settingUp = false;
@@ -141,21 +136,7 @@
         launchInfo = null;
       }
     } catch (e) {
-      failSetup(e, "Failed to create workspace");
-    }
-  }
-
-  async function handleOpenFolderWorkspace() {
-    beginSetup("Choose a folder...");
-    try {
-      const completed = await onOpenFolderWorkspace(updateSetupProgress);
-      if (completed === false) {
-        settingUp = false;
-        setupProgress = null;
-        fadingOut = false;
-      }
-    } catch (e) {
-      failSetup(e, "Failed to open workspace");
+      failSetup(e, "Failed to set up workspace");
     }
   }
 
@@ -177,7 +158,7 @@
 
   async function handleBundleSelected(info: BundleSelectInfo, overrides?: PluginOverride[]) {
     launchInfo = info;
-    await handleCreateFolderWorkspace(info.bundle, overrides);
+    await handleChooseFolderWorkspace(info.bundle, overrides);
   }
 
   export async function handleSignInComplete() {
@@ -249,20 +230,10 @@
             <Button
               class="w-full get-started-btn"
               disabled={!animationDone || settingUp}
-              onclick={() => handleCreateFolderWorkspace(null)}
-            >
-              <FolderPlus class="size-4 mr-2" />
-              Create workspace in folder
-            </Button>
-
-            <Button
-              class="w-full"
-              variant="outline"
-              disabled={!animationDone || settingUp}
-              onclick={handleOpenFolderWorkspace}
+              onclick={() => handleChooseFolderWorkspace(null)}
             >
               <FolderOpen class="size-4 mr-2" />
-              Open existing folder
+              Choose workspace folder
             </Button>
 
             {#if onOpenFileNavigation}
@@ -377,7 +348,7 @@
             {themes}
             deferZoom={true}
             onDeferredSelect={(info) => handleBundleSelected(info, info.pluginOverrides)}
-            onSelect={(bundle, overrides) => handleCreateFolderWorkspace(bundle, overrides)}
+            onSelect={(bundle, overrides) => handleChooseFolderWorkspace(bundle, overrides)}
             onBack={() => navigateTo('main')}
           />
         {/if}

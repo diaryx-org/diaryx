@@ -81,9 +81,10 @@ unavailable.
 
 `App.svelte` bootstraps starter content for first-run users.
 The normal first-run/add-workspace path is now folder-first: the welcome screen
-asks users to create a workspace in a selected folder or open an existing
-folder, then applies starter content or curated starter bundles inside that
-folder. Provider-backed restore is no longer exposed from onboarding.
+asks users to choose a workspace folder. If the folder already contains a
+Diaryx root index, Diaryx opens it; otherwise it initializes starter content or
+curated starter bundles inside that folder. Provider-backed restore is no
+longer exposed from onboarding.
 On iOS Tauri, first-run shows the welcome/onboarding screen before any
 workspace creation.
 On iOS Tauri, if the selected workspace directory exists but has no root index
@@ -109,9 +110,8 @@ workspace registry. On iOS it calls the native
 `pick_authorized_workspace_folder` command so the Swift directory picker can
 create and persist a security-scoped bookmark at selection time. On desktop it
 calls `authorize_workspace_path` after the JS/Tauri dialog returns a path. This
-keeps "create here", "open existing folder", and "relocate workspace"
-selections from saving a raw path that cannot be reopened on the next workspace
-switch.
+keeps onboarding folder selection and workspace relocation from saving a raw
+path that cannot be reopened on the next workspace switch.
 
 On iOS Tauri, `App.svelte` also supports a single-file fallback for document
 providers that allow selecting a Markdown/text file but do not grant folder

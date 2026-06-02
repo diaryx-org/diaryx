@@ -114,6 +114,7 @@ import {
   maybeBootstrapIosStarterWorkspace,
   applyOnboardingBundle,
   autoCreateDefaultWorkspace,
+  handleChooseFolderWorkspace,
   handleCreateFolderWorkspace,
   handleOpenFolderWorkspace,
   handleGetStarted,
@@ -826,6 +827,90 @@ describe("onboardingController", () => {
   // -------------------------------------------------------------------------
 
   describe("folder workspace onboarding", () => {
+    it("chooses an existing workspace folder and opens its root entry", async () => {
+      const createLocalWorkspace = vi.fn((name, storageType, path) => ({
+        id: "folder-1",
+        name,
+        storageType,
+        path,
+      }));
+      const { deps, api } = makeOnGetStartedDeps({
+        backend: {
+          getWorkspacePath: vi.fn(() => "/selected/archive/README.md"),
+        },
+        api: {
+          resolveWorkspaceRootIndexPath: vi.fn().mockResolvedValue("/selected/archive/README.md"),
+        },
+        deps: {
+          createLocalWorkspace,
+        },
+      });
+
+      const result = await handleChooseFolderWorkspace(
+        deps as any,
+        { name: "Archive", path: "/selected/archive" },
+        null,
+        null,
+      );
+
+      expect(createLocalWorkspace).toHaveBeenCalledWith(
+        "Archive",
+        undefined,
+        "/selected/archive",
+      );
+      expect(api.createWorkspace).not.toHaveBeenCalled();
+      expect(deps.autoCreateDeps.setupPermissions).toHaveBeenCalled();
+      expect(deps.refreshTree).toHaveBeenCalledTimes(1);
+      expect(deps.expandNode).toHaveBeenCalledWith("/workspace/index.md");
+      expect(deps.openEntry).toHaveBeenCalledWith("/selected/archive/README.md");
+      expect(deps.runValidation).toHaveBeenCalled();
+      expect(deps.dismissLaunchOverlay).toHaveBeenCalled();
+      expect(result.spotlightSteps).toBeNull();
+    });
+
+    it("chooses a folder without a root index and initializes starter content", async () => {
+      const createLocalWorkspace = vi.fn((name, storageType, path) => ({
+        id: "folder-1",
+        name,
+        storageType,
+        path,
+      }));
+      const { deps, api } = makeOnGetStartedDeps({
+        backend: {
+          getWorkspacePath: vi.fn(() => "/selected/archive/README.md"),
+        },
+        api: {
+          resolveWorkspaceRootIndexPath: vi.fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValue("/workspace/index.md"),
+        },
+        deps: {
+          createLocalWorkspace,
+        },
+      });
+
+      const result = await handleChooseFolderWorkspace(
+        deps as any,
+        { name: "Archive", path: "/selected/archive" },
+        null,
+        null,
+      );
+
+      expect(createLocalWorkspace).toHaveBeenCalledWith(
+        "Archive",
+        undefined,
+        "/selected/archive",
+      );
+      expect(api.createWorkspace).toHaveBeenCalledWith("/selected/archive", "Archive");
+      expect(deps.autoCreateDeps.setupPermissions).toHaveBeenCalled();
+      expect(deps.refreshTree).toHaveBeenCalledTimes(2);
+      expect(deps.expandNode).toHaveBeenCalledWith("/workspace/index.md");
+      expect(deps.openEntry).toHaveBeenCalledWith("/workspace/index.md");
+      expect(deps.runValidation).toHaveBeenCalled();
+      expect(deps.dismissLaunchOverlay).toHaveBeenCalled();
+      expect(result.spotlightSteps).toBeNull();
+    });
+
     it("creates a workspace in the selected folder and opens the root entry", async () => {
       const createLocalWorkspace = vi.fn((name, storageType, path) => ({
         id: "folder-1",

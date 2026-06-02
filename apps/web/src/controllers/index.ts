@@ -73,6 +73,7 @@ export {
   applyOnboardingBundle,
   autoCreateDefaultWorkspace,
   handleGetStarted,
+  handleChooseFolderWorkspace,
   handleSignInCreateNew,
   handleCreateWithProvider,
   handleWelcomeComplete,

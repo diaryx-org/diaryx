@@ -141,7 +141,7 @@
   {#if !verificationSent}
     {#if !compact}
       <p class="text-sm text-muted-foreground">
-        Sign in to enable sync across devices.
+        Sign in to manage your Diaryx account.
       </p>
     {/if}
 

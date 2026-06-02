@@ -45,7 +45,7 @@
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
-  import { PanelRight, Menu, Loader2, Settings, Store, Cloud, CloudOff, Eye, CircleUser } from "@lucide/svelte";
+  import { PanelRight, Menu, Loader2, Settings, Store, Eye, CircleUser } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import {
     handleStandardPluginHostUiAction,
@@ -72,8 +72,6 @@
   import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
   import { buildCommandRegistry } from "$lib/commandRegistry";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
-  import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
-  import { startSyncScheduler, stopSyncScheduler, runManualSyncNow, getSyncState } from "$lib/sync/syncScheduler.svelte";
   import { createLatestOnlyRunner } from "$lib/latestOnlyRunner";
   import {
     registerE2EBridge,
@@ -82,7 +80,7 @@
   } from "$lib/e2e/bridge";
 
   // Import auth
-  import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState, getWorkspaces, isSyncEnabled } from "./lib/auth";
+  import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState } from "./lib/auth";
   import {
     getLocalWorkspace,
     getLocalWorkspaces,
@@ -92,14 +90,8 @@
     createLocalWorkspace,
     setCurrentWorkspaceId,
     removeLocalWorkspace,
-    getPrimaryWorkspaceProviderLink,
-    getWorkspaceProviderLink,
-    isWorkspaceSyncEnabled as isWorkspaceProviderSyncEnabled,
-    setPluginMetadata,
     renameLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
-  import { getProviderDisplayLabel } from "$lib/sync/builtinProviders";
-  import { linkWorkspace, unlinkWorkspace } from "$lib/sync/workspaceProviderService";
 
   type StartupPhaseMeasurement = {
     label: string;
@@ -144,31 +136,6 @@
     return { measure, logSummary };
   }
 
-  /** Dispatch a sync sub-command (SyncPull, SyncPush, SyncStatus) to the primary linked provider. */
-  async function dispatchPluginSyncCommand(
-    command: string,
-  ): Promise<{ success: boolean; data?: unknown; error?: string }> {
-    const wsId = getCurrentWorkspaceId();
-    if (!wsId) return { success: false, error: "No workspace" };
-    const link = getPrimaryWorkspaceProviderLink(wsId);
-    if (!link) return { success: false, error: "No sync provider linked" };
-    if (isTauri()) {
-      try {
-        const backend = workspaceStore.backend ?? await getBackend();
-        const a = createApi(backend);
-        const data = await a.executePluginCommand(link.pluginId, command, {
-          provider_id: link.pluginId,
-        });
-        return { success: true, data };
-      } catch (e) {
-        return { success: false, error: e instanceof Error ? e.message : String(e) };
-      }
-    }
-    return await browserPlugins.dispatchCommand(link.pluginId, command, {
-      provider_id: link.pluginId,
-    });
-  }
-
   // Initialize theme store immediately
   const themeStore = getThemeStore();
 
@@ -188,11 +155,8 @@
     shouldBypassWelcomeScreenForE2E,
     maybeBootstrapIosStarterWorkspace,
     autoCreateDefaultWorkspace as autoCreateDefaultWorkspaceController,
-    handleGetStarted as handleGetStartedController,
     handleCreateFolderWorkspace as handleCreateFolderWorkspaceController,
     handleOpenFolderWorkspace as handleOpenFolderWorkspaceController,
-    handleSignInCreateNew as handleSignInCreateNewController,
-    handleCreateWithProvider as handleCreateWithProviderController,
     handleWelcomeComplete as handleWelcomeCompleteController,
     type AutoCreateWorkspaceDeps,
     type FolderWorkspaceTarget,
@@ -211,14 +175,14 @@
     type AttachmentMediaKind,
   } from "./models/services/attachmentService";
 
-  // Sync/CRDT orchestration is entirely plugin-owned (diaryx_sync plugin).
+  // Filesystem events refresh the visible workspace state and plugin status.
   function initEventSubscription(backendInstance: any): () => void {
     if (!backendInstance?.onFileSystemEvent) {
       return () => {};
     }
 
     const subscriptionId = backendInstance.onFileSystemEvent(async (event: any) => {
-      // Bridge sync status events to the collaboration store
+      // Bridge plugin status events to the collaboration store.
       if (event?.type === "SyncStatusChanged") {
         if (event.status === "error" && event.error) {
           collaborationStore.setSyncError(event.error);
@@ -273,51 +237,6 @@
     return () => {
       backendInstance.offFileSystemEvent?.(subscriptionId);
     };
-  }
-
-  async function withLiveSyncSetupProgress<T>(
-    onProgress: ((progress: { percent: number; message: string; detail?: string }) => void) | undefined,
-    task: () => Promise<T>,
-  ): Promise<T> {
-    if (!onProgress) {
-      return await task();
-    }
-
-    const backend = workspaceStore.backend ?? await getBackend();
-    if (!backend?.onFileSystemEvent || !backend?.offFileSystemEvent) {
-      return await task();
-    }
-
-    const subscriptionId = backend.onFileSystemEvent((event: any) => {
-      if (event?.type === "SyncProgress") {
-        const total = Number(event.total ?? 0);
-        const completed = Number(event.completed ?? 0);
-        const percent = typeof event.percent === "number"
-          ? event.percent
-          : total > 0
-            ? Math.round((completed / total) * 100)
-            : 0;
-        onProgress({
-          percent,
-          message: typeof event.message === "string" && event.message.length > 0
-            ? event.message
-            : "Syncing workspace...",
-          detail: typeof event.path === "string" && event.path.length > 0 ? event.path : undefined,
-        });
-      } else if (event?.type === "SyncStatusChanged" && event.status === "error" && event.error) {
-        onProgress({
-          percent: 100,
-          message: "Sync failed",
-          detail: String(event.error),
-        });
-      }
-    });
-
-    try {
-      return await task();
-    } finally {
-      backend.offFileSystemEvent(subscriptionId);
-    }
   }
 
   // Import controllers
@@ -540,7 +459,6 @@
     workspaceStore.expandNode(resolvedPath);
     collaborationStore.setEnabled(false);
     collaborationStore.clearCollaborationSession();
-    stopSyncScheduler();
     setStoredFileNavigationPath(resolvedPath);
 
     await openEntry(resolvedPath, { force: true });
@@ -674,8 +592,8 @@
   let welcomeScreenRef: ReturnType<typeof WelcomeScreen> | undefined = $state();
   /** Non-null when the user navigated to the welcome screen from an active workspace */
   let welcomeReturnWorkspaceName = $state<string | null>(null);
-  /** When set, opens the welcome screen to a specific view (e.g. 'bundles', 'workspace-picker'). */
-  let welcomeInitialView = $state<'main' | 'sign-in' | 'workspace-picker' | 'bundles' | 'provider-choice' | null>(null);
+  /** When set, opens the welcome screen to a specific view (for example, 'bundles'). */
+  let welcomeInitialView = $state<'main' | 'sign-in' | 'bundles' | null>(null);
   let fileNavigationMode = $state(false);
   let fileNavigationRootFile = $state<string | null>(null);
   // Clear initialView when the welcome screen closes so it doesn't persist on re-open
@@ -771,18 +689,6 @@
   // Collaboration state - proxied from collaborationStore
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
   let authState = $derived(getAuthState());
-  const syncState = getSyncState();
-  let collapsedBarSyncEnabled = $derived.by(() => {
-    const wsId = getCurrentWorkspaceId();
-    return !!wsId && isWorkspaceProviderSyncEnabled(wsId);
-  });
-  let collapsedBarSyncColor = $derived.by(() => {
-    const s = collaborationStore.effectiveSyncStatus;
-    if (s === "synced") return "text-green-600 dark:text-green-400";
-    if (s === "syncing" || s === "connecting") return "text-amber-500";
-    if (s === "error") return "text-red-500";
-    return "text-muted-foreground";
-  });
   let pluginManifestCount = $derived(getPluginStore().allManifests.length);
   let activeLocalWorkspaceId = $derived(
     authState.activeWorkspaceId ?? getCurrentWorkspaceId(),
@@ -798,7 +704,7 @@
 
   // Auto-save timer (component-local, not needed in global store)
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
-  const AUTO_SAVE_DELAY_MS = 300; // 300ms – near-instant local save; remote sync has its own 3s debounce
+  const AUTO_SAVE_DELAY_MS = 300; // 300ms - near-instant local save
 
   // Tree refresh debounce timer (prevents rapid refreshes during sync)
   let refreshTreeTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -976,8 +882,6 @@
   }
 
   async function reloadWorkspaceScopedBrowserState(): Promise<void> {
-    const activeBackend = await getBackend();
-
     await Promise.all([
       themeStore.reloadFromWorkspace?.(),
       appearanceStore.reloadFromWorkspace?.(),
@@ -1001,43 +905,7 @@
       console.warn('[App] Failed to load browser plugins:', e),
     );
 
-    // Stop any previous sync scheduler before restarting with new workspace context.
-    stopSyncScheduler();
-
-    await mirrorCurrentWorkspaceMutationToLinkedProviders({
-      backend: {
-        getWorkspacePath: () => activeBackend.getWorkspacePath(),
-        resolveRootIndex: async (workspacePath) => {
-          const finder = (activeBackend as { findRootIndex?: (path: string) => Promise<string> }).findRootIndex;
-          return typeof finder === "function" ? await finder(workspacePath) : workspacePath;
-        },
-      },
-      runPluginCommand: async (pluginId, command, params = null) => {
-        const api = createApi(activeBackend);
-        return await api.executePluginCommand(pluginId, command, params);
-      },
-    }).catch((e: unknown) =>
-      console.warn('[App] Failed to initialize linked workspace sync state:', e),
-    );
-
     getPluginStore().preloadInsertCommandIcons();
-
-    // Start debounced sync scheduler — runs full provider sync on startup,
-    // after a quiet period following file mutations, and when the tab resumes.
-    startSyncScheduler();
-
-    // Resume any pending deferred file downloads from a previous session.
-    try {
-      const { getServerUrl, getToken } = await import("$lib/auth");
-      const serverUrl = getServerUrl();
-      const token = getToken();
-      if (serverUrl && token) {
-        const { initDeferredQueue } = await import("$lib/sync/deferredFileQueue");
-        initDeferredQueue(createApi(activeBackend), serverUrl, token);
-      }
-    } catch (e) {
-      console.warn("[App] Failed to resume deferred file queue:", e);
-    }
   }
 
 
@@ -1185,7 +1053,7 @@
       document.documentElement.classList.add("tauri-macos-overlay");
     }
 
-    // Load saved collaboration settings (server URL is read by the sync plugin)
+    // Load saved account/collaboration server settings.
     if (typeof window !== "undefined") {
       const savedServerUrl = localStorage.getItem("diaryx_sync_server_url")
         ?? localStorage.getItem("diaryx-sync-server");
@@ -1422,7 +1290,7 @@
         cleanupEventSubscription = () => { unsubPlugins(); prevCleanup(); };
       }
 
-      // Set workspace ID for plugin system (sync plugin reads this)
+      // Set workspace ID for plugin runtime context.
       const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
       workspaceStore.setWorkspaceId(sharedWorkspaceId);
 
@@ -1606,7 +1474,6 @@
     unregisterE2EBridge();
     // Cleanup blob URLs
     revokeBlobUrls();
-    stopSyncScheduler();
     // Cleanup filesystem event subscription
     cleanupEventSubscription?.();
     cleanupEventSubscription = null;
@@ -1810,7 +1677,7 @@
     await runLatestOpenEntry({ path, force: options.force ?? false });
   }
 
-  // Save current entry - delegates to controller with sync support
+  // Save current entry - delegates to controller write helpers.
   // detectH1Title: when true, backend detects first-line H1 and syncs to title/filename
   async function save(detectH1Title = false) {
     if (!api || !currentEntry || !editorRef) return;
@@ -1859,7 +1726,7 @@
   }
 
   // Handle content changes - triggers debounced auto-save
-  // Sync propagation is handled by plugin-owned filesystem event processing.
+  // Filesystem event processing refreshes visible workspace state after writes.
   // We skip markdown serialization here to avoid O(doc) work on every keystroke;
   // the actual serialization happens once when the debounced save fires.
   function handleContentChange() {
@@ -2196,7 +2063,7 @@
 
   /**
    * Handle magic link token verification from URL.
-   * Verifies the token automatically and updates plugin-owned sync status surfaces.
+   * Verifies the token automatically and updates account status.
    */
   async function handleMagicLinkToken(token: string) {
     // Show connecting status while verifying
@@ -2207,20 +2074,12 @@
       // Note: URL token is cleared before this function is called to prevent double verification
       await verifyMagicLink(token);
 
-      // Set status to idle; sync plugin status updates to 'synced' when connected.
+      // Set status to idle after authentication succeeds.
       collaborationStore.setSyncStatus('idle');
 
-      // Show success toast. If sync isn't set up yet (new device), the wizard will
-      // open automatically after initialization — avoid the misleading "now syncing" message.
-      if (!isSyncEnabled() && getWorkspaces().length > 0) {
-        toast.success("Signed in successfully", {
-          description: "Downloading your workspace from server...",
-        });
-      } else {
-        toast.success("Signed in successfully", {
-          description: "Your workspace is now syncing.",
-        });
-      }
+      toast.success("Signed in successfully", {
+        description: "Your account is connected.",
+      });
 
     } catch (error) {
       console.error("[App] Magic link verification failed:", error);
@@ -2234,7 +2093,7 @@
     }
   }
 
-  // Create a child entry - delegates to controller with sync support
+  // Create a child entry - delegates to controller write helpers.
   async function handleCreateChildEntry(parentPath: string) {
     if (!api) return;
     await createChildEntryWithSync(api, parentPath, async (result) => {
@@ -2246,7 +2105,7 @@
     });
   }
 
-  // Create a new entry - delegates to controller with sync support
+  // Create a new entry - delegates to controller write helpers.
   async function createNewEntry(title: string, parentPath: string | null) {
     if (!api) return;
 
@@ -2438,7 +2297,7 @@
     return effectivePath;
   }
 
-  // Duplicate an entry - delegates to controller with sync support
+  // Duplicate an entry - delegates to controller write helpers.
   async function handleDuplicateEntry(path: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
     const parentPath = workspaceStore.getParentNodePath(path);
@@ -2949,11 +2808,6 @@
       onOpenBackupImport: handleQuickBackupExport,
       onImportFromClipboard: handleImportFromClipboard,
       onImportMarkdownFile: handleImportMarkdownFile,
-      onSyncNow: runManualSyncNow,
-      isSyncAvailable: () => {
-        const wsId = getCurrentWorkspaceId();
-        return !!wsId && isWorkspaceProviderSyncEnabled(wsId);
-      },
       pluginCommandPaletteItems: getPluginStore().commandPaletteItems as Array<{
         pluginId: string;
         contribution: { id: string; label: string; group: string | null; plugin_command: string };
@@ -3654,43 +3508,6 @@
     bind:this={welcomeScreenRef}
     initialView={welcomeInitialView}
     onLaunch={(info) => { launchOverlay = info; }}
-    onGetStarted={async (selectedBundle, pluginOverrides) => {
-      entryStore.setLoading(true);
-      try {
-        clearFileNavigationMode({ forgetStoredPath: true });
-        const result = await handleGetStartedController(
-          {
-            autoCreateDeps: buildAutoCreateDeps(),
-            installLocalPlugin: (bytes, name) => installLocalPlugin(bytes, name),
-            refreshTree,
-            getTree: () => tree,
-            expandNode: (path) => workspaceStore.expandNode(path),
-            openEntry,
-            runValidation,
-            dismissLaunchOverlay,
-          },
-          selectedBundle,
-          pluginOverrides,
-        );
-        showWelcomeScreen = false;
-
-        // Trigger spotlight onboarding tour if the bundle defines one
-        if (result.spotlightSteps) {
-          await tick();
-          requestAnimationFrame(() => {
-            spotlightSteps = result.spotlightSteps;
-          });
-        }
-      } catch (e) {
-        console.error("[App] Auto-create from welcome screen failed:", e);
-        throw e;
-      } finally {
-        entryStore.setLoading(false);
-        // Clear the launch zoom overlay so it doesn't block the welcome screen on error
-        launchOverlay = null;
-        launchOverlayDone = false;
-      }
-    }}
     onCreateFolderWorkspace={async (selectedBundle, pluginOverrides, onProgress) => {
       const target = await pickWorkspaceFolderTarget("Choose Workspace Folder");
       if (!target) return false;
@@ -3783,139 +3600,6 @@
         launchOverlayDone = false;
       }
     } : undefined}
-    onSignInCreateNew={async () => {
-      // User signed in but has no existing workspaces — create first synced workspace
-      entryStore.setLoading(true);
-      try {
-        clearFileNavigationMode({ forgetStoredPath: true });
-        await handleSignInCreateNewController({
-          autoCreateDeps: buildAutoCreateDeps(),
-          refreshTree,
-          getTree: () => tree,
-          expandNode: (path) => workspaceStore.expandNode(path),
-          openEntry,
-          runValidation,
-        });
-        showWelcomeScreen = false;
-      } catch (e) {
-        console.error("[App] Auto-create after sign-in failed:", e);
-        throw e;
-      } finally {
-        entryStore.setLoading(false);
-      }
-    }}
-    onCreateWithProvider={async (bundle, providerPluginId, pluginOverrides, restoreNamespace, onProgress) => {
-      entryStore.setLoading(true);
-      try {
-        clearFileNavigationMode({ forgetStoredPath: true });
-        const result = await withLiveSyncSetupProgress(onProgress, async () => await handleCreateWithProviderController(
-          {
-            autoCreateDeps: buildAutoCreateDeps(),
-            installLocalPlugin: (bytes, name) => installLocalPlugin(bytes, name),
-            refreshTree,
-            getTree: () => tree,
-            expandNode: (path) => workspaceStore.expandNode(path),
-            openEntry,
-            runValidation,
-            dismissLaunchOverlay,
-            persistPermissionDefaults: persistRequestedPluginPermissionDefaults,
-            switchWorkspace,
-          },
-          bundle,
-          providerPluginId,
-          pluginOverrides,
-          restoreNamespace,
-          onProgress,
-        ),
-        );
-        showWelcomeScreen = false;
-
-        if (result.spotlightSteps) {
-          await tick();
-          requestAnimationFrame(() => {
-            spotlightSteps = result.spotlightSteps;
-          });
-        }
-      } catch (e) {
-        console.error("[App] Create with provider failed:", e);
-        throw e;
-      } finally {
-        entryStore.setLoading(false);
-        // Clear the launch zoom overlay so it doesn't block the welcome screen on error
-        launchOverlay = null;
-        launchOverlayDone = false;
-      }
-    }}
-    onMoveCurrentWorkspace={async (providerPluginId, onProgress) => {
-      const workspaceId = getCurrentWorkspaceId();
-      const workspace = workspaceId ? getLocalWorkspace(workspaceId) : null;
-      if (!workspaceId || !workspace) {
-        throw new Error("No current workspace is available.");
-      }
-
-      const currentLink = getPrimaryWorkspaceProviderLink(workspaceId);
-      const currentProviderId = currentLink?.pluginId ?? null;
-      const currentProviderLabel = currentProviderId
-        ? getProviderDisplayLabel(currentProviderId) ?? currentProviderId
-        : null;
-
-      entryStore.setLoading(true);
-      try {
-        await withLiveSyncSetupProgress(onProgress, async () => {
-        if (!providerPluginId) {
-          if (!currentProviderId) {
-            toast.message("This workspace is already stored only on this device.");
-            showWelcomeScreen = false;
-            welcomeReturnWorkspaceName = null;
-            return;
-          }
-
-          if (isWorkspaceProviderSyncEnabled(workspaceId)) {
-            onProgress?.({ percent: 20, message: "Disconnecting cloud sync..." });
-            await unlinkWorkspace(currentProviderId, workspaceId);
-          } else {
-            setPluginMetadata(workspaceId, currentProviderId, null);
-          }
-
-          toast.success(`"${workspace.name}" now lives only on this device.`);
-        } else {
-          const providerLabel = getProviderDisplayLabel(providerPluginId) ?? providerPluginId;
-          const existingTargetLink = getWorkspaceProviderLink(workspaceId, providerPluginId);
-
-          if (currentProviderId && currentProviderId !== providerPluginId) {
-            if (isWorkspaceProviderSyncEnabled(workspaceId)) {
-              onProgress?.({ percent: 18, message: "Disconnecting previous provider..." });
-              await unlinkWorkspace(currentProviderId, workspaceId);
-            } else {
-              setPluginMetadata(workspaceId, currentProviderId, null);
-            }
-          }
-
-          if (currentProviderId === providerPluginId && isWorkspaceProviderSyncEnabled(workspaceId)) {
-            toast.message(`"${workspace.name}" is already stored with ${providerLabel}.`);
-          } else {
-            await linkWorkspace(providerPluginId, {
-              localId: workspaceId,
-              name: workspace.name,
-              remoteId: existingTargetLink?.remoteWorkspaceId,
-            }, onProgress);
-            toast.success(
-              currentProviderLabel && currentProviderId !== providerPluginId
-                ? `Moved "${workspace.name}" from ${currentProviderLabel} to ${providerLabel}.`
-                : `"${workspace.name}" is now stored with ${providerLabel}.`,
-            );
-          }
-        }
-        });
-
-        showWelcomeScreen = false;
-        welcomeReturnWorkspaceName = null;
-      } finally {
-        entryStore.setLoading(false);
-        launchOverlay = null;
-        launchOverlayDone = false;
-      }
-    }}
     returnWorkspaceName={welcomeReturnWorkspaceName}
     onReturn={() => {
       showWelcomeScreen = false;
@@ -3954,13 +3638,6 @@
       const localWs = wsId ? getLocalWorkspace(wsId) : null;
       welcomeReturnWorkspaceName = localWs?.name ?? null;
       welcomeInitialView = 'main';
-      showWelcomeScreen = true;
-    }}
-    onBrowseRemoteWorkspaces={() => {
-      const wsId = getCurrentWorkspaceId();
-      const localWs = wsId ? getLocalWorkspace(wsId) : null;
-      welcomeReturnWorkspaceName = localWs?.name ?? null;
-      welcomeInitialView = 'workspace-picker';
       showWelcomeScreen = true;
     }}
     onOpenFileFromPicker={isTauri() && isIOS() ? async () => {
@@ -4022,41 +3699,6 @@
     requestedTab={requestedLeftTab}
     onRequestedTabConsumed={() => (requestedLeftTab = null)}
     onPluginHostAction={handlePluginHostAction}
-    syncEnabled={(() => {
-      const wsId = getCurrentWorkspaceId();
-      return !!wsId && isWorkspaceProviderSyncEnabled(wsId);
-    })()}
-    onSync={runManualSyncNow}
-    onSyncPull={async () => {
-      const result = await dispatchPluginSyncCommand("SyncPull");
-      if (!result.success) console.warn("[App] SyncPull:", result.error);
-    }}
-    onSyncPush={async () => {
-      const result = await dispatchPluginSyncCommand("SyncPush");
-      if (!result.success) console.warn("[App] SyncPush:", result.error);
-    }}
-    onSyncRefreshStatus={async () => {
-      const result = await dispatchPluginSyncCommand("SyncStatus");
-      if (!result.success) {
-        console.warn("[App] SyncStatus:", result.error);
-        return;
-      }
-      // Update the collaboration store from the plugin's status response
-      // so the UI reflects the current state without waiting for events.
-      if (result.data && typeof result.data === "object") {
-        const d = result.data as Record<string, unknown>;
-        const state = typeof d.state === "string" ? d.state : null;
-        if (state === "synced" || state === "dirty") {
-          collaborationStore.setSyncStatus("synced");
-          collaborationStore.setSyncProgress(null);
-        } else if (state === "error") {
-          collaborationStore.setSyncStatus("error");
-        }
-        if (typeof d.dirty_count === "number" && d.dirty_count > 0) {
-          collaborationStore.setSyncStatus("syncing");
-        }
-      }
-    }}
   />
 
   <!-- Left sidebar resize handle -->
@@ -4108,29 +3750,6 @@
             </Tooltip.Trigger>
             <Tooltip.Content side="right">Audience</Tooltip.Content>
           </Tooltip.Root>
-
-          <!-- Cloud/Sync -->
-          {#if collapsedBarSyncEnabled}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                <button
-                  type="button"
-                  class="p-2 rounded-md hover:bg-accent transition-colors"
-                  onclick={runManualSyncNow}
-                  aria-label="Sync"
-                >
-                  {#if syncState.syncing}
-                    <Loader2 class="size-4 animate-spin text-amber-500" />
-                  {:else if collaborationStore.serverOffline}
-                    <CloudOff class={`size-4 ${collapsedBarSyncColor}`} />
-                  {:else}
-                    <Cloud class={`size-4 ${collapsedBarSyncColor}`} />
-                  {/if}
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content side="right">Sync</Tooltip.Content>
-            </Tooltip.Root>
-          {/if}
 
           <!-- Marketplace -->
           <Tooltip.Root>

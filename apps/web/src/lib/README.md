@@ -41,7 +41,7 @@ Shared libraries, components, and utilities for the web application.
 | `publish/`     | Publishing and export components                                       |
 | `settings/`    | Settings panel components                                              |
 | `share/`       | Share session components                                               |
-| `sync/`        | Sync plugin host-side adapters/services                                |
+| `sync/`        | Legacy sync-provider adapters/services                                 |
 | `storage/`     | Storage abstraction                                                    |
 | `stores/`      | Svelte stores                                                          |
 | `wasm/`        | Built WASM module                                                      |
@@ -79,9 +79,6 @@ The onboarding flow supports:
 
 - folder-first workspace creation/opening through a user-selected directory
 - curated starter bundles applied to the selected folder workspace
-- provider-backed workspace creation as a secondary/legacy path
-- remote workspace restore through provider-owned metadata
-- Apple/Tauri built-in provider options such as iCloud Drive
 
 For Tauri, selected folders are routed through `workspaceAccess.ts` so
 sandboxed Apple builds can persist security-scoped access before the path is
@@ -97,24 +94,11 @@ iOS single-file fallback. That path asks the native document picker for one
 Markdown/text file, persists the returned bookmark, and lets `App.svelte` open
 the file directly without assuming access to the parent folder.
 
-Provider-backed restore still uses staged initialization so users see visible
-forward motion during link/bootstrap flows even when the underlying provider
-does not emit granular file-level progress.
-
-Browser sync now loads the Extism sync plugin from
-`/plugins/diaryx_sync.wasm` with a runtime compatibility check. If the file is
-an older wasm-bindgen-flavored artifact, loading fails fast with a rebuild
-instruction instead of surfacing a low-level Extism import resolution error.
-
-Extism sync guest calls are serialized in
-`plugins/extismBrowserLoader.ts` so browser transport callbacks and host
-events cannot re-enter the guest concurrently and trip internal `RefCell`
-borrows.
-
-Browser host-side sync wiring lives in `plugins/extismBrowserLoader.ts` and
-`sync/providerPluginCommands.ts` / `sync/workspaceProviderService.ts` so the
-web app remains a plugin host, provider commands prefer plugin-owned
-runtime/config state, and sync logic stays in the external sync plugin.
+Legacy provider-sync wiring remains in `sync/` and
+`plugins/extismBrowserLoader.ts` while the old sidecar implementation is being
+retired, but it is no longer part of the active welcome/settings workflow.
+Future sync work should build on the local-folder model instead of making the
+app manage a separate remote workspace location.
 
 `App.svelte` now returns first-run and missing-workspace recovery flows to the
 welcome screen instead of reopening a separate add-workspace modal.
@@ -269,10 +253,8 @@ when invalid editor content makes decoration refresh fail.
   reveal the selected entry in Finder/Explorer/the system file manager via the
   backend's opener-backed `revealInFileManager()` helper. The action is hidden
   on mobile because Tauri does not support reveal flows there.
-- `WorkspaceSelector.svelte` can now attach an existing local Tauri folder to a
-  listed remote workspace. The remote picker keeps `download` for
-  remote-wins restore and adds `link` for local-folder attach, with explicit
-  `Already in sync` vs `Upload local` policies before the workspace is linked.
+- `WorkspaceSelector.svelte` lists registered local workspaces and routes
+  creation through the welcome screen's folder picker.
 - `windowDrag.ts` centralizes Tauri desktop window dragging for shared chrome
   surfaces. Sidebar/header/footer drag handlers use it and automatically skip
   interactive descendants such as buttons, links, inputs, and elements marked

@@ -12,7 +12,6 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import * as Popover from "$lib/components/ui/popover";
   import type { Api } from "$lib/backend/api";
-  // PluginStatusItems removed — sync indicator moved to LeftSidebar
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { maybeStartWindowDrag } from "$lib/windowDrag";
   import {

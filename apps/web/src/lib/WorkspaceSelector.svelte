@@ -9,13 +9,11 @@
     Plus,
     Loader2,
     HardDrive,
-    Cloud,
     Ellipsis,
     Pencil,
     Trash2,
   } from "@lucide/svelte";
   import {
-    getServerWorkspaceId,
     getLocalWorkspaces,
     getWorkspaceStorageType,
     getCurrentWorkspaceId,
@@ -48,13 +46,12 @@
   // Derived state
   let allLocalWorkspaces = $derived(getLocalWorkspaces());
 
-  // Local workspace list with sync indicator
-  type LocalWorkspaceEntry = { id: string; name: string; synced: boolean };
+  // Local workspace list
+  type LocalWorkspaceEntry = { id: string; name: string };
   let workspaces = $derived.by(() => {
     const result: LocalWorkspaceEntry[] = [];
     for (const ws of allLocalWorkspaces) {
-      const serverId = getServerWorkspaceId(ws.id);
-      result.push({ id: ws.id, name: ws.name, synced: !!serverId });
+      result.push({ id: ws.id, name: ws.name });
     }
     return result;
   });
@@ -321,11 +318,7 @@
                     <Check class="size-3.5" />
                   {/if}
                 </span>
-                {#if ws.synced}
-                  <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
-                {:else}
-                  <HardDrive class="size-3.5 shrink-0 text-muted-foreground" />
-                {/if}
+                <HardDrive class="size-3.5 shrink-0 text-muted-foreground" />
                 <span class="truncate flex-1">{ws.name}</span>
                 {#if showStorageBadges}
                   <span class="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0 font-medium">{storageLabel(getWorkspaceStorageType(ws.id))}</span>

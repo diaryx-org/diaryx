@@ -7,7 +7,8 @@
  * - iOS first-run bootstrap
  * - Default workspace auto-creation
  * - Bundle application during onboarding
- * - Welcome screen callback orchestration (onGetStarted, onSignInCreateNew, onCreateWithProvider)
+ * - Folder workspace callback orchestration
+ * - Legacy provider-backed onboarding helpers retained during sync unwinding
  */
 
 import type { Api } from '../lib/backend/api';

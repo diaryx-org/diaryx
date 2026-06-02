@@ -33,25 +33,28 @@ bun run build
 The app uses a backend abstraction (`src/lib/backend`) so feature code can run
 against WASM or Tauri with the same interface.
 
-Browser-hosted cloud traffic now routes through the Cloudflare Worker in
+Browser-hosted account/publishing traffic routes through the Cloudflare Worker in
 `worker/`, which serves the SPA from Workers Static Assets and handles the
 same-origin `/api/*` proxy before asset serving. The Worker keeps auth
 same-origin and proxies API requests to the backend with paths passed through
-unchanged (both the Cloudflare API worker and native sync server serve under `/api/`).
+unchanged. The historical sync server and Cloudflare backend also contain
+auth/account/publishing API code, so client changes that remove sync should not
+delete those backend capabilities.
 
 Production deploys attach this Worker directly to the `app.diaryx.org` custom
 domain via Wrangler routes, disable `workers.dev`, and keep Preview URLs
 enabled for branch/testing workflows.
 
-### Plugin-Owned Sync
+### Workspace Storage
 
-Web sync/share/provider/history/status behavior is plugin-owned:
+Diaryx workspaces are local folders. The web app asks users to create or open a
+folder and then relies on external tools such as iCloud Drive, Dropbox,
+Syncthing, or Git for cross-device file syncing. The client no longer exposes
+workspace-provider setup, remote workspace restore, or a built-in sync button.
 
-- Runtime: `diaryx_sync_extism` loaded as `sync`
-- Host rendering: generic plugin surfaces (sidebar/settings/status)
-- Host responsibilities: provider routing (plugin + built-in) +
-  filesystem-event-driven refresh
-- No host CRDT bridge layer in `apps/web/src/lib/crdt`
+Legacy provider-sync modules remain in the source tree while the backend and
+plugin surfaces are unwound, but they are not part of the active onboarding or
+settings workflow.
 
 ## Validation
 
@@ -81,30 +84,12 @@ components accumulate reusable geometry/filtering/state-transition logic, prefer
 moving that logic into nearby `.ts` helpers with direct Vitest coverage rather
 than forcing line coverage through large UI shells.
 
-### Sync E2E Notes
+### Legacy Sync E2E Notes
 
-Sync E2E tests expect a running sync server (`http://127.0.0.1:3030` by
-default). The dev-mode magic-link response (`dev_link`) is used for auth flows.
-If `DIARYX_SYNC_PLUGIN_WASM` is not set, the E2E builds the in-repo
-`crates/plugins/diaryx_sync_extism` crate and installs that fresh guest artifact before the
-browser flow starts.
-
-The Chromium sync E2E covers the browser-hosted provider flow end to end:
-
-- install the sync guest into both clients
-- sign both clients in with the same account
-- link a workspace on client A
-- upload a fresh provider snapshot from client A
-- download/bootstrap the linked workspace on client B
-- verify client B renders the uploaded content and rejoins the sync session
-
-Environment variables:
-
-- `SYNC_SERVER_URL`: override sync server URL
-- `SYNC_SERVER_HOST`: host for auto-started sync server (`127.0.0.1` default)
-- `SYNC_SERVER_PORT`: base port for auto-started sync server (`3030` default)
-- `SYNC_E2E_START_SERVER`: set `0` to skip auto-starting the sync server
-- `DIARYX_SYNC_PLUGIN_WASM`: use an explicit prebuilt sync guest artifact
+Sync E2E coverage is legacy while the sync sidecar is being removed from the
+client workflow. Keep those tests scoped to the old provider modules until the
+backend sync code is retired or renamed; do not treat them as the expected user
+path for new workspace setup.
 
 ## Developer Guide
 

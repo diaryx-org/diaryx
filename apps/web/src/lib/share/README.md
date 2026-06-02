@@ -8,10 +8,8 @@ exclude:
 
 # Share
 
-This directory no longer contains host-owned live-share session UI.
-
-Live share/session surfaces moved to the sync plugin (`diaryx_sync_extism`) and
-are rendered through plugin iframe contributions.
+This directory no longer contains host-owned live-share session UI. Publishing
+surfaces are composed from namespace/publish components and account APIs.
 
 ## Files
 

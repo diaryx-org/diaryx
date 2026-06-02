@@ -9,7 +9,7 @@ exclude:
 
 # Device
 
-Device identification for multi-device sync.
+Device identification for account/device-scoped features.
 
 ## Files
 

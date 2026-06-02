@@ -71,7 +71,7 @@ property to reach the binary. `GetAncestorAttachments` now returns both the
 attachment-note path and the binary path so UI surfaces can offer note
 navigation separately from binary preview/download behavior.
 
-## Live Sync Event Emission
+## Filesystem Event Emission
 
 `api.ts` emits browser plugin file events for both body edits and frontmatter
 edits. `setFrontmatterProperty()` and `removeFrontmatterProperty()` always
@@ -86,10 +86,9 @@ external Markdown edits, creates, deletes, and renames on the same frontend
 refresh path as plugin/core filesystem events without granting broad webview
 filesystem scope.
 
-That event contract is required for provider-owned live sync. The sync guest
-uses `file_saved` to rebuild workspace metadata from disk and propagate
-description, audience, `part_of`, `contents`, and other frontmatter changes
-across connected clients without relying on host-side CRDT refresh logic.
+The active web app uses this event contract for local UI refresh and plugin
+notifications. Legacy provider-sync modules may also consume these events, but
+`App.svelte` no longer starts a sync scheduler from them.
 
 For image previews on Tauri, the frontend can also prefer native `asset:`
 URLs (`convertFileSrc`) for local verified attachment files. When native
@@ -167,21 +166,24 @@ Unsupported mock commands now throw instead of silently returning `Ok`. That
 keeps preview/test failures localized to the missing command rather than
 surfacing later as confusing response-type mismatches.
 
-## Sync Boundary (Plugin-Owned)
+## Sync Boundary (Legacy)
 
-The web backend no longer initializes a host-side CRDT storage bridge.
+The web backend no longer initializes a host-side CRDT storage bridge, and the
+active app shell no longer exposes provider sync setup or manual sync controls.
 
 - `wasmWorkerNew.ts` only initializes storage/runtime (OPFS, IndexedDB, FSA,
-  plugin storage) and command execution.
-- Sync/CRDT orchestration is plugin-owned (for example, sync plugin commands and
-  plugin surfaces in settings/sidebar/status).
-- Runtime context passed to Extism guests includes generic provider-link
-  metadata for the current workspace, not just sync-plugin-specific IDs.
+  plugin storage for legacy compatibility) and command execution.
+- Legacy sync/CRDT orchestration remains in plugin/provider modules until the
+  old sidecar implementation is retired.
+- Runtime context passed to Extism guests can include legacy provider-link
+  metadata for backward compatibility.
 - `setupCrdtStorage()` remains a compatibility no-op in the worker API.
 
-## Native Sync (Tauri only)
+## Native Sync (Legacy Tauri API)
 
-The `TauriBackend` provides native sync methods that use the Rust sync client:
+The `TauriBackend` still provides native sync methods that use the Rust sync
+client. These methods are retained as legacy API surface and are not called by
+the current folder-first web app shell:
 
 ```typescript
 // Check if native sync is available

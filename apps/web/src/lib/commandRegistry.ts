@@ -118,8 +118,6 @@ export interface CommandRegistryContext {
   onOpenBackupImport: () => void;
   onImportFromClipboard: () => void | Promise<void>;
   onImportMarkdownFile: () => void | Promise<void>;
-  onSyncNow?: () => void | Promise<void>;
-  isSyncAvailable?: () => boolean;
   /** Plugin-declared command palette items from manifest CommandPaletteItem contributions. */
   pluginCommandPaletteItems: Array<{
     pluginId: string;
@@ -524,19 +522,6 @@ export function buildCommandRegistry(
       group: "workspace",
       icon: ShieldCheck,
       available: () => true,
-      execute: fn,
-      favoritable: true,
-    });
-  }
-
-  if (ctx.onSyncNow) {
-    const fn = ctx.onSyncNow;
-    add({
-      id: "workspace:sync-now",
-      label: "Sync Now",
-      group: "workspace",
-      icon: RefreshCw,
-      available: () => ctx.isSyncAvailable?.() ?? false,
       execute: fn,
       favoritable: true,
     });

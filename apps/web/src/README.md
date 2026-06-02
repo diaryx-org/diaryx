@@ -29,11 +29,11 @@ Source tree for the Diaryx web frontend.
 | `models/`      | Stores and services             |
 | `views/`       | View components                 |
 
-## Sync/Share Architecture
+## Workspace And Account Architecture
 
-Web no longer owns a CRDT bridge layer. Sync/share/provider/history behavior is
-implemented by the sync plugin and consumed through generic plugin command/UI
-infrastructure in the host.
+Web no longer presents sync providers as workspace storage choices. Workspaces
+are created or opened as local folders, and users can place those folders in an
+external sync tool if they want cross-device availability.
 
 `App.svelte` listens to backend filesystem events and refreshes workspace tree +
 active entry state from those events, rather than wiring direct host CRDT
@@ -41,11 +41,11 @@ bridge callbacks. In Tauri builds, the native backend also watches the active
 workspace directory and emits the same event shape for external file edits; the
 active editor reloads from disk only when it has no unsaved local draft.
 
-For Playwright sync coverage, `App.svelte` also exposes a localhost-only
+For Playwright coverage, `App.svelte` also exposes a localhost-only
 `globalThis.__diaryx_e2e` bridge in dev runs. That bridge is intentionally
-limited to test helpers such as root-path lookup, content mutation, sync-status
-inspection, and provider-link introspection so browser E2E flows can drive the
-generic host without importing duplicate app modules through Vite.
+limited to test helpers such as root-path lookup and content mutation so
+browser E2E flows can drive the generic host without importing duplicate app
+modules through Vite.
 
 ## Rename Behavior
 
@@ -83,8 +83,7 @@ unavailable.
 The normal first-run/add-workspace path is now folder-first: the welcome screen
 asks users to create a workspace in a selected folder or open an existing
 folder, then applies starter content or curated starter bundles inside that
-folder. Provider-backed restore remains available from the signed-in workspace
-picker, but it is no longer the default creation path.
+folder. Provider-backed restore is no longer exposed from onboarding.
 On iOS Tauri, first-run shows the welcome/onboarding screen before any
 workspace creation.
 On iOS Tauri, if the selected workspace directory exists but has no root index
@@ -121,15 +120,10 @@ path directly, sets a one-node synthetic tree for save context, skips workspace
 tree refresh/validation, and lets the left sidebar present the Files picker
 instead of the built-in workspace tree.
 
-On teardown/reload, `App.svelte` now also stops the sync scheduler, clears
-pending autosave/tree-refresh timers, drops filesystem subscriptions, and
-resets the backend singleton so dev-mode remounts do not inherit stale
-frontend async state from a previous webview instance.
-
-When restoring a remote workspace from onboarding, the welcome flow now skips
-bundle selection and instead inspects the restored root frontmatter to install
-any registry plugins declared by that workspace's `plugins` config (plus
-disabled plugin IDs that still need to be available locally).
+On teardown/reload, `App.svelte` clears pending autosave/tree-refresh timers,
+drops filesystem subscriptions, and resets the backend singleton so dev-mode
+remounts do not inherit stale frontend async state from a previous webview
+instance.
 
 ## Mobile Swipe Behavior
 

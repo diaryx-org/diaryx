@@ -6,10 +6,9 @@
    * - OPFS (default): High-performance, browser-managed
    * - IndexedDB: Traditional browser database
    * - File System Access: User-visible local folder
-   * - Plugin storage: Cloud storage provided by a plugin (S3, Google Drive, etc.)
    */
   import { Button } from "$lib/components/ui/button";
-  import { HardDrive, Database, FolderOpen, AlertCircle, Check, Cloud } from "@lucide/svelte";
+  import { HardDrive, Database, FolderOpen, AlertCircle, Check } from "@lucide/svelte";
   import {
     isStorageTypeSupported,
     getStorageTypeName,
@@ -20,12 +19,9 @@
   import {
     getWorkspaceStorageType,
     setWorkspaceStorageType,
-    getWorkspaceStoragePluginId,
-    setWorkspaceStoragePlugin,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import { switchWorkspace } from "$lib/workspace/switchWorkspace";
   import { isTauri } from "$lib/backend/interface";
-  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 
   interface Props {
     workspaceId: string;
@@ -34,20 +30,13 @@
 
   let { workspaceId, workspaceName }: Props = $props();
 
-  const pluginStore = getPluginStore();
-
   // Current and selected storage type (per-workspace)
   let currentType = $derived(getWorkspaceStorageType(workspaceId));
-  let currentPluginId = $derived(getWorkspaceStoragePluginId(workspaceId));
   let selectedType = $state<StorageType | null>(null);
-  let selectedPluginId = $state<string | null>(null);
 
   // Use selected if user has picked something, otherwise show current
   let effectiveSelected = $derived(selectedType ?? currentType);
-  let needsChange = $derived(
-    effectiveSelected !== currentType ||
-    (effectiveSelected === 'plugin' && selectedPluginId !== null && selectedPluginId !== currentPluginId)
-  );
+  let needsChange = $derived(effectiveSelected !== currentType);
   let isChanging = $state(false);
 
   // Storage options with icons
@@ -60,13 +49,7 @@
   function handleSelect(type: StorageType) {
     if (isStorageTypeSupported(type)) {
       selectedType = type;
-      selectedPluginId = null;
     }
-  }
-
-  function handleSelectPlugin(pluginId: string) {
-    selectedType = 'plugin';
-    selectedPluginId = pluginId;
   }
 
   async function applyChange() {
@@ -80,19 +63,13 @@
         await storeWorkspaceFileSystemHandle(workspaceId, handle);
       }
 
-      if (effectiveSelected === 'plugin' && selectedPluginId) {
-        // Set plugin storage (sets storageType='plugin' + plugin metadata)
-        setWorkspaceStoragePlugin(workspaceId, selectedPluginId);
-      } else {
-        // Persist the new storage type in the workspace registry
-        setWorkspaceStorageType(workspaceId, effectiveSelected);
-      }
+      // Persist the new storage type in the workspace registry
+      setWorkspaceStorageType(workspaceId, effectiveSelected);
 
       // Re-init workspace with new storage (no page reload)
       await switchWorkspace(workspaceId, workspaceName);
 
       selectedType = null;
-      selectedPluginId = null;
     } catch (e) {
       console.error('[StorageSettings] Failed to switch storage:', e);
     } finally {
@@ -102,7 +79,6 @@
 
   function cancelChange() {
     selectedType = null;
-    selectedPluginId = null;
   }
 </script>
 
@@ -170,40 +146,6 @@
             </p>
           </div>
           {#if isSelected && isSupported}
-            <Check class="size-4 text-primary mt-0.5" />
-          {/if}
-        </button>
-      {/each}
-
-      <!-- Plugin Storage Providers -->
-      {#each pluginStore.storageProviders as provider}
-        {@const isSelected = effectiveSelected === 'plugin' && selectedPluginId === provider.contribution.id}
-        {@const isCurrent = currentType === 'plugin' && currentPluginId === provider.contribution.id}
-
-        <button
-          type="button"
-          class="w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors
-            {isSelected || (isCurrent && !selectedType) ? 'border-primary bg-secondary' : 'border-border hover:border-primary/50'}
-            cursor-pointer"
-          onclick={() => handleSelectPlugin(provider.contribution.id)}
-        >
-          <div class="mt-0.5">
-            <Cloud class="size-5 {isSelected || (isCurrent && !selectedType) ? 'text-primary' : 'text-muted-foreground'}" />
-          </div>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="font-medium text-sm">{provider.contribution.label}</span>
-              {#if isCurrent}
-                <span class="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded">Current</span>
-              {/if}
-            </div>
-            {#if provider.contribution.description}
-              <p class="text-xs text-muted-foreground mt-0.5">
-                {provider.contribution.description}
-              </p>
-            {/if}
-          </div>
-          {#if isSelected || (isCurrent && !selectedType)}
             <Check class="size-4 text-primary mt-0.5" />
           {/if}
         </button>

@@ -45,12 +45,8 @@
     Copy,
     CircleHelp,
   } from "@lucide/svelte";
-  import { Cloud, CloudOff, CloudDownload, Loader2 as CloudSpinner } from "@lucide/svelte";
   import { getAuthState } from "./auth";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
-  import SyncDialog from "./components/SyncDialog.svelte";
-  import { getSyncState } from "$lib/sync/syncScheduler.svelte";
-  import { onDeferredQueueProgress } from "$lib/sync/deferredFileQueue";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
@@ -91,7 +87,6 @@
     marketplaceDialogOpen?: boolean;
     onOpenAccountSettings: () => void;
     onAddWorkspace: () => void;
-    onBrowseRemoteWorkspaces?: () => void;
     onOpenFileFromPicker?: () => void | Promise<void>;
     onMoveEntry: (fromPath: string, toParentPath: string, position?: { beforePath?: string; afterPath?: string }) => void;
     onOpenMoveDialog?: (path: string) => void;
@@ -122,11 +117,6 @@
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
     onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
-    syncEnabled?: boolean;
-    onSync?: () => Promise<void>;
-    onSyncPull?: () => Promise<void>;
-    onSyncPush?: () => Promise<void>;
-    onSyncRefreshStatus?: () => Promise<void>;
   }
 
   let {
@@ -154,7 +144,6 @@
     marketplaceDialogOpen = false,
     onOpenAccountSettings,
     onAddWorkspace,
-    onBrowseRemoteWorkspaces,
     onOpenFileFromPicker,
     onMoveEntry,
     onOpenMoveDialog,
@@ -185,32 +174,7 @@
     requestedTab = null,
     onRequestedTabConsumed,
     onPluginHostAction,
-    syncEnabled = false,
-    onSync,
-    onSyncPull,
-    onSyncPush,
-    onSyncRefreshStatus,
   }: Props = $props();
-
-  let showSyncDialog = $state(false);
-  const syncState = getSyncState();
-  let deferredDownloading = $state(false);
-
-  $effect(() => {
-    const unsub = onDeferredQueueProgress((p) => {
-      deferredDownloading = p.total > 0 && p.completed < p.total;
-    });
-    return unsub;
-  });
-
-  const syncIndicatorColor = $derived.by(() => {
-    const s = collaborationStore.effectiveSyncStatus;
-    if (s === "synced") return "text-green-600 dark:text-green-400";
-    if (s === "syncing" || s === "connecting")
-      return "text-amber-600 dark:text-amber-400";
-    if (s === "error") return "text-destructive";
-    return "text-muted-foreground";
-  });
 
   // Platform detection for keyboard shortcut display
   const isMac =
@@ -1424,32 +1388,6 @@
 
   <!-- Workspace Selector -->
   <div class="flex items-center gap-1 px-3 pt-1 pb-1 shrink-0">
-    {#if syncEnabled}
-      <Tooltip.Root>
-        <Tooltip.Trigger>
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={() => { showSyncDialog = true; }}
-            class="size-8 shrink-0"
-            aria-label="Sync"
-          >
-            {#if syncState.syncing}
-              <CloudSpinner class="size-4 animate-spin text-amber-500" />
-            {:else if collaborationStore.serverOffline}
-              <CloudOff class={`size-4 ${syncIndicatorColor}`} />
-            {:else if deferredDownloading}
-              <CloudDownload class="size-4 text-amber-500 animate-pulse" />
-            {:else}
-              <Cloud class={`size-4 ${syncIndicatorColor}`} />
-            {/if}
-          </Button>
-        </Tooltip.Trigger>
-        {#if !mobileState.isMobile && !collapsed && !showSyncDialog}
-          <Tooltip.Content>Sync</Tooltip.Content>
-        {/if}
-      </Tooltip.Root>
-    {/if}
     <div class="flex-1 min-w-0">
       <WorkspaceSelector
         onSwitchStart={onWorkspaceSwitchStart}
@@ -1537,7 +1475,6 @@
       <SignInDialog
         bind:open={profilePopoverOpen}
         onOpenAccountSettings={() => { profilePopoverOpen = false; onOpenAccountSettings(); }}
-        onBrowseRemoteWorkspaces={() => { profilePopoverOpen = false; onBrowseRemoteWorkspaces?.(); }}
       />
       <div class="flex items-center gap-1 shrink-0">
         <Tooltip.Root>
@@ -1597,16 +1534,6 @@
     </div>
   </div>
 </aside>
-
-{#if syncEnabled && onSync && onSyncPull && onSyncPush}
-  <SyncDialog
-    bind:open={showSyncDialog}
-    onSync={onSync}
-    onPull={onSyncPull}
-    onPush={onSyncPush}
-    onRefreshStatus={onSyncRefreshStatus ?? (async () => {})}
-  />
-{/if}
 
 <!-- Mobile Action Sheet for context menu -->
 <MobileActionSheet

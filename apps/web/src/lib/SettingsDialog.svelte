@@ -18,19 +18,15 @@
   import WorkspaceSettings from "./settings/WorkspaceSettings.svelte";
   import LinkSettings from "./settings/LinkSettings.svelte";
   import StorageSettings from "./settings/StorageSettings.svelte";
-  import SyncLinkSettings from "./settings/SyncLinkSettings.svelte";
   import AccountSettings from "./settings/AccountSettings.svelte";
   import BackupSettings from "./settings/BackupSettings.svelte";
   import ImportSettings from "./settings/ImportSettings.svelte";
   import ClearDataSettings from "./settings/ClearDataSettings.svelte";
-  import ICloudSettings from "./settings/ICloudSettings.svelte";
   import DebugInfo from "./settings/DebugInfo.svelte";
   import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import PluginIframe from "./components/PluginIframe.svelte";
   import { getLegacyBuiltinFields } from "./components/pluginBuiltinCompat";
-  import { isTauri } from "$lib/backend/interface";
-  import { getBackend } from "$lib/backend";
   import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
@@ -159,17 +155,6 @@
   // Track active tab
   let activeTab = $state("general");
 
-  // Whether this is an Apple build (for iCloud settings visibility)
-  let isAppleBuild = $state(false);
-  $effect(() => {
-    if (isTauri()) {
-      getBackend().then((backend) => {
-        const paths = backend.getAppPaths();
-        isAppleBuild = (paths?.is_apple_build as boolean) ?? false;
-      }).catch(() => {});
-    }
-  });
-
   // Eagerly load plugin config when a plugin settings tab is active.
   // This replaces the old {#await} pattern so the UI renders immediately.
   $effect(() => {
@@ -210,7 +195,6 @@
       {:else if activeTab === "workspace"}
         <div class="space-y-4">
           <WorkspaceSettings workspaceRootIndex={workspacePath} />
-          <SyncLinkSettings workspaceId={currentWorkspaceId} workspaceName={currentWorkspaceName} />
           <LinkSettings workspaceRootIndex={workspacePath} />
           <StorageSettings workspaceId={currentWorkspaceId} workspaceName={currentWorkspaceName} />
         </div>
@@ -225,9 +209,6 @@
         </div>
       {:else if activeTab === "data"}
         <div class="space-y-4">
-          {#if isAppleBuild}
-            <ICloudSettings />
-          {/if}
           <BackupSettings {workspacePath} />
           <ImportSettings {workspacePath} />
           <ClearDataSettings />

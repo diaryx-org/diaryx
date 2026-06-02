@@ -15,7 +15,6 @@
     AlertCircle,
     Fingerprint,
     WifiOff,
-    Cloud,
     CircleUser,
   } from "@lucide/svelte";
   import SignOutDialog from "$lib/SignOutDialog.svelte";
@@ -28,7 +27,6 @@
     requestMagicLink,
     verifyMagicLink,
     reconnectServer,
-    listUserWorkspaceNamespaces,
   } from "$lib/auth";
   import {
     authenticateWithPasskey,
@@ -37,19 +35,14 @@
   import { isTauri } from "$lib/backend/interface";
   import { getBackend, createApi } from "$lib/backend";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
-  import {
-    getLocalWorkspaces,
-    getWorkspaceProviderLinks,
-  } from "$lib/storage/localWorkspaceRegistry.svelte";
   import { onMount } from "svelte";
 
   interface Props {
     open: boolean;
     onOpenAccountSettings?: () => void;
-    onBrowseRemoteWorkspaces?: () => void;
   }
 
-  let { open = $bindable(), onOpenAccountSettings, onBrowseRemoteWorkspaces }: Props = $props();
+  let { open = $bindable(), onOpenAccountSettings }: Props = $props();
 
   let authState = $derived(getAuthState());
 
@@ -209,34 +202,6 @@
     }
   }
 
-  // Remote workspace count (for "Browse remote workspaces" button)
-  let unlinkedRemoteCount = $state(0);
-  let loadingRemote = $state(false);
-
-  $effect(() => {
-    if (authState.isAuthenticated && open) {
-      loadingRemote = true;
-      const linkedIds = new Set<string>();
-      for (const ws of getLocalWorkspaces()) {
-        for (const link of getWorkspaceProviderLinks(ws.id)) {
-          linkedIds.add(link.remoteWorkspaceId);
-        }
-      }
-      listUserWorkspaceNamespaces()
-        .then((namespaces) => {
-          unlinkedRemoteCount = namespaces.filter((ns) => !linkedIds.has(ns.id)).length;
-        })
-        .catch(() => { unlinkedRemoteCount = 0; })
-        .finally(() => { loadingRemote = false; });
-    } else {
-      unlinkedRemoteCount = 0;
-    }
-  });
-
-  function handleBrowseRemote() {
-    open = false;
-    onBrowseRemoteWorkspaces?.();
-  }
 </script>
 
 <Dialog.Root bind:open>
@@ -284,23 +249,6 @@
             </div>
           {/if}
 
-          {#if unlinkedRemoteCount > 0}
-            <Button
-              variant="outline"
-              size="sm"
-              class="w-full justify-start"
-              onclick={handleBrowseRemote}
-            >
-              <Cloud class="size-3.5 mr-1.5" />
-              Browse remote workspaces ({unlinkedRemoteCount})
-            </Button>
-          {:else if loadingRemote}
-            <div class="flex items-center gap-2 text-xs text-muted-foreground py-1">
-              <Loader2 class="size-3.5 animate-spin" />
-              Checking remote workspaces...
-            </div>
-          {/if}
-
           <Separator />
 
           <div class="space-y-1.5">
@@ -333,7 +281,7 @@
         <div class="space-y-3">
           {#if !verificationSent}
             <p class="text-xs text-muted-foreground">
-              Sign in to sync across devices and host live editing sessions.
+              Sign in to manage your Diaryx account.
             </p>
 
             <div class="space-y-1.5">

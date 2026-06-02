@@ -3,7 +3,7 @@ title: ROADMAP
 description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
-updated: 2026-04-27T08:08:23-06:00
+updated: 2026-06-02T00:00:00-06:00
 part_of: '[Diaryx](/Diaryx.md)'
 link_of:
 - '[Diaryx](/Diaryx.md)'
@@ -24,7 +24,7 @@ Diaryx is still in its infancy. It aims to solve the audience filtering problem 
 **Other**
 
 - [ ] Publish Obsidian plugin
-- [ ] Make sync plugin work
+- [ ] Remove first-party sync setup from the app in favor of folder-based workspaces and external sync tools
 - [ ] Make plugin-import and plugin-pandoc work
 - [ ] Finish TestFlight and publish to app store
 
@@ -38,9 +38,9 @@ Diaryx is still in its infancy. It aims to solve the audience filtering problem 
 ## Would be cool (long term, low priority)
 
 - Abstract away kinds of metadata—instead of YAML frontmatter, why not TOML, JSON, or other format? Why not endmatter or an arbitrary metadata code block?
-- Evaluate whether the server-side CRDT primitives now living in `diaryx_server::sync` should absorb additional sync plugin logic, or whether plugin-side sync stays self-contained in the Extism guest.
+- Revisit first-party sync only after the folder-based workspace model is solid; any future sync should build on local folders instead of a separate sidecar workspace location.
 - Interactive functionality in published Diaryx
-- More servers/load balancing for `diaryx_sync_server` (microservices?)
+- Split or rename `diaryx_sync_server`/Cloudflare backend code so auth/account/publishing functionality remains while first-party sync code can be removed cleanly.
 - In the marketplace:
   - UI sounds packs
   - UI/keyboard haptics packs
@@ -58,4 +58,4 @@ Diaryx is still in its infancy. It aims to solve the audience filtering problem 
 - Persistent identifier support for qualified files (ARK). Useful for academia/family history.
 - Integration with FamilySearch API for family history records—import/export
 - Per-audience workspace settings
-- diaryx_sync_server takes plugins and handles only server compute primitives, auth, and billing (sync logic owned entirely by sync plugin, publish logic owned entirely by publish plugin, etc.)
+- The backend takes plugins and handles only server compute primitives, auth, billing, and publishing. First-party sync should be removed or rebuilt later on top of folder-based workspaces.

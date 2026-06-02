@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.5.1
-updated: 2026-04-25T17:39:46-06:00
+updated: 2026-06-02T00:00:00-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -138,12 +138,13 @@ Tag any section of your writing with an audience — just you, family, close fri
 
 ### We never hold your words hostage.
 
-Diaryx is local-first. Your entries live on your device as plain Markdown files you can open in any text editor. Sync is optional, and you can leave any time with everything you wrote.
+Diaryx is local-first. Your entries live in a folder you choose as plain Markdown files you can open in any text editor. Put that folder in iCloud Drive, Dropbox, Syncthing, Git, or another external sync tool if you want it available elsewhere.
 
 - **Works everywhere**: Web, iOS, Mac, Windows, Linux, even CLI!
 - **Plain Markdown**: No proprietary format. Your files are yours, readable forever.
+- **Folder-based storage**: You choose where the workspace lives and can move or sync that folder with normal file tools.
 - **Share your way**: Publish to your own diaryx.org subdomain, email a filtered version, or share in person.
-- **Extend with plugins**: Add drawing, audio recording, cloud sync, colored highlights, and more through a growing plugin library.
+- **Extend with plugins**: Add drawing, audio recording, colored highlights, and more through a growing plugin library.
 
 ---
 

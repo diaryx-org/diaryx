@@ -28,17 +28,16 @@ View components organized by feature area.
 
 ## Onboarding
 
-`WelcomeScreen.svelte` owns first-run workspace setup and restore. Its primary
-path is folder-first: users create a new Diaryx workspace in a selected folder
-or open an existing workspace folder before choosing any sync/provider option.
+`WelcomeScreen.svelte` owns first-run workspace setup. The active path is
+folder-first: users create a new Diaryx workspace in a selected folder or open
+an existing workspace folder.
 
 - Bundle selection is now a starter-content choice for the selected folder
-  workspace rather than a sync-provider choice.
+  workspace.
 - iOS Tauri can expose an optional single-file fallback when cloud providers
   allow opening a Markdown file but gray out folder selection. That path opens
   the file directly and does not build a full workspace tree.
-- Built-in host providers such as Apple/Tauri iCloud Drive still appear in the
-  provider-choice UI for moving the current workspace, but not as the default
-  first-run path.
-- The workspace picker can restore either server-backed namespaces or provider-owned restore targets surfaced directly by the host.
-- Provider-backed namespaces that exist on the account but are unsupported on the current client stay visible in the picker with an unavailable message instead of disappearing from restore UI.
+- Signing in is account-oriented and no longer opens remote workspace restore
+  or provider-backed workspace creation flows.
+- Users who want cross-device access should place the selected workspace folder
+  in iCloud Drive, Dropbox, Syncthing, Git, or another external sync tool.

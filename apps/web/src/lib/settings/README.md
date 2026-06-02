@@ -16,34 +16,33 @@ Settings panel components for `SettingsDialog.svelte`.
 | File | Purpose |
 | --- | --- |
 | `DisplaySettings.svelte` | Display mode and focus-mode preferences. |
-| `WorkspaceSettings.svelte` / `WorkspaceManagement.svelte` | Workspace config and provider link/unlink management. |
-| `StorageSettings.svelte` | Local storage backend settings. |
+| `WorkspaceSettings.svelte` / `WorkspaceManagement.svelte` | Workspace config and read-only local workspace overview. |
+| `StorageSettings.svelte` | Local storage backend settings. Plugin/cloud storage providers are not shown as workspace sync choices. |
 | `DebugInfo.svelte` | Runtime app/config path diagnostics. On Tauri it can read the active log file into the panel and, on desktop, reveal that file in the system file manager. |
 | `ImportSettings.svelte` | ZIP import flow for importing a Diaryx workspace export. |
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
 | `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified, and local installs review requested permissions on both browser and Tauri paths before install. Uninstall also clears workspace-level `plugins.<id>` / `disabled_plugins` entries through the Rust backend command path and drops plugin-owned local metadata / namespaces when present. |
 | `PluginSettingsTab.svelte` | Declarative plugin field renderer, including generic host actions, follow-up commands, workspace metadata patch handling, and temporary file-byte bridging for plugin commands that call `host_request_file`. |
-| `ICloudSettings.svelte` | iCloud Drive toggle and sync status (iOS Apple builds only). Conditionally rendered in the Data tab. |
-| `syncSettingsLogic.ts` | Shared sync/storage usage helpers used by settings UIs. |
+| `SyncLinkSettings.svelte` / `ICloudSettings.svelte` | Legacy sync settings components retained while the old provider-sync implementation is unwound; not rendered by `SettingsDialog.svelte`. |
+| `syncSettingsLogic.ts` | Legacy sync/storage usage helpers used by legacy settings UIs. |
 
-`WorkspaceManagement.svelte` now shows a read-only account/workspace overview,
-including account-linked workspaces whose provider is unavailable on the current
-client, so Apple-only iCloud workspaces remain visible on unsupported devices
-with an explanatory unavailable state. It no longer assumes the first installed
-provider is the canonical cloud provider; linked, downloadable, and linkable
-rows now use each workspace's actual provider or render actions per ready
-provider.
+`WorkspaceManagement.svelte` now shows only local workspaces and explains that
+users can place the folder in an external sync tool such as iCloud Drive,
+Dropbox, Syncthing, or Git. It no longer lists cloud-linked, downloadable, or
+provider-unavailable workspaces.
 
 ## Plugin Settings Tabs
 
 `SettingsDialog.svelte` renders plugin-contributed settings tabs dynamically:
 
-- `ComponentRef::Iframe` contributions render via `PluginIframe` (still used by sync snapshots/history and templating plugin panels)
+- `ComponentRef::Iframe` contributions render via `PluginIframe` (used by plugin panels such as templating)
 - `ComponentRef::Builtin` contributions can resolve through `pluginBuiltinCompat` for host-backed compatibility fields when needed
 - Declarative field contributions render via `PluginSettingsTab`
 - `PluginSettingsTab` can invoke arbitrary host-managed actions, apply config patches, write plugin-scoped workspace metadata patches from command results, gate nested field groups with conditions like `authenticated` or `config:import_format=markdown`, and pass selected file bytes through both browser and native plugin command paths
 
-Google Drive storage and the GitHub sync provider both use declarative settings plus a host-managed OAuth action. GitHub also supports pasting a personal access token as a fallback when OAuth is unavailable on the current platform. `diaryx.sync` and `diaryx.share` both use declarative settings surfaces, while snapshots/history and templating remain iframe-backed.
+Declarative plugin settings remain available for non-sync plugins and
+host-managed actions such as OAuth. Legacy sync provider settings should stay
+out of the active settings tabs unless the product direction changes again.
 
 ## Mobile Drawer Layout
 
@@ -82,6 +81,6 @@ same log so mobile/TestFlight issues can be debugged without attaching Xcode.
   - `provider_mode === "managed"` and
   - current auth tier is not Plus.
 - The AI provider mode selector remains visible so users can switch back to BYO mode.
-- When `diaryx.ai` config is saved in managed mode, settings persistence ensures root frontmatter plugin permissions include the current sync server hostname under:
+- When `diaryx.ai` config is saved in managed mode, settings persistence ensures root frontmatter plugin permissions include the current backend hostname under:
   - `plugins.diaryx.ai.permissions.http_requests.include`
   - no wildcard `all` is used.

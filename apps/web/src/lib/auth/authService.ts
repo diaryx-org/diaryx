@@ -181,6 +181,35 @@ export class AuthService {
     }
   }
 
+  private errorMessageFromBody(data: unknown | null, fallback: string): string {
+    if (!data || typeof data !== "object") return fallback;
+
+    const error = (data as { error?: unknown }).error;
+    if (typeof error === "string" && error.trim()) return error;
+
+    const message = (data as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+
+    return fallback;
+  }
+
+  private async authErrorFromResponse(
+    response: Response,
+    fallback: string,
+  ): Promise<AuthError> {
+    const data = await this.parseErrorBody(response);
+    const devices =
+      data && typeof data === "object" && Array.isArray((data as any).devices)
+        ? (data as any).devices
+        : undefined;
+    return new AuthError(
+      this.errorMessageFromBody(data, fallback),
+      response.status,
+      data,
+      devices,
+    );
+  }
+
   private formatQuotaMessage(
     payload: StorageLimitExceededErrorResponse,
   ): string {
@@ -413,7 +442,7 @@ export class AuthService {
     });
 
     if (!response.ok) {
-      throw new AuthError("Failed to get devices", response.status);
+      throw await this.authErrorFromResponse(response, "Failed to get devices");
     }
 
     return response.json();
@@ -433,7 +462,7 @@ export class AuthService {
     });
 
     if (!response.ok) {
-      throw new AuthError("Failed to rename device", response.status);
+      throw await this.authErrorFromResponse(response, "Failed to rename device");
     }
   }
 
@@ -447,7 +476,7 @@ export class AuthService {
     });
 
     if (!response.ok) {
-      throw new AuthError("Failed to delete device", response.status);
+      throw await this.authErrorFromResponse(response, "Failed to delete device");
     }
   }
 

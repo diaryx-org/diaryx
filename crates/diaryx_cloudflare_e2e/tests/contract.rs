@@ -75,6 +75,7 @@ async fn cloudflare_contract_suite() {
     run!(test_magic_link_rejects_invalid_email);
     run!(test_magic_link_verify_returns_session);
     run!(test_me_without_auth_returns_401);
+    run!(test_delete_current_device_returns_actionable_error);
 
     // -- Namespace lifecycle ----------------------------------------------
     run!(test_namespace_create_list_get_lifecycle);

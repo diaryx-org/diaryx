@@ -7,10 +7,43 @@
 
 mod support;
 
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode};
 use serde_json::json;
 
 use support::{TestApp, build_test_router, read_json, read_status_and_json};
+
+async fn sign_in(app: &TestApp, email: &str) -> String {
+    let response = app
+        .post_json("/api/auth/magic-link", &json!({ "email": email }))
+        .await;
+    let (status, body) = read_status_and_json(response).await;
+    assert_eq!(status, StatusCode::OK, "body was: {body}");
+
+    let dev_link = body
+        .get("dev_link")
+        .and_then(|v| v.as_str())
+        .expect("dev_link should be present when email is not configured");
+    let token = dev_link
+        .split("token=")
+        .nth(1)
+        .expect("dev_link should include token")
+        .split('&')
+        .next()
+        .expect("token query value should be present");
+
+    let response = app
+        .get(&format!(
+            "/api/auth/verify?token={token}&device_name=SmokeDevice"
+        ))
+        .await;
+    let (status, body) = read_status_and_json(response).await;
+    assert_eq!(status, StatusCode::OK, "body was: {body}");
+
+    body.get("token")
+        .and_then(|v| v.as_str())
+        .expect("verify response should include a token")
+        .to_string()
+}
 
 #[tokio::test]
 async fn health_endpoint_returns_200_ok() {
@@ -77,5 +110,41 @@ async fn magic_link_rejects_invalid_email() {
     assert!(
         body.get("error").and_then(|v| v.as_str()).is_some(),
         "should return an error field, got: {body}"
+    );
+}
+
+#[tokio::test]
+async fn delete_current_device_returns_actionable_error_body() {
+    let app: TestApp = build_test_router();
+    let session_token = sign_in(&app, "alice@example.com").await;
+
+    let response = app
+        .request_with_bearer(Method::GET, "/api/auth/me", &session_token)
+        .await;
+    let (status, body) = read_status_and_json(response).await;
+    assert_eq!(status, StatusCode::OK, "body was: {body}");
+    let current_device_id = body
+        .get("devices")
+        .and_then(|v| v.as_array())
+        .and_then(|devices| devices.first())
+        .and_then(|device| device.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("signed-in user should have a registered device");
+
+    let response = app
+        .request_with_bearer(
+            Method::DELETE,
+            &format!("/api/auth/devices/{current_device_id}"),
+            &session_token,
+        )
+        .await;
+    let (status, body) = read_status_and_json(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body was: {body}");
+    assert_eq!(
+        body.get("error").and_then(|v| v.as_str()),
+        Some(
+            "You cannot delete the device you are currently using. Sign out on this device instead."
+        ),
     );
 }

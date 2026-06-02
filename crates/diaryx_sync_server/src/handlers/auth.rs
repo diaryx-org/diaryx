@@ -532,14 +532,24 @@ async fn rename_device(
     Json(body): Json<RenameDeviceRequest>,
 ) -> impl IntoResponse {
     // Verify the device belongs to the user
-    let devices = state
-        .auth_store
-        .list_user_devices(&auth.user.id)
-        .await
-        .unwrap_or_default();
+    let devices = match state.auth_store.list_user_devices(&auth.user.id).await {
+        Ok(devices) => devices,
+        Err(e) => {
+            error!("Failed to list devices before rename: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("Failed to load devices")),
+            )
+                .into_response();
+        }
+    };
 
     if !devices.iter().any(|d| d.id == device_id) {
-        return StatusCode::NOT_FOUND.into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("Device not found")),
+        )
+            .into_response();
     }
 
     let name = body.name.trim().to_string();
@@ -553,10 +563,18 @@ async fn rename_device(
 
     match state.auth_store.rename_device(&device_id, &name).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("Device not found")),
+        )
+            .into_response(),
         Err(e) => {
             error!("Failed to rename device: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("Failed to rename device")),
+            )
+                .into_response()
         }
     }
 }
@@ -568,29 +586,49 @@ async fn delete_device(
     axum::extract::Path(device_id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     // Verify the device belongs to the user
-    let devices = state
-        .auth_store
-        .list_user_devices(&auth.user.id)
-        .await
-        .unwrap_or_default();
+    let devices = match state.auth_store.list_user_devices(&auth.user.id).await {
+        Ok(devices) => devices,
+        Err(e) => {
+            error!("Failed to list devices before delete: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("Failed to load devices")),
+            )
+                .into_response();
+        }
+    };
 
     let owns_device = devices.iter().any(|d| d.id == device_id);
 
     if !owns_device {
-        return StatusCode::NOT_FOUND;
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("Device not found")),
+        )
+            .into_response();
     }
 
     // Don't allow deleting the current device
     if device_id == auth.session.device_id {
-        return StatusCode::BAD_REQUEST;
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "You cannot delete the device you are currently using. Sign out on this device instead.",
+            )),
+        )
+            .into_response();
     }
 
     if let Err(e) = state.auth_store.delete_device(&device_id).await {
         error!("Failed to delete device: {}", e);
-        return StatusCode::INTERNAL_SERVER_ERROR;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new("Failed to delete device")),
+        )
+            .into_response();
     }
 
-    StatusCode::NO_CONTENT
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// DELETE /auth/account - Delete user account and all server data

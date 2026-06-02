@@ -22,14 +22,14 @@ use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, Response, StatusCode, header};
-use axum::{Router, routing::get};
+use axum::{Extension, Router, routing::get};
 use rusqlite::Connection;
 use tower::ServiceExt;
 
 use diaryx_sync_server::adapters::{
     NativeAuthSessionStore, NativeAuthStore, NativeNamespaceStore, NativeUserStore,
 };
-use diaryx_sync_server::auth::{MagicLinkService, PasskeyService};
+use diaryx_sync_server::auth::{AuthExtractor, MagicLinkService, PasskeyService};
 use diaryx_sync_server::config::{
     AppleIapConfig, Config, EmailConfig, ManagedAiConfig, R2Config, StripeConfig,
 };
@@ -125,6 +125,21 @@ impl TestApp {
         self.request(req).await
     }
 
+    pub async fn request_with_bearer(
+        &self,
+        method: Method,
+        path: &str,
+        token: &str,
+    ) -> Response<Body> {
+        let req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .expect("request builder");
+        self.request(req).await
+    }
+
     pub async fn post_json(&self, path: &str, body: &serde_json::Value) -> Response<Body> {
         let req = Request::builder()
             .method(Method::POST)
@@ -158,6 +173,7 @@ pub fn build_test_router() -> TestApp {
     let user_store = Arc::new(NativeUserStore::new(repo.clone()));
     let auth_store = Arc::new(NativeAuthStore::new(repo.clone()));
     let namespace_store = Arc::new(NativeNamespaceStore::new(ns_repo));
+    let auth_extractor = AuthExtractor::new(auth_store.clone(), auth_session_store.clone());
 
     let auth_state = AuthState {
         magic_link_service,
@@ -175,7 +191,9 @@ pub fn build_test_router() -> TestApp {
         .route("/health", get(|| async { "OK" }))
         .nest("/auth", auth_routes(auth_state));
 
-    let router = Router::new().nest("/api", api);
+    let router = Router::new()
+        .nest("/api", api)
+        .layer(Extension(auth_extractor));
 
     TestApp {
         router,

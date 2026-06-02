@@ -128,8 +128,13 @@
   }
 
   async function handleDeleteDevice(deviceId: string) {
-    try { await deleteDevice(deviceId); }
-    catch (e) { error = e instanceof Error ? e.message : "Failed to delete device"; }
+    error = null;
+    try {
+      await deleteDevice(deviceId);
+    } catch (e) {
+      console.error("[AccountSettings] Failed to delete device:", { deviceId, error: e });
+      error = e instanceof Error ? e.message : "Failed to delete device";
+    }
   }
 
   async function handleRefresh() {
@@ -149,11 +154,16 @@
 
   async function confirmRenameDevice() {
     if (!renamingDeviceId || !renameValue.trim()) return;
+    error = null;
     try {
       await renameDevice(renamingDeviceId, renameValue.trim());
       renamingDeviceId = null;
       renameValue = "";
     } catch (e) {
+      console.error("[AccountSettings] Failed to rename device:", {
+        deviceId: renamingDeviceId,
+        error: e,
+      });
       error = e instanceof Error ? e.message : "Failed to rename device";
     }
   }

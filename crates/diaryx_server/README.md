@@ -63,12 +63,13 @@ Two public modules exist for cross-adapter testing:
 The `testing` module compiles unconditionally. The `contract::http` submodule
 requires the `reqwest-dispatcher` feature.
 
-Current contract suite covers 12 scenarios:
+Current contract suite covers 13 scenarios:
 
 - **Health + auth**: `health_endpoint_returns_200_ok`,
   `magic_link_dev_mode_returns_dev_credentials`,
   `magic_link_rejects_invalid_email`,
-  `magic_link_verify_returns_session`, `me_without_auth_returns_401`.
+  `magic_link_verify_returns_session`, `me_without_auth_returns_401`,
+  `delete_current_device_returns_actionable_error`.
 - **Namespace lifecycle**: `namespace_create_list_get_lifecycle`,
   `namespace_access_forbidden_for_other_users`.
 - **Object CRUD + URL fuzz**: `object_put_get_delete_roundtrip`,

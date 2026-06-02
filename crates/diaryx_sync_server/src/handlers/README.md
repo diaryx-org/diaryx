@@ -40,6 +40,11 @@ Auth verification endpoints (`/auth/verify`, `/auth/verify-code`, `/auth/passkey
 
 Auth verification also enforces the tier device cap during session creation; Free users can keep up to 2 registered devices and Plus users up to 10. When the limit is reached the `403` response includes a `devices` array with each device's `id`, `name`, and `last_seen_at`. The client can then re-submit the verification request with `replace_device_id` set to the ID of the device to remove, completing sign-in in one step.
 
+Device rename/delete endpoints return JSON `error` bodies for validation and
+ownership failures. In particular, deleting the current session's device
+returns `400` with an explanation to sign out on that device instead, so
+settings UIs can show the actual cause.
+
 ### Snapshot Endpoints
 
 `api.rs` also serves workspace snapshot downloads and uploads at

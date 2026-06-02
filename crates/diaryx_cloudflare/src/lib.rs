@@ -102,6 +102,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/auth/magic-link", handlers::request_magic_link)
         .get_async("/api/auth/verify", handlers::verify_magic_link)
         .post_async("/api/auth/verify-code", handlers::verify_code)
+        .get_async("/api/auth/devices", handlers::list_devices)
+        .patch_async("/api/auth/devices/:device_id", handlers::rename_device)
+        .delete_async("/api/auth/devices/:device_id", handlers::delete_device)
         // Passkeys
         .post_async(
             "/api/auth/passkeys/register/start",

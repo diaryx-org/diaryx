@@ -49,6 +49,11 @@ The verify methods accept an optional `replaceDeviceId`, and `AuthError`
 surfaces the server's `devices[]` list on 403 device-limit responses so
 `DeviceReplacementDialog` can drive the retry loop.
 
+Device management failures also preserve server-provided JSON `error` /
+`message` fields in `AuthError.message`. Account settings can therefore show
+specific delete/rename causes such as "device not found" or the server's
+current-device rejection instead of a generic failure string.
+
 Snapshot helpers support `include_attachments=true|false` (default `true`) for
 both upload and download bootstrap flows.
 

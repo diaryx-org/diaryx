@@ -305,12 +305,18 @@ describe("AuthService", () => {
       expect(url).toBe(`${SERVER}/auth/devices`);
     });
 
-    it("throws AuthError on failure", async () => {
-      stubFetch(mockResponse({}, { status: 401, ok: false }));
+    it("throws AuthError with server error message on failure", async () => {
+      stubFetch(
+        mockResponse(
+          { error: "Session expired" },
+          { status: 401, ok: false },
+        ),
+      );
 
       await expect(service.getDevices()).rejects.toMatchObject({
-        message: "Failed to get devices",
+        message: "Session expired",
         statusCode: 401,
+        details: { error: "Session expired" },
       });
     });
   });
@@ -331,14 +337,20 @@ describe("AuthService", () => {
       expect(body).toEqual({ name: "New Name" });
     });
 
-    it("throws AuthError on failure", async () => {
-      stubFetch(mockResponse({}, { status: 404, ok: false }));
+    it("throws AuthError with server error message on failure", async () => {
+      stubFetch(
+        mockResponse(
+          { error: "Device not found" },
+          { status: 404, ok: false },
+        ),
+      );
 
       await expect(
         service.renameDevice("tok", "bad-id", "Name"),
       ).rejects.toMatchObject({
-        message: "Failed to rename device",
+        message: "Device not found",
         statusCode: 404,
+        details: { error: "Device not found" },
       });
     });
   });
@@ -724,14 +736,39 @@ describe("AuthService", () => {
       );
     });
 
-    it("throws AuthError on failure", async () => {
-      stubFetch(mockResponse({}, { status: 404, ok: false }));
+    it("throws AuthError with server error message on failure", async () => {
+      stubFetch(
+        mockResponse(
+          { error: "You cannot delete the device you are currently using." },
+          { status: 400, ok: false },
+        ),
+      );
+
+      await expect(
+        service.deleteDevice("tok", "bad-id"),
+      ).rejects.toMatchObject({
+        message: "You cannot delete the device you are currently using.",
+        statusCode: 400,
+        details: {
+          error: "You cannot delete the device you are currently using.",
+        },
+      });
+    });
+
+    it("falls back when the server does not return a JSON error body", async () => {
+      stubFetch(
+        mockResponse(
+          "",
+          { status: 404, ok: false, contentType: "text/plain" },
+        ),
+      );
 
       await expect(
         service.deleteDevice("tok", "bad-id"),
       ).rejects.toMatchObject({
         message: "Failed to delete device",
         statusCode: 404,
+        details: null,
       });
     });
   });

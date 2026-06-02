@@ -134,16 +134,16 @@ fn js_uuid_v4() -> String {
     result.as_string().expect("randomUUID returned non-string")
 }
 
-/// Authenticate the request, returning the user ID on success.
+/// Authenticate the request, returning the full auth context on success.
 ///
 /// On failure, returns `Ok(Response)` with the correct HTTP status code (401
 /// for missing/invalid tokens, or the status mapped by [`error_response`] for
 /// other `ServerCoreError` variants) instead of `Err(worker::Error)` which
 /// the Workers runtime would surface as a generic 500.
-async fn authenticate(
+async fn authenticate_context(
     req: &Request,
     ctx: &RouteContext<()>,
-) -> Result<std::result::Result<String, Response>> {
+) -> Result<std::result::Result<diaryx_server::domain::AuthContext, Response>> {
     let auth_store = D1AuthStore::new(db(ctx)?);
     let session_store = D1AuthSessionStore::new(db(ctx)?);
 
@@ -167,8 +167,19 @@ async fn authenticate(
 
     let service = SessionValidationService::new(&auth_store, &session_store);
     match service.validate(&token).await {
-        Ok(auth_ctx) => Ok(Ok(auth_ctx.user.id)),
+        Ok(auth_ctx) => Ok(Ok(auth_ctx)),
         Err(e) => Ok(Err(error_response(e)?)),
+    }
+}
+
+/// Authenticate the request, returning the user ID on success.
+async fn authenticate(
+    req: &Request,
+    ctx: &RouteContext<()>,
+) -> Result<std::result::Result<String, Response>> {
+    match authenticate_context(req, ctx).await? {
+        Ok(auth_ctx) => Ok(Ok(auth_ctx.user.id)),
+        Err(resp) => Ok(Err(resp)),
     }
 }
 
@@ -1182,6 +1193,138 @@ pub async fn logout(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     };
     resp.headers_mut().set("Set-Cookie", clear_cookie)?;
     Ok(resp)
+}
+
+pub async fn list_devices(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = require_auth!(&req, &ctx);
+
+    let auth_store = D1AuthStore::new(db(&ctx)?);
+    let devices = match auth_store.list_user_devices(&user_id).await {
+        Ok(devices) => devices,
+        Err(e) => {
+            worker::console_error!("Failed to list devices: {e}");
+            return Response::from_json(&serde_json::json!({
+                "error": "Failed to load devices"
+            }))
+            .map(|r| r.with_status(500));
+        }
+    };
+    let body: Vec<serde_json::Value> = devices
+        .into_iter()
+        .map(|d| {
+            serde_json::json!({
+                "id": d.id,
+                "name": d.name,
+                "last_seen_at": d.last_seen_at.to_rfc3339(),
+            })
+        })
+        .collect();
+
+    Response::from_json(&body)
+}
+
+#[derive(Deserialize)]
+struct RenameDeviceBody {
+    name: String,
+}
+
+pub async fn rename_device(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = require_auth!(&req, &ctx);
+    let device_id = ctx
+        .param("device_id")
+        .ok_or_else(|| Error::from("missing device_id"))?
+        .to_string();
+    let body: RenameDeviceBody = req.json().await?;
+    let name = body.name.trim().to_string();
+
+    if name.is_empty() {
+        return Response::from_json(&serde_json::json!({
+            "error": "Device name cannot be empty"
+        }))
+        .map(|r| r.with_status(400));
+    }
+
+    let auth_store = D1AuthStore::new(db(&ctx)?);
+    let devices = match auth_store.list_user_devices(&user_id).await {
+        Ok(devices) => devices,
+        Err(e) => {
+            worker::console_error!("Failed to list devices before rename: {e}");
+            return Response::from_json(&serde_json::json!({
+                "error": "Failed to load devices"
+            }))
+            .map(|r| r.with_status(500));
+        }
+    };
+
+    if !devices.iter().any(|d| d.id == device_id) {
+        return Response::from_json(&serde_json::json!({
+            "error": "Device not found"
+        }))
+        .map(|r| r.with_status(404));
+    }
+
+    match auth_store.rename_device(&device_id, &name).await {
+        Ok(true) => Response::empty().map(|r| r.with_status(204)),
+        Ok(false) => Response::from_json(&serde_json::json!({
+            "error": "Device not found"
+        }))
+        .map(|r| r.with_status(404)),
+        Err(e) => {
+            worker::console_error!("Failed to rename device: {e}");
+            Response::from_json(&serde_json::json!({
+                "error": "Failed to rename device"
+            }))
+            .map(|r| r.with_status(500))
+        }
+    }
+}
+
+pub async fn delete_device(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth_ctx = match authenticate_context(&req, &ctx).await? {
+        Ok(auth_ctx) => auth_ctx,
+        Err(resp) => return Ok(resp),
+    };
+    let device_id = ctx
+        .param("device_id")
+        .ok_or_else(|| Error::from("missing device_id"))?
+        .to_string();
+
+    let auth_store = D1AuthStore::new(db(&ctx)?);
+    let devices = match auth_store.list_user_devices(&auth_ctx.user.id).await {
+        Ok(devices) => devices,
+        Err(e) => {
+            worker::console_error!("Failed to list devices before delete: {e}");
+            return Response::from_json(&serde_json::json!({
+                "error": "Failed to load devices"
+            }))
+            .map(|r| r.with_status(500));
+        }
+    };
+
+    if !devices.iter().any(|d| d.id == device_id) {
+        return Response::from_json(&serde_json::json!({
+            "error": "Device not found"
+        }))
+        .map(|r| r.with_status(404));
+    }
+
+    if device_id == auth_ctx.session.device_id {
+        return Response::from_json(&serde_json::json!({
+            "error": "You cannot delete the device you are currently using. Sign out on this device instead."
+        }))
+        .map(|r| r.with_status(400));
+    }
+
+    match auth_store.delete_device(&device_id).await {
+        Ok(()) => Response::empty().map(|r| r.with_status(204)),
+        Err(e) => {
+            worker::console_error!("Failed to delete device: {e}");
+            Response::from_json(&serde_json::json!({
+                "error": "Failed to delete device"
+            }))
+            .map(|r| r.with_status(500))
+        }
+    }
 }
 
 #[derive(Deserialize)]

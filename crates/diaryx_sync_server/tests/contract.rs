@@ -60,6 +60,12 @@ async fn contract_me_without_auth_returns_401() {
     contract::test_me_without_auth_returns_401(&d).await;
 }
 
+#[tokio::test]
+async fn contract_delete_current_device_returns_actionable_error() {
+    let (_s, d) = fresh_dispatcher().await;
+    contract::test_delete_current_device_returns_actionable_error(&d).await;
+}
+
 // -- Namespace lifecycle -----------------------------------------------------
 
 #[tokio::test]

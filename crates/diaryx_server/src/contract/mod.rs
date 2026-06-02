@@ -403,6 +403,56 @@ pub async fn test_me_without_auth_returns_401<D: HttpDispatcher>(dispatcher: &D)
     );
 }
 
+/// Deleting the device behind the current session must fail with an
+/// actionable JSON error. Otherwise settings clients can only show a generic
+/// "Failed to delete device" message for the most common invalid action.
+pub async fn test_delete_current_device_returns_actionable_error<D: HttpDispatcher>(
+    dispatcher: &D,
+) {
+    let token = sign_in_via_magic_link(dispatcher, &unique_email("delete-current-device")).await;
+
+    let me_resp = dispatcher
+        .dispatch(ContractRequest::get("/api/auth/me").with_bearer(&token))
+        .await;
+    assert_eq!(
+        me_resp.status,
+        200,
+        "/auth/me with fresh token should succeed: {} / {}",
+        me_resp.status,
+        me_resp.body_text()
+    );
+    let me = me_resp.body_json();
+    let current_device_id = me
+        .get("devices")
+        .and_then(|v| v.as_array())
+        .and_then(|devices| devices.first())
+        .and_then(|device| device.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("/auth/me missing current device id: {me}"));
+
+    let delete_resp = dispatcher
+        .dispatch(
+            ContractRequest::delete(format!("/api/auth/devices/{current_device_id}"))
+                .with_bearer(&token),
+        )
+        .await;
+    assert_eq!(
+        delete_resp.status,
+        400,
+        "deleting the current device should 400, got {}: {}",
+        delete_resp.status,
+        delete_resp.body_text()
+    );
+    let body = delete_resp.body_json();
+    assert_eq!(
+        body.get("error").and_then(|v| v.as_str()),
+        Some(
+            "You cannot delete the device you are currently using. Sign out on this device instead."
+        ),
+        "current-device delete error should explain the failure: {body}"
+    );
+}
+
 // ===========================================================================
 // Namespace lifecycle
 // ===========================================================================

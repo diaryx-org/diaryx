@@ -165,6 +165,10 @@ DELETE /auth/devices/{device_id}
 Authorization: Bearer <session_token>
 ```
 
+Deleting the current session's device returns `400` with a JSON `error`
+explaining that the user should sign out on that device instead. Unknown
+devices return `404` with `{"error":"Device not found"}`.
+
 ### API
 
 #### Server Status

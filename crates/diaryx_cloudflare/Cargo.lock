@@ -118,6 +118,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bookmatter"
+version = "1.5.1"
+dependencies = [
+ "indexmap",
+ "ryu",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -210,6 +222,13 @@ name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+
+[[package]]
+name = "crossfs"
+version = "1.5.1"
+dependencies = [
+ "futures-io",
+]
 
 [[package]]
 name = "crypto-bigint"
@@ -322,10 +341,12 @@ dependencies = [
 
 [[package]]
 name = "diaryx_core"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
+ "bookmatter",
  "chrono",
+ "crossfs",
  "futures-util",
  "indexmap",
  "log",
@@ -333,7 +354,6 @@ dependencies = [
  "ryu",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "thiserror 2.0.18",
  "urlencoding",
@@ -342,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_server"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "argon2",
  "async-trait",

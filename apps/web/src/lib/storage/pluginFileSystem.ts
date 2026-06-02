@@ -28,72 +28,91 @@ async function pluginCmd(
   return (result.data as Record<string, unknown>) ?? {};
 }
 
+function bytesToBase64(data: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < data.length; i++) {
+    binary += String.fromCharCode(data[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export function createPluginFileSystemCallbacks(
   pluginId: string,
 ): JsFileSystemCallbacks {
   return {
+    read: async (path: string): Promise<Uint8Array> => {
+      const result = await pluginCmd(pluginId, "ReadBinary", { path });
+      return base64ToBytes(result.data as string);
+    },
+
     readToString: async (path: string): Promise<string> => {
       const result = await pluginCmd(pluginId, "ReadFile", { path });
       return result.content as string;
     },
 
-    writeFile: async (path: string, content: string): Promise<void> => {
-      await pluginCmd(pluginId, "WriteFile", { path, content });
+    readDir: async (
+      path: string,
+    ): Promise<Array<string | { name: string; kind: "file" | "dir" | "symlink" }>> => {
+      const result = await pluginCmd(pluginId, "ListFiles", { dir: path });
+      const files = (result.files as string[]) ?? [];
+      return files.map((name) => ({ name, kind: "file" as const }));
     },
 
-    deleteFile: async (path: string): Promise<void> => {
-      await pluginCmd(pluginId, "DeleteFile", { path });
-    },
-
-    exists: async (path: string): Promise<boolean> => {
-      const result = await pluginCmd(pluginId, "Exists", { path });
-      return result.exists as boolean;
-    },
-
-    isDir: async (path: string): Promise<boolean> => {
-      const result = await pluginCmd(pluginId, "IsDir", { path });
-      return result.isDir as boolean;
-    },
-
-    listFiles: async (dir: string): Promise<string[]> => {
-      const result = await pluginCmd(pluginId, "ListFiles", { dir });
-      return result.files as string[];
-    },
-
-    listMdFiles: async (dir: string): Promise<string[]> => {
-      const result = await pluginCmd(pluginId, "ListMdFiles", { dir });
-      return result.files as string[];
+    write: async (path: string, contents: Uint8Array): Promise<void> => {
+      await pluginCmd(pluginId, "WriteBinary", {
+        path,
+        data: bytesToBase64(contents),
+      });
     },
 
     createDirAll: async (path: string): Promise<void> => {
       await pluginCmd(pluginId, "CreateDirAll", { path });
     },
 
-    moveFile: async (from: string, to: string): Promise<void> => {
+    removeFile: async (path: string): Promise<void> => {
+      await pluginCmd(pluginId, "DeleteFile", { path });
+    },
+
+    removeDir: async (_path: string): Promise<void> => {
+      // Storage plugins (S3, Google Drive) model directories as key prefixes,
+      // so removing an "empty" directory is a no-op.
+    },
+
+    removeDirAll: async (path: string): Promise<void> => {
+      const result = await pluginCmd(pluginId, "ListFiles", { dir: path });
+      const files = (result.files as string[]) ?? [];
+      for (const name of files) {
+        const childPath = path ? `${path}/${name}` : name;
+        await pluginCmd(pluginId, "DeleteFile", { path: childPath });
+      }
+    },
+
+    rename: async (from: string, to: string): Promise<void> => {
       await pluginCmd(pluginId, "MoveFile", { from, to });
     },
 
-    readBinary: async (path: string): Promise<Uint8Array> => {
-      const result = await pluginCmd(pluginId, "ReadBinary", { path });
-      const b64 = result.data as string;
-      const binary = atob(b64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      return bytes;
-    },
-
-    writeBinary: async (
+    metadata: async (
       path: string,
-      data: Uint8Array,
-    ): Promise<void> => {
-      let binary = "";
-      for (let i = 0; i < data.length; i++) {
-        binary += String.fromCharCode(data[i]);
+    ): Promise<{ kind: "file" | "dir" | "symlink"; len?: number }> => {
+      const existsResult = await pluginCmd(pluginId, "Exists", { path });
+      if (!(existsResult.exists as boolean)) {
+        const err = new Error(`Path not found: ${path}`) as Error & {
+          kind?: string;
+        };
+        err.kind = "NotFound";
+        throw err;
       }
-      const b64 = btoa(binary);
-      await pluginCmd(pluginId, "WriteBinary", { path, data: b64 });
+      const dirResult = await pluginCmd(pluginId, "IsDir", { path });
+      return { kind: (dirResult.isDir as boolean) ? "dir" : "file" };
     },
   };
 }

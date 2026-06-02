@@ -4,18 +4,30 @@ use tauri::{
     AppHandle, Runtime,
 };
 
-use crate::{ICloudAvailability, ICloudContainerInfo, ICloudSyncStatus, MigrationResult};
+use crate::{
+    ICloudAvailability, ICloudContainerInfo, ICloudSyncStatus, MigrationResult,
+    PickedWorkspaceFile, PickedWorkspaceFolder,
+};
 
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_icloud);
 
 pub struct ICloud<R: Runtime>(PluginHandle<R>);
 
-/// Wrapper for Swift responses that wrap values in a `value` key,
-/// since `invoke.resolve()` requires a dictionary.
 #[derive(Deserialize)]
-struct ValueResponse<T> {
-    value: T,
+#[serde(rename_all = "camelCase")]
+struct PickWorkspaceFolderResponse {
+    cancelled: Option<bool>,
+    path: Option<String>,
+    bookmark: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PickWorkspaceFileResponse {
+    cancelled: Option<bool>,
+    path: Option<String>,
+    bookmark: Option<String>,
 }
 
 pub fn init<R: Runtime>(
@@ -118,5 +130,53 @@ impl<R: Runtime> ICloud<R> {
             )
             .await?;
         Ok(result)
+    }
+
+    pub async fn pick_workspace_folder(
+        &self,
+        title: String,
+    ) -> Result<Option<PickedWorkspaceFolder>, Box<dyn std::error::Error>> {
+        let result: PickWorkspaceFolderResponse = self
+            .0
+            .run_mobile_plugin_async(
+                "pickWorkspaceFolder",
+                serde_json::json!({
+                    "title": title,
+                }),
+            )
+            .await?;
+
+        if result.cancelled.unwrap_or(false) {
+            return Ok(None);
+        }
+
+        match (result.path, result.bookmark) {
+            (Some(path), Some(bookmark)) => Ok(Some(PickedWorkspaceFolder { path, bookmark })),
+            _ => Err("Folder picker did not return both a path and bookmark".into()),
+        }
+    }
+
+    pub async fn pick_workspace_file(
+        &self,
+        title: String,
+    ) -> Result<Option<PickedWorkspaceFile>, Box<dyn std::error::Error>> {
+        let result: PickWorkspaceFileResponse = self
+            .0
+            .run_mobile_plugin_async(
+                "pickWorkspaceFile",
+                serde_json::json!({
+                    "title": title,
+                }),
+            )
+            .await?;
+
+        if result.cancelled.unwrap_or(false) {
+            return Ok(None);
+        }
+
+        match (result.path, result.bookmark) {
+            (Some(path), Some(bookmark)) => Ok(Some(PickedWorkspaceFile { path, bookmark })),
+            _ => Err("File picker did not return both a path and bookmark".into()),
+        }
     }
 }

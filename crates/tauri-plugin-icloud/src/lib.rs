@@ -9,7 +9,9 @@ use tauri::{
 #[cfg(mobile)]
 pub mod mobile;
 
-// Container identifier used across both iOS Swift plugin and macOS filesystem paths.
+// Container identifier used by macOS filesystem paths. The iOS Swift plugin has
+// its own matching constant.
+#[cfg(all(not(mobile), target_os = "macos"))]
 const CONTAINER_ID: &str = "iCloud.org.diaryx.app";
 
 // --- Models ---
@@ -40,6 +42,20 @@ pub struct ICloudSyncStatus {
 #[serde(rename_all = "camelCase")]
 pub struct MigrationResult {
     pub files_migrated: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedWorkspaceFolder {
+    pub path: String,
+    pub bookmark: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedWorkspaceFile {
+    pub path: String,
+    pub bookmark: String,
 }
 
 // ============================================================================
@@ -231,6 +247,47 @@ pub async fn do_migrate_from_icloud<R: Runtime>(
     {
         let _ = (source_path, dest_path);
         Err("iCloud is not supported on this platform".into())
+    }
+}
+
+/// Present the iOS document picker for a workspace folder and return its
+/// security-scoped bookmark data. This is intentionally iOS-only; desktop uses
+/// Tauri's regular dialog plugin plus the app's Rust bookmark helper.
+pub async fn pick_workspace_folder<R: Runtime>(
+    _app: &AppHandle<R>,
+    title: String,
+) -> Result<Option<PickedWorkspaceFolder>, String> {
+    #[cfg(target_os = "ios")]
+    {
+        _app.state::<mobile::ICloud<R>>()
+            .pick_workspace_folder(title)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = title;
+        Err("Native workspace folder picking is only available on iOS".into())
+    }
+}
+
+/// Present the iOS document picker for a single workspace file and return its
+/// security-scoped bookmark data.
+pub async fn pick_workspace_file<R: Runtime>(
+    _app: &AppHandle<R>,
+    title: String,
+) -> Result<Option<PickedWorkspaceFile>, String> {
+    #[cfg(target_os = "ios")]
+    {
+        _app.state::<mobile::ICloud<R>>()
+            .pick_workspace_file(title)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = title;
+        Err("Native workspace file picking is only available on iOS".into())
     }
 }
 

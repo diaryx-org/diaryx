@@ -1,4 +1,5 @@
 import UIKit
+import UniformTypeIdentifiers
 import Tauri
 import SwiftRs
 
@@ -13,6 +14,65 @@ class MigrateArgs: Decodable {
     let destPath: String
 }
 
+class PickWorkspaceFolderArgs: Decodable {
+    let title: String?
+}
+
+class PickWorkspaceFileArgs: Decodable {
+    let title: String?
+}
+
+private final class WorkspaceBookmarkPickerDelegate: NSObject, UIDocumentPickerDelegate {
+    private let invoke: Invoke
+    private let bookmarkErrorLabel: String
+    private let onComplete: () -> Void
+
+    init(invoke: Invoke, bookmarkErrorLabel: String, onComplete: @escaping () -> Void) {
+        self.invoke = invoke
+        self.bookmarkErrorLabel = bookmarkErrorLabel
+        self.onComplete = onComplete
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        invoke.resolve(["cancelled": true])
+        onComplete()
+    }
+
+    func documentPicker(
+        _ controller: UIDocumentPickerViewController,
+        didPickDocumentsAt urls: [URL]
+    ) {
+        guard let url = urls.first else {
+            invoke.resolve(["cancelled": true])
+            onComplete()
+            return
+        }
+
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+            onComplete()
+        }
+
+        do {
+            let bookmark = try url.bookmarkData(
+                options: [.minimalBookmark],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            invoke.resolve([
+                "cancelled": false,
+                "path": url.path,
+                "bookmark": bookmark.base64EncodedString(),
+            ])
+        } catch {
+            invoke.reject("Failed to create \(bookmarkErrorLabel) bookmark: \(error.localizedDescription)")
+        }
+    }
+}
+
 // MARK: - iCloud Plugin
 
 private let kContainerIdentifier = "iCloud.org.diaryx.app"
@@ -20,6 +80,7 @@ private let kContainerIdentifier = "iCloud.org.diaryx.app"
 class ICloudPlugin: Plugin {
     private var metadataQuery: NSMetadataQuery?
     private var queryObserver: NSObjectProtocol?
+    private var documentPickerDelegate: WorkspaceBookmarkPickerDelegate?
 
     // MARK: - Commands
 
@@ -163,6 +224,80 @@ class ICloudPlugin: Plugin {
     @objc public func stopStatusMonitoring(_ invoke: Invoke) {
         stopQuery()
         invoke.resolve(["success": true])
+    }
+
+    @objc public func pickWorkspaceFolder(_ invoke: Invoke) throws {
+        let args = try invoke.parseArgs(PickWorkspaceFolderArgs.self)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            guard let presenter = self.topViewController() else {
+                invoke.reject("Unable to present the workspace folder picker.")
+                return
+            }
+
+            guard #available(iOS 14.0, *) else {
+                invoke.reject("Workspace folder picking requires iOS 14 or newer.")
+                return
+            }
+
+            let picker = UIDocumentPickerViewController(
+                forOpeningContentTypes: [UTType.folder],
+                asCopy: false
+            )
+            picker.allowsMultipleSelection = false
+            picker.modalPresentationStyle = .formSheet
+            picker.title = args.title ?? "Select Workspace Folder"
+
+            let delegate = WorkspaceBookmarkPickerDelegate(
+                invoke: invoke,
+                bookmarkErrorLabel: "workspace folder"
+            ) { [weak self] in
+                self?.documentPickerDelegate = nil
+            }
+            self.documentPickerDelegate = delegate
+            picker.delegate = delegate
+
+            presenter.present(picker, animated: true)
+        }
+    }
+
+    @objc public func pickWorkspaceFile(_ invoke: Invoke) throws {
+        let args = try invoke.parseArgs(PickWorkspaceFileArgs.self)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            guard let presenter = self.topViewController() else {
+                invoke.reject("Unable to present the workspace file picker.")
+                return
+            }
+
+            guard #available(iOS 14.0, *) else {
+                invoke.reject("Workspace file picking requires iOS 14 or newer.")
+                return
+            }
+
+            let markdownType = UTType(filenameExtension: "md") ?? .plainText
+            let longMarkdownType = UTType(filenameExtension: "markdown") ?? markdownType
+            let picker = UIDocumentPickerViewController(
+                forOpeningContentTypes: [markdownType, longMarkdownType, .plainText, .text],
+                asCopy: false
+            )
+            picker.allowsMultipleSelection = false
+            picker.modalPresentationStyle = .formSheet
+            picker.title = args.title ?? "Select Markdown File"
+
+            let delegate = WorkspaceBookmarkPickerDelegate(
+                invoke: invoke,
+                bookmarkErrorLabel: "workspace file"
+            ) { [weak self] in
+                self?.documentPickerDelegate = nil
+            }
+            self.documentPickerDelegate = delegate
+            picker.delegate = delegate
+
+            presenter.present(picker, animated: true)
+        }
     }
 
     @objc public func migrateToIcloud(_ invoke: Invoke) async throws {
@@ -332,6 +467,27 @@ class ICloudPlugin: Plugin {
             "downloading": downloading,
             "upToDate": upToDate,
         ])
+    }
+
+    private func topViewController() -> UIViewController? {
+        let activeScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        let fallbackScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first
+
+        let root = (activeScene ?? fallbackScene)?
+            .windows
+            .first { $0.isKeyWindow }?
+            .rootViewController
+            ?? (activeScene ?? fallbackScene)?.windows.first?.rootViewController
+
+        var top = root
+        while let presented = top?.presentedViewController {
+            top = presented
+        }
+        return top
     }
 
     deinit {

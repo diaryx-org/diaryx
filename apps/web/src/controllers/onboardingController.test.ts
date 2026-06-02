@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   removeLocalWorkspace: vi.fn(),
   resetBackend: vi.fn(),
   resolveStorageType: vi.fn(async () => "opfs" as const),
+  storeWorkspaceFileSystemHandle: vi.fn(),
   setActiveWorkspaceId: vi.fn(),
 }));
 
@@ -40,6 +41,7 @@ vi.mock("$lib/auth", () => ({
 
 vi.mock("$lib/backend/storageType", () => ({
   resolveStorageType: mocks.resolveStorageType,
+  storeWorkspaceFileSystemHandle: mocks.storeWorkspaceFileSystemHandle,
 }));
 
 vi.mock("$lib/hooks/useMobile.svelte", () => ({
@@ -112,6 +114,8 @@ import {
   maybeBootstrapIosStarterWorkspace,
   applyOnboardingBundle,
   autoCreateDefaultWorkspace,
+  handleCreateFolderWorkspace,
+  handleOpenFolderWorkspace,
   handleGetStarted,
   handleSignInCreateNew,
   handleCreateWithProvider,
@@ -814,6 +818,90 @@ describe("onboardingController", () => {
 
       expect(deps.expandNode).not.toHaveBeenCalled();
       expect(deps.openEntry).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // folder workspace onboarding
+  // -------------------------------------------------------------------------
+
+  describe("folder workspace onboarding", () => {
+    it("creates a workspace in the selected folder and opens the root entry", async () => {
+      const createLocalWorkspace = vi.fn((name, storageType, path) => ({
+        id: "folder-1",
+        name,
+        storageType,
+        path,
+      }));
+      const { deps, api } = makeOnGetStartedDeps({
+        backend: {
+          getWorkspacePath: vi.fn(() => "/selected/archive/README.md"),
+        },
+        deps: {
+          createLocalWorkspace,
+        },
+      });
+
+      const result = await handleCreateFolderWorkspace(
+        deps as any,
+        { name: "Archive", path: "/selected/archive" },
+        null,
+        null,
+      );
+
+      expect(createLocalWorkspace).toHaveBeenCalledWith(
+        "Archive",
+        undefined,
+        "/selected/archive",
+      );
+      expect(deps.autoCreateDeps.setCurrentWorkspaceId).toHaveBeenCalledWith("folder-1");
+      expect(api.createWorkspace).toHaveBeenCalledWith("/selected/archive", "Archive");
+      expect(deps.autoCreateDeps.setupPermissions).toHaveBeenCalled();
+      expect(deps.refreshTree).toHaveBeenCalledTimes(2);
+      expect(deps.openEntry).toHaveBeenCalledWith("/workspace/index.md");
+      expect(result.spotlightSteps).toBeNull();
+    });
+
+    it("opens an existing folder without creating a new root index", async () => {
+      const createLocalWorkspace = vi.fn((name, storageType, path) => ({
+        id: "folder-1",
+        name,
+        storageType,
+        path,
+      }));
+      const { deps: autoCreateDeps, api } = makeAutoCreateDeps({
+        backend: {
+          getWorkspacePath: vi.fn(() => "/selected/archive/README.md"),
+        },
+        deps: {
+          createLocalWorkspace,
+        },
+      });
+      const deps = {
+        autoCreateDeps,
+        refreshTree: vi.fn().mockResolvedValue(undefined),
+        getTree: vi.fn(() => ({ path: "/selected/archive/README.md" })),
+        expandNode: vi.fn(),
+        openEntry: vi.fn().mockResolvedValue(undefined),
+        runValidation: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await handleOpenFolderWorkspace(
+        deps as any,
+        { name: "Archive", path: "/selected/archive" },
+      );
+
+      expect(createLocalWorkspace).toHaveBeenCalledWith(
+        "Archive",
+        undefined,
+        "/selected/archive",
+      );
+      expect(api.createWorkspace).not.toHaveBeenCalled();
+      expect(autoCreateDeps.setupPermissions).toHaveBeenCalled();
+      expect(deps.refreshTree).toHaveBeenCalled();
+      expect(deps.expandNode).toHaveBeenCalledWith("/selected/archive/README.md");
+      expect(deps.openEntry).toHaveBeenCalledWith("/workspace/index.md");
+      expect(deps.runValidation).toHaveBeenCalled();
     });
   });
 

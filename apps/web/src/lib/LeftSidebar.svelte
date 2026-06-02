@@ -76,6 +76,8 @@
     collapsed: boolean;
     sidebarWidth?: number;
     resizing?: boolean;
+    fileNavigationMode?: boolean;
+    fileNavigationRootFile?: string | null;
     /** 0-1 during an interactive swipe gesture, null otherwise */
     swipeProgress?: number | null;
     showUnlinkedFiles: boolean;
@@ -90,6 +92,7 @@
     onOpenAccountSettings: () => void;
     onAddWorkspace: () => void;
     onBrowseRemoteWorkspaces?: () => void;
+    onOpenFileFromPicker?: () => void | Promise<void>;
     onMoveEntry: (fromPath: string, toParentPath: string, position?: { beforePath?: string; afterPath?: string }) => void;
     onOpenMoveDialog?: (path: string) => void;
     onCreateChildEntry: (parentPath: string) => void;
@@ -137,6 +140,8 @@
     collapsed,
     sidebarWidth = 288,
     resizing = false,
+    fileNavigationMode = false,
+    fileNavigationRootFile = null,
     swipeProgress = null,
     showUnlinkedFiles,
     api,
@@ -150,6 +155,7 @@
     onOpenAccountSettings,
     onAddWorkspace,
     onBrowseRemoteWorkspaces,
+    onOpenFileFromPicker,
     onMoveEntry,
     onOpenMoveDialog,
     onCreateChildEntry,
@@ -1303,6 +1309,24 @@
           <p class="text-xs text-muted-foreground px-4">
             "{workspaceMissing.name}" may have been moved or deleted.
           </p>
+        </div>
+      {:else if fileNavigationMode}
+        <div class="flex flex-col items-center justify-center py-8 text-center gap-3">
+          <FileText class="size-8 text-muted-foreground" />
+          <div class="min-w-0 max-w-full space-y-1">
+            <p class="text-sm font-medium text-foreground">Single file</p>
+            {#if fileNavigationRootFile}
+              <p class="text-xs text-muted-foreground truncate" title={fileNavigationRootFile}>
+                {getFileName(fileNavigationRootFile)}
+              </p>
+            {/if}
+          </div>
+          {#if onOpenFileFromPicker}
+            <Button variant="outline" size="sm" onclick={onOpenFileFromPicker}>
+              <FolderOpen class="size-4 mr-1.5" />
+              Open from Files
+            </Button>
+          {/if}
         </div>
       {:else if !tree && isLoading}
         <!-- Loading State - only shown during initial tree load -->

@@ -17,7 +17,7 @@ mod credentials;
 #[cfg(feature = "dev-ipc")]
 mod dev_ipc;
 mod logging;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod macos_security_scoped;
 mod namespace_commands;
 
@@ -155,6 +155,8 @@ pub fn run() {
             commands::get_app_paths,
             commands::read_log_file,
             commands::pick_workspace_folder,
+            commands::pick_authorized_workspace_folder,
+            commands::pick_authorized_workspace_file,
             commands::authorize_workspace_path,
             commands::reveal_in_file_manager,
             commands::read_binary_file,

@@ -3,7 +3,11 @@
   import { getBackend, isTauri, isNativePluginBackend, replaceBackend, resetBackend, type TreeNode } from "./lib/backend";
   import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
   import { BackendError } from "./lib/backend/interface";
-  import { pickAuthorizedWorkspaceFolder } from "./lib/backend/workspaceAccess";
+  import {
+    authorizeWorkspacePath,
+    pickAuthorizedWorkspaceFile,
+    pickAuthorizedWorkspaceFolder,
+  } from "./lib/backend/workspaceAccess";
   import { maybeStartWindowDrag } from "$lib/windowDrag";
   import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
   import { switchWorkspace } from "$lib/workspace/switchWorkspace";
@@ -102,6 +106,8 @@
     elapsedMs: number;
   };
 
+  const IOS_FILE_NAVIGATION_PATH_KEY = "diaryx-ios-file-navigation-root-file";
+
   function getTimingNow(): number {
     return typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
@@ -183,10 +189,13 @@
     maybeBootstrapIosStarterWorkspace,
     autoCreateDefaultWorkspace as autoCreateDefaultWorkspaceController,
     handleGetStarted as handleGetStartedController,
+    handleCreateFolderWorkspace as handleCreateFolderWorkspaceController,
+    handleOpenFolderWorkspace as handleOpenFolderWorkspaceController,
     handleSignInCreateNew as handleSignInCreateNewController,
     handleCreateWithProvider as handleCreateWithProviderController,
     handleWelcomeComplete as handleWelcomeCompleteController,
     type AutoCreateWorkspaceDeps,
+    type FolderWorkspaceTarget,
   } from "./controllers/onboardingController";
 
   // Import services
@@ -412,6 +421,139 @@
     showWelcomeScreen = true;
   }
 
+  function folderNameFromPath(path: string): string {
+    const trimmed = path.trim().replace(/[\\/]+$/, "");
+    const parts = trimmed.split(/[\\/]/).filter(Boolean);
+    return parts.at(-1) || "My Workspace";
+  }
+
+  async function pickWorkspaceFolderTarget(title: string): Promise<FolderWorkspaceTarget | null> {
+    if (isTauri()) {
+      const path = await pickAuthorizedWorkspaceFolder(title);
+      if (!path) return null;
+      return {
+        name: folderNameFromPath(path),
+        path,
+      };
+    }
+
+    if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
+      try {
+        const directoryHandle = await (window as any).showDirectoryPicker({
+          mode: "readwrite",
+        }) as FileSystemDirectoryHandle;
+        return {
+          name: directoryHandle.name || "My Workspace",
+          storageType: "filesystem-access",
+          directoryHandle,
+        };
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") {
+          return null;
+        }
+        throw e;
+      }
+    }
+
+    toast.error("Folder workspaces are not available in this browser.", {
+      description: "Use the Diaryx app, or a browser with local folder access such as Chrome or Edge.",
+    });
+    return null;
+  }
+
+  function fileNameFromPath(path: string): string {
+    const trimmed = path.trim().replace(/[\\/]+$/, "");
+    const parts = trimmed.split(/[\\/]/).filter(Boolean);
+    return parts.at(-1) || "Selected File";
+  }
+
+  function createFileNavigationTree(filePath: string): TreeNode {
+    return {
+      name: fileNameFromPath(filePath),
+      description: null,
+      path: filePath,
+      is_index: true,
+      children: [],
+      properties: undefined,
+      audience: [],
+    };
+  }
+
+  function getStoredFileNavigationPath(): string | null {
+    if (typeof localStorage === "undefined") return null;
+    const stored = localStorage.getItem(IOS_FILE_NAVIGATION_PATH_KEY)?.trim();
+    return stored || null;
+  }
+
+  function setStoredFileNavigationPath(filePath: string | null): void {
+    if (typeof localStorage === "undefined") return;
+    if (filePath) {
+      localStorage.setItem(IOS_FILE_NAVIGATION_PATH_KEY, filePath);
+    } else {
+      localStorage.removeItem(IOS_FILE_NAVIGATION_PATH_KEY);
+    }
+  }
+
+  function clearFileNavigationMode(options: { forgetStoredPath?: boolean } = {}): void {
+    fileNavigationMode = false;
+    fileNavigationRootFile = null;
+    if (options.forgetStoredPath) {
+      setStoredFileNavigationPath(null);
+    }
+  }
+
+  async function initializeFileNavigationMode(
+    filePath: string,
+    options: { restoreAccess?: boolean } = {},
+  ): Promise<boolean> {
+    let resolvedPath = filePath;
+    if (options.restoreAccess && isTauri()) {
+      resolvedPath = await authorizeWorkspacePath(filePath);
+    }
+
+    if (isDirty && currentEntry && editorRef) {
+      cancelAutoSave();
+      await save();
+    }
+
+    const backendInstance = workspaceStore.backend ?? await getBackend();
+    workspaceStore.setBackend(backendInstance);
+    if (!cleanupEventSubscription) {
+      cleanupEventSubscription = initEventSubscription(backendInstance);
+    }
+
+    const apiInstance = createApi(backendInstance);
+    try {
+      await getPluginStore().init(apiInstance);
+    } catch (e) {
+      console.warn("[App] Failed to initialize plugins for file navigation mode:", e);
+    }
+
+    fileNavigationMode = true;
+    fileNavigationRootFile = resolvedPath;
+    workspaceMissing = null;
+    workspaceStore.setWorkspaceId(null);
+    workspaceStore.setValidationResult(null);
+    workspaceStore.setTree(null);
+    workspaceStore.setTree(createFileNavigationTree(resolvedPath));
+    workspaceStore.expandNode(resolvedPath);
+    collaborationStore.setEnabled(false);
+    collaborationStore.clearCollaborationSession();
+    stopSyncScheduler();
+    setStoredFileNavigationPath(resolvedPath);
+
+    await openEntry(resolvedPath, { force: true });
+    showWelcomeScreen = false;
+    welcomeReturnWorkspaceName = null;
+    return true;
+  }
+
+  async function openFileNavigationPicker(title = "Open Markdown File"): Promise<boolean> {
+    const filePath = await pickAuthorizedWorkspaceFile(title);
+    if (!filePath) return false;
+    return await initializeFileNavigationMode(filePath);
+  }
+
   // Find in file state
   let showFindBar = $state(false);
 
@@ -533,6 +675,8 @@
   let welcomeReturnWorkspaceName = $state<string | null>(null);
   /** When set, opens the welcome screen to a specific view (e.g. 'bundles', 'workspace-picker'). */
   let welcomeInitialView = $state<'main' | 'sign-in' | 'workspace-picker' | 'bundles' | 'provider-choice' | null>(null);
+  let fileNavigationMode = $state(false);
+  let fileNavigationRootFile = $state<string | null>(null);
   // Clear initialView when the welcome screen closes so it doesn't persist on re-open
   $effect(() => { if (!showWelcomeScreen) welcomeInitialView = null; });
   let spotlightSteps = $state<SpotlightStep[] | null>(null);
@@ -1130,10 +1274,10 @@
       const httpParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
       const isHttpBackend = httpParams?.get("backend") === "http" && !!httpParams?.get("api_url");
 
-      // On Tauri mobile, the workspace lives at a fixed path (document_dir/Diaryx).
-      // Skip the registry entirely — just initialize the backend with the default
-      // path. The registry (localStorage) can be cleared by the OS independently
-      // of the actual workspace files, so we never rely on it for mobile startup.
+      // Tauri iOS can work with user-picked Files folders. Startup therefore
+      // follows the local workspace registry when one exists, and otherwise
+      // shows the folder-first welcome screen instead of silently creating a
+      // fixed app-container workspace.
       const isTauriMobile = isTauri() && isIOS();
 
       // Check if any workspaces exist before proceeding
@@ -1141,10 +1285,11 @@
       let localWsList = getLocalWorkspaces();
       let currentWsId = getCurrentWorkspaceId();
 
-      if (!isTauriMobile && !isHttpBackend && !defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
+      if (!isHttpBackend && !defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
         const dataJustCleared = sessionStorage.getItem('diaryx_data_cleared');
         if (dataJustCleared) {
           sessionStorage.removeItem('diaryx_data_cleared');
+          setStoredFileNavigationPath(null);
         }
 
         if ((globalThis as any).__diaryx_preview || shouldBypassWelcomeScreenForE2E()) {
@@ -1159,6 +1304,19 @@
             startupStatus = "welcome_screen";
             return;
           }
+        } else if (isTauriMobile && getStoredFileNavigationPath()) {
+          const storedPath = getStoredFileNavigationPath()!;
+          try {
+            await startupTracer.measure(
+              "restore iOS file navigation",
+              () => initializeFileNavigationMode(storedPath, { restoreAccess: true }),
+            );
+            startupStatus = "file_navigation";
+            return;
+          } catch (e) {
+            console.warn("[App] Failed to restore iOS file navigation:", e);
+            setStoredFileNavigationPath(null);
+          }
         } else {
           // No workspaces exist — show welcome/onboarding screen
           showWelcomeScreen = true;
@@ -1169,13 +1327,20 @@
 
       // Initialize the backend (auto-detects Tauri vs WASM)
       // Pass workspace ID and name so the backend uses the correct OPFS directory.
-      // On Tauri mobile, pass undefined — initialize_app resolves the fixed default path.
+      // On Tauri iOS, pass the current registry workspace when present so
+      // reinitialize_workspace can restore security-scoped access for the
+      // selected folder.
       let wsId: string | undefined;
       let wsName: string | undefined;
       if (isTauriMobile) {
-        // Mobile: backend uses document_dir/Diaryx directly, no registry needed
-        wsId = currentWsId ?? undefined;
-        wsName = undefined;
+        const localWs = getLocalWorkspace(currentWsId ?? '');
+        if (!localWs) {
+          showWelcomeScreen = true;
+          startupStatus = "welcome_screen";
+          return;
+        }
+        wsId = localWs.id;
+        wsName = localWs.name;
       } else if (isHttpBackend) {
         // HTTP backend doesn't use the workspace registry
         wsId = undefined;
@@ -1204,9 +1369,9 @@
       workspaceStore.setBackend(backendInstance);
       void checkForAppUpdatesInBackground(backendInstance);
 
-      // On Tauri mobile, ensure the workspace is in the registry now that the
-      // backend is initialized. This back-fills the registry after we skipped
-      // the registry check above, so settings/sync/etc. still work correctly.
+      // Older iOS installs may have been initialized before the registry was
+      // required. Keep a defensive backfill for those sessions after the
+      // backend has resolved the app-container default workspace.
       if (isTauriMobile && getLocalWorkspaces().length === 0) {
         const ws = createLocalWorkspace(
           localStorage.getItem('diaryx-workspace-name') || 'My Workspace',
@@ -1505,6 +1670,7 @@
   }
 
   async function handleWorkspaceSwitchComplete() {
+    clearFileNavigationMode({ forgetStoredPath: true });
     // Re-initialize references: get the new backend from the singleton
     const newBackend = await getBackend();
     workspaceStore.setBackend(newBackend);
@@ -2156,10 +2322,10 @@
       const workspaceDir = getWorkspaceDirectoryPath(backend.getWorkspacePath());
       await api.createWorkspace(workspaceDir, wsName);
       await refreshTree();
-      // Open the newly created root index
-      if (tree) {
-        workspaceStore.expandNode(tree.path);
-        await openEntry(tree.path);
+      const rootIndexPath = await api.resolveWorkspaceRootIndexPath(workspaceDir);
+      if (rootIndexPath) {
+        workspaceStore.expandNode(rootIndexPath);
+        await openEntry(rootIndexPath);
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -2532,6 +2698,7 @@
 
   // Wrapper functions that delegate to controllers
   async function refreshTree() {
+    if (fileNavigationMode) return;
     if (!api || !backend) return;
     const audiences = templateContextStore.previewAudience ?? undefined;
     const startedAt = getTimingNow();
@@ -3489,6 +3656,7 @@
     onGetStarted={async (selectedBundle, pluginOverrides) => {
       entryStore.setLoading(true);
       try {
+        clearFileNavigationMode({ forgetStoredPath: true });
         const result = await handleGetStartedController(
           {
             autoCreateDeps: buildAutoCreateDeps(),
@@ -3522,10 +3690,103 @@
         launchOverlayDone = false;
       }
     }}
+    onCreateFolderWorkspace={async (selectedBundle, pluginOverrides, onProgress) => {
+      const target = await pickWorkspaceFolderTarget("Choose Workspace Folder");
+      if (!target) return false;
+
+      entryStore.setLoading(true);
+      try {
+        clearFileNavigationMode({ forgetStoredPath: true });
+        onProgress?.({ percent: 12, message: "Preparing folder..." });
+        const result = await handleCreateFolderWorkspaceController(
+          {
+            autoCreateDeps: buildAutoCreateDeps(),
+            installLocalPlugin: (bytes, name) => installLocalPlugin(bytes, name),
+            refreshTree,
+            getTree: () => tree,
+            expandNode: (path) => workspaceStore.expandNode(path),
+            openEntry,
+            runValidation,
+            dismissLaunchOverlay,
+          },
+          target,
+          selectedBundle,
+          pluginOverrides,
+        );
+        showWelcomeScreen = false;
+        welcomeReturnWorkspaceName = null;
+
+        if (result.spotlightSteps) {
+          await tick();
+          requestAnimationFrame(() => {
+            spotlightSteps = result.spotlightSteps;
+          });
+        }
+
+        return true;
+      } catch (e) {
+        console.error("[App] Folder workspace creation failed:", e);
+        throw e;
+      } finally {
+        entryStore.setLoading(false);
+        launchOverlay = null;
+        launchOverlayDone = false;
+      }
+    }}
+    onOpenFolderWorkspace={async (onProgress) => {
+      const target = await pickWorkspaceFolderTarget("Open Workspace Folder");
+      if (!target) return false;
+
+      entryStore.setLoading(true);
+      try {
+        clearFileNavigationMode({ forgetStoredPath: true });
+        onProgress?.({ percent: 20, message: "Opening folder..." });
+        await handleOpenFolderWorkspaceController(
+          {
+            autoCreateDeps: buildAutoCreateDeps(),
+            refreshTree,
+            getTree: () => tree,
+            expandNode: (path) => workspaceStore.expandNode(path),
+            openEntry,
+            runValidation,
+          },
+          target,
+        );
+        showWelcomeScreen = false;
+        welcomeReturnWorkspaceName = null;
+        return true;
+      } catch (e) {
+        console.error("[App] Folder workspace open failed:", e);
+        throw e;
+      } finally {
+        entryStore.setLoading(false);
+        launchOverlay = null;
+        launchOverlayDone = false;
+      }
+    }}
+    onOpenFileNavigation={isTauri() && isIOS() ? async (onProgress) => {
+      entryStore.setLoading(true);
+      try {
+        onProgress?.({ percent: 20, message: "Opening file..." });
+        const completed = await openFileNavigationPicker("Open Markdown File");
+        if (!completed) return false;
+        showWelcomeScreen = false;
+        welcomeReturnWorkspaceName = null;
+        return true;
+      } catch (e) {
+        console.error("[App] File navigation open failed:", e);
+        throw e;
+      } finally {
+        entryStore.setLoading(false);
+        launchOverlay = null;
+        launchOverlayDone = false;
+      }
+    } : undefined}
     onSignInCreateNew={async () => {
       // User signed in but has no existing workspaces — create first synced workspace
       entryStore.setLoading(true);
       try {
+        clearFileNavigationMode({ forgetStoredPath: true });
         await handleSignInCreateNewController({
           autoCreateDeps: buildAutoCreateDeps(),
           refreshTree,
@@ -3545,6 +3806,7 @@
     onCreateWithProvider={async (bundle, providerPluginId, pluginOverrides, restoreNamespace, onProgress) => {
       entryStore.setLoading(true);
       try {
+        clearFileNavigationMode({ forgetStoredPath: true });
         const result = await withLiveSyncSetupProgress(onProgress, async () => await handleCreateWithProviderController(
           {
             autoCreateDeps: buildAutoCreateDeps(),
@@ -3675,6 +3937,8 @@
     collapsed={leftSidebarCollapsed}
     sidebarWidth={leftSidebarWidth}
     resizing={resizingSidebar === 'left'}
+    {fileNavigationMode}
+    {fileNavigationRootFile}
     swipeProgress={mobileGestures.leftSidebarSwipeProgress}
     onOpenEntry={openEntry}
     onToggleNode={toggleNode}
@@ -3688,7 +3952,7 @@
       const wsId = getCurrentWorkspaceId();
       const localWs = wsId ? getLocalWorkspace(wsId) : null;
       welcomeReturnWorkspaceName = localWs?.name ?? null;
-      welcomeInitialView = 'bundles';
+      welcomeInitialView = 'main';
       showWelcomeScreen = true;
     }}
     onBrowseRemoteWorkspaces={() => {
@@ -3698,6 +3962,19 @@
       welcomeInitialView = 'workspace-picker';
       showWelcomeScreen = true;
     }}
+    onOpenFileFromPicker={isTauri() && isIOS() ? async () => {
+      entryStore.setLoading(true);
+      try {
+        await openFileNavigationPicker("Open Markdown File");
+      } catch (e) {
+        console.error("[App] File navigation picker failed:", e);
+        toast.error("Failed to open file", {
+          description: e instanceof Error ? e.message : String(e),
+        });
+      } finally {
+        entryStore.setLoading(false);
+      }
+    } : undefined}
     onMoveEntry={handleMoveEntry}
     onReorderChildren={handleReorderChildren}
     onOpenMoveDialog={(path) => { moveEntryDialogPath = path; }}
@@ -4030,13 +4307,8 @@
         {workspaceMissing}
         onToggleLeftSidebar={toggleLeftSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
-        hasWorkspaceTree={!!tree && tree.path !== '.'}
-        onInitializeWorkspace={() => {
-          const wsId = getCurrentWorkspaceId();
-          const localWs = wsId ? getLocalWorkspace(wsId) : null;
-          welcomeReturnWorkspaceName = localWs?.name ?? null;
-          showWelcomeScreen = true;
-        }}
+        hasWorkspaceTree={!!tree && tree.path !== '.' && /\.md$/i.test(tree.path)}
+        onInitializeWorkspace={handleInitializeWorkspace}
         onRelocateWorkspace={isTauri() ? handleRelocateWorkspace : undefined}
         onRemoveWorkspace={handleRemoveWorkspace}
       />

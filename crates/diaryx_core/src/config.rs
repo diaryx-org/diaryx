@@ -87,10 +87,11 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<WorkspaceEntry>,
 
-    /// Optional native bookmark data keyed by workspace path.
+    /// Optional native bookmark data keyed by authorized workspace path.
     ///
-    /// macOS sandboxed builds use this to persist security-scoped bookmarks for
-    /// workspace folders selected by the user. Other platforms ignore it.
+    /// Sandboxed Apple builds use this to persist security-scoped bookmarks for
+    /// workspace folders or single root files selected by the user. Other
+    /// platforms ignore it.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub workspace_bookmarks: HashMap<String, String>,
 

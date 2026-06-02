@@ -1,6 +1,7 @@
 import { isTauri } from "./interface";
+import { isIOS } from "$lib/hooks/useMobile.svelte";
 
-function firstSelectedFolder(
+function firstSelectedPath(
   selection: string | string[] | null,
 ): string | null {
   if (typeof selection === "string") return selection;
@@ -33,9 +34,42 @@ export async function authorizeWorkspacePath(path: string): Promise<string> {
 export async function pickAuthorizedWorkspaceFolder(
   title: string,
 ): Promise<string | null> {
+  if (isTauri() && isIOS()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string | null>("pick_authorized_workspace_folder", {
+      title,
+    });
+  }
+
   const { open } = await import("@tauri-apps/plugin-dialog");
   const selection = await open({ directory: true, title });
-  const folder = firstSelectedFolder(selection);
+  const folder = firstSelectedPath(selection);
   if (!folder) return null;
   return await authorizeWorkspacePath(folder);
+}
+
+/**
+ * Open a native file picker and immediately authorize the selected path.
+ *
+ * This is primarily an iOS fallback for providers that allow opening a single
+ * file but do not allow picking a whole folder.
+ */
+export async function pickAuthorizedWorkspaceFile(
+  title: string,
+): Promise<string | null> {
+  if (isTauri() && isIOS()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string | null>("pick_authorized_workspace_file", {
+      title,
+    });
+  }
+
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selection = await open({
+    title,
+    filters: [{ name: "Markdown", extensions: ["md", "markdown", "txt"] }],
+  });
+  const file = firstSelectedPath(selection);
+  if (!file) return null;
+  return await authorizeWorkspacePath(file);
 }

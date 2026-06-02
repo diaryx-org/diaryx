@@ -13,16 +13,25 @@ The Tauri backend for Diaryx, providing native filesystem access for the web fro
 
 The desktop/mobile config also enables Tauri's built-in `asset` protocol for common local-user directories so image previews can use native file-backed URLs (`convertFileSrc`) instead of copying attachment bytes through JS when the workspace path falls inside those scopes. Preview flows still fall back to the blob/binary path when a file is outside scope or native loading is unavailable. The Rust app enables the matching Tauri `protocol-asset` feature in`src-tauri/Cargo.toml`.
 
-Mac App Store / TestFlight builds now keep sandbox-safe behavior for workspace folders by persisting security-scoped bookmarks for any folder chosen through the native picker. On the next launch or workspace switch, the app resolves the bookmark and re-opens access before reading the workspace-local `.diaryx` metadata directory, which keeps plugin installation working for externally chosen folders in sandboxed releases. The App Store entitlements therefore need
+Mac App Store / TestFlight builds now keep sandbox-safe behavior for workspace folders by persisting bookmarks for any folder chosen through the native picker. On iOS, the folder-first welcome flow presents a `UIDocumentPickerViewController` directory picker, saves the directory URL as a `.minimalBookmark`, and returns the selected folder through `pick_authorized_workspace_folder`; on macOS, shared folder-pick flows use the Tauri dialog plus `authorize_workspace_path` to persist a security-scoped bookmark. On the next launch or workspace switch, the app resolves the bookmark and re-opens access before reading the workspace-local `.diaryx` metadata directory, which keeps plugin installation working for externally chosen folders in sandboxed releases. The App Store entitlements therefore need
 both `com.apple.security.files.user-selected.read-write` and
 `com.apple.security.files.bookmarks.app-scope` so the sandboxed build can
 persist and reopen those bookmarks across launches.
 
 Shared web-side folder picks now bridge back into Rust through
-`authorize_workspace_path` as well. That command lets flows like "open existing
-folder" and "relocate workspace" turn a JS-selected path into a persisted
-security-scoped bookmark immediately, instead of relying only on
-`pick_workspace_folder`.
+`workspaceAccess.ts` as well. On iOS that helper calls
+`pick_authorized_workspace_folder` so the Swift picker can create the bookmark
+at selection time; on desktop it calls `authorize_workspace_path` after the JS
+dialog returns a path. That lets flows like "open existing folder" and
+"relocate workspace" persist security-scoped access immediately, instead of
+relying only on `pick_workspace_folder`.
+
+iOS also exposes `pick_authorized_workspace_file` for the single-file fallback.
+That command presents a Markdown/text document picker, stores the returned
+security-scoped bookmark, and returns the authorized file path. The frontend
+uses it only for file-navigation mode, where the grant is intentionally limited
+to the selected root file and the normal workspace folder tree is not
+enumerated.
 
 The Tauri backend also writes file-backed logs under the app data directory
 (`logs/diaryx.log`). The shared Debug Info panel exposes the resolved log file
@@ -376,12 +385,13 @@ See [PUBLISHING.md](PUBLISHING.md) for the full guide to publishing to the App S
 - iOS (via Tauri mobile)
 - Android (via Tauri mobile)
 
-Mobile platforms use platform-appropriate paths within app sandboxes. On iOS,
-the sandbox container UUID changes between builds and reinstalls, so
-`initialize_app` re-resolves any absolute workspace path stored in config by
-extracting the folder name and joining it to the current `document_dir`. This
-mirrors the same logic already present in `reinitialize_workspace` and prevents
-`EPERM` errors when a dev build overwrites an older install.
+Mobile platforms use platform-appropriate paths and iOS can also attach to
+user-picked Files folders. Bookmark-backed external folders are resolved first
+in both `initialize_app` and `reinitialize_workspace`; only paths without a
+stored bookmark use the legacy app-container repair path. That fallback handles
+the iOS sandbox container UUID changing between builds and reinstalls by
+extracting the folder name and joining it to the current `document_dir`, which
+prevents `EPERM` errors when a dev build overwrites an older install.
 
 On sandboxed macOS App Store builds, the default workspace now lives inside the
 app container until the user explicitly picks an external folder. External

@@ -78,6 +78,11 @@ unavailable.
 ## Starter Workspace Bootstrap
 
 `App.svelte` bootstraps starter content for first-run users.
+The normal first-run/add-workspace path is now folder-first: the welcome screen
+asks users to create a workspace in a selected folder or open an existing
+folder, then applies starter content or curated starter bundles inside that
+folder. Provider-backed restore remains available from the signed-in workspace
+picker, but it is no longer the default creation path.
 On iOS Tauri, first-run shows the welcome/onboarding screen before any
 workspace creation.
 On iOS Tauri, if the selected workspace directory exists but has no root index
@@ -99,11 +104,20 @@ builds.
 
 Shared Tauri folder-picking flows now also run through the app-wide
 `workspaceAccess.ts` helper before a selected path is stored in the local
-workspace registry. That helper calls the native `authorize_workspace_path`
-command so sandboxed macOS builds persist a security-scoped bookmark for
-"create here", "open existing folder", and "relocate workspace" selections
-instead of saving a raw path that cannot be reopened on the next workspace
+workspace registry. On iOS it calls the native
+`pick_authorized_workspace_folder` command so the Swift directory picker can
+create and persist a security-scoped bookmark at selection time. On desktop it
+calls `authorize_workspace_path` after the JS/Tauri dialog returns a path. This
+keeps "create here", "open existing folder", and "relocate workspace"
+selections from saving a raw path that cannot be reopened on the next workspace
 switch.
+
+On iOS Tauri, `App.svelte` also supports a single-file fallback for document
+providers that allow selecting a Markdown/text file but do not grant folder
+access. The fallback stores the selected file bookmark, opens that absolute
+path directly, sets a one-node synthetic tree for save context, skips workspace
+tree refresh/validation, and lets the left sidebar present the Files picker
+instead of the built-in workspace tree.
 
 On teardown/reload, `App.svelte` now also stops the sync scheduler, clears
 pending autosave/tree-refresh timers, drops filesystem subscriptions, and

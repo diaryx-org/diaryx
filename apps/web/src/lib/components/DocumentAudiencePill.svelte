@@ -6,8 +6,8 @@
   import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
 
   interface Props {
-    /** string[] = explicit tags, null = inheriting, [] = explicitly empty */
-    audience: string[] | null;
+    /** string[] = explicit tags, string = legacy scalar tag, null = inheriting, [] = explicitly empty */
+    audience: unknown;
     entryPath: string;
     api: Api | null;
     onChange: (value: string[] | null) => void | Promise<void>;
@@ -24,6 +24,21 @@
   let canInherit = $state(false);
   let defaultAudienceApplied = $state(false);
 
+  function normalizeTags(value: unknown): string[] | null {
+    if (value === null || value === undefined) return null;
+    if (Array.isArray(value)) {
+      return value
+        .filter((tag): tag is string => typeof tag === "string")
+        .map((tag) => tag.trim())
+        .filter((tag) => tag.length > 0);
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed ? [trimmed] : [];
+    }
+    return [];
+  }
+
   async function resolveInheritedAudience() {
     if (!api) return;
     inheritedTags = [];
@@ -36,10 +51,10 @@
       canInherit = result.can_inherit;
       defaultAudienceApplied = result.default_audience_applied;
       if (result.inherited) {
-        inheritedTags = result.tags;
+        inheritedTags = normalizeTags(result.tags) ?? [];
         inheritedSourceTitle = result.source_title ?? null;
       } else if (result.default_audience_applied) {
-        inheritedTags = result.tags;
+        inheritedTags = normalizeTags(result.tags) ?? [];
       }
     } catch (e) {
       console.warn("[DocumentAudiencePill] Failed to resolve inherited audience:", e);
@@ -52,18 +67,19 @@
     }
   });
 
-  const isInheriting = $derived(audience === null && canInherit);
-  const isDefault = $derived(audience === null && !canInherit && defaultAudienceApplied);
+  const explicitAudience = $derived(normalizeTags(audience));
+  const isInheriting = $derived(explicitAudience === null && canInherit);
+  const isDefault = $derived(explicitAudience === null && !canInherit && defaultAudienceApplied);
   const displayTags = $derived(
     isInheriting ? inheritedTags :
     isDefault ? (inheritedTags.length > 0 ? inheritedTags : []) :
-    (audience ?? [])
+    (explicitAudience ?? [])
   );
   const isPrivate = $derived(displayTags.length === 0 && !defaultAudienceApplied);
 
   function removeTag(index: number) {
-    if (!audience) return;
-    const newTags = [...audience];
+    if (!explicitAudience) return;
+    const newTags = [...explicitAudience];
     newTags.splice(index, 1);
     onChange(newTags);
   }

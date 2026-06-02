@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 async function loadWorkspaceAccess(options?: {
   isTauri?: boolean;
+  isIOS?: boolean;
   selection?: string | string[] | null;
   authorizedPath?: string;
 }) {
@@ -14,6 +15,9 @@ async function loadWorkspaceAccess(options?: {
 
   vi.doMock("./interface", () => ({
     isTauri: () => options?.isTauri ?? true,
+  }));
+  vi.doMock("$lib/hooks/useMobile.svelte", () => ({
+    isIOS: () => options?.isIOS ?? false,
   }));
   vi.doMock("@tauri-apps/api/core", () => ({
     invoke,
@@ -75,6 +79,57 @@ describe("workspaceAccess", () => {
     });
     expect(invoke).toHaveBeenCalledWith("authorize_workspace_path", {
       workspacePath: "/picked/workspace",
+    });
+  });
+
+  it("uses the native authorized picker command on iOS", async () => {
+    const { pickAuthorizedWorkspaceFolder, open, invoke } =
+      await loadWorkspaceAccess({
+        isIOS: true,
+        authorizedPath: "/ios/resolved/workspace",
+      });
+
+    await expect(
+      pickAuthorizedWorkspaceFolder("Create Workspace in Folder"),
+    ).resolves.toBe("/ios/resolved/workspace");
+    expect(open).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith("pick_authorized_workspace_folder", {
+      title: "Create Workspace in Folder",
+    });
+  });
+
+  it("authorizes the selected file from the native picker", async () => {
+    const { pickAuthorizedWorkspaceFile, open, invoke } =
+      await loadWorkspaceAccess({
+        selection: "/picked/root.md",
+        authorizedPath: "/resolved/root.md",
+      });
+
+    await expect(
+      pickAuthorizedWorkspaceFile("Open Markdown File"),
+    ).resolves.toBe("/resolved/root.md");
+    expect(open).toHaveBeenCalledWith({
+      title: "Open Markdown File",
+      filters: [{ name: "Markdown", extensions: ["md", "markdown", "txt"] }],
+    });
+    expect(invoke).toHaveBeenCalledWith("authorize_workspace_path", {
+      workspacePath: "/picked/root.md",
+    });
+  });
+
+  it("uses the native authorized file picker command on iOS", async () => {
+    const { pickAuthorizedWorkspaceFile, open, invoke } =
+      await loadWorkspaceAccess({
+        isIOS: true,
+        authorizedPath: "/ios/resolved/root.md",
+      });
+
+    await expect(
+      pickAuthorizedWorkspaceFile("Open Root File"),
+    ).resolves.toBe("/ios/resolved/root.md");
+    expect(open).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith("pick_authorized_workspace_file", {
+      title: "Open Root File",
     });
   });
 

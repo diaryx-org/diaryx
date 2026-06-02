@@ -12,7 +12,11 @@
 
 import type { Api } from '../lib/backend/api';
 import type { JsonValue } from '../lib/backend/generated/serde_json/JsonValue';
-import { resolveStorageType, type StorageType } from '../lib/backend/storageType';
+import {
+  resolveStorageType,
+  storeWorkspaceFileSystemHandle,
+  type StorageType,
+} from '../lib/backend/storageType';
 import type { BundleRegistryEntry } from '$lib/marketplace/types';
 import {
   fetchStarterWorkspaceRegistry,
@@ -348,7 +352,7 @@ export async function applyOnboardingBundle(
 // ---------------------------------------------------------------------------
 
 export interface AutoCreateWorkspaceDeps {
-  createLocalWorkspace: (name: string, storageType?: StorageType) => { id: string; name: string; storageType?: StorageType };
+  createLocalWorkspace: (name: string, storageType?: StorageType, path?: string) => { id: string; name: string; storageType?: StorageType; path?: string };
   setCurrentWorkspaceId: (id: string) => void;
   getBackend: (id: string, name: string, storageType?: StorageType) => Promise<any>;
   createApi: (backend: any) => Api;
@@ -358,6 +362,78 @@ export interface AutoCreateWorkspaceDeps {
   refreshTree: () => Promise<void>;
   setupPermissions: () => void;
   persistPermissionDefaults: (pluginId: string, defaults: any) => Promise<void>;
+}
+
+export interface FolderWorkspaceTarget {
+  name: string;
+  path?: string;
+  storageType?: StorageType;
+  directoryHandle?: FileSystemDirectoryHandle;
+}
+
+async function initializeRegisteredWorkspace(
+  deps: AutoCreateWorkspaceDeps,
+  target: FolderWorkspaceTarget,
+): Promise<{ id: string; name: string; backend: any; api: Api; workspaceDir: string }> {
+  const name = target.name.trim() || "My Workspace";
+  const ws = deps.createLocalWorkspace(name, target.storageType, target.path);
+  deps.setCurrentWorkspaceId(ws.id);
+
+  try {
+    if (target.directoryHandle) {
+      await storeWorkspaceFileSystemHandle(ws.id, target.directoryHandle);
+    }
+
+    const backendInstance = await deps.getBackend(ws.id, ws.name, ws.storageType);
+    deps.setBackend(backendInstance);
+
+    const apiInstance = deps.createApi(backendInstance);
+    deps.setCleanupEventSubscription(deps.initEventSubscription(backendInstance));
+
+    return {
+      id: ws.id,
+      name: ws.name,
+      backend: backendInstance,
+      api: apiInstance,
+      workspaceDir: getWorkspaceDirectoryPath(backendInstance),
+    };
+  } catch (err) {
+    console.error("[onboarding] folder workspace initialization failed, rolling back:", err);
+    removeLocalWorkspace(ws.id);
+    resetBackend();
+    throw err;
+  }
+}
+
+async function seedWorkspaceFromBundle(
+  apiInstance: Api,
+  backendInstance: any,
+  workspaceDir: string,
+  workspaceName: string,
+  bundle?: BundleRegistryEntry | null,
+): Promise<void> {
+  let importedStarter = false;
+
+  if (bundle?.starter_workspace_id) {
+    try {
+      const starterRegistry = await fetchStarterWorkspaceRegistry();
+      const starter = starterRegistry.starters.find(
+        (s) => s.id === bundle.starter_workspace_id,
+      );
+      if (starter?.artifact) {
+        const zipBlob = await fetchStarterWorkspaceZip(starter);
+        const zipFile = new File([zipBlob], "starter.zip", { type: "application/zip" });
+        await backendInstance.importFromZip(zipFile, workspaceDir, () => {});
+        importedStarter = true;
+      }
+    } catch (e) {
+      console.warn("[App] Failed to import starter workspace from bundle, falling back:", e);
+    }
+  }
+
+  if (!importedStarter) {
+    await seedStarterWorkspaceContent(apiInstance, workspaceDir, workspaceName);
+  }
 }
 
 /**
@@ -390,28 +466,7 @@ export async function autoCreateDefaultWorkspace(
 
     const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
 
-    // Import starter workspace content from the bundle (or fall back to hardcoded content)
-    let importedStarter = false;
-    if (bundle?.starter_workspace_id) {
-      try {
-        const starterRegistry = await fetchStarterWorkspaceRegistry();
-        const starter = starterRegistry.starters.find(
-          (s) => s.id === bundle.starter_workspace_id,
-        );
-        if (starter?.artifact) {
-          const zipBlob = await fetchStarterWorkspaceZip(starter);
-          const zipFile = new File([zipBlob], "starter.zip", { type: "application/zip" });
-          await backendInstance.importFromZip(zipFile, workspaceDir, () => {});
-          importedStarter = true;
-        }
-      } catch (e) {
-        console.warn("[App] Failed to import starter workspace from bundle, falling back:", e);
-      }
-    }
-
-    if (!importedStarter) {
-      await seedStarterWorkspaceContent(apiInstance, workspaceDir, ws.name);
-    }
+    await seedWorkspaceFromBundle(apiInstance, backendInstance, workspaceDir, ws.name, bundle);
 
     // Load the workspace tree and permission config before installing plugins.
     // The starter workspace frontmatter may contain pre-configured plugin
@@ -458,6 +513,8 @@ export interface OnGetStartedResult {
   spotlightSteps: any[] | null;
 }
 
+export type OnFolderWorkspaceResult = OnGetStartedResult;
+
 /**
  * Orchestrates the "Get Started" flow from the welcome screen.
  * Creates workspace from bundle, installs overrides, triggers spotlight.
@@ -495,6 +552,95 @@ export async function handleGetStarted(
   return {
     spotlightSteps: selectedBundle?.spotlight?.length ? selectedBundle.spotlight : null,
   };
+}
+
+export async function handleCreateFolderWorkspace(
+  deps: OnGetStartedDeps,
+  target: FolderWorkspaceTarget,
+  selectedBundle: BundleRegistryEntry | null,
+  pluginOverrides: Array<{ targetPluginId: string; bytes: ArrayBuffer; fileName: string }> | null | undefined,
+): Promise<OnFolderWorkspaceResult> {
+  const effectiveBundle = selectedBundle && pluginOverrides?.length
+    ? excludeOverriddenPlugins(selectedBundle, pluginOverrides)
+    : selectedBundle;
+
+  const initialized = await initializeRegisteredWorkspace(deps.autoCreateDeps, target);
+  await seedWorkspaceFromBundle(
+    initialized.api,
+    initialized.backend,
+    initialized.workspaceDir,
+    initialized.name,
+    effectiveBundle,
+  );
+
+  await deps.refreshTree();
+  deps.autoCreateDeps.setupPermissions();
+
+  if (pluginOverrides?.length) {
+    for (const o of pluginOverrides) {
+      await deps.installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
+    }
+  }
+
+  if (effectiveBundle && effectiveBundle.plugins.length > 0) {
+    try {
+      await applyOnboardingBundle(effectiveBundle, deps.autoCreateDeps.persistPermissionDefaults);
+    } catch (e) {
+      console.warn("[App] Bundle apply during folder onboarding failed (non-fatal):", e);
+    }
+  }
+
+  await deps.refreshTree();
+  const tree = deps.getTree();
+  const rootIndexPath = await initialized.api.resolveWorkspaceRootIndexPath(
+    initialized.backend.getWorkspacePath(),
+  );
+  if (tree) {
+    deps.expandNode(tree.path);
+  }
+  if (rootIndexPath) {
+    await deps.openEntry(rootIndexPath);
+  }
+  await deps.runValidation();
+  await deps.dismissLaunchOverlay();
+
+  return {
+    spotlightSteps: selectedBundle?.spotlight?.length ? selectedBundle.spotlight : null,
+  };
+}
+
+export interface OnOpenFolderWorkspaceDeps {
+  autoCreateDeps: AutoCreateWorkspaceDeps;
+  refreshTree: () => Promise<void>;
+  getTree: () => { path: string } | null;
+  expandNode: (path: string) => void;
+  openEntry: (path: string) => Promise<void>;
+  runValidation: () => Promise<void>;
+}
+
+export async function handleOpenFolderWorkspace(
+  deps: OnOpenFolderWorkspaceDeps,
+  target: FolderWorkspaceTarget,
+): Promise<void> {
+  const initialized = await initializeRegisteredWorkspace(deps.autoCreateDeps, target);
+  deps.autoCreateDeps.setupPermissions();
+  await deps.refreshTree();
+
+  try {
+    const rootIndexPath = await initialized.api.resolveWorkspaceRootIndexPath(
+      initialized.backend.getWorkspacePath(),
+    );
+    if (rootIndexPath) {
+      const tree = deps.getTree();
+      if (tree) {
+        deps.expandNode(tree.path);
+      }
+      await deps.openEntry(rootIndexPath);
+      await deps.runValidation();
+    }
+  } catch (e) {
+    console.warn("[onboarding] Opened folder has no Diaryx root index yet:", e);
+  }
 }
 
 export interface OnSignInCreateNewDeps {

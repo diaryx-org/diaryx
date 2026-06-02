@@ -11,9 +11,9 @@
 
 use crate::logging;
 #[cfg(target_os = "macos")]
-use crate::macos_security_scoped::{
-    ActiveSecurityScopedAccess, activate_security_scoped_bookmark, create_security_scoped_bookmark,
-};
+use crate::macos_security_scoped::create_security_scoped_bookmark;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use crate::macos_security_scoped::{ActiveSecurityScopedAccess, activate_security_scoped_bookmark};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -38,6 +38,7 @@ use diaryx_native::{NativeConfigExt, RealFileSystem};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use tauri_plugin_opener::OpenerExt;
 #[cfg(all(
     feature = "desktop-updater",
@@ -195,8 +196,8 @@ pub struct AppState {
     /// running. This prevents a slow/stale workspace's load from clobbering a
     /// newer workspace that started loading mid-flight.
     pub plugin_load_generation: Arc<AtomicU64>,
-    /// Active macOS security-scoped workspace access, when needed.
-    #[cfg(target_os = "macos")]
+    /// Active Apple security-scoped workspace access, when needed.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub workspace_access: Mutex<Option<ActiveSecurityScopedAccess>>,
 }
 
@@ -208,7 +209,7 @@ impl AppState {
             plugins_loaded_at: Mutex::new(None),
             plugins_ready: Arc::new(PluginsReady::new()),
             plugin_load_generation: Arc::new(AtomicU64::new(0)),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             workspace_access: Mutex::new(None),
         }
     }
@@ -388,7 +389,7 @@ fn log_plugin_install_error(err: SerializableError) -> SerializableError {
     err
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn workspace_access_error(path: &Path, message: impl Into<String>) -> SerializableError {
     SerializableError {
         kind: "WorkspaceAccessError".to_string(),
@@ -412,7 +413,21 @@ fn store_workspace_bookmark_in_config(
     Ok(true)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(target_os = "ios")]
+fn store_workspace_bookmark_data_in_config(
+    config: &mut Config,
+    workspace_path: &Path,
+    bookmark: &str,
+) -> bool {
+    if config.workspace_bookmark(workspace_path) == Some(bookmark) {
+        return false;
+    }
+
+    config.set_workspace_bookmark(workspace_path.to_path_buf(), bookmark.to_string());
+    true
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn activate_workspace_access_from_config(
     config: &mut Config,
     workspace_path: &Path,
@@ -442,7 +457,7 @@ fn activate_workspace_access_from_config(
     Ok(Some((access, changed)))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 async fn load_workspace_config(config_path: &Path, default_workspace: &Path) -> Config {
     if config_path.exists() {
         Config::load_from(&SyncToAsyncFs::new(RealFileSystem), config_path)
@@ -451,6 +466,147 @@ async fn load_workspace_config(config_path: &Path, default_workspace: &Path) -> 
     } else {
         Config::new(default_workspace.to_path_buf())
     }
+}
+
+#[cfg(target_os = "ios")]
+fn resolve_ios_container_workspace_path(
+    stored_path: &Path,
+    paths: &AppPaths,
+    log_context: &str,
+) -> PathBuf {
+    let resolved_path = if stored_path.is_absolute() {
+        if let Some(name) = stored_path.file_name() {
+            paths.document_dir.join(name)
+        } else {
+            paths.default_workspace.clone()
+        }
+    } else {
+        paths.document_dir.join(stored_path)
+    };
+
+    if resolved_path != stored_path {
+        log::info!(
+            "[{}] iOS: re-resolved app-container workspace path {:?} -> {:?}",
+            log_context,
+            stored_path,
+            resolved_path
+        );
+    }
+
+    resolved_path
+}
+
+#[cfg(all(target_os = "ios", feature = "icloud"))]
+async fn pick_ios_authorized_workspace_path<R: Runtime>(
+    app: &AppHandle<R>,
+    title: String,
+) -> Result<Option<(PathBuf, ActiveSecurityScopedAccess)>, SerializableError> {
+    let Some(picked) = tauri_plugin_icloud::pick_workspace_folder(app, title)
+        .await
+        .map_err(|e| SerializableError {
+            kind: "WorkspaceFolderPickerError".to_string(),
+            message: e,
+            path: None,
+        })?
+    else {
+        return Ok(None);
+    };
+
+    let selected_path = PathBuf::from(&picked.path);
+    let paths = get_platform_paths(app)?;
+    let mut config = load_workspace_config(&paths.config_path, &paths.default_workspace).await;
+    let mut config_changed = !paths.config_path.exists();
+    config_changed |=
+        store_workspace_bookmark_data_in_config(&mut config, &selected_path, &picked.bookmark);
+
+    let access =
+        activate_workspace_access_from_config(&mut config, &selected_path)?.ok_or_else(|| {
+            workspace_access_error(
+                &selected_path,
+                "Missing workspace bookmark after folder pick",
+            )
+        })?;
+    config_changed |= access.1;
+
+    if config_changed {
+        save_config_file(&config, &paths.config_path).await?;
+    }
+
+    let resolved_path = access.0.resolved_path().to_path_buf();
+    log::info!(
+        "[pick_ios_authorized_workspace_path] Authorized security-scoped workspace access: selected={:?} resolved={:?}",
+        selected_path,
+        resolved_path
+    );
+
+    Ok(Some((resolved_path, access.0)))
+}
+
+#[cfg(all(target_os = "ios", feature = "icloud"))]
+async fn pick_ios_authorized_workspace_file<R: Runtime>(
+    app: &AppHandle<R>,
+    title: String,
+) -> Result<Option<(PathBuf, ActiveSecurityScopedAccess)>, SerializableError> {
+    let Some(picked) = tauri_plugin_icloud::pick_workspace_file(app, title)
+        .await
+        .map_err(|e| SerializableError {
+            kind: "WorkspaceFilePickerError".to_string(),
+            message: e,
+            path: None,
+        })?
+    else {
+        return Ok(None);
+    };
+
+    let selected_path = PathBuf::from(&picked.path);
+    let paths = get_platform_paths(app)?;
+    let mut config = load_workspace_config(&paths.config_path, &paths.default_workspace).await;
+    let mut config_changed = !paths.config_path.exists();
+    config_changed |=
+        store_workspace_bookmark_data_in_config(&mut config, &selected_path, &picked.bookmark);
+
+    let access =
+        activate_workspace_access_from_config(&mut config, &selected_path)?.ok_or_else(|| {
+            workspace_access_error(&selected_path, "Missing workspace bookmark after file pick")
+        })?;
+    config_changed |= access.1;
+
+    if config_changed {
+        save_config_file(&config, &paths.config_path).await?;
+    }
+
+    let resolved_path = access.0.resolved_path().to_path_buf();
+    log::info!(
+        "[pick_ios_authorized_workspace_file] Authorized security-scoped file access: selected={:?} resolved={:?}",
+        selected_path,
+        resolved_path
+    );
+
+    Ok(Some((resolved_path, access.0)))
+}
+
+#[cfg(all(target_os = "ios", not(feature = "icloud")))]
+async fn pick_ios_authorized_workspace_path<R: Runtime>(
+    _app: &AppHandle<R>,
+    _title: String,
+) -> Result<Option<(PathBuf, ActiveSecurityScopedAccess)>, SerializableError> {
+    Err(SerializableError {
+        kind: "UnsupportedPlatform".to_string(),
+        message: "iOS workspace folder picking requires the Apple/iCloud feature set".to_string(),
+        path: None,
+    })
+}
+
+#[cfg(all(target_os = "ios", not(feature = "icloud")))]
+async fn pick_ios_authorized_workspace_file<R: Runtime>(
+    _app: &AppHandle<R>,
+    _title: String,
+) -> Result<Option<(PathBuf, ActiveSecurityScopedAccess)>, SerializableError> {
+    Err(SerializableError {
+        kind: "UnsupportedPlatform".to_string(),
+        message: "iOS workspace file picking requires the Apple/iCloud feature set".to_string(),
+        path: None,
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -2914,16 +3070,67 @@ pub async fn install_app_update<R: Runtime>(app: AppHandle<R>) -> Result<bool, S
 pub async fn pick_workspace_folder<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<Option<AppPaths>, SerializableError> {
-    // Suppress unused warning on iOS (app is used on other platforms)
-    let _ = &app;
-    // Folder picking is not supported on iOS
     #[cfg(target_os = "ios")]
     {
-        return Err(SerializableError {
-            kind: "UnsupportedPlatform".to_string(),
-            message: "Folder picking is not supported on iOS".to_string(),
-            path: None,
-        });
+        let paths = get_platform_paths(&app)?;
+        let Some((actual_workspace, active_access)) =
+            pick_ios_authorized_workspace_path(&app, "Select Workspace Folder".to_string()).await?
+        else {
+            return Ok(None);
+        };
+
+        let mut config = load_workspace_config(&paths.config_path, &paths.default_workspace).await;
+        let mut config_changed = !paths.config_path.exists();
+        if config.default_workspace != actual_workspace {
+            config.default_workspace = actual_workspace.clone();
+            config_changed = true;
+        }
+        if config_changed {
+            save_config_file(&config, &paths.config_path).await?;
+        }
+
+        let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
+        let workspace_initialized = match ws.find_root_index_in_dir(&actual_workspace).await {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(_) => false,
+        };
+
+        if !workspace_initialized {
+            log::info!(
+                "[pick_workspace_folder] Initializing iOS workspace at {:?}",
+                actual_workspace
+            );
+            ws.init_workspace(&actual_workspace, Some("My Workspace"), None)
+                .await
+                .map_err(|e| e.to_serializable())?;
+        }
+
+        {
+            let app_state = app.state::<AppState>();
+            *acquire_lock(&app_state.workspace_path)? = Some(actual_workspace.clone());
+            *acquire_lock(&app_state.diaryx)? = None;
+            #[cfg(feature = "extism-plugins")]
+            if let Some(plugin_adapters) = app.try_state::<PluginAdapters>()
+                && let Ok(mut guard) = plugin_adapters.adapters.lock()
+            {
+                guard.clear();
+            }
+            *acquire_lock(&app_state.workspace_access)? = Some(active_access);
+        }
+
+        return Ok(Some(AppPaths {
+            data_dir: paths.data_dir,
+            document_dir: paths.document_dir,
+            default_workspace: actual_workspace,
+            config_path: paths.config_path,
+            log_dir: paths.log_dir,
+            log_file: paths.log_file,
+            is_mobile: paths.is_mobile,
+            is_apple_build: paths.is_apple_build,
+            icloud_workspace: paths.icloud_workspace.clone(),
+            icloud_active: paths.icloud_active,
+        }));
     }
 
     #[cfg(not(target_os = "ios"))]
@@ -3041,12 +3248,120 @@ pub async fn pick_workspace_folder<R: Runtime>(
     }
 }
 
+/// Pick a workspace folder and return the sandbox-authorized path.
+///
+/// The folder-first frontend uses this narrower command because it wants to
+/// register/create/open a workspace itself after the native picker has granted
+/// durable access. On iOS this presents `UIDocumentPickerViewController` and
+/// persists the returned security-scoped bookmark; on desktop it uses Tauri's
+/// folder dialog and then runs the same authorization path used by other
+/// web-selected folders.
+#[tauri::command]
+pub async fn pick_authorized_workspace_folder<R: Runtime>(
+    app: AppHandle<R>,
+    title: Option<String>,
+) -> Result<Option<String>, SerializableError> {
+    let title = title.unwrap_or_else(|| "Select Workspace Folder".to_string());
+
+    #[cfg(target_os = "ios")]
+    {
+        let Some((resolved_path, active_access)) =
+            pick_ios_authorized_workspace_path(&app, title).await?
+        else {
+            return Ok(None);
+        };
+
+        {
+            let app_state = app.state::<AppState>();
+            *acquire_lock(&app_state.workspace_access)? = Some(active_access);
+        }
+
+        return Ok(Some(resolved_path.to_string_lossy().into_owned()));
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let folder_path = app.dialog().file().set_title(&title).blocking_pick_folder();
+
+        let selected_path = match folder_path {
+            Some(path) => path.into_path().map_err(|e| SerializableError {
+                kind: "PathError".to_string(),
+                message: format!("Failed to get folder path: {:?}", e),
+                path: None,
+            })?,
+            None => return Ok(None),
+        };
+
+        let resolved_path =
+            authorize_workspace_path(app, selected_path.to_string_lossy().into_owned()).await?;
+        Ok(Some(resolved_path))
+    }
+}
+
+/// Pick a single workspace root file and return the sandbox-authorized path.
+///
+/// This is the iOS fallback for providers that do not allow folder grants in
+/// the document picker. It stores the same security-scoped bookmark data used
+/// by folder workspaces, but the grant is limited to the selected file.
+#[tauri::command]
+pub async fn pick_authorized_workspace_file<R: Runtime>(
+    app: AppHandle<R>,
+    title: Option<String>,
+) -> Result<Option<String>, SerializableError> {
+    let title = title.unwrap_or_else(|| "Select Markdown File".to_string());
+
+    #[cfg(target_os = "ios")]
+    {
+        let Some((resolved_path, active_access)) =
+            pick_ios_authorized_workspace_file(&app, title).await?
+        else {
+            return Ok(None);
+        };
+
+        {
+            let app_state = app.state::<AppState>();
+            *acquire_lock(&app_state.workspace_access)? = Some(active_access);
+        }
+
+        return Ok(Some(resolved_path.to_string_lossy().into_owned()));
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let file_path = app
+            .dialog()
+            .file()
+            .set_title(&title)
+            .add_filter("Markdown", &["md", "markdown", "txt"])
+            .blocking_pick_file();
+
+        let selected_path = match file_path {
+            Some(path) => path.into_path().map_err(|e| SerializableError {
+                kind: "PathError".to_string(),
+                message: format!("Failed to get file path: {:?}", e),
+                path: None,
+            })?,
+            None => return Ok(None),
+        };
+
+        let resolved_path =
+            authorize_workspace_path(app, selected_path.to_string_lossy().into_owned()).await?;
+        Ok(Some(resolved_path))
+    }
+}
+
 /// Persist security-scoped access for a workspace path selected by the frontend.
 ///
 /// Shared Tauri UI flows such as "open existing folder" and "relocate
 /// workspace" use JS-native folder pickers, so they need an explicit native
 /// step to convert the selected path into a persistent bookmark on sandboxed
-/// macOS builds.
+/// Apple builds. iOS can only create a new bookmark during the native document
+/// picker grant, so this command restores existing iOS bookmark access but does
+/// not mint a bookmark from an arbitrary raw path.
 #[tauri::command]
 pub async fn authorize_workspace_path<R: Runtime>(
     app: AppHandle<R>,
@@ -3058,8 +3373,8 @@ pub async fn authorize_workspace_path<R: Runtime>(
     {
         let paths = get_platform_paths(&app)?;
         let mut config = load_workspace_config(&paths.config_path, &paths.default_workspace).await;
-        let mut config_changed = !paths.config_path.exists()
-            || store_workspace_bookmark_in_config(&mut config, &requested_path)?;
+        let mut config_changed = !paths.config_path.exists();
+        config_changed |= store_workspace_bookmark_in_config(&mut config, &requested_path)?;
 
         let access = activate_workspace_access_from_config(&mut config, &requested_path)?
             .ok_or_else(|| workspace_access_error(&requested_path, "Missing workspace bookmark"))?;
@@ -3078,7 +3393,51 @@ pub async fn authorize_workspace_path<R: Runtime>(
         return Ok(resolved_path.to_string_lossy().into_owned());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "ios")]
+    {
+        let paths = get_platform_paths(&app)?;
+        let mut config = load_workspace_config(&paths.config_path, &paths.default_workspace).await;
+        let had_bookmark = config.workspace_bookmark(&requested_path).is_some();
+
+        match activate_workspace_access_from_config(&mut config, &requested_path) {
+            Ok(Some((access, bookmark_changed))) => {
+                if bookmark_changed {
+                    save_config_file(&config, &paths.config_path).await?;
+                }
+
+                let resolved_path = access.resolved_path().to_path_buf();
+                {
+                    let app_state = app.state::<AppState>();
+                    *acquire_lock(&app_state.workspace_access)? = Some(access);
+                }
+
+                log::info!(
+                    "[authorize_workspace_path] Restored iOS security-scoped workspace access: configured={:?} resolved={:?}",
+                    requested_path,
+                    resolved_path
+                );
+                return Ok(resolved_path.to_string_lossy().into_owned());
+            }
+            Ok(None) => {
+                log::info!(
+                    "[authorize_workspace_path] No iOS workspace bookmark for {:?}; returning raw path",
+                    requested_path
+                );
+            }
+            Err(error) if had_bookmark => return Err(error),
+            Err(error) => {
+                log::warn!(
+                    "[authorize_workspace_path] Failed to resolve iOS workspace access for {:?}: {:?}; returning raw path",
+                    requested_path,
+                    error
+                );
+            }
+        }
+
+        return Ok(requested_path.to_string_lossy().into_owned());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
         let _ = app;
         Ok(requested_path.to_string_lossy().into_owned())
@@ -3408,30 +3767,57 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
     // Use the workspace path from config (may differ from platform default)
     let mut actual_workspace = config.default_workspace.clone();
 
-    // On iOS the sandbox container UUID changes between builds/reinstalls, so
-    // an absolute path persisted in config may point at a stale container.
-    // Re-resolve by extracting just the folder name and joining it to the
-    // current document_dir — the same logic reinitialize_workspace uses.
     #[cfg(target_os = "ios")]
-    {
-        if actual_workspace.is_absolute() {
-            let re_resolved = if let Some(name) = actual_workspace.file_name() {
-                paths.document_dir.join(name)
-            } else {
-                paths.default_workspace.clone()
-            };
-            if re_resolved != actual_workspace {
+    let active_access = {
+        let configured_workspace = actual_workspace.clone();
+        match activate_workspace_access_from_config(&mut config, &configured_workspace) {
+            Ok(Some((access, bookmark_changed))) => {
                 log::info!(
-                    "[initialize_app] iOS: re-resolved stale workspace path {:?} -> {:?}",
-                    actual_workspace,
-                    re_resolved
+                    "[initialize_app] Restored iOS security-scoped workspace access: configured={:?} resolved={:?}",
+                    configured_workspace,
+                    access.resolved_path()
                 );
-                actual_workspace = re_resolved;
-                config.default_workspace = actual_workspace.clone();
-                config_changed = true;
+                config_changed |= bookmark_changed;
+                actual_workspace = access.resolved_path().to_path_buf();
+                if config.default_workspace != actual_workspace {
+                    config.default_workspace = actual_workspace.clone();
+                    config_changed = true;
+                }
+                Some(access)
+            }
+            Ok(None) => {
+                let re_resolved = resolve_ios_container_workspace_path(
+                    &actual_workspace,
+                    &paths,
+                    "initialize_app",
+                );
+                if re_resolved != actual_workspace {
+                    actual_workspace = re_resolved;
+                    config.default_workspace = actual_workspace.clone();
+                    config_changed = true;
+                }
+                None
+            }
+            Err(e) => {
+                log::warn!(
+                    "[initialize_app] Failed to resolve stored iOS bookmark for {:?}: {:?}; falling back to app-container path resolution",
+                    configured_workspace,
+                    e
+                );
+                let re_resolved = resolve_ios_container_workspace_path(
+                    &actual_workspace,
+                    &paths,
+                    "initialize_app",
+                );
+                if re_resolved != actual_workspace {
+                    actual_workspace = re_resolved;
+                    config.default_workspace = actual_workspace.clone();
+                    config_changed = true;
+                }
+                None
             }
         }
-    }
+    };
 
     #[cfg(target_os = "macos")]
     let active_access = match activate_workspace_access_from_config(&mut config, &actual_workspace)
@@ -3519,6 +3905,12 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
         }
     };
 
+    #[cfg(target_os = "ios")]
+    if config_changed {
+        save_config_file(&config, &paths.config_path).await?;
+    }
+
+    #[cfg(not(target_os = "ios"))]
     if config_changed && !paths.is_mobile {
         save_config_file(&config, &paths.config_path).await?;
     }
@@ -3592,7 +3984,7 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
         // Force re-creation of Diaryx on next execute()
         let mut diaryx_lock = acquire_lock(&app_state.diaryx)?;
         *diaryx_lock = None;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             *acquire_lock(&app_state.workspace_access)? = active_access;
         }
@@ -5385,26 +5777,58 @@ pub async fn reinitialize_workspace<R: Runtime>(
 
     // 2. Resolve and validate workspace directory
     let paths = get_platform_paths(&app)?;
-    let ws_path = PathBuf::from(&workspace_path);
+    let mut ws_path = PathBuf::from(&workspace_path);
 
-    // On iOS, the sandbox container UUID changes between launches, so stored
-    // absolute paths become invalid. Re-resolve by extracting the workspace
-    // folder name and joining it to the current document_dir.
     #[cfg(target_os = "ios")]
-    let ws_path = {
-        if ws_path.is_absolute() {
-            if let Some(name) = ws_path.file_name() {
-                paths.document_dir.join(name)
-            } else {
-                paths.default_workspace.clone()
+    let active_access = {
+        let mut config_changed = false;
+        let mut loaded_config =
+            load_workspace_config(&paths.config_path, &paths.default_workspace).await;
+        let configured_workspace = ws_path.clone();
+
+        match activate_workspace_access_from_config(&mut loaded_config, &configured_workspace) {
+            Ok(Some((access, bookmark_changed))) => {
+                log::info!(
+                    "[reinitialize_workspace] Restored iOS security-scoped workspace access: configured={:?} resolved={:?}",
+                    configured_workspace,
+                    access.resolved_path()
+                );
+                config_changed |= bookmark_changed;
+                ws_path = access.resolved_path().to_path_buf();
+                if loaded_config.default_workspace == PathBuf::from(&workspace_path)
+                    && loaded_config.default_workspace != ws_path
+                {
+                    loaded_config.default_workspace = ws_path.clone();
+                    config_changed = true;
+                }
+                if config_changed {
+                    save_config_file(&loaded_config, &paths.config_path).await?;
+                }
+                Some(access)
             }
-        } else {
-            paths.document_dir.join(&ws_path)
+            Ok(None) => {
+                ws_path = resolve_ios_container_workspace_path(
+                    &configured_workspace,
+                    &paths,
+                    "reinitialize_workspace",
+                );
+                None
+            }
+            Err(e) => {
+                log::warn!(
+                    "[reinitialize_workspace] Failed to resolve stored iOS bookmark for {:?}: {:?}; falling back to app-container path resolution",
+                    configured_workspace,
+                    e
+                );
+                ws_path = resolve_ios_container_workspace_path(
+                    &configured_workspace,
+                    &paths,
+                    "reinitialize_workspace",
+                );
+                None
+            }
         }
     };
-
-    #[cfg(not(target_os = "ios"))]
-    let mut ws_path = ws_path;
 
     #[cfg(target_os = "macos")]
     let active_access = {
@@ -5531,7 +5955,7 @@ pub async fn reinitialize_workspace<R: Runtime>(
     // 3. Update AppState
     {
         *acquire_lock(&state.workspace_path)? = Some(ws_path.clone());
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             *acquire_lock(&state.workspace_access)? = active_access;
         }

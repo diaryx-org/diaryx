@@ -1,8 +1,10 @@
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "ios"))]
 
 use base64::Engine;
 use std::ffi::c_void;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(target_os = "macos")]
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 type Boolean = u8;
@@ -18,9 +20,27 @@ type CFURLRef = *const c_void;
 type CFURLBookmarkCreationOptions = CFOptionFlags;
 type CFURLBookmarkResolutionOptions = CFOptionFlags;
 
+#[cfg(target_os = "ios")]
+const K_CFURL_BOOKMARK_CREATION_MINIMAL_BOOKMARK: CFURLBookmarkCreationOptions = 1 << 9;
+#[cfg(target_os = "macos")]
 const K_CFURL_BOOKMARK_CREATION_WITH_SECURITY_SCOPE: CFURLBookmarkCreationOptions = 1 << 11;
+#[cfg(target_os = "macos")]
 const K_CFURL_BOOKMARK_RESOLUTION_WITHOUT_UI_MASK: CFURLBookmarkResolutionOptions = 1 << 8;
+#[cfg(target_os = "macos")]
 const K_CFURL_BOOKMARK_RESOLUTION_WITH_SECURITY_SCOPE: CFURLBookmarkResolutionOptions = 1 << 10;
+
+#[cfg(target_os = "ios")]
+const BOOKMARK_CREATION_OPTIONS: CFURLBookmarkCreationOptions =
+    K_CFURL_BOOKMARK_CREATION_MINIMAL_BOOKMARK;
+#[cfg(target_os = "macos")]
+const BOOKMARK_CREATION_OPTIONS: CFURLBookmarkCreationOptions =
+    K_CFURL_BOOKMARK_CREATION_WITH_SECURITY_SCOPE;
+
+#[cfg(target_os = "ios")]
+const BOOKMARK_RESOLUTION_OPTIONS: CFURLBookmarkResolutionOptions = 0;
+#[cfg(target_os = "macos")]
+const BOOKMARK_RESOLUTION_OPTIONS: CFURLBookmarkResolutionOptions =
+    K_CFURL_BOOKMARK_RESOLUTION_WITHOUT_UI_MASK | K_CFURL_BOOKMARK_RESOLUTION_WITH_SECURITY_SCOPE;
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
@@ -28,6 +48,7 @@ unsafe extern "C" {
     fn CFDataCreate(allocator: CFAllocatorRef, bytes: *const u8, length: CFIndex) -> CFDataRef;
     fn CFDataGetBytePtr(data: CFDataRef) -> *const u8;
     fn CFDataGetLength(data: CFDataRef) -> CFIndex;
+    #[cfg(target_os = "macos")]
     fn CFURLCreateFromFileSystemRepresentation(
         allocator: CFAllocatorRef,
         buffer: *const u8,
@@ -61,6 +82,7 @@ unsafe extern "C" {
     fn CFURLStopAccessingSecurityScopedResource(url: CFURLRef);
 }
 
+#[cfg(target_os = "macos")]
 fn cf_url_from_path(path: &Path, is_directory: bool) -> Result<CFURLRef, String> {
     let bytes = path.as_os_str().as_bytes();
     let url = unsafe {
@@ -115,7 +137,7 @@ fn create_bookmark_from_url(url: CFURLRef) -> Result<String, String> {
         CFURLCreateBookmarkData(
             std::ptr::null(),
             url,
-            K_CFURL_BOOKMARK_CREATION_WITH_SECURITY_SCOPE,
+            BOOKMARK_CREATION_OPTIONS,
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null_mut(),
@@ -158,6 +180,7 @@ impl Drop for ActiveSecurityScopedAccess {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub fn create_security_scoped_bookmark(path: &Path) -> Result<String, String> {
     let url = cf_url_from_path(path, true)?;
     let bookmark = create_bookmark_from_url(url);
@@ -188,8 +211,7 @@ pub fn activate_security_scoped_bookmark(
         CFURLCreateByResolvingBookmarkData(
             std::ptr::null(),
             bookmark_data,
-            K_CFURL_BOOKMARK_RESOLUTION_WITHOUT_UI_MASK
-                | K_CFURL_BOOKMARK_RESOLUTION_WITH_SECURITY_SCOPE,
+            BOOKMARK_RESOLUTION_OPTIONS,
             std::ptr::null(),
             std::ptr::null(),
             &mut is_stale,

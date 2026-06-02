@@ -3,7 +3,7 @@
    * WelcomeScreen — full-screen first-run experience.
    *
    * Views:
-   * - main: Two-button welcome
+   * - main: Folder-first workspace setup
    * - sign-in: Embedded SignInForm
    * - workspace-picker: List of user's synced workspaces after auth
    * - bundles: Full-screen bundle picker
@@ -12,7 +12,7 @@
   import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Progress } from "$lib/components/ui/progress";
-  import { ArrowLeft, Loader2, Cloud, Download, HardDrive, Lock } from "@lucide/svelte";
+  import { ArrowLeft, Loader2, Cloud, Download, FileText, HardDrive, Lock, FolderOpen, FolderPlus } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
   import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
@@ -25,9 +25,7 @@
   import { isAuthenticated, listUserWorkspaceNamespaces } from "$lib/auth/authStore.svelte";
   import {
     fetchPluginRegistry,
-    getRegistryWorkspaceProviders,
     type RegistryPlugin,
-    type RegistryWorkspaceProvider,
   } from "$lib/plugins/pluginRegistry";
   import { installRegistryPlugin } from "$lib/plugins/pluginInstallService";
   import {
@@ -41,6 +39,20 @@
   interface Props {
     /** Called to create a local workspace (no account) */
     onGetStarted: (selectedBundle: BundleRegistryEntry | null, pluginOverrides?: PluginOverride[]) => void | Promise<void>;
+    /** Called to create a workspace in a user-selected folder. Returns false when cancelled. */
+    onCreateFolderWorkspace: (
+      selectedBundle: BundleRegistryEntry | null,
+      pluginOverrides?: PluginOverride[],
+      onProgress?: (progress: { percent: number; message: string; detail?: string }) => void,
+    ) => boolean | void | Promise<boolean | void>;
+    /** Called to open an existing workspace folder. Returns false when cancelled. */
+    onOpenFolderWorkspace: (
+      onProgress?: (progress: { percent: number; message: string; detail?: string }) => void,
+    ) => boolean | void | Promise<boolean | void>;
+    /** Called to open one Markdown root file when folder access is unavailable. Returns false when cancelled. */
+    onOpenFileNavigation?: (
+      onProgress?: (progress: { percent: number; message: string; detail?: string }) => void,
+    ) => boolean | void | Promise<boolean | void>;
     /** Called after sign-in when user has no existing workspaces — create first synced workspace */
     onSignInCreateNew: () => void | Promise<void>;
     /** Called when user picks a provider for a new workspace (or restores from remote) */
@@ -67,6 +79,9 @@
 
   let {
     onGetStarted,
+    onCreateFolderWorkspace,
+    onOpenFolderWorkspace,
+    onOpenFileNavigation,
     onSignInCreateNew,
     onCreateWithProvider,
     onMoveCurrentWorkspace,
@@ -151,13 +166,20 @@
     })),
   );
   const manageModeProviders = $derived.by(() =>
-    workspaceProviders.map((provider): WelcomeProvider => ({
-      pluginId: String(provider.pluginId),
-      label: provider.contribution.label,
-      description: provider.contribution.description ?? null,
-      source: provider.source,
-      requiresAuth: provider.source !== "builtin",
-    })),
+    [
+      ...workspaceProviders.map((provider): WelcomeProvider => ({
+        pluginId: String(provider.pluginId),
+        label: provider.contribution.label,
+        description: provider.contribution.description ?? null,
+        source: provider.source,
+        requiresAuth: provider.source !== "builtin",
+      })),
+      ...builtinProviders.filter(
+        (builtin) => !workspaceProviders.some(
+          (provider) => String(provider.pluginId) === builtin.pluginId,
+        ),
+      ),
+    ],
   );
   const providerChoiceProviders = $derived(
     isMovingCurrentWorkspace ? manageModeProviders : bundleProviders,
@@ -168,16 +190,6 @@
     );
     return registryProviderPlugins.filter((plugin) => !installedProviderIds.has(plugin.id));
   });
-
-  function toWelcomeProvider(provider: RegistryWorkspaceProvider): WelcomeProvider {
-    return {
-      pluginId: provider.pluginId,
-      label: provider.label,
-      description: provider.description ?? null,
-      source: "plugin",
-      requiresAuth: true,
-    };
-  }
 
   function toSyntheticNamespace(
     providerId: string,
@@ -245,6 +257,50 @@
     }
   }
 
+  async function handleCreateFolderWorkspace(bundle: BundleRegistryEntry | null, overrides?: PluginOverride[]) {
+    beginSetup("Choose a folder...");
+    try {
+      const completed = await onCreateFolderWorkspace(bundle, overrides, updateSetupProgress);
+      if (completed === false) {
+        settingUp = false;
+        setupProgress = null;
+        fadingOut = false;
+      }
+    } catch (e) {
+      failSetup(e, "Failed to create workspace");
+    }
+  }
+
+  async function handleOpenFolderWorkspace() {
+    beginSetup("Choose a folder...");
+    try {
+      const completed = await onOpenFolderWorkspace(updateSetupProgress);
+      if (completed === false) {
+        settingUp = false;
+        setupProgress = null;
+        fadingOut = false;
+      }
+    } catch (e) {
+      failSetup(e, "Failed to open workspace");
+    }
+  }
+
+  async function handleOpenFileNavigation() {
+    if (!onOpenFileNavigation) return;
+
+    beginSetup("Choose a file...");
+    try {
+      const completed = await onOpenFileNavigation(updateSetupProgress);
+      if (completed === false) {
+        settingUp = false;
+        setupProgress = null;
+        fadingOut = false;
+      }
+    } catch (e) {
+      failSetup(e, "Failed to open file");
+    }
+  }
+
   async function handleBundleSelected(info: BundleSelectInfo, overrides?: PluginOverride[]) {
     launchInfo = info;
     const bundle = info.bundle;
@@ -252,39 +308,7 @@
 
     selectedBundle = bundle;
 
-    const pluginIds = bundle.plugins.map((p) => p.plugin_id);
-
-    // If overrides include a plugin not in the bundle, add its ID to the check list
-    if (overrides) {
-      for (const o of overrides) {
-        if (o.targetPluginId === "__new__" || !pluginIds.includes(o.targetPluginId)) {
-          // New plugin added — we can't know its ID from the bundle, but it
-          // will be inspected during install. For provider detection, we still
-          // check the bundle's declared plugins.
-        }
-      }
-    }
-
-    try {
-      const registry = await fetchPluginRegistry();
-      registryProviderPlugins = registry.plugins.filter((plugin) =>
-        Array.isArray(plugin.ui) && plugin.ui.some((entry) => entry.slot === "WorkspaceProvider"),
-      );
-      bundleProviders = [
-        ...getRegistryWorkspaceProviders(registry.plugins, pluginIds).map(toWelcomeProvider),
-        ...builtinProviders,
-      ];
-    } catch {
-      registryProviderPlugins = [];
-      bundleProviders = [...builtinProviders];
-    }
-
-    if (bundleProviders.length === 0 && registryProviderPlugins.length === 0) {
-      await handleGetStarted(bundle, overrides);
-    } else {
-      isMovingCurrentWorkspace = false;
-      navigateTo('provider-choice');
-    }
+    await handleCreateFolderWorkspace(bundle, overrides);
   }
 
   async function installWorkspaceProvider(plugin: RegistryPlugin) {
@@ -610,17 +634,49 @@
           <div class="space-y-3 fade-in" style="animation-delay: 2.4s">
             <Button
               class="w-full get-started-btn"
-              disabled={!animationDone}
+              disabled={!animationDone || settingUp}
+              onclick={() => handleCreateFolderWorkspace(null)}
+            >
+              <FolderPlus class="size-4 mr-2" />
+              Create workspace in folder
+            </Button>
+
+            <Button
+              class="w-full"
+              variant="outline"
+              disabled={!animationDone || settingUp}
+              onclick={handleOpenFolderWorkspace}
+            >
+              <FolderOpen class="size-4 mr-2" />
+              Open existing folder
+            </Button>
+
+            {#if onOpenFileNavigation}
+              <Button
+                class="w-full"
+                variant="outline"
+                disabled={!animationDone || settingUp}
+                onclick={handleOpenFileNavigation}
+              >
+                <FileText class="size-4 mr-2" />
+                Open single file
+              </Button>
+            {/if}
+
+            <button
+              type="button"
+              class="w-full text-xs text-muted-foreground/70 hover:text-foreground transition-colors disabled:opacity-50"
+              disabled={!animationDone || settingUp}
               onclick={() => navigateTo('bundles')}
             >
-              Get Started
-            </Button>
+              Choose a starter workspace
+            </button>
 
             {#if !isAuthenticated()}
               <button
                 type="button"
                 class="w-full text-xs text-muted-foreground/70 hover:text-foreground transition-colors disabled:opacity-50"
-                disabled={!animationDone}
+                disabled={!animationDone || settingUp}
                 onclick={() => navigateTo('sign-in')}
               >
                 Already have an account? Sign in
@@ -632,7 +688,7 @@
                 <Button
                   variant="ghost"
                   class="text-muted-foreground"
-                  disabled={!animationDone}
+                  disabled={!animationDone || settingUp}
                   onclick={onReturn}
                 >
                   <ArrowLeft class="size-4 mr-2" />
@@ -642,12 +698,35 @@
                   <button
                     type="button"
                     class="text-xs text-muted-foreground/70 hover:text-foreground transition-colors disabled:opacity-50"
-                    disabled={!animationDone}
+                    disabled={!animationDone || settingUp}
                     onclick={() => { isMovingCurrentWorkspace = true; navigateTo('provider-choice'); }}
                   >
                     Move
                   </button>
                 {/if}
+              </div>
+            {/if}
+
+            {#if settingUp}
+              <div class="space-y-2 pt-2">
+                <div class="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 class="size-4 animate-spin" />
+                  {setupProgress?.message ?? "Setting up…"}
+                </div>
+                {#if setupProgress}
+                  <Progress value={setupProgress.percent} class="h-1.5" />
+                  {#if setupProgress.detail}
+                    <p class="text-center text-xs text-muted-foreground">
+                      {setupProgress.detail}
+                    </p>
+                  {/if}
+                {/if}
+              </div>
+            {/if}
+
+            {#if setupError}
+              <div class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                {setupError}
               </div>
             {/if}
           </div>
@@ -949,7 +1028,7 @@
             {themes}
             deferZoom={true}
             onDeferredSelect={(info) => handleBundleSelected(info, info.pluginOverrides)}
-            onSelect={(bundle, overrides) => handleGetStarted(bundle, overrides)}
+            onSelect={(bundle, overrides) => handleCreateFolderWorkspace(bundle, overrides)}
             onBack={() => navigateTo('main')}
           />
         {/if}

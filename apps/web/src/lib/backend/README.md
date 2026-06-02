@@ -39,6 +39,19 @@ after Rust-side manifest changes the repo should refresh them via
 by `@tauri-apps/api` and avoids iOS builds silently falling back to browser
 code paths just because `window.__TAURI__` is absent.
 
+## Workspace Access Bridge
+
+`workspaceAccess.ts` centralizes native path grants for workspace selection.
+Folder flows call `pickAuthorizedWorkspaceFolder(...)`; on iOS that invokes
+the Swift `UIDocumentPickerViewController` directory picker so the bookmark is
+created while the user grant is active, while desktop Tauri authorizes the
+dialog-selected path after selection.
+
+The same module also exposes `pickAuthorizedWorkspaceFile(...)` for the iOS
+single-file fallback. That command bookmarks one Markdown/text file and lets
+`App.svelte` run in file-navigation mode without enumerating the provider's
+parent folder.
+
 ## Attachment Upload Path
 
 `api.ts` now uploads entry attachments over the backend binary channel:
@@ -241,13 +254,14 @@ flow for browser and Tauri installs.
   custom-protocol/postMessage handoff issues instead of hanging indefinitely
   behind an abandoned native invoke callback.
 - `workspaceAccess.ts` now does the same kind of app-wide bridging for
-  sandboxed workspace picks: shared folder-picker flows call the native
-  `authorize_workspace_path` command immediately after selection so TestFlight
-  and App Store builds persist security-scoped bookmarks before those paths are
-  stored in the local workspace registry. The same helper is now reused by the
-  workspace-selector remote-link flow, so attaching a CLI-managed folder to an
-  existing remote workspace keeps the native bookmark/path pair consistent with
-  normal relocate/open-folder picks.
+  sandboxed workspace picks: on iOS, shared folder-picker flows call
+  `pick_authorized_workspace_folder` so the native Swift directory picker can
+  create the security-scoped bookmark while the user grant is active; on
+  desktop they call `authorize_workspace_path` immediately after the Tauri
+  dialog selection. The same helper is now reused by the workspace-selector
+  remote-link flow, so attaching a CLI-managed folder to an existing remote
+  workspace keeps the native bookmark/path pair consistent with normal
+  relocate/open-folder picks.
 - Tauri plugin install/inspect calls now also log stage-specific failures on
   both the JS and Rust sides, so mobile/TestFlight install issues show up in
   the Debug log panel with enough context to tell whether the failure happened

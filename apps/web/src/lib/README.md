@@ -77,10 +77,25 @@ instead of a standalone add-workspace dialog.
 
 The onboarding flow supports:
 
-- local-first workspace creation from curated starter bundles
-- provider-backed workspace creation after bundle selection
+- folder-first workspace creation/opening through a user-selected directory
+- curated starter bundles applied to the selected folder workspace
+- provider-backed workspace creation as a secondary/legacy path
 - remote workspace restore through provider-owned metadata
 - Apple/Tauri built-in provider options such as iCloud Drive
+
+For Tauri, selected folders are routed through `workspaceAccess.ts` so
+sandboxed Apple builds can persist security-scoped access before the path is
+stored in the local workspace registry. iOS uses the native
+`pick_authorized_workspace_folder` command because the Swift document picker
+must create the bookmark while the user grant is active; desktop Tauri can
+authorize the path after the dialog returns. Browser folder workspaces use the
+File System Access API when available and persist the selected handle per
+workspace.
+
+`workspaceAccess.ts` also exposes `pickAuthorizedWorkspaceFile(...)` for the
+iOS single-file fallback. That path asks the native document picker for one
+Markdown/text file, persists the returned bookmark, and lets `App.svelte` open
+the file directly without assuming access to the parent folder.
 
 Provider-backed restore still uses staged initialization so users see visible
 forward motion during link/bootstrap flows even when the underlying provider

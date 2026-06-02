@@ -13,6 +13,7 @@ import {
 export type ThemeMode = "light" | "dark" | "system";
 
 const STORAGE_KEY = "diaryx-theme";
+const DEFAULT_THEME_MODE: ThemeMode = "system";
 
 function isThemeMode(value: unknown): value is ThemeMode {
   return value === "light" || value === "dark" || value === "system";
@@ -119,11 +120,7 @@ export function createThemeStore() {
   async function reloadFromWorkspace(): Promise<void> {
     try {
       const raw = await readWorkspaceText(getThemeModePath());
-      if (!raw) {
-        persistLegacyMode(mode);
-        void persistWorkspaceMode(mode);
-        return;
-      }
+      if (!raw) return;
 
       const parsed = JSON.parse(raw) as { mode?: unknown };
       if (isThemeMode(parsed.mode)) {
@@ -164,6 +161,11 @@ export function createThemeStore() {
       persistThemeMode = persistFn;
       if (isThemeMode(themeMode)) {
         setModeInternal(themeMode, { persistLegacy: true, persistWorkspace: false });
+      } else {
+        setModeInternal(DEFAULT_THEME_MODE, {
+          persistLegacy: true,
+          persistWorkspace: false,
+        });
       }
     },
     /** Register a callback invoked after light/dark mode changes. */

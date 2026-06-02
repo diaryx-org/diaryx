@@ -4,14 +4,12 @@
    */
   import { Separator } from "$lib/components/ui/separator";
   import { HardDrive } from "@lucide/svelte";
-  import { getAuthState } from "$lib/auth";
   import {
     getLocalWorkspaces,
     getCurrentWorkspaceId,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
 
-  let authState = $derived(getAuthState());
-  let currentId = $derived(authState.activeWorkspaceId ?? getCurrentWorkspaceId());
+  let currentId = $derived(getCurrentWorkspaceId());
   let localWorkspaces = $derived(getLocalWorkspaces());
   let hasAnyWorkspaces = $derived(localWorkspaces.length > 0);
 </script>

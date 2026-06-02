@@ -890,6 +890,21 @@ export function createAppearanceStore() {
       ].some((value) => typeof value === "string" && value.length > 0);
 
       if (!hasWorkspaceState && !hasLegacyThemeSettings) {
+        themeLibrary = {};
+        typographyLibrary = {};
+        appearance = normalizeAppearance(
+          {
+            ...appearance,
+            typographyPresetId: DEFAULT_APPEARANCE.typographyPresetId,
+            typographyOverrides: {},
+          },
+          getThemeMap(),
+          getTypographyMap(),
+        );
+        saveThemeLibrary(themeLibrary);
+        saveTypographyLibrary(typographyLibrary);
+        saveAppearance(appearance);
+        apply();
         void persistThemeWorkspaceFiles(themeLibrary);
         void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
         return;
@@ -1034,26 +1049,38 @@ export function createAppearanceStore() {
       persistFn: (theme: { presetId: string; accentHue: number | null }) => Promise<void>,
     ): void {
       persistWorkspaceTheme = persistFn;
+      const hasPreset = workspaceTheme.presetId !== undefined;
+      const hasAccent = Object.hasOwn(workspaceTheme, "accentHue");
       if (
-        workspaceTheme.presetId !== undefined ||
-        Object.hasOwn(workspaceTheme, "accentHue")
+        hasPreset ||
+        hasAccent
       ) {
         appearance = normalizeAppearance(
           {
             ...appearance,
-            ...(workspaceTheme.presetId !== undefined
+            ...(hasPreset
               ? { presetId: workspaceTheme.presetId }
               : {}),
-            ...(Object.hasOwn(workspaceTheme, "accentHue")
+            ...(hasAccent
               ? { accentHue: workspaceTheme.accentHue ?? null }
               : {}),
           },
           getThemeMap(),
           getTypographyMap(),
         );
-        saveAppearance(appearance);
-        apply();
+      } else {
+        appearance = normalizeAppearance(
+          {
+            ...appearance,
+            presetId: DEFAULT_APPEARANCE.presetId,
+            accentHue: DEFAULT_APPEARANCE.accentHue,
+          },
+          getThemeMap(),
+          getTypographyMap(),
+        );
       }
+      saveAppearance(appearance);
+      apply();
     },
 
     reapply: apply,

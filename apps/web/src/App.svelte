@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { getBackend, isTauri, isNativePluginBackend, replaceBackend, resetBackend, type TreeNode } from "./lib/backend";
+  import { getBackend, isTauri, isNativePluginBackend, replaceBackend, resetBackend, type Backend, type TreeNode } from "./lib/backend";
   import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
   import { BackendError } from "./lib/backend/interface";
   import {
@@ -689,9 +689,7 @@
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
   let authState = $derived(getAuthState());
   let pluginManifestCount = $derived(getPluginStore().allManifests.length);
-  let activeLocalWorkspaceId = $derived(
-    authState.activeWorkspaceId ?? getCurrentWorkspaceId(),
-  );
+  let activeLocalWorkspaceId = $derived(getCurrentWorkspaceId());
   const PREVIEW_AUDIENCE_UNSET = Symbol("preview-audience-unset");
   let lastPreviewAudience = $state<string[] | null | typeof PREVIEW_AUDIENCE_UNSET>(
     PREVIEW_AUDIENCE_UNSET,
@@ -1539,25 +1537,27 @@
   async function handleWorkspaceSwitchComplete() {
     clearFileNavigationMode({ forgetStoredPath: true });
     // Re-initialize references: get the new backend from the singleton
-    const newBackend = await getBackend();
-    workspaceStore.setBackend(newBackend);
+    const nextBackend = await getBackend();
+    workspaceStore.setBackend(nextBackend);
+    const nextApi = createApi(nextBackend);
     // Refresh tree and validation from new workspace
-    await refreshTree();
+    await refreshTreeWith(nextApi, nextBackend);
+    const nextTree = workspaceStore.tree;
 
     // Hydrate view preferences from the new workspace's config
-    const workspaceRootIndexPath = await api?.resolveWorkspaceRootIndexPath(
-      tree?.path ?? null,
+    const workspaceRootIndexPath = await nextApi.resolveWorkspaceRootIndexPath(
+      nextTree?.path ?? null,
     );
-    if (workspaceRootIndexPath && api) {
+    if (workspaceRootIndexPath) {
       try {
-        const wsConfig = await api.getWorkspaceConfig(workspaceRootIndexPath);
+        const wsConfig = await nextApi.getWorkspaceConfig(workspaceRootIndexPath);
         workspaceStore.hydrateDisplaySettings(wsConfig, async (field, value) => {
           try {
-            const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
-              tree?.path ?? null,
+            const nextRootIndexPath = await nextApi.resolveWorkspaceRootIndexPath(
+              workspaceStore.tree?.path ?? null,
             );
             if (!nextRootIndexPath) return;
-            await api!.setWorkspaceConfig(nextRootIndexPath, field, value);
+            await nextApi.setWorkspaceConfig(nextRootIndexPath, field, value);
           } catch (e) {
             console.warn('[App] Failed to persist display setting:', field, e);
           }
@@ -1566,11 +1566,11 @@
         // Hydrate theme mode
         themeStore.hydrateThemeMode(wsConfig.theme_mode, async (mode) => {
           try {
-            const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
-              tree?.path ?? null,
+            const nextRootIndexPath = await nextApi.resolveWorkspaceRootIndexPath(
+              workspaceStore.tree?.path ?? null,
             );
             if (!nextRootIndexPath) return;
-            await api!.setWorkspaceConfig(nextRootIndexPath, 'theme_mode', mode);
+            await nextApi.setWorkspaceConfig(nextRootIndexPath, 'theme_mode', mode);
           } catch (e) {
             console.warn('[App] Failed to persist theme_mode:', e);
           }
@@ -1583,12 +1583,12 @@
           },
           async ({ presetId, accentHue }) => {
             try {
-              const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
-                tree?.path ?? null,
+              const nextRootIndexPath = await nextApi.resolveWorkspaceRootIndexPath(
+                workspaceStore.tree?.path ?? null,
               );
               if (!nextRootIndexPath) return;
-              await api!.setWorkspaceConfig(nextRootIndexPath, 'theme_preset', presetId);
-              await api!.setWorkspaceConfig(
+              await nextApi.setWorkspaceConfig(nextRootIndexPath, 'theme_preset', presetId);
+              await nextApi.setWorkspaceConfig(
                 nextRootIndexPath,
                 'theme_accent_hue',
                 accentHue === null ? 'null' : JSON.stringify(accentHue),
@@ -1602,11 +1602,11 @@
         // Hydrate audience colors
         getAudienceColorStore().hydrate(wsConfig.audience_colors as Record<string, string> | undefined, async (colors) => {
           try {
-            const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
-              tree?.path ?? null,
+            const nextRootIndexPath = await nextApi.resolveWorkspaceRootIndexPath(
+              workspaceStore.tree?.path ?? null,
             );
             if (!nextRootIndexPath) return;
-            await api!.setWorkspaceConfig(nextRootIndexPath, 'audience_colors', JSON.stringify(colors));
+            await nextApi.setWorkspaceConfig(nextRootIndexPath, 'audience_colors', JSON.stringify(colors));
           } catch (e) {
             console.warn('[App] Failed to persist audience_colors:', e);
           }
@@ -1615,18 +1615,18 @@
         // Hydrate disabled plugins
         getPluginStore().hydrateDisabledPlugins(wsConfig.disabled_plugins, async (disabledIds) => {
           try {
-            const nextRootIndexPath = await api!.resolveWorkspaceRootIndexPath(
-              tree?.path ?? null,
+            const nextRootIndexPath = await nextApi.resolveWorkspaceRootIndexPath(
+              workspaceStore.tree?.path ?? null,
             );
             if (!nextRootIndexPath) return;
-            await api!.setWorkspaceConfig(nextRootIndexPath, 'disabled_plugins', JSON.stringify(disabledIds));
+            await nextApi.setWorkspaceConfig(nextRootIndexPath, 'disabled_plugins', JSON.stringify(disabledIds));
           } catch (e) {
             console.warn('[App] Failed to persist disabled_plugins:', e);
           }
         });
 
         if (wsConfig.show_unlinked_files || wsConfig.show_hidden_files) {
-          await refreshTree();
+          await refreshTreeWith(nextApi, nextBackend);
         }
       } catch (e) {
         console.warn('[App] Failed to load workspace config:', e);
@@ -1635,11 +1635,12 @@
 
     await reloadWorkspaceScopedBrowserState();
     // Navigate to the root entry of the new workspace
-    if (tree && !currentEntry) {
-      workspaceStore.expandNode(tree.path);
-      await openEntry(tree.path);
+    const rootTree = workspaceStore.tree;
+    if (rootTree && !currentEntry) {
+      workspaceStore.expandNode(rootTree.path);
+      await openEntryController(nextApi, rootTree.path, rootTree, collaborationEnabled);
     }
-    await runValidation();
+    await runValidationWith(nextApi, nextBackend, workspaceStore.tree);
     entryStore.setLoading(false);
   }
 
@@ -2549,9 +2550,17 @@
   }
 
   // Run workspace validation (delegates to controller)
+  async function runValidationWith(
+    apiInstance: Api,
+    backendInstance: Backend,
+    validationTree: TreeNode | null = tree,
+  ) {
+    await runValidationController(apiInstance, backendInstance, validationTree);
+  }
+
   async function runValidation() {
     if (!api || !backend) return;
-    await runValidationController(api, backend, tree);
+    await runValidationWith(api, backend);
   }
 
   // Validate a specific path (delegates to controller)
@@ -2616,13 +2625,18 @@
   }
 
   // Wrapper functions that delegate to controllers
-  async function refreshTree() {
+  async function refreshTreeWith(apiInstance: Api, backendInstance: Backend) {
     if (fileNavigationMode) return;
-    if (!api || !backend) return;
     const audiences = templateContextStore.previewAudience ?? undefined;
     const startedAt = getTimingNow();
     const treeRefreshStartedAt = getTimingNow();
-    await refreshTreeController(api, backend, showUnlinkedFiles, showHiddenFiles, audiences);
+    await refreshTreeController(
+      apiInstance,
+      backendInstance,
+      showUnlinkedFiles,
+      showHiddenFiles,
+      audiences,
+    );
     const treeRefreshElapsedMs = getElapsedMs(treeRefreshStartedAt);
 
     const permissionsReloadStartedAt = getTimingNow();
@@ -2638,6 +2652,11 @@
       permissionsReloadElapsedMs,
       totalElapsedMs: getElapsedMs(startedAt),
     });
+  }
+
+  async function refreshTree() {
+    if (!api || !backend) return;
+    await refreshTreeWith(api, backend);
   }
 
   // Handle import:complete event from ImportSettings

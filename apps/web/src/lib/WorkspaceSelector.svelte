@@ -23,7 +23,6 @@
   import type { StorageType } from "$lib/backend/storageType";
   import { switchWorkspace } from "$lib/workspace/switchWorkspace";
   import {
-    getAuthState,
     getWorkspaces as getServerWorkspaces,
     renameServerWorkspace,
   } from "$lib/auth";
@@ -82,9 +81,8 @@
   let deleteLoading = $state(false);
   let menuOpenId = $state<string | null>(null);
 
-  // Current workspace ID (reactive via auth state + local registry state)
-  let authState = $derived(getAuthState());
-  let currentWsId = $derived(authState.activeWorkspaceId ?? getCurrentWorkspaceId());
+  // Current workspace ID (local registry is the source of truth for local folders)
+  let currentWsId = $derived(getCurrentWorkspaceId());
 
   // Display name
   let displayName = $derived.by(() => {

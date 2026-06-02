@@ -22,6 +22,7 @@ import {
 
 beforeEach(() => {
   localStorage.clear();
+  vi.clearAllMocks();
   document.documentElement.classList.remove("dark");
 
   if (!window.matchMedia) {
@@ -183,15 +184,27 @@ describe("createThemeStore", () => {
     expect(store.mode).toBe("dark");
   });
 
-  it("reloadFromWorkspace persists defaults when no workspace file exists", async () => {
+  it("reloadFromWorkspace leaves mode unchanged when no workspace file exists", async () => {
     vi.mocked(readWorkspaceText).mockResolvedValueOnce(null);
 
     const store = createThemeStore();
+    store.setMode("dark");
+    vi.mocked(writeWorkspaceText).mockClear();
     await store.reloadFromWorkspace();
-    // Should remain at default
+    // Missing workspace theme files should not clone the current in-memory mode.
+    expect(store.mode).toBe("dark");
+    expect(writeWorkspaceText).not.toHaveBeenCalled();
+  });
+
+  it("hydrateThemeMode resets to system when workspace config has no mode", () => {
+    const store = createThemeStore();
+    const persistFn = vi.fn().mockResolvedValue(undefined);
+
+    store.setMode("dark");
+    store.hydrateThemeMode(undefined, persistFn);
+
     expect(store.mode).toBe("system");
-    // Should have persisted current mode to workspace
-    expect(writeWorkspaceText).toHaveBeenCalled();
+    expect(persistFn).not.toHaveBeenCalled();
   });
 
   it("reloadFromWorkspace handles parse errors gracefully", async () => {

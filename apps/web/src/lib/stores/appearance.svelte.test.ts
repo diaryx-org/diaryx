@@ -12,7 +12,10 @@ import type {
   TypographyDefinition,
   UserAppearance,
 } from "./appearance.types";
-import { readWorkspaceText } from "$lib/workspace/workspaceAssetStorage";
+import {
+  readWorkspaceText,
+  writeWorkspaceText,
+} from "$lib/workspace/workspaceAssetStorage";
 
 // ---------------------------------------------------------------------------
 // Mock workspace persistence (async I/O not needed in unit tests)
@@ -90,6 +93,20 @@ describe("appearanceStore theme library", () => {
 
     store.setAccentHue(210);
     expect(persistFn).toHaveBeenCalledWith({ presetId: "sepia", accentHue: 210 });
+  });
+
+  it("resets workspace theme selection when workspace config has no theme fields", () => {
+    const store = createAppearanceStore();
+    const persistFn = vi.fn().mockResolvedValue(undefined);
+
+    store.hydrateWorkspaceTheme({ presetId: "sepia", accentHue: 180 }, persistFn);
+    expect(store.presetId).toBe("sepia");
+
+    store.hydrateWorkspaceTheme({}, persistFn);
+
+    expect(store.presetId).toBe("default");
+    expect(store.accentHue).toBeNull();
+    expect(persistFn).not.toHaveBeenCalled();
   });
 
   it("installs, applies, and uninstalls custom themes with fallback", () => {
@@ -610,6 +627,25 @@ describe("appearanceStore reset", () => {
 // ===========================================================================
 
 describe("appearanceStore persistence", () => {
+  it("reloadFromWorkspace resets typography when no workspace appearance files exist", async () => {
+    vi.mocked(readWorkspaceText)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+
+    const store = createAppearanceStore();
+    store.setTypographyPreset("compact-system");
+    store.setBaseFontSize(14);
+    vi.mocked(writeWorkspaceText).mockClear();
+
+    await store.reloadFromWorkspace();
+
+    expect(store.typographyPresetId).toBe("default");
+    expect(store.typographyOverrides).toEqual({});
+    expect(writeWorkspaceText).toHaveBeenCalled();
+  });
+
   it("reloads legacy workspace theme settings and migrates them through the workspace callback", async () => {
     vi.mocked(readWorkspaceText)
       .mockResolvedValueOnce(JSON.stringify({ presetId: "nord", accentHue: 220 }))

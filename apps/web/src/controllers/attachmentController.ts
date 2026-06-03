@@ -25,7 +25,7 @@ import {
 import {
   indexAttachmentRefs,
   sha256Hex,
-} from '$lib/sync/attachmentSyncService';
+} from '$lib/attachments/attachmentIndexService';
 import { getCurrentWorkspaceId } from '$lib/storage/localWorkspaceRegistry.svelte';
 import { toast } from 'svelte-sonner';
 

@@ -10,11 +10,11 @@
  * - Property changes
  */
 
-import { tick } from 'svelte';
+
 import type { EntryData, TreeNode, Api, CreateChildResult } from '../lib/backend';
 import { getBackend } from '../lib/backend';
 import type { JsonValue } from '../lib/backend/generated/serde_json/JsonValue';
-import { entryStore, uiStore, collaborationStore } from '../models/stores';
+import { entryStore, uiStore } from '../models/stores';
 import {
   revokeBlobUrls,
   reverseBlobUrlsToAttachmentPaths,
@@ -22,13 +22,14 @@ import {
 import { dispatchFileOpenedEvent } from '../lib/plugins/browserPluginManager.svelte';
 import { toWorkspaceRelativePath } from '../lib/utils/path';
 
-// Sync/body orchestration is plugin-owned; host keeps local filesystem workflows.
-async function ensureBodySync(path: string): Promise<void> {
+/**
+ * Notify plugins that an entry was opened.
+ */
+async function notifyEntryOpened(path: string): Promise<void> {
   const backend = await getBackend();
   const syncPath = toWorkspaceRelativePath(backend.getWorkspacePath(), path);
   await dispatchFileOpenedEvent(syncPath);
 }
-function closeBodySync(_path: string): void {}
 
 type EditorMarkdownRef = {
   getMarkdown?: () => string | undefined;
@@ -98,8 +99,7 @@ function normalizeFrontmatter(frontmatter: any): Record<string, any> {
 export async function openEntry(
   api: Api,
   path: string,
-  tree: TreeNode | null,
-  collaborationEnabled: boolean,
+  _tree: TreeNode | null,
   options?: {
     onBeforeOpen?: () => Promise<void>;
     isCurrentRequest?: () => boolean;
@@ -148,62 +148,31 @@ export async function openEntry(
   }
   if (!isCurrentRequest()) return;
 
-  // Non-blocking: set up body sync bridge and collaboration tracking.
-  // The bridge must exist to receive remote body updates (onBodyChange callback),
-  // but it doesn't need to complete before the editor is visible.
+  // Non-blocking: notify plugins that entry was opened.
   try {
-    await ensureBodySync(path);
+    await notifyEntryOpened(path);
   } catch (e) {
-    console.warn('[EntryController] Body sync setup failed:', e);
-  }
-  if (!isCurrentRequest()) return;
-
-  // Collaboration path tracking (doesn't affect content display)
-  try {
-    const entry = entryStore.currentEntry;
-    if (entry && entry.path === path) {
-      let workspaceDir = tree?.path || '';
-      if (workspaceDir.endsWith('/')) {
-        workspaceDir = workspaceDir.slice(0, -1);
-      }
-      if (
-        workspaceDir.endsWith('README.md') ||
-        workspaceDir.endsWith('index.md')
-      ) {
-        workspaceDir = workspaceDir.substring(0, workspaceDir.lastIndexOf('/'));
-      }
-      let newRelativePath = entry.path;
-      if (workspaceDir && entry.path.startsWith(workspaceDir)) {
-        newRelativePath = entry.path.substring(workspaceDir.length + 1);
-      }
-
-      const currentCollaborationPath = collaborationStore.currentCollaborationPath;
-      if (currentCollaborationPath !== newRelativePath) {
-        collaborationStore.clearCollaborationSession();
-        await tick();
-      }
-
-      if (collaborationEnabled) {
-        collaborationStore.setCollaborationPath(newRelativePath);
-        console.log('[EntryController] Collaboration path:', newRelativePath);
-      }
-    } else if (!entry) {
-      collaborationStore.clearCollaborationSession();
-    }
-  } catch (e) {
-    console.warn('[EntryController] Collaboration setup failed:', e);
+    console.warn('[EntryController] Plugin notification failed:', e);
   }
 }
 
 /**
- * Save the current entry.
+ * Save an entry.
+ *
+ * @param api - API instance
+ * @param currentEntry - The current entry being saved
+ * @param editorRef - Reference to the editor component
+ * @param rootIndexPath - Workspace root index path
+ * @param detectH1Title - When true, detect H1→title sync (manual save/blur only, not auto-save)
+ * @returns Object with newPath if H1 sync caused a rename
  */
 export async function saveEntry(
   api: Api,
   currentEntry: EntryData | null,
   editorRef: any,
-  rootIndexPath?: string
-): Promise<void> {
+  rootIndexPath?: string,
+  detectH1Title?: boolean
+): Promise<{ newPath?: string } | void> {
   if (!currentEntry || !editorRef) return;
   if (entryStore.isSaving) return; // Prevent concurrent saves
 
@@ -211,14 +180,24 @@ export async function saveEntry(
     entryStore.setSaving(true);
     const markdown = getEditorBodyMarkdown(editorRef);
 
-    // Note: saveEntry expects only the body content, not frontmatter.
-    // Frontmatter is preserved by the backend's save_content() method.
-    await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath);
+    // Save to backend
+    const newPath = await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath, detectH1Title);
     // Pre-acknowledge so the Editor's content-sync effect won't re-apply
     // the content we just read from it (which would reset the cursor).
     editorRef?.acknowledgeSavedContent?.(markdown);
     entryStore.setDisplayContent(markdown);
     entryStore.markClean();
+
+    if (newPath && newPath !== currentEntry.path) {
+      // H1 sync caused a rename
+      await notifyEntryOpened(newPath);
+      return { newPath };
+    }
+
+    if (newPath) {
+      // Title changed but path didn't — return so caller can refresh UI
+      return { newPath };
+    }
   } catch (e) {
     uiStore.setError(e instanceof Error ? e.message : String(e));
   } finally {
@@ -228,18 +207,25 @@ export async function saveEntry(
 
 /**
  * Create a child entry under a parent.
- * Note: CRDT sync is handled by Rust CreateEntry command.
+ *
+ * @param api - API instance
+ * @param parentPath - Path of the parent entry
+ * @param onSuccess - Callback after successful creation
+ * @returns The CreateChildResult with paths and conversion info, or null on failure
  */
 export async function createChildEntry(
   api: Api,
   parentPath: string,
-  onSuccess?: () => Promise<void>
+  onSuccess?: (result: CreateChildResult) => Promise<void>
 ): Promise<CreateChildResult | null> {
   try {
     const result = await api.createChildEntry(parentPath);
 
+    // Ensure plugin notification is triggered for the new file
+    await notifyEntryOpened(result.child_path);
+
     if (onSuccess) {
-      await onSuccess();
+      await onSuccess(result);
     }
 
     return result;
@@ -251,16 +237,24 @@ export async function createChildEntry(
 
 /**
  * Create a new entry at a specific path.
- * Note: CRDT sync is handled by Rust CreateEntry command.
+ *
+ * @param api - API instance
+ * @param path - Path for the new entry
+ * @param options - Options including title and template
+ * @param onSuccess - Callback after successful creation
+ * @returns The path of the new entry, or null on failure
  */
 export async function createEntry(
   api: Api,
   path: string,
-  options: { title: string; rootIndexPath?: string },
+  options: { title: string; template?: string; rootIndexPath?: string },
   onSuccess?: () => Promise<void>
 ): Promise<string | null> {
   try {
     const newPath = await api.createEntry(path, { ...options, rootIndexPath: options.rootIndexPath });
+
+    // Ensure plugin notification is triggered for the new file
+    await notifyEntryOpened(newPath);
 
     if (onSuccess) {
       await onSuccess();
@@ -279,6 +273,12 @@ export async function createEntry(
  * Delete an entry.
  *
  * Callers are responsible for showing a confirmation dialog before calling this.
+ *
+ * @param api - API instance
+ * @param path - Path of the entry to delete
+ * @param currentEntryPath - Path of the currently open entry (to clear if same)
+ * @param onSuccess - Callback after successful deletion (e.g., refresh tree)
+ * @returns True if deletion completed successfully
  */
 export async function deleteEntry(
   api: Api,
@@ -287,6 +287,7 @@ export async function deleteEntry(
   onSuccess?: () => Promise<void>
 ): Promise<boolean> {
   try {
+    // Delete via Rust
     await api.deleteEntry(path);
 
     // If we deleted the currently open entry, clear it
@@ -456,7 +457,6 @@ export async function handlePropertyChange(
 
 /**
  * Remove a property from the current entry.
- * Note: CRDT sync is handled by Rust RemoveFrontmatterProperty command.
  */
 export async function removeProperty(
   api: Api,
@@ -480,7 +480,6 @@ export async function removeProperty(
 
 /**
  * Add a property to the current entry.
- * Note: CRDT sync is handled by Rust SetFrontmatterProperty command.
  */
 export async function addProperty(
   api: Api,
@@ -508,7 +507,6 @@ export async function addProperty(
 
 /**
  * Rename an entry.
- * Note: CRDT sync is handled by Rust RenameEntry command.
  *
  * @param api - API instance
  * @param path - Current path of the entry
@@ -522,13 +520,10 @@ export async function renameEntry(
   newFilename: string,
   onSuccess?: () => Promise<void>
 ): Promise<string> {
-  // Close old body sync bridge before rename
-  closeBodySync(path);
-
   const newPath = await api.renameEntry(path, newFilename);
 
-  // Create new body sync bridge for the new path
-  await ensureBodySync(newPath);
+  // Notify plugins about new path
+  await notifyEntryOpened(newPath);
 
   if (onSuccess) {
     await onSuccess();
@@ -539,7 +534,6 @@ export async function renameEntry(
 
 /**
  * Duplicate an entry.
- * Note: CRDT sync for the new file should be added via Rust DuplicateEntry command.
  *
  * @param api - API instance
  * @param path - Path of the entry to duplicate
@@ -553,193 +547,12 @@ export async function duplicateEntry(
 ): Promise<string> {
   const newPath = await api.duplicateEntry(path);
 
-  // Ensure body sync bridge is created for the new file
-  await ensureBodySync(newPath);
+  // Notify plugins about new path
+  await notifyEntryOpened(newPath);
 
   if (onSuccess) {
     await onSuccess();
   }
 
   return newPath;
-}
-
-/**
- * Delete an entry with CRDT sync support.
- * Note: CRDT sync (soft delete) is now handled by Rust DeleteEntry command.
- *
- * Callers are responsible for showing a confirmation dialog before calling this.
- *
- * @param api - API instance
- * @param path - Path of the entry to delete
- * @param currentEntryPath - Path of the currently open entry (to clear if same)
- * @param onSuccess - Callback after successful deletion (e.g., refresh tree)
- * @returns True if deletion completed successfully
- */
-export async function deleteEntryWithSync(
-  api: Api,
-  path: string,
-  currentEntryPath: string | null,
-  onSuccess?: () => Promise<void>
-): Promise<boolean> {
-  try {
-    // Close body sync bridge for the deleted file
-    closeBodySync(path);
-
-    // Delete via Rust - handles CRDT soft delete automatically
-    await api.deleteEntry(path);
-
-    // If we deleted the currently open entry, clear it
-    if (currentEntryPath === path) {
-      entryStore.setCurrentEntry(null);
-      entryStore.markClean();
-    }
-
-    if (onSuccess) {
-      // Try to refresh - might fail if workspace state is temporarily inconsistent
-      try {
-        await onSuccess();
-      } catch (refreshError) {
-        console.warn('[EntryController] Error refreshing after delete:', refreshError);
-        // Try again after a short delay
-        setTimeout(async () => {
-          try {
-            if (onSuccess) await onSuccess();
-          } catch (e) {
-            console.error('[EntryController] Retry refresh failed:', e);
-          }
-        }, 500);
-      }
-    }
-
-    return true;
-  } catch (e) {
-    uiStore.setError(e instanceof Error ? e.message : String(e));
-    return false;
-  }
-}
-
-/**
- * Create a child entry with CRDT sync support.
- * Note: CRDT sync is now handled by Rust CreateEntry command.
- *
- * @param api - API instance
- * @param parentPath - Path of the parent entry
- * @param onSuccess - Callback after successful creation. Receives the full result
- *                    including both child path and (possibly new) parent path.
- * @returns The CreateChildResult with paths and conversion info, or null on failure
- */
-export async function createChildEntryWithSync(
-  api: Api,
-  parentPath: string,
-  onSuccess?: (result: CreateChildResult) => Promise<void>
-): Promise<CreateChildResult | null> {
-  try {
-    // Create via Rust - handles CRDT sync automatically
-    // Returns detailed result with child path, parent path, and conversion info
-    const result = await api.createChildEntry(parentPath);
-
-    // Ensure body sync bridge is created for the new file
-    await ensureBodySync(result.child_path);
-
-    if (onSuccess) {
-      await onSuccess(result);
-    }
-
-    return result;
-  } catch (e) {
-    uiStore.setError(e instanceof Error ? e.message : String(e));
-    return null;
-  }
-}
-
-/**
- * Create a new entry with CRDT sync support.
- * Note: CRDT sync is now handled by Rust CreateEntry command.
- *
- * @param api - API instance
- * @param path - Path for the new entry
- * @param options - Options including title and template
- * @param onSuccess - Callback after successful creation
- * @returns The path of the new entry, or null on failure
- */
-export async function createEntryWithSync(
-  api: Api,
-  path: string,
-  options: { title: string; template?: string; rootIndexPath?: string },
-  onSuccess?: () => Promise<void>
-): Promise<string | null> {
-  try {
-    // Create via Rust - handles CRDT sync automatically
-    const newPath = await api.createEntry(path, { ...options, rootIndexPath: options.rootIndexPath });
-
-    // Ensure body sync bridge is created for the new file
-    await ensureBodySync(newPath);
-
-    if (onSuccess) {
-      await onSuccess();
-    }
-
-    return newPath;
-  } catch (e) {
-    uiStore.setError(e instanceof Error ? e.message : String(e));
-    return null;
-  } finally {
-    uiStore.closeNewEntryModal();
-  }
-}
-
-/**
- * Save an entry with CRDT sync support.
- * Note: CRDT sync is now handled by Rust SaveEntry command.
- *
- * @param api - API instance
- * @param currentEntry - The current entry being saved
- * @param editorRef - Reference to the editor component
- * @param rootIndexPath - Workspace root index path
- * @param detectH1Title - When true, detect H1→title sync (manual save/blur only, not auto-save)
- * @returns Object with newPath if H1 sync caused a rename
- */
-export async function saveEntryWithSync(
-  api: Api,
-  currentEntry: EntryData | null,
-  editorRef: any,
-  rootIndexPath?: string,
-  detectH1Title?: boolean
-): Promise<{ newPath?: string } | void> {
-  if (!currentEntry || !editorRef) return;
-  if (entryStore.isSaving) return; // Prevent concurrent saves
-
-  try {
-    entryStore.setSaving(true);
-    const markdown = getEditorBodyMarkdown(editorRef);
-
-    // Save to backend - Rust handles CRDT sync automatically
-    const newPath = await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath, detectH1Title);
-    // Mirror the saved markdown into displayContent so it tracks the editor's
-    // live state. Without this, displayContent permanently lags behind the editor
-    // until the user switches entries — and any later code path that re-syncs the
-    // editor from displayContent (e.g. plugin-triggered editor rebuild) will
-    // silently overwrite unsaved-since-load edits, causing data loss.
-    // Pre-acknowledge so the Editor's content-sync effect won't re-apply
-    // the content we just read from it (which would reset the cursor).
-    editorRef?.acknowledgeSavedContent?.(markdown);
-    entryStore.setDisplayContent(markdown);
-    entryStore.markClean();
-
-    if (newPath && newPath !== currentEntry.path) {
-      // H1 sync caused a rename — update body sync bridges
-      closeBodySync(currentEntry.path);
-      await ensureBodySync(newPath);
-      return { newPath };
-    }
-
-    if (newPath) {
-      // Title changed but path didn't — return so caller can refresh UI
-      return { newPath };
-    }
-  } catch (e) {
-    uiStore.setError(e instanceof Error ? e.message : String(e));
-  } finally {
-    entryStore.setSaving(false);
-  }
 }

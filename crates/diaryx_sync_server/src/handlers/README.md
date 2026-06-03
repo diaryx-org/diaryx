@@ -60,7 +60,7 @@ snapshot, and multipart attachment routes are no longer mounted.
 - `GET /api/usage` — user-level usage totals.
 - `GET /api/namespaces/{ns_id}/usage` — namespace-level usage totals.
 
-### Audience, Domain, Session, and Sync Endpoints
+### Audience, Domain, and Session Endpoints
 
 - `PUT /api/namespaces/{ns_id}/audiences/{name}` — set audience access gates.
 - `GET /api/namespaces/{ns_id}/audiences` — list audiences.
@@ -76,7 +76,6 @@ snapshot, and multipart attachment routes are no longer mounted.
 - `GET /domain-auth` — Caddy `forward_auth` endpoint.
 - `GET /domain-check` — domain mapping probe endpoint.
 - `POST /api/sessions`, `GET /api/sessions/{code}`, `DELETE /api/sessions/{code}` — namespace share sessions.
-- `GET /api/sync/{namespace_id}` — WebSocket sync endpoint backed by namespace ownership/session checks.
 
 The domain mutation routes call shared Rust core flows that validate
 audiences/labels, update `custom_domains`, and invoke the `DomainMappingCache`

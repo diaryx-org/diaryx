@@ -2491,7 +2491,6 @@ version = "1.6.0"
 dependencies = [
  "diaryx_extism",
  "diaryx_server",
- "diaryx_sync_extism",
  "futures",
  "reqwest 0.12.28",
  "serde_json",
@@ -2774,25 +2773,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
-]
-
-[[package]]
-name = "diaryx_sync_extism"
-version = "0.2.27"
-dependencies = [
- "base64 0.22.1",
- "diaryx_core",
- "diaryx_extism",
- "diaryx_plugin_sdk",
- "diaryx_sync_extism",
- "diaryx_sync_server",
- "extism-pdk",
- "indexmap 2.13.1",
- "log",
- "percent-encoding",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

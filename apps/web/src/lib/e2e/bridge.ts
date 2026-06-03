@@ -11,7 +11,7 @@ import type { Backend } from "../backend/interface";
 import type { JsonValue } from "../backend/generated/serde_json/JsonValue";
 import { getBackend } from "../backend";
 import { getWorkspaceDirectoryPath } from "../../controllers/onboardingController";
-import { deleteEntryWithSync } from "../../controllers";
+import { deleteEntry } from "../../controllers";
 import {
   permissionStore,
   workspaceStore,
@@ -258,7 +258,7 @@ export function registerE2EBridge(deps: E2EBridgeDeps): void {
     },
     async deleteEntry(path: string): Promise<boolean> {
       const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-      return await deleteEntryWithSync(apiInstance, resolveE2EPath(backendInstance, path, trp()), null);
+      return await deleteEntry(apiInstance, resolveE2EPath(backendInstance, path, trp()), null);
     },
     setAutoAllowPermissions(enabled: boolean): void {
       permissionStore.setAutoAllow(enabled);

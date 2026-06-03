@@ -117,7 +117,7 @@ vi.mock("$lib/auth", () => ({
 }));
 
 // --- Services ---
-vi.mock("$lib/sync/attachmentSyncService", () => ({
+vi.mock("$lib/attachments/attachmentIndexService", () => ({
   getAttachmentMetadata: vi.fn(() => null),
 }));
 

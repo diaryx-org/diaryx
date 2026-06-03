@@ -27,47 +27,7 @@ type Env = {
   ASSETS: AssetsBinding;
   API?: ServiceBinding;
   CDN?: R2Bucket;
-  SYNC_SERVER_ORIGIN?: string;
 };
-
-const DEFAULT_SYNC_SERVER_ORIGIN = "https://sync.diaryx.org";
-
-function resolveSyncServerOrigin(env: Env): string {
-  const configured = env.SYNC_SERVER_ORIGIN?.trim();
-  return configured && configured.length > 0
-    ? configured
-    : DEFAULT_SYNC_SERVER_ORIGIN;
-}
-
-/** Paths that must be proxied to the native sync server (not the Rust API worker). */
-function isSyncPath(pathname: string): boolean {
-  // WebSocket sync endpoint: /api/sync/{namespace_id}
-  if (/^\/api\/sync\/[^/]+\/?$/.test(pathname)) return true;
-
-  return false;
-}
-
-function buildUpstreamRequest(
-  request: Request,
-  upstreamUrl: URL,
-): Request {
-  const headers = new Headers(request.headers);
-  const sourceUrl = new URL(request.url);
-  headers.set("X-Forwarded-Host", sourceUrl.host);
-  headers.set("X-Forwarded-Proto", sourceUrl.protocol.replace(":", ""));
-
-  const init: RequestInit = {
-    method: request.method,
-    headers,
-    redirect: "manual",
-  };
-
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    init.body = request.body;
-  }
-
-  return new Request(upstreamUrl.toString(), init);
-}
 
 const MIME_TYPES: Record<string, string> = {
   ".md": "text/markdown",
@@ -145,38 +105,11 @@ export default {
       return handleCdn(url, env);
     }
 
-    // Sync endpoints → proxy to native sync server (passthrough, no path rewrite)
-    if (isSyncPath(url.pathname)) {
-      const upstreamUrl = new URL(
-        url.pathname + url.search,
-        resolveSyncServerOrigin(env),
-      );
-      const upstreamRequest = buildUpstreamRequest(request, upstreamUrl);
-      const response = await fetch(upstreamRequest);
-      return new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-    }
-
-    // All other API requests → Rust API worker via service binding,
-    // or fall back to sync server proxy if the binding isn't configured yet.
+    // API requests → Rust API worker via service binding
     if (env.API) {
       return env.API.fetch(request);
     }
 
-    // Fallback: proxy to native sync server (passthrough)
-    const upstreamUrl = new URL(
-      url.pathname + url.search,
-      resolveSyncServerOrigin(env),
-    );
-    const upstreamRequest = buildUpstreamRequest(request, upstreamUrl);
-    const response = await fetch(upstreamRequest);
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
+    return new Response("API service binding is not configured", { status: 503 });
   },
 };

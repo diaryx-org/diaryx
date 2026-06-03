@@ -115,10 +115,6 @@ import {
   addProperty,
   renameEntry,
   duplicateEntry,
-  deleteEntryWithSync,
-  createChildEntryWithSync,
-  createEntryWithSync,
-  saveEntryWithSync,
 } from './entryController';
 
 // ---------------------------------------------------------------------------
@@ -212,7 +208,7 @@ describe('openEntry', () => {
     const api = makeApi({ getEntry: vi.fn().mockResolvedValue(entry) });
     const tree = { path: 'workspace/README.md', children: [] };
 
-    await openEntry(api, 'journal/entry.md', tree as any, false);
+    await openEntry(api, 'journal/entry.md', tree as any);
 
     expect(setLoading).toHaveBeenCalledWith(true);
     expect(revokeBlobUrlsMock).toHaveBeenCalled();
@@ -234,7 +230,7 @@ describe('openEntry', () => {
       }),
     });
 
-    await openEntry(api, 'entry.md', null, false, { onBeforeOpen });
+    await openEntry(api, 'entry.md', null, { onBeforeOpen });
 
     expect(order).toEqual(['before', 'getEntry']);
   });
@@ -243,7 +239,7 @@ describe('openEntry', () => {
     let calls = 0;
     const entry = makeEntry();
     const api = makeApi({ getEntry: vi.fn().mockResolvedValue(entry) });
-    await openEntry(api, 'entry.md', null, false, {
+    await openEntry(api, 'entry.md', null, {
       onBeforeOpen: async () => {},
       isCurrentRequest: () => {
         calls++;
@@ -261,7 +257,7 @@ describe('openEntry', () => {
   it('sets error on store when getEntry fails', async () => {
     const api = makeApi({ getEntry: vi.fn().mockRejectedValue(new Error('Not found')) });
 
-    await openEntry(api, 'missing.md', null, false);
+    await openEntry(api, 'missing.md', null);
 
     expect(setError).toHaveBeenCalledWith('Not found');
     expect(setLoading).toHaveBeenCalledWith(false);
@@ -272,7 +268,7 @@ describe('openEntry', () => {
     const entry = makeEntry({ frontmatter: fm });
     const api = makeApi({ getEntry: vi.fn().mockResolvedValue(entry) });
 
-    await openEntry(api, 'entry.md', null, false);
+    await openEntry(api, 'entry.md', null);
 
     // The entry passed to setCurrentEntry should have Object frontmatter
     const storedEntry = setCurrentEntry.mock.calls[0][0];
@@ -280,39 +276,10 @@ describe('openEntry', () => {
     expect(storedEntry.frontmatter instanceof Map).toBe(false);
   });
 
-  it('sets collaboration path when collaborationEnabled is true', async () => {
-    const entry = makeEntry({ path: 'workspace/journal/entry.md' });
-    const api = makeApi({ getEntry: vi.fn().mockResolvedValue(entry) });
-    const tree = { path: 'workspace/README.md', children: [] };
-
-    // Make entryStoreCurrentEntry match what openEntry sets
-    setCurrentEntry.mockImplementation((e: any) => {
-      entryStoreCurrentEntry = e;
-    });
-
-    await openEntry(api, 'workspace/journal/entry.md', tree as any, true);
-
-    expect(setCollaborationPath).toHaveBeenCalledWith('journal/entry.md');
-  });
-
-  it('clears collaboration session when entry is null', async () => {
-    entryStoreCurrentEntry = null;
-    const api = makeApi({ getEntry: vi.fn().mockResolvedValue(null) });
-
-    // When entry is null, setCurrentEntry(null) leaves entryStoreCurrentEntry as null
-    setCurrentEntry.mockImplementation((e: any) => {
-      entryStoreCurrentEntry = e;
-    });
-
-    await openEntry(api, 'entry.md', null, true);
-
-    expect(clearCollaborationSession).toHaveBeenCalled();
-  });
-
   it('sets error when getEntry returns null (entry not found)', async () => {
     const api = makeApi({ getEntry: vi.fn().mockResolvedValue(null) });
 
-    await openEntry(api, 'entry.md', null, false);
+    await openEntry(api, 'entry.md', null);
 
     // null entry causes frontmatter normalization to throw, caught by error handler
     expect(setError).toHaveBeenCalled();
@@ -324,51 +291,6 @@ describe('openEntry', () => {
 // ===========================================================================
 
 describe('saveEntry', () => {
-  it('saves markdown via api and marks clean', async () => {
-    const api = makeApi({ saveEntry: vi.fn().mockResolvedValue(null) });
-    const entry = makeEntry();
-    const editorRef = { getMarkdown: () => '# body' };
-
-    await saveEntry(api, entry, editorRef);
-
-    expect(setSaving).toHaveBeenCalledWith(true);
-    expect(api.saveEntry).toHaveBeenCalledWith('journal/entry.md', '# body', undefined, undefined);
-    expect(markClean).toHaveBeenCalled();
-    expect(setSaving).toHaveBeenCalledWith(false);
-  });
-
-  it('does nothing when currentEntry is null', async () => {
-    const api = makeApi();
-    await saveEntry(api, null, { getMarkdown: () => 'x' });
-    expect(api.saveEntry).not.toHaveBeenCalled();
-  });
-
-  it('does nothing when editorRef is null', async () => {
-    const api = makeApi();
-    await saveEntry(api, makeEntry(), null);
-    expect(api.saveEntry).not.toHaveBeenCalled();
-  });
-
-  it('prevents concurrent saves', async () => {
-    entryStoreSaving = true;
-    const api = makeApi();
-    await saveEntry(api, makeEntry(), { getMarkdown: () => 'x' });
-    expect(api.saveEntry).not.toHaveBeenCalled();
-  });
-
-  it('sets error on failure', async () => {
-    const api = makeApi({ saveEntry: vi.fn().mockRejectedValue(new Error('Disk full')) });
-    await saveEntry(api, makeEntry(), { getMarkdown: () => 'x' });
-    expect(setError).toHaveBeenCalledWith('Disk full');
-    expect(markClean).not.toHaveBeenCalled();
-  });
-});
-
-// ===========================================================================
-// saveEntryWithSync
-// ===========================================================================
-
-describe('saveEntryWithSync', () => {
   it('retries transient save failures and eventually saves', async () => {
     vi.useFakeTimers();
     reverseBlobUrlsToAttachmentPathsMock.mockReturnValue('# normalized');
@@ -381,7 +303,7 @@ describe('saveEntryWithSync', () => {
     const entry = makeEntry({ path: 'README.md' });
     const editorRef = { getMarkdown: () => '# updated' };
 
-    const promise = saveEntryWithSync(api, entry, editorRef);
+    const promise = saveEntry(api, entry, editorRef);
     await vi.runAllTimersAsync();
     await promise;
 
@@ -397,7 +319,7 @@ describe('saveEntryWithSync', () => {
     const entry = makeEntry({ path: 'README.md' });
     const editorRef = { getMarkdown: () => '# updated' };
 
-    await saveEntryWithSync(api, entry, editorRef);
+    await saveEntry(api, entry, editorRef);
 
     expect(api.saveEntry).toHaveBeenCalledTimes(1);
     expect(markClean).not.toHaveBeenCalled();
@@ -411,7 +333,7 @@ describe('saveEntryWithSync', () => {
     const entry = makeEntry({ path: 'journal/entry.md' });
     const editorRef = { getMarkdown: () => '# body' };
 
-    const result = await saveEntryWithSync(api, entry, editorRef);
+    const result = await saveEntry(api, entry, editorRef);
 
     expect(result).toEqual({ newPath: 'journal/renamed.md' });
   });
@@ -423,14 +345,14 @@ describe('saveEntryWithSync', () => {
     const entry = makeEntry({ path: 'journal/entry.md' });
     const editorRef = { getMarkdown: () => '# body' };
 
-    const result = await saveEntryWithSync(api, entry, editorRef);
+    const result = await saveEntry(api, entry, editorRef);
 
     expect(result).toEqual({ newPath: 'journal/entry.md' });
   });
 
   it('does nothing when currentEntry is null', async () => {
     const api = makeApi();
-    const result = await saveEntryWithSync(api, null, { getMarkdown: () => 'x' });
+    const result = await saveEntry(api, null, { getMarkdown: () => 'x' });
     expect(result).toBeUndefined();
     expect(api.saveEntry).not.toHaveBeenCalled();
   });
@@ -438,7 +360,7 @@ describe('saveEntryWithSync', () => {
   it('prevents concurrent saves', async () => {
     entryStoreSaving = true;
     const api = makeApi();
-    const result = await saveEntryWithSync(api, makeEntry(), { getMarkdown: () => 'x' });
+    const result = await saveEntry(api, makeEntry(), { getMarkdown: () => 'x' });
     expect(result).toBeUndefined();
     expect(api.saveEntry).not.toHaveBeenCalled();
   });
@@ -448,7 +370,7 @@ describe('saveEntryWithSync', () => {
     const entry = makeEntry();
     const editorRef = { getMarkdown: () => '# body' };
 
-    await saveEntryWithSync(api, entry, editorRef, 'workspace/README.md', true);
+    await saveEntry(api, entry, editorRef, 'workspace/README.md', true);
 
     expect(api.saveEntry).toHaveBeenCalledWith(
       'journal/entry.md', '# body', 'workspace/README.md', true
@@ -466,7 +388,7 @@ describe('saveEntryWithSync', () => {
     const entry = makeEntry({ path: 'journal/entry.md' });
     const editorRef = { getMarkdown: () => '# edited body' };
 
-    await saveEntryWithSync(api, entry, editorRef);
+    await saveEntry(api, entry, editorRef);
 
     expect(setDisplayContent).toHaveBeenCalledWith('# edited body');
     expect(markClean).toHaveBeenCalledTimes(1);
@@ -479,7 +401,7 @@ describe('saveEntryWithSync', () => {
     const entry = makeEntry();
     const editorRef = { getMarkdown: () => '# body' };
 
-    await saveEntryWithSync(api, entry, editorRef);
+    await saveEntry(api, entry, editorRef);
 
     expect(setDisplayContent).not.toHaveBeenCalled();
     expect(markClean).not.toHaveBeenCalled();
@@ -935,120 +857,5 @@ describe('duplicateEntry', () => {
     const api = makeApi({ duplicateEntry: vi.fn().mockRejectedValue(new Error('disk full')) });
 
     await expect(duplicateEntry(api, 'entry.md')).rejects.toThrow('disk full');
-  });
-});
-
-// ===========================================================================
-// deleteEntryWithSync
-// ===========================================================================
-
-describe('deleteEntryWithSync', () => {
-  it('deletes entry and returns true', async () => {
-    const api = makeApi({ deleteEntry: vi.fn().mockResolvedValue(undefined) });
-    const onSuccess = vi.fn();
-
-    const ret = await deleteEntryWithSync(api, 'entry.md', 'other.md', onSuccess);
-
-    expect(ret).toBe(true);
-    expect(api.deleteEntry).toHaveBeenCalledWith('entry.md');
-    expect(onSuccess).toHaveBeenCalled();
-  });
-
-  it('clears current entry when deleting the open entry', async () => {
-    const api = makeApi({ deleteEntry: vi.fn().mockResolvedValue(undefined) });
-
-    await deleteEntryWithSync(api, 'entry.md', 'entry.md');
-
-    expect(setCurrentEntry).toHaveBeenCalledWith(null);
-    expect(markClean).toHaveBeenCalled();
-  });
-
-  it('returns false and sets error on failure', async () => {
-    const api = makeApi({ deleteEntry: vi.fn().mockRejectedValue(new Error('locked')) });
-
-    const ret = await deleteEntryWithSync(api, 'entry.md', null);
-
-    expect(ret).toBe(false);
-    expect(setError).toHaveBeenCalledWith('locked');
-  });
-
-  it('retries onSuccess on transient refresh failure', async () => {
-    vi.useFakeTimers();
-    const api = makeApi({ deleteEntry: vi.fn().mockResolvedValue(undefined) });
-    const onSuccess = vi.fn()
-      .mockRejectedValueOnce(new Error('temp'))
-      .mockResolvedValue(undefined);
-
-    const promise = deleteEntryWithSync(api, 'entry.md', null, onSuccess);
-    await promise;
-
-    expect(onSuccess).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(600);
-    await vi.runAllTimersAsync();
-    expect(onSuccess).toHaveBeenCalledTimes(2);
-  });
-});
-
-// ===========================================================================
-// createChildEntryWithSync
-// ===========================================================================
-
-describe('createChildEntryWithSync', () => {
-  it('creates child, ensures body sync, and calls onSuccess with result', async () => {
-    const result = { child_path: 'parent/child.md', parent_path: 'parent/index.md', parent_converted: true, original_parent_path: 'parent.md' };
-    const api = makeApi({ createChildEntry: vi.fn().mockResolvedValue(result) });
-    const onSuccess = vi.fn();
-
-    const ret = await createChildEntryWithSync(api, 'parent.md', onSuccess);
-
-    expect(ret).toEqual(result);
-    expect(api.createChildEntry).toHaveBeenCalledWith('parent.md');
-    expect(dispatchFileOpenedEventMock).toHaveBeenCalled();
-    expect(onSuccess).toHaveBeenCalledWith(result);
-  });
-
-  it('returns null and sets error on failure', async () => {
-    const api = makeApi({ createChildEntry: vi.fn().mockRejectedValue(new Error('no space')) });
-
-    const ret = await createChildEntryWithSync(api, 'parent.md');
-
-    expect(ret).toBeNull();
-    expect(setError).toHaveBeenCalledWith('no space');
-  });
-});
-
-// ===========================================================================
-// createEntryWithSync
-// ===========================================================================
-
-describe('createEntryWithSync', () => {
-  it('creates entry, ensures body sync, calls onSuccess, and closes modal', async () => {
-    const api = makeApi({ createEntry: vi.fn().mockResolvedValue('new/entry.md') });
-    const onSuccess = vi.fn();
-
-    const ret = await createEntryWithSync(api, 'new', { title: 'New Entry' }, onSuccess);
-
-    expect(ret).toBe('new/entry.md');
-    expect(dispatchFileOpenedEventMock).toHaveBeenCalled();
-    expect(onSuccess).toHaveBeenCalled();
-    expect(closeNewEntryModal).toHaveBeenCalled();
-  });
-
-  it('passes template and rootIndexPath options', async () => {
-    const api = makeApi({ createEntry: vi.fn().mockResolvedValue('new/entry.md') });
-
-    await createEntryWithSync(api, 'new', { title: 'T', template: 'daily', rootIndexPath: 'README.md' });
-
-    expect(api.createEntry).toHaveBeenCalledWith('new', { title: 'T', template: 'daily', rootIndexPath: 'README.md' });
-  });
-
-  it('returns null and sets error on failure, still closes modal', async () => {
-    const api = makeApi({ createEntry: vi.fn().mockRejectedValue(new Error('exists')) });
-
-    const ret = await createEntryWithSync(api, 'new', { title: 'Dup' });
-
-    expect(ret).toBeNull();
-    expect(setError).toHaveBeenCalledWith('exists');
-    expect(closeNewEntryModal).toHaveBeenCalled();
   });
 });

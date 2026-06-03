@@ -14,7 +14,6 @@
     ChevronUp,
     AlertCircle,
     Fingerprint,
-    WifiOff,
     CircleUser,
   } from "@lucide/svelte";
   import SignOutDialog from "$lib/SignOutDialog.svelte";
@@ -26,7 +25,6 @@
     setServerUrl,
     requestMagicLink,
     verifyMagicLink,
-    reconnectServer,
   } from "$lib/auth";
   import {
     authenticateWithPasskey,
@@ -34,7 +32,6 @@
   import { isPasskeySupported } from "$lib/auth/webauthnUtils";
   import { isTauri } from "$lib/backend/interface";
   import { getBackend, createApi } from "$lib/backend";
-  import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import { onMount } from "svelte";
 
   interface Props {
@@ -67,23 +64,7 @@
   let resendInterval: ReturnType<typeof setInterval> | null = null;
   let urlCheckInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Reconnect state
-  let isReconnecting = $state(false);
 
-  async function handleReconnect() {
-    isReconnecting = true;
-    error = null;
-    try {
-      const success = await reconnectServer();
-      if (!success) {
-        error = "Server still unreachable";
-      }
-    } catch {
-      error = "Reconnection failed";
-    } finally {
-      isReconnecting = false;
-    }
-  }
 
   // Passkey state
   let passkeySupported = $state(false);
@@ -225,29 +206,6 @@
         <!-- Authenticated state -->
         <div class="space-y-3">
           <div class="text-sm font-medium truncate">{authState.user.email}</div>
-
-          {#if collaborationStore.serverOffline}
-            <div class="space-y-2 p-2.5 rounded-md bg-amber-500/10 border border-amber-500/20">
-              <div class="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
-                <WifiOff class="size-3.5 shrink-0" />
-                <span>Server unreachable — working offline</span>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                class="w-full"
-                onclick={handleReconnect}
-                disabled={isReconnecting}
-              >
-                {#if isReconnecting}
-                  <Loader2 class="size-3.5 mr-1.5 animate-spin" />
-                  Reconnecting…
-                {:else}
-                  Reconnect
-                {/if}
-              </Button>
-            </div>
-          {/if}
 
           <Separator />
 

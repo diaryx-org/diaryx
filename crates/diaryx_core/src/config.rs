@@ -12,7 +12,6 @@
 //! - `default_workspace`: Primary workspace directory path
 //! - `editor`: Preferred editor command
 //! - `link_format`: Format for `part_of`/`contents`/`attachments` links
-//! - `sync_*`: Cloud synchronization settings (legacy, see `auth.md`)
 //!
 //! # Async-first Design
 //!

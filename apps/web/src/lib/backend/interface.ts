@@ -212,26 +212,7 @@ export type FileSystemEvent =
   | { type: 'FileRenamed'; old_path: string; new_path: string }
   | { type: 'FileMoved'; path: string; old_parent?: string; new_parent?: string }
   | { type: 'MetadataChanged'; path: string; frontmatter: unknown }
-  | { type: 'ContentsChanged'; path: string; body: string }
-  // Legacy plugin/runtime sync events
-  | { type: 'SyncStarted'; doc_name: string }
-  | { type: 'SyncCompleted'; doc_name: string; files_synced: number }
-  | { type: 'SyncStatusChanged'; status: string; error?: string }
-  | {
-      type: 'SyncProgress';
-      completed: number;
-      total: number;
-      percent?: number;
-      phase?: string;
-      message?: string;
-      path?: string;
-    }
-  // Legacy sync message event retained for plugin/runtime event payloads
-  | { type: 'SendSyncMessage'; doc_name: string; message: number[]; is_body: boolean }
-  // Peer/session events from Rust sync
-  | { type: 'PeerJoined'; peer_count: number }
-  | { type: 'PeerLeft'; peer_count: number }
-  | { type: 'FocusListChanged'; files: string[] };
+  | { type: 'ContentsChanged'; path: string; body: string };
 
 /**
  * Callback type for filesystem event subscriptions.

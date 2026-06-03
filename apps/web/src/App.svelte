@@ -57,7 +57,6 @@
   import {
     entryStore,
     uiStore,
-    collaborationStore,
     workspaceStore,
     permissionStore,
     getThemeStore,
@@ -193,23 +192,6 @@
     }
 
     const subscriptionId = backendInstance.onFileSystemEvent(async (event: any) => {
-      // Bridge plugin status events to the collaboration store.
-      if (event?.type === "SyncStatusChanged") {
-        if (event.status === "error" && event.error) {
-          collaborationStore.setSyncError(event.error);
-        } else {
-          collaborationStore.setSyncStatus(event.status);
-        }
-        return;
-      }
-      if (event?.type === "SyncProgress") {
-        collaborationStore.setSyncProgress({
-          total: event.total ?? 0,
-          completed: event.completed ?? 0,
-        });
-        return;
-      }
-
       const current = entryStore.currentEntry;
       const activeApi = workspaceStore.backend ? createApi(workspaceStore.backend) : null;
       const currentIsDirty = entryStore.isDirty;
@@ -257,10 +239,10 @@
     runValidation as runValidationController,
     validatePath,
     openEntry as openEntryController,
-    saveEntryWithSync,
-    createChildEntryWithSync,
-    createEntryWithSync,
-    deleteEntryWithSync,
+    saveEntry,
+    createChildEntry,
+    createEntry,
+    deleteEntry,
     duplicateEntry as duplicateEntryController,
     handleImportFromClipboard as importFromClipboardHandler,
     handleImportMarkdownFile as importMarkdownFileHandler,
@@ -464,8 +446,6 @@
     workspaceStore.setTree(null);
     workspaceStore.setTree(createFileNavigationTree(resolvedPath));
     workspaceStore.expandNode(resolvedPath);
-    collaborationStore.setEnabled(false);
-    collaborationStore.clearCollaborationSession();
     setStoredFileNavigationPath(resolvedPath);
 
     await openEntry(resolvedPath, { force: true });
@@ -694,7 +674,7 @@
 
 
   // Collaboration state - proxied from collaborationStore
-  let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
+  let collaborationEnabled = false;
   let authState = $derived(getAuthState());
   let pluginManifestCount = $derived(getPluginStore().allManifests.length);
   let activeLocalWorkspaceId = $derived(getCurrentWorkspaceId());
@@ -1058,14 +1038,7 @@
       document.documentElement.classList.add("tauri-macos-overlay");
     }
 
-    // Load saved account/collaboration server settings.
-    if (typeof window !== "undefined") {
-      const savedServerUrl = localStorage.getItem("diaryx_sync_server_url")
-        ?? localStorage.getItem("diaryx-sync-server");
-      if (savedServerUrl) {
-        collaborationStore.setServerUrl(savedServerUrl);
-      }
-    }
+
 
     const startupTracer = createStartupTracer("WorkspaceStartup");
     let startupStatus = "failed";
@@ -1644,7 +1617,7 @@
     const rootTree = workspaceStore.tree;
     if (rootTree && !currentEntry) {
       workspaceStore.expandNode(rootTree.path);
-      await openEntryController(nextApi, rootTree.path, rootTree, collaborationEnabled);
+      await openEntryController(nextApi, rootTree.path, rootTree);
     }
     await runValidationWith(nextApi, nextBackend, workspaceStore.tree);
     entryStore.setLoading(false);
@@ -1670,7 +1643,7 @@
         return;
       }
 
-      await openEntryController(api, path, tree, collaborationEnabled);
+      await openEntryController(api, path, tree);
     } finally {
       if (pendingEntryPath === path) {
         pendingEntryPath = null;
@@ -1687,7 +1660,7 @@
   // detectH1Title: when true, backend detects first-line H1 and syncs to title/filename
   async function save(detectH1Title = false) {
     if (!api || !currentEntry || !editorRef) return;
-    const result = await saveEntryWithSync(api, currentEntry, editorRef, tree?.path, detectH1Title);
+    const result = await saveEntry(api, currentEntry, editorRef, tree?.path, detectH1Title);
     if (result?.newPath) {
       // H1→title sync caused a path change — update UI state
       const entry = entryStore.currentEntry;
@@ -1700,9 +1673,7 @@
         try {
           const updatedEntry = await api.getEntry(result.newPath);
           entryStore.setCurrentEntry(updatedEntry);
-          if (collaborationEnabled) {
-            collaborationStore.setCollaborationPath(toCollaborationPath(result.newPath, tree?.path ?? ""));
-          }
+
         } catch {
           // Fallback: just update the path
           entryStore.setCurrentEntry({ ...entry, path: result.newPath });
@@ -1981,7 +1952,7 @@
         if (!path) throw new Error("host-action delete-entry requires payload.path");
         if (!api) throw new Error("Workspace API is unavailable");
         const parentPath = workspaceStore.getParentNodePath(path);
-        const deleted = await deleteEntryWithSync(
+        const deleted = await deleteEntry(
           api,
           path,
           currentEntry?.path ?? null,
@@ -2072,16 +2043,10 @@
    * Verifies the token automatically and updates account status.
    */
   async function handleMagicLinkToken(token: string) {
-    // Show connecting status while verifying
-    collaborationStore.setSyncStatus('connecting');
-
     try {
       // Verify the magic link token
       // Note: URL token is cleared before this function is called to prevent double verification
       await verifyMagicLink(token);
-
-      // Set status to idle after authentication succeeds.
-      collaborationStore.setSyncStatus('idle');
 
       toast.success("Signed in successfully", {
         description: "Your account is connected.",
@@ -2089,10 +2054,6 @@
 
     } catch (error) {
       console.error("[App] Magic link verification failed:", error);
-      collaborationStore.setSyncStatus('error');
-      collaborationStore.setSyncError(
-        error instanceof Error ? error.message : "Verification failed"
-      );
       toast.error("Sign in failed", {
         description: error instanceof Error ? error.message : "Could not verify magic link",
       });
@@ -2102,7 +2063,7 @@
   // Create a child entry - delegates to controller write helpers.
   async function handleCreateChildEntry(parentPath: string) {
     if (!api) return;
-    await createChildEntryWithSync(api, parentPath, async (result) => {
+    await createChildEntry(api, parentPath, async (result) => {
       await refreshTree();
       // Use result.parent_path (may differ from original if parent was converted to index)
       await loadNodeChildren(result.parent_path);
@@ -2119,7 +2080,7 @@
     const filename = await api.generateFilename(title, tree?.path ?? undefined);
 
     // Create the entry at workspace root
-    const newPath = await createEntryWithSync(api, filename, { title, rootIndexPath: tree?.path }, async () => {
+    const newPath = await createEntry(api, filename, { title, rootIndexPath: tree?.path }, async () => {
       await refreshTree();
     });
 
@@ -2148,7 +2109,7 @@
     if (!tree?.path) throw new Error("A workspace must be open to create AI conversations");
 
     const filename = await api.generateFilename(title, tree.path);
-    const newPath = await createEntryWithSync(
+    const newPath = await createEntry(
       api,
       filename,
       { title, rootIndexPath: tree.path },
@@ -2327,7 +2288,7 @@
   async function handleRenameEntry(path: string, newTitle: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
     if (currentEntry?.path === path && isDirty && editorRef) {
-      await saveEntryWithSync(api, currentEntry, editorRef, tree?.path);
+      await saveEntry(api, currentEntry, editorRef, tree?.path);
     }
 
     // Use SetFrontmatterProperty to set title, which atomically handles filename rename + H1 sync
@@ -2355,9 +2316,7 @@
           frontmatter: { ...currentEntry.frontmatter, title: newTitle },
         });
       }
-      if (collaborationEnabled) {
-        collaborationStore.setCollaborationPath(toCollaborationPath(effectivePath, tree?.path ?? ""));
-      }
+
     }
 
     return effectivePath;
@@ -2417,7 +2376,7 @@
       let deletedCount = 0;
 
       for (const path of deletePlan) {
-        const deleted = await deleteEntryWithSync(
+        const deleted = await deleteEntry(
           api,
           path,
           currentEntry?.path ?? null,
@@ -3217,7 +3176,7 @@
 
         // Flush pending editor saves before title change (backend may rename the file)
         if (isDirty && editorRef) {
-          await saveEntryWithSync(api, currentEntry, editorRef, tree?.path);
+          await saveEntry(api, currentEntry, editorRef, tree?.path);
         }
 
         try {
@@ -3233,9 +3192,7 @@
               workspaceStore.collapseNode(path);
               workspaceStore.expandNode(newPath);
             }
-            if (collaborationEnabled) {
-              collaborationStore.setCollaborationPath(toCollaborationPath(newPath, tree?.path ?? ""));
-            }
+
           }
 
           // Re-read the entry from disk so the editor picks up the
@@ -3797,11 +3754,6 @@
               >
                 <span class="relative inline-flex">
                   <CircleUser class="size-4 text-muted-foreground" />
-                  {#if authState.isAuthenticated}
-                    <span
-                      class="absolute -bottom-0.5 -right-0.5 size-2 rounded-full ring-1 ring-background {collaborationStore.serverOffline ? 'bg-amber-500' : 'bg-emerald-500'}"
-                    ></span>
-                  {/if}
                 </span>
               </button>
             </Tooltip.Trigger>
@@ -3920,7 +3872,6 @@
         hasEditor={!!editorRef}
         showAccountButton={leftSidebarCollapsed}
         isAuthenticated={authState.isAuthenticated}
-        serverOffline={collaborationStore.serverOffline}
         onOpenAccount={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
         onOpenLeftSidebar={toggleLeftSidebar}
         onOpenRightSidebar={toggleRightSidebar}

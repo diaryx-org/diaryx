@@ -72,66 +72,6 @@ pub enum FileSystemEvent {
         /// New body content.
         body: String,
     },
-
-    // === Sync Events ===
-    /// Sync session started.
-    SyncStarted {
-        /// Document name (e.g., "workspace" or file path for body docs).
-        doc_name: String,
-    },
-
-    /// Initial sync completed.
-    SyncCompleted {
-        /// Document name.
-        doc_name: String,
-        /// Number of files synced.
-        files_synced: usize,
-    },
-
-    /// Sync status changed.
-    SyncStatusChanged {
-        /// Status: "idle", "connecting", "syncing", "synced", "error".
-        status: String,
-        /// Optional error message when status is "error".
-        #[serde(default)]
-        error: Option<String>,
-    },
-
-    /// Sync progress update.
-    SyncProgress {
-        /// Number of files completed.
-        completed: usize,
-        /// Total number of files to sync.
-        total: usize,
-    },
-
-    /// Request to send sync message over WebSocket.
-    SendSyncMessage {
-        /// Document name ("workspace" for workspace, file path for body)
-        doc_name: String,
-        /// Encoded sync message bytes to send (serialized as array of numbers)
-        message: Vec<u8>,
-        /// Whether this is a body doc (true) or workspace (false)
-        is_body: bool,
-    },
-
-    /// A peer joined the sync session.
-    PeerJoined {
-        /// Current number of connected peers.
-        peer_count: usize,
-    },
-
-    /// A peer left the sync session.
-    PeerLeft {
-        /// Current number of connected peers.
-        peer_count: usize,
-    },
-
-    /// The server's focus list changed.
-    FocusListChanged {
-        /// Currently focused file paths.
-        files: Vec<String>,
-    },
 }
 
 impl FileSystemEvent {
@@ -197,59 +137,7 @@ impl FileSystemEvent {
     pub fn contents_changed(path: PathBuf, body: String) -> Self {
         Self::ContentsChanged { path, body }
     }
-
-    /// Create a SyncStarted event.
-    pub fn sync_started(doc_name: String) -> Self {
-        Self::SyncStarted { doc_name }
-    }
-
-    /// Create a SyncCompleted event.
-    pub fn sync_completed(doc_name: String, files_synced: usize) -> Self {
-        Self::SyncCompleted {
-            doc_name,
-            files_synced,
-        }
-    }
-
-    /// Create a SyncStatusChanged event.
-    pub fn sync_status_changed(status: impl Into<String>, error: Option<String>) -> Self {
-        Self::SyncStatusChanged {
-            status: status.into(),
-            error,
-        }
-    }
-
-    /// Create a SyncProgress event.
-    pub fn sync_progress(completed: usize, total: usize) -> Self {
-        Self::SyncProgress { completed, total }
-    }
-
-    /// Create a SendSyncMessage event.
-    pub fn send_sync_message(doc_name: impl Into<String>, message: Vec<u8>, is_body: bool) -> Self {
-        Self::SendSyncMessage {
-            doc_name: doc_name.into(),
-            message,
-            is_body,
-        }
-    }
-
-    /// Create a PeerJoined event.
-    pub fn peer_joined(peer_count: usize) -> Self {
-        Self::PeerJoined { peer_count }
-    }
-
-    /// Create a PeerLeft event.
-    pub fn peer_left(peer_count: usize) -> Self {
-        Self::PeerLeft { peer_count }
-    }
-
-    /// Create a FocusListChanged event.
-    pub fn focus_list_changed(files: Vec<String>) -> Self {
-        Self::FocusListChanged { files }
-    }
-
     /// Get the primary path associated with this event.
-    /// Returns None for sync events which don't have a path.
     pub fn path(&self) -> Option<&PathBuf> {
         match self {
             Self::FileCreated { path, .. } => Some(path),
@@ -258,15 +146,6 @@ impl FileSystemEvent {
             Self::FileMoved { path, .. } => Some(path),
             Self::MetadataChanged { path, .. } => Some(path),
             Self::ContentsChanged { path, .. } => Some(path),
-            // Sync events don't have a primary path
-            Self::SyncStarted { .. } => None,
-            Self::SyncCompleted { .. } => None,
-            Self::SyncStatusChanged { .. } => None,
-            Self::SyncProgress { .. } => None,
-            Self::SendSyncMessage { .. } => None,
-            Self::PeerJoined { .. } => None,
-            Self::PeerLeft { .. } => None,
-            Self::FocusListChanged { .. } => None,
         }
     }
 
@@ -279,14 +158,6 @@ impl FileSystemEvent {
             Self::FileMoved { .. } => "FileMoved",
             Self::MetadataChanged { .. } => "MetadataChanged",
             Self::ContentsChanged { .. } => "ContentsChanged",
-            Self::SyncStarted { .. } => "SyncStarted",
-            Self::SyncCompleted { .. } => "SyncCompleted",
-            Self::SyncStatusChanged { .. } => "SyncStatusChanged",
-            Self::SyncProgress { .. } => "SyncProgress",
-            Self::SendSyncMessage { .. } => "SendSyncMessage",
-            Self::PeerJoined { .. } => "PeerJoined",
-            Self::PeerLeft { .. } => "PeerLeft",
-            Self::FocusListChanged { .. } => "FocusListChanged",
         }
     }
 }
@@ -333,25 +204,5 @@ mod tests {
 
         let parsed: FileSystemEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.event_type(), "FileCreated");
-    }
-
-    #[test]
-    fn test_sync_events() {
-        let event = FileSystemEvent::sync_started("workspace".to_string());
-        assert_eq!(event.event_type(), "SyncStarted");
-        assert!(event.path().is_none());
-
-        let event = FileSystemEvent::sync_completed("workspace".to_string(), 10);
-        assert_eq!(event.event_type(), "SyncCompleted");
-
-        let event = FileSystemEvent::sync_status_changed("synced", None);
-        assert_eq!(event.event_type(), "SyncStatusChanged");
-
-        let event =
-            FileSystemEvent::sync_status_changed("error", Some("Connection failed".to_string()));
-        assert_eq!(event.event_type(), "SyncStatusChanged");
-
-        let event = FileSystemEvent::sync_progress(5, 10);
-        assert_eq!(event.event_type(), "SyncProgress");
     }
 }

@@ -11,7 +11,6 @@ members = [
     "crates/diaryx_sync_server",
     "crates/diaryx_extism",
     "crates/plugins/diaryx_plugin_sdk",
-    "crates/plugins/diaryx_sync_extism",
     "crates/plugins/diaryx_publish_extism",
     "crates/plugins/diaryx_ai_extism",
     "crates/plugins/diaryx_audio_extism",

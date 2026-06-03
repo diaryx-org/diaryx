@@ -22,7 +22,6 @@ use diaryx_sync_server::{
         site_routes, usage_routes,
     },
     proxy_adapters::{NativeProxySecretResolver, NativeProxyUsageStore, StaticProxyConfigStore},
-    sync_v2::SyncV2Server,
 };
 use rusqlite::Connection;
 use std::sync::Arc;
@@ -104,17 +103,6 @@ async fn main() {
         }
     };
 
-    // Create data directory for workspace databases
-    let data_dir = config
-        .database_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let workspaces_dir = data_dir.join("workspaces");
-    if let Err(e) = std::fs::create_dir_all(&workspaces_dir) {
-        error!("Failed to create workspaces directory: {}", e);
-        std::process::exit(1);
-    }
-
     // Create namespace repo (shared connection from AuthRepo)
     let ns_repo = Arc::new(NamespaceRepo::new(repo.connection()));
     let auth_store = Arc::new(NativeAuthStore::new(repo.clone()));
@@ -125,10 +113,6 @@ async fn main() {
         config.kv_api_token.clone(),
         config.kv_namespace_id.clone(),
     ));
-
-    // Create sync server (GenericNamespaceSyncHook)
-    let sync_server = SyncV2Server::new(repo.clone(), ns_repo.clone(), workspaces_dir);
-    let sync_router = sync_server.into_router_at("/sync/{namespace_id}");
 
     // Create shared rate limiter
     let rate_limiter = diaryx_sync_server::rate_limit::RateLimiter::new();
@@ -303,9 +287,7 @@ async fn main() {
         // Usage metering route (user-level, not namespace-scoped)
         .nest("/usage", usage_routes(object_state.clone()))
         // Namespace session routes
-        .nest("/sessions", ns_session_routes(ns_session_state))
-        // Generic namespace sync endpoint
-        .merge(sync_router);
+        .nest("/sessions", ns_session_routes(ns_session_state));
 
     // Stripe billing routes (only if configured)
     if let Some(stripe) = stripe_router {

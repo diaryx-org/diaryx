@@ -7,9 +7,6 @@ const browserPluginEventMocks = vi.hoisted(() => ({
   dispatchFileSavedEvent: vi.fn().mockResolvedValue(undefined),
 }))
 
-const workspaceMirrorMocks = vi.hoisted(() => ({
-  mirrorCurrentWorkspaceMutationToLinkedProviders: vi.fn().mockResolvedValue(undefined),
-}))
 
 const permissionStoreMocks = vi.hoisted(() => ({
   permissionStore: {
@@ -18,7 +15,6 @@ const permissionStoreMocks = vi.hoisted(() => ({
 }))
 
 vi.mock('$lib/plugins/browserPluginManager.svelte', () => browserPluginEventMocks)
-vi.mock('$lib/sync/browserWorkspaceMutationMirror', () => workspaceMirrorMocks)
 vi.mock('@/models/stores/permissionStore.svelte', () => permissionStoreMocks)
 
 import { createApi } from './api'
@@ -234,7 +230,6 @@ describe('api', () => {
       })
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('test.md', { bodyChanged: true })
       expect(browserPluginEventMocks.dispatchFileMovedEvent).not.toHaveBeenCalled()
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should mirror workspace metadata after a save-driven rename', async () => {
@@ -248,7 +243,6 @@ describe('api', () => {
       expect(result).toBe('renamed.md')
       expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('test.md', 'renamed.md')
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('renamed.md', { bodyChanged: true })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -268,7 +262,6 @@ describe('api', () => {
       })
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenNthCalledWith(1, 'source.md', { bodyChanged: false })
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenNthCalledWith(2, 'target.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should remove link metadata for source and target entries', async () => {
@@ -286,7 +279,6 @@ describe('api', () => {
       })
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenNthCalledWith(1, 'source.md', { bodyChanged: false })
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenNthCalledWith(2, 'target.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -308,7 +300,6 @@ describe('api', () => {
       })
       expect(result).toBe('new-entry.md')
       expect(browserPluginEventMocks.dispatchFileCreatedEvent).toHaveBeenCalledWith('new-entry.md')
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should create entry with options', async () => {
@@ -331,7 +322,6 @@ describe('api', () => {
         },
       })
       expect(browserPluginEventMocks.dispatchFileCreatedEvent).toHaveBeenCalledWith('new-entry.md')
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -346,7 +336,6 @@ describe('api', () => {
         params: { path: 'test.md', hard_delete: false },
       })
       expect(browserPluginEventMocks.dispatchFileDeletedEvent).toHaveBeenCalledWith('test.md')
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -361,7 +350,6 @@ describe('api', () => {
         params: { from: 'old/path.md', to: 'new/path.md' },
       })
       expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('old/path.md', 'new/path.md')
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -381,7 +369,6 @@ describe('api', () => {
       expect(result).toBe('folder/new-name.md')
       expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('folder/old-name.md', 'folder/new-name.md')
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('folder/new-name.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -401,7 +388,6 @@ describe('api', () => {
       expect(result).toBe('folder/child.md')
       expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('child.md', 'folder/child.md')
       expect(browserPluginEventMocks.dispatchFileSavedEvent).not.toHaveBeenCalled()
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should emit a save event when only relationship metadata changes', async () => {
@@ -415,7 +401,6 @@ describe('api', () => {
       expect(result).toBe('child.md')
       expect(browserPluginEventMocks.dispatchFileMovedEvent).not.toHaveBeenCalled()
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('child.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -597,7 +582,6 @@ describe('api', () => {
         params: { path: 'test.md', key: 'title', value: 'New Title', root_index_path: null },
       })
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('test.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should dispatch file-saved for non-title frontmatter updates', async () => {
@@ -606,7 +590,6 @@ describe('api', () => {
       await api.setFrontmatterProperty('test.md', 'description', 'Updated description')
 
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('test.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should mirror frontmatter renames through plugin events', async () => {
@@ -620,7 +603,6 @@ describe('api', () => {
       expect(result).toBe('renamed.md')
       expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('test.md', 'renamed.md')
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('renamed.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should remove frontmatter property', async () => {
@@ -633,7 +615,6 @@ describe('api', () => {
         params: { path: 'test.md', key: 'author' },
       })
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('test.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -847,7 +828,6 @@ describe('api', () => {
       })
       expect(result).toBe('copy-of-test.md')
       expect(browserPluginEventMocks.dispatchFileCreatedEvent).toHaveBeenCalledWith('copy-of-test.md')
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -865,7 +845,6 @@ describe('api', () => {
         params: { path: 'folder.md' },
       })
       expect(result).toBe('folder/README.md')
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -883,7 +862,6 @@ describe('api', () => {
         params: { path: 'folder/README.md' },
       })
       expect(result).toBe('folder.md')
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -909,7 +887,6 @@ describe('api', () => {
       expect(result).toEqual(mockResult)
       expect(browserPluginEventMocks.dispatchFileCreatedEvent).toHaveBeenCalledWith('parent/child.md')
       expect(browserPluginEventMocks.dispatchFileMovedEvent).not.toHaveBeenCalled()
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should dispatch move event when parent was converted', async () => {
@@ -929,7 +906,6 @@ describe('api', () => {
       expect(result).toEqual(mockResult)
       expect(browserPluginEventMocks.dispatchFileCreatedEvent).toHaveBeenCalledWith('parent/child.md')
       expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('parent.md', 'parent/README.md')
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -1071,7 +1047,6 @@ describe('api', () => {
         type: 'SetWorkspaceConfig',
         params: { root_index_path: 'README.md', field: 'filename_style', value: 'kebab-case' },
       })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -1086,7 +1061,6 @@ describe('api', () => {
         params: { path: 'test.md', keys: ['title', 'author', 'date'] },
       })
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('test.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -1106,7 +1080,6 @@ describe('api', () => {
         },
       })
       expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('source.md', { bodyChanged: false })
-      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should default createIfMissing to true', async () => {

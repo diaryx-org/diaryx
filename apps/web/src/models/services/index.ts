@@ -44,4 +44,4 @@ export {
 export {
   indexAttachmentRefs,
   sha256Hex,
-} from '$lib/sync/attachmentSyncService';
+} from '$lib/attachments/attachmentIndexService';

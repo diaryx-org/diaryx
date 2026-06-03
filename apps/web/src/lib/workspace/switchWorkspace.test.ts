@@ -19,7 +19,6 @@ const mocks = vi.hoisted(() => {
     setActiveWorkspaceId: vi.fn(),
     getWorkspaceStorageType: vi.fn(() => "opfs"),
     getWorkspaceStoragePluginId: vi.fn(() => null),
-    hydrateProviderLinksFromFrontmatter: vi.fn(async () => {}),
   };
 });
 
@@ -52,10 +51,6 @@ vi.mock("$lib/storage/localWorkspaceRegistry.svelte", () => ({
   getWorkspaceStoragePluginId: mocks.getWorkspaceStoragePluginId,
 }));
 
-vi.mock("./hydrateProviderLinks", () => ({
-  hydrateProviderLinksFromFrontmatter: mocks.hydrateProviderLinksFromFrontmatter,
-}));
-
 import { switchWorkspace } from "./switchWorkspace";
 
 describe("switchWorkspace", () => {
@@ -66,7 +61,6 @@ describe("switchWorkspace", () => {
     mocks.pluginStore.init.mockResolvedValue(undefined);
     mocks.getWorkspaceStorageType.mockReturnValue("opfs");
     mocks.getWorkspaceStoragePluginId.mockReturnValue(null);
-    mocks.hydrateProviderLinksFromFrontmatter.mockResolvedValue(undefined);
   });
 
   it("rebuilds backend state and refreshes plugin manifests for the new workspace", async () => {
@@ -93,9 +87,6 @@ describe("switchWorkspace", () => {
       sequence.push("plugin-init");
       resolvePluginInit = resolve;
     }));
-    mocks.hydrateProviderLinksFromFrontmatter.mockImplementation(async () => {
-      sequence.push("hydrate");
-    });
 
     const switchPromise = switchWorkspace("workspace-2", "Workspace Two", {
       onReady: () => {
@@ -109,18 +100,8 @@ describe("switchWorkspace", () => {
     ]);
 
     expect(readiness).toBe("ready");
-    expect(sequence).toEqual(["plugin-init", "hydrate", "ready"]);
+    expect(sequence).toEqual(["plugin-init", "ready"]);
     resolvePluginInit?.();
     await switchPromise;
-  });
-
-  it("hydrates provider links from frontmatter during switch readiness", async () => {
-    await switchWorkspace("workspace-2", "Workspace Two");
-
-    expect(mocks.hydrateProviderLinksFromFrontmatter).toHaveBeenCalledWith(
-      "workspace-2",
-      mocks.api,
-      mocks.backend,
-    );
   });
 });

@@ -10,7 +10,7 @@
 //! ## Token lifecycle in the browser
 //!
 //! The browser never sees the raw session token. On successful verification
-//! the sync server sets an `HttpOnly` cookie on the response, and every
+//! the server sets an `HttpOnly` cookie on the response, and every
 //! subsequent fetch includes it via `credentials: 'include'`. The only state
 //! held on the JS side is a boolean "has session" flag (mirrored in
 //! `localStorage`) plus non-secret metadata (email, workspace id).

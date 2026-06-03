@@ -16,7 +16,6 @@ import {
   trackBlobUrl,
   hasBlobUrls,
   attachmentExistsLocally,
-  getAttachmentAvailability,
   computeRelativeAttachmentPath,
   formatDroppedAttachmentPathForEntry,
   stripWorkspacePrefixFromAttachmentPath,
@@ -264,36 +263,6 @@ describe('attachmentService', () => {
       expect(mockApi.resolveAttachmentStoragePath).toHaveBeenCalledWith('entry.md', '_attachments/test.png')
       expect(mockApi.fileExists).toHaveBeenCalledWith('/workspace/_attachments/test.png')
     })
-
-    it('should report remote availability when local file is missing but metadata exists', async () => {
-      const mockApi = {
-        resolveAttachmentStoragePath: vi.fn().mockResolvedValue('/workspace/_attachments/test.png'),
-        fileExists: vi.fn().mockResolvedValue(false),
-      }
-
-      const { indexAttachmentRefs } = await import('$lib/sync/attachmentSyncService')
-      indexAttachmentRefs(
-        'entry-remote.md',
-        [{
-          path: '_attachments/test.png',
-          source: 'local',
-          hash: 'abc123',
-          mime_type: 'image/png',
-          size: BigInt(12),
-          uploaded_at: BigInt(Date.now()),
-          deleted: false,
-        }],
-        'ws-1',
-      )
-
-      const result = await getAttachmentAvailability(
-        mockApi as any,
-        'entry-remote.md',
-        '_attachments/test.png',
-      )
-
-      expect(result).toBe('remote')
-    })
   })
 
   describe('transformAttachmentPaths', () => {
@@ -355,7 +324,7 @@ describe('attachmentService', () => {
 
     it('should cache successful attachment hash verification across blob URL resets', async () => {
       const expectedHash = 'a'.repeat(64)
-      const syncService = await import('$lib/sync/attachmentSyncService')
+      const syncService = await import('$lib/attachments/attachmentIndexService')
       const shaSpy = vi.spyOn(syncService, 'sha256Hex').mockResolvedValue(expectedHash)
 
       syncService.indexAttachmentRefs(

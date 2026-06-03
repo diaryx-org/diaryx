@@ -65,7 +65,7 @@
     getAttachmentThumbnailUrl,
     isPreviewableAttachmentKind,
   } from "@/models/services/attachmentService";
-  import { getAttachmentMetadata } from "$lib/sync/attachmentSyncService";
+  import { getAttachmentMetadata } from "$lib/attachments/attachmentIndexService";
   import { parseLinkDisplay } from "$lib/utils/linkParser";
   import MoveConfigDialog from "$lib/components/MoveConfigDialog.svelte";
 

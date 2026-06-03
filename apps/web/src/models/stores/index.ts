@@ -6,7 +6,6 @@
 
 export { entryStore, getEntryStore } from './entryStore.svelte';
 export { uiStore, getUIStore } from './uiStore.svelte';
-export { collaborationStore, getCollaborationStore } from './collaborationStore.svelte';
 export { workspaceStore, getWorkspaceStore } from './workspaceStore.svelte';
 export { permissionStore, getPermissionStore } from './permissionStore.svelte';
 export { getThemeStore } from '../../lib/stores/theme.svelte';

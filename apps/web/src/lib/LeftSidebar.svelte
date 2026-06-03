@@ -46,7 +46,6 @@
     CircleHelp,
   } from "@lucide/svelte";
   import { getAuthState } from "./auth";
-  import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import { getAudiencePanelStore } from "$lib/stores/audiencePanelStore.svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
@@ -1476,15 +1475,8 @@
       >
         <span class="relative shrink-0">
           <CircleUser class="size-5 text-muted-foreground" />
-          {#if authState.isAuthenticated}
-            <span
-              class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-sidebar {collaborationStore.serverOffline ? 'bg-amber-500' : 'bg-emerald-500'}"
-            ></span>
-          {/if}
         </span>
-        {#if collaborationStore.serverOffline && authState.isAuthenticated}
-          <span class="text-sm truncate text-amber-600 dark:text-amber-400">Offline</span>
-        {:else if authState.isAuthenticated && authState.user}
+        {#if authState.isAuthenticated && authState.user}
           <span class="text-sm truncate text-sidebar-foreground">{authState.user.email}</span>
         {:else}
           <span class="text-sm text-muted-foreground">Sign in</span>

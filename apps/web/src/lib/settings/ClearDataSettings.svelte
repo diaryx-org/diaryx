@@ -3,7 +3,7 @@
    * ClearDataSettings - Clear all locally stored data
    *
    * Allows users to wipe all local data including:
-   * - OPFS storage (workspace files, CRDT data)
+   * - OPFS storage (workspace files)
    * - IndexedDB databases
    * - localStorage (settings, auth tokens)
    *
@@ -81,10 +81,8 @@
 
     <ul class="list-disc list-inside text-sm text-muted-foreground space-y-1 py-2">
       <li>All workspace files and notes</li>
-      <li>CRDT sync data</li>
       <li>App settings and preferences</li>
       <li>Login credentials and tokens</li>
-      <li>Cloud backup configurations</li>
     </ul>
 
     <p class="text-sm font-medium text-destructive">

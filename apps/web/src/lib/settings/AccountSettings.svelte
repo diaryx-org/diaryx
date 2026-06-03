@@ -5,8 +5,7 @@
    * Features:
    * - Inline sign-in (email + magic link) — does NOT enable sync
    * - Account info (email, devices)
-   * - "Set Up Sync" button when signed in but sync not enabled
-   * - Delete server data
+   * - Delete account
    * - Logout
    */
   import { Button } from "$lib/components/ui/button";
@@ -366,12 +365,12 @@
           onclick={() => (showDeleteConfirm = true)}
         >
           <Trash2 class="size-4 mr-2" />
-          Delete All Server Data
+          Delete Account
         </Button>
       </div>
 
       <p class="text-xs text-muted-foreground">
-        Deleting server data will remove all synced data from our servers but keep your local files.
+        Deleting your account will remove your user information and linked devices from the server, but keep your local files.
       </p>
     </div>
   {:else}
@@ -387,17 +386,17 @@
     <Dialog.Header>
       <Dialog.Title class="flex items-center gap-2 text-destructive">
         <AlertTriangle class="size-5" />
-        Delete All Server Data
+        Delete Account
       </Dialog.Title>
       <Dialog.Description>
-        This will permanently delete all your data from our sync servers, including:
+        This will permanently delete your account from the server, including:
       </Dialog.Description>
     </Dialog.Header>
 
     <ul class="list-disc list-inside text-sm text-muted-foreground space-y-1 py-2">
-      <li>Your synced workspace data</li>
-      <li>All linked devices</li>
-      <li>Your account information</li>
+      <li>Your registered user metadata</li>
+      <li>All registered devices</li>
+      <li>Your account credentials</li>
     </ul>
 
     <p class="text-sm font-medium">

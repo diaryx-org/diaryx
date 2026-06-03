@@ -30,12 +30,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 diaryx_server = { workspace = true, features = ["reqwest-dispatcher"] }
-# Needed by `tests/sync_plugin_e2e.rs` to drive the sync plugin WASM against
-# wrangler dev. The `e2e-scenarios` feature pulls in the shared scenario
-# bodies from `diaryx_sync_extism::e2e_scenarios` so the same suite drives
-# both sync_server (in-process) and cloudflare (wrangler dev).
 diaryx_extism = { workspace = true, features = ["testing", "http"] }
-diaryx_sync_extism = { path = "../plugins/diaryx_sync_extism", features = ["e2e-scenarios"] }
 # FutureExt::catch_unwind in tests/contract.rs so a single failed assertion
 # doesn't abort the rest of the suite (wrangler startup is 60s+; we want to
 # see every drift in one run, not one-at-a-time).

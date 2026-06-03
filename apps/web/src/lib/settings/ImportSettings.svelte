@@ -3,8 +3,6 @@
    * ImportSettings - Import from zip settings section
    *
    * Extracted from SettingsDialog for modularity.
-   * When sync is enabled, imports are routed through the server snapshot
-   * endpoint to avoid OOM from per-file CRDT updates over WebSocket.
    */
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";

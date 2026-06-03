@@ -8,7 +8,6 @@ import {
   getWorkspaceStorageType,
   getWorkspaceStoragePluginId,
 } from "$lib/storage/localWorkspaceRegistry.svelte";
-import { hydrateProviderLinksFromFrontmatter } from "./hydrateProviderLinks";
 
 export interface SwitchWorkspaceOptions {
   onTeardownComplete?: () => void;
@@ -41,7 +40,6 @@ export async function switchWorkspace(
   void getPluginStore().init(api).catch((error) => {
     console.warn("[switchWorkspace] Failed to refresh plugin manifests:", error);
   });
-  await hydrateProviderLinksFromFrontmatter(workspaceId, api, backend);
 
   options?.onReady?.();
 }

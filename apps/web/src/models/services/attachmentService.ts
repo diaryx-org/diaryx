@@ -9,7 +9,7 @@ import type { Api } from '$lib/backend/api';
 import { isTauri } from '$lib/backend/interface';
 import { parseLinkDisplay } from '$lib/utils/linkParser';
 import { normalizeSlashes } from '$lib/utils/path';
-import { getAttachmentMetadata, sha256Hex } from '$lib/sync/attachmentSyncService';
+import { getAttachmentMetadata, sha256Hex } from '$lib/attachments/attachmentIndexService';
 
 // ============================================================================
 // State

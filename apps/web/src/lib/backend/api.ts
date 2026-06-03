@@ -12,7 +12,7 @@ import {
   dispatchFileMovedEvent,
   dispatchFileSavedEvent,
 } from '$lib/plugins/browserPluginManager.svelte';
-import { mirrorCurrentWorkspaceMutationToLinkedProviders } from '$lib/sync/browserWorkspaceMutationMirror';
+
 import {
   isMarkdownPath,
   isRootIndexPath,
@@ -360,17 +360,7 @@ export function createApi(backend: Backend) {
   }
 
   async function mirrorWorkspaceMutation(): Promise<void> {
-    await mirrorCurrentWorkspaceMutationToLinkedProviders({
-      backend: {
-        getWorkspacePath: () => backend.getWorkspacePath(),
-        resolveRootIndex: async (workspacePath) => {
-          const finder = (backend as { findRootIndex?: (path: string) => Promise<string> }).findRootIndex;
-          return typeof finder === "function" ? await finder(workspacePath) : workspacePath;
-        },
-      },
-      runPluginCommand: async (pluginId, command, params = null) =>
-        await pluginCommand(pluginId, command, params),
-    });
+    // No-op (legacy sync provider mirroring removed)
   }
 
   return {

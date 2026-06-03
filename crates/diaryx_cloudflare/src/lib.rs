@@ -2,7 +2,6 @@ pub mod adapters;
 pub mod config;
 mod getrandom_shim;
 mod handlers;
-pub mod sync;
 
 use worker::*;
 
@@ -144,8 +143,6 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/proxy/:proxy_id/*path", handlers::proxy_request)
         // Backward compat: old AI endpoint
         .post_async("/api/ai/*path", handlers::ai_compat_proxy)
-        // Sync (WebSocket upgrade → Durable Object)
-        .get_async("/api/sync/:namespace_id", handlers::upgrade_sync_ws)
         // Run
         .run(req, env.clone())
         .await?;

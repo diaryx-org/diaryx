@@ -131,7 +131,6 @@ impl AsyncFileSystem for StorageBackend {
 /// The decorated filesystem stack.
 ///
 /// `EventEmittingFs<StorageBackend>` — pure event-emitting filesystem.
-/// Sync is handled externally by the Extism sync plugin loaded at runtime.
 type DecoratedFs = EventEmittingFs<StorageBackend>;
 
 // ============================================================================
@@ -194,9 +193,6 @@ thread_local! {
 /// to the WASM-specific WasmCallbackRegistry (which holds JS functions).
 fn create_event_bridge() -> Arc<dyn Fn(&FileSystemEvent) + Send + Sync> {
     Arc::new(|event: &FileSystemEvent| {
-        if matches!(event, FileSystemEvent::SendSyncMessage { .. }) {
-            log::trace!("[EventBridge] Forwarding SendSyncMessage event to WASM_EVENT_REGISTRY");
-        }
         WASM_EVENT_REGISTRY.with(|reg| {
             if let Some(registry) = reg.borrow().as_ref() {
                 registry.emit(event);
@@ -265,7 +261,7 @@ impl DiaryxBackend {
             EventEmittingFs::with_registry(storage_backend, Arc::clone(&rust_event_registry));
         let fs = Rc::new(event_fs);
 
-        // Note: Plugins (Publish, Sync) are loaded at runtime via the Extism browser plugin system.
+        // Note: Plugins are loaded at runtime via the Extism browser plugin system.
         let diaryx = {
             let d = Diaryx::new((*fs).clone());
             d.set_workspace_root(PathBuf::from(""));

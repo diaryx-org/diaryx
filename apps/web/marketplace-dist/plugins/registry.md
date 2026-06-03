@@ -1,6 +1,6 @@
 ---
 schema_version: 2
-generated_at: '2026-04-23T15:04:14.404573+00:00'
+generated_at: '2026-04-27T23:54:10.076509+00:00'
 cdn_base: https://app.diaryx.org/cdn
 plugins:
 - id: diaryx.ai
@@ -295,7 +295,7 @@ plugins:
     published_at: 2026-04-23 15:03:32+00:00
 - id: diaryx.publish
   name: Publish
-  version: 0.2.10
+  version: 0.2.11
   description: Export and publish content with optional format conversion
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -312,10 +312,10 @@ plugins:
   - custom_commands
   summary: Export and publish workspaces.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.publish/0.2.10/diaryx_publish_extism.wasm
-    sha256: c525db421ac297af6b6d73c75f72efefdb2ce8ed82c5409e5dd507ef08d32d63
-    size: 2237262
-    published_at: '2026-04-15T05:52:20Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.publish/0.2.11/diaryx_publish_extism.wasm
+    sha256: 7fdefa3e463c8a1a455965e13e70d7900bec3002023a9a85dd778fdcf864d843
+    size: 1771848
+    published_at: 2026-04-27 17:14:30+00:00
   ui:
   - slot: SidebarTab
     id: publish-panel
@@ -530,7 +530,7 @@ plugins:
       plugin_storage: Persist S3 connection settings for the current workspace.
 - id: diaryx.sync
   name: Sync
-  version: 0.2.25
+  version: 0.2.27
   description: Real-time multi-device sync across Diaryx workspaces
   author: Diaryx Team
   license: PolyForm Shield 1.0.0
@@ -551,10 +551,10 @@ plugins:
   summary: Realtime multi-device workspace sync, snapshots, history, and workspace-provider
     flows.
   artifact:
-    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.2.25/diaryx_sync_extism.wasm
-    sha256: bd9d7db80564ed7cbcf61f07323bd4c97cf86694e4d14a7341b34853425ac2ba
-    size: 766202
-    published_at: '2026-04-18T01:10:00Z'
+    url: https://app.diaryx.org/cdn/plugins/artifacts/diaryx.sync/0.2.27/diaryx_sync_extism.wasm
+    sha256: 488f9b75f9af8d3443fd6283f34a01ad41d603d63202ce1b847bf003680a0881
+    size: 801697
+    published_at: 2026-04-27 23:53:35+00:00
   ui:
   - slot: SettingsTab
     id: sync-settings
@@ -663,7 +663,7 @@ plugins:
 
 # Diaryx Plugin Registry
 
-Generated at 2026-04-23T15:04:14.404573+00:00
+Generated at 2026-04-27T23:54:10.076509+00:00
 
 **16** plugins available.
 
@@ -704,7 +704,7 @@ Render inline and block LaTeX.
 This experimental plugin uses Pandoc for file conversion.
 
 ## Publish
-**ID:** `diaryx.publish` | **Version:** 0.2.10
+**ID:** `diaryx.publish` | **Version:** 0.2.11
 Export and publish workspaces.
 
 ## Live Share
@@ -724,7 +724,7 @@ Google Drive storage backend.
 S3-compatible storage backend.
 
 ## Sync
-**ID:** `diaryx.sync` | **Version:** 0.2.25
+**ID:** `diaryx.sync` | **Version:** 0.2.27
 Realtime multi-device workspace sync, snapshots, history, and workspace-provider flows.
 
 ## Templating

@@ -52,10 +52,6 @@ folder and then relies on external tools such as iCloud Drive, Dropbox,
 Syncthing, or Git for cross-device file syncing. The client no longer exposes
 workspace-provider setup, remote workspace restore, or a built-in sync button.
 
-Legacy provider-sync modules remain in the source tree while the backend and
-plugin surfaces are unwound, but they are not part of the active onboarding or
-settings workflow.
-
 ## Validation
 
 Workspace validation/fixes are exposed through backend commands and used in both
@@ -83,13 +79,6 @@ fits for V8 instrumentation (for example the WASM worker bridge). When Svelte
 components accumulate reusable geometry/filtering/state-transition logic, prefer
 moving that logic into nearby `.ts` helpers with direct Vitest coverage rather
 than forcing line coverage through large UI shells.
-
-### Legacy Sync E2E Notes
-
-Sync E2E coverage is legacy while the sync sidecar is being removed from the
-client workflow. Keep those tests scoped to the old provider modules until the
-backend sync code is retired or renamed; do not treat them as the expected user
-path for new workspace setup.
 
 ## Developer Guide
 

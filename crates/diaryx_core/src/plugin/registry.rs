@@ -403,8 +403,6 @@ impl PluginRegistry {
                 self.emit_file_saved(&FileSavedEvent { path: path_str })
                     .await;
             }
-            // Sync events and other variants are not forwarded to plugins
-            _ => {}
         }
     }
 }

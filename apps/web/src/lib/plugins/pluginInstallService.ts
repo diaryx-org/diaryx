@@ -24,7 +24,7 @@ import {
   clearInstalledPluginSource,
   setInstalledPluginSource,
 } from "$lib/plugins/pluginInstallSource.svelte";
-import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
+
 import {
   getCurrentWorkspaceId,
   getPluginMetadata,
@@ -504,24 +504,7 @@ async function reviewAndInstall(
 }
 
 async function bootstrapLinkedWorkspaceSyncState(): Promise<void> {
-  if (isTauri()) {
-    return;
-  }
-
-  const backend = await getBackend();
-  const api = createApi(backend);
-
-  await mirrorCurrentWorkspaceMutationToLinkedProviders({
-    backend: {
-      getWorkspacePath: () => backend.getWorkspacePath(),
-      resolveRootIndex: async (workspacePath) => {
-        const finder = (backend as { findRootIndex?: (path: string) => Promise<string> }).findRootIndex;
-        return typeof finder === "function" ? await finder(workspacePath) : workspacePath;
-      },
-    },
-    runPluginCommand: async (pluginId, command, params = null) =>
-      await api.executePluginCommand(pluginId, command, params),
-  });
+  // No-op (legacy sync provider bootstrapping removed)
 }
 
 export async function installRegistryPlugin(

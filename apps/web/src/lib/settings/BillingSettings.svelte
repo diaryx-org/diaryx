@@ -224,7 +224,6 @@
           Free already includes one published website.
         </p>
         <ul class="space-y-1 text-muted-foreground">
-          <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> Sync up to 10 workspaces with the Sync plugin</li>
           <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> Start a live editing session with up to 5 friends with the Share plugin</li>
           <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> Ask an AI about your notes with the AI plugin</li>
           <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> 2 GiB attachment storage</li>

@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
   getBrowserManifests: vi.fn(() => [] as any[]),
   getCachedPluginIcon: vi.fn(() => ({}) as any),
   loadPluginIcon: vi.fn(async () => ({}) as any),
-  getBuiltinWorkspaceProviders: vi.fn(() => [] as any[]),
   listWorkspaceChildDirectories: vi.fn(async () => [] as string[]),
   readWorkspaceText: vi.fn(async (_path: string) => null as string | null),
 }));
@@ -22,10 +21,6 @@ vi.mock("$lib/plugins/browserPluginManager.svelte", () => ({
 vi.mock("$lib/plugins/pluginIconResolver", () => ({
   getCachedPluginIcon: mocks.getCachedPluginIcon,
   loadPluginIcon: mocks.loadPluginIcon,
-}));
-
-vi.mock("$lib/sync/builtinProviders", () => ({
-  getBuiltinWorkspaceProviders: mocks.getBuiltinWorkspaceProviders,
 }));
 
 vi.mock("$lib/workspace/workspaceAssetStorage", () => ({
@@ -59,15 +54,6 @@ function makeMockApi(manifests: PluginManifest[] = []) {
   } as any;
 }
 
-/** All five commands required for workspace provider synthesis. */
-const ALL_WP_COMMANDS = [
-  "GetProviderStatus",
-  "ListRemoteWorkspaces",
-  "LinkWorkspace",
-  "UnlinkWorkspace",
-  "DownloadWorkspace",
-];
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -79,7 +65,6 @@ describe("pluginStore", () => {
     vi.clearAllMocks();
     localStorage.clear();
     mocks.getBrowserManifests.mockReturnValue([]);
-    mocks.getBuiltinWorkspaceProviders.mockReturnValue([]);
     mocks.listWorkspaceChildDirectories.mockResolvedValue([]);
     mocks.readWorkspaceText.mockResolvedValue(null);
     store = getPluginStore();
@@ -1197,249 +1182,7 @@ describe("pluginStore", () => {
     });
   });
 
-  // ========================================================================
-  // Workspace providers
-  // ========================================================================
 
-  describe("workspaceProviders", () => {
-    it("synthesizes provider from custom commands capability", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        name: "Workspace Provider",
-        capabilities: [
-          {
-            CustomCommands: {
-              commands: ALL_WP_COMMANDS,
-            },
-          },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      const providers = store.workspaceProviders;
-      expect(providers).toHaveLength(1);
-      expect(providers[0].contribution.label).toBe("Workspace Provider");
-      expect(providers[0].source).toBe("plugin");
-    });
-
-    it("does not synthesize provider when commands are incomplete", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        name: "Incomplete Provider",
-        capabilities: [
-          {
-            CustomCommands: {
-              commands: ["GetProviderStatus", "ListRemoteWorkspaces"],
-              // Missing LinkWorkspace, UnlinkWorkspace, DownloadWorkspace
-            },
-          },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      // Should only have builtin providers (mocked to empty)
-      expect(store.workspaceProviders).toHaveLength(0);
-    });
-
-    it("uses explicit WorkspaceProvider UI entry over command synthesis", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        name: "Plugin Name",
-        ui: [
-          {
-            slot: "WorkspaceProvider",
-            id: "custom-wp",
-            label: "Custom WP Label",
-            description: "A custom workspace provider",
-          },
-        ] as any,
-        capabilities: [
-          { CustomCommands: { commands: ALL_WP_COMMANDS } },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      const providers = store.workspaceProviders;
-      // Should use the explicit UI entry, not synthesize from commands
-      expect(providers).toHaveLength(1);
-      expect(providers[0].contribution.id).toBe("custom-wp");
-      expect(providers[0].contribution.label).toBe("Custom WP Label");
-      expect(providers[0].contribution.description).toBe(
-        "A custom workspace provider",
-      );
-    });
-
-    it("falls back to plugin id when WorkspaceProvider UI entry has no id", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        name: "My WP",
-        ui: [
-          {
-            slot: "WorkspaceProvider",
-            label: "WP Label",
-          },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      const providers = store.workspaceProviders;
-      expect(providers[0].contribution.id).toBe("wp.plugin");
-    });
-
-    it("falls back to manifest name when WorkspaceProvider has no label", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        name: "My WP Name",
-        ui: [
-          {
-            slot: "WorkspaceProvider",
-            id: "wp-id",
-          },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      expect(store.workspaceProviders[0].contribution.label).toBe("My WP Name");
-    });
-
-    it("falls back to id when manifest name is missing for synthesized provider", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        name: null as any,
-        capabilities: [
-          { CustomCommands: { commands: ALL_WP_COMMANDS } },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      expect(store.workspaceProviders[0].contribution.label).toBe("wp.plugin");
-    });
-
-    it("includes description for synthesized providers", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        name: "WP",
-        description: "Syncs via magic",
-        capabilities: [
-          { CustomCommands: { commands: ALL_WP_COMMANDS } },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      expect(store.workspaceProviders[0].contribution.description).toBe(
-        "Syncs via magic",
-      );
-    });
-
-    it("appends builtin workspace providers", async () => {
-      const builtinProvider = {
-        pluginId: "builtin.icloud",
-        contribution: {
-          id: "icloud",
-          label: "iCloud",
-          description: null,
-        },
-        source: "builtin",
-      };
-      mocks.getBuiltinWorkspaceProviders.mockReturnValue([builtinProvider]);
-
-      const api = makeMockApi([]);
-      await store.init(api);
-
-      const providers = store.workspaceProviders;
-      expect(providers).toHaveLength(1);
-      expect(providers[0].contribution.id).toBe("icloud");
-    });
-
-    it("combines plugin and builtin workspace providers", async () => {
-      const builtinProvider = {
-        pluginId: "builtin.icloud",
-        contribution: { id: "icloud", label: "iCloud", description: null },
-        source: "builtin",
-      };
-      mocks.getBuiltinWorkspaceProviders.mockReturnValue([builtinProvider]);
-
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        name: "Custom WP",
-        capabilities: [
-          { CustomCommands: { commands: ALL_WP_COMMANDS } },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      const providers = store.workspaceProviders;
-      expect(providers).toHaveLength(2);
-      const ids = providers.map((p) => p.contribution.id);
-      expect(ids).toContain("wp.plugin");
-      expect(ids).toContain("icloud");
-    });
-
-    it("handles capabilities that are not CustomCommands", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        capabilities: [
-          { SomeOtherCapability: {} },
-          null,
-          "string-cap",
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      // Should not produce any provider
-      expect(store.workspaceProviders).toHaveLength(0);
-    });
-
-    it("handles empty commands array in CustomCommands", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        capabilities: [
-          { CustomCommands: { commands: [] } },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      expect(store.workspaceProviders).toHaveLength(0);
-    });
-
-    it("ignores non-string commands in CustomCommands", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        capabilities: [
-          { CustomCommands: { commands: [42, null, undefined, "GetProviderStatus"] } },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      // Only "GetProviderStatus" is valid, but not enough to synthesize
-      expect(store.workspaceProviders).toHaveLength(0);
-    });
-
-    it("ignores empty-string commands in CustomCommands", async () => {
-      const manifest = makeManifest({
-        id: "wp.plugin",
-        capabilities: [
-          { CustomCommands: { commands: ["", ...ALL_WP_COMMANDS] } },
-        ] as any,
-      });
-      const api = makeMockApi([manifest]);
-      await store.init(api);
-
-      // Empty strings are skipped, but all required commands are present
-      expect(store.workspaceProviders).toHaveLength(1);
-    });
-  });
 
   // ========================================================================
   // Storage providers
@@ -1864,7 +1607,6 @@ describe("pluginStore", () => {
       expect(s).toHaveProperty("commandPaletteOwner");
       expect(s).toHaveProperty("leftSidebarContextMenuOwner");
       expect(s).toHaveProperty("statusBarItems");
-      expect(s).toHaveProperty("workspaceProviders");
       expect(s).toHaveProperty("storageProviders");
       expect(s).toHaveProperty("blockPickerItems");
       expect(s).toHaveProperty("editorInsertCommands");

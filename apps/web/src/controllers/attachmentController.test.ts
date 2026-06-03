@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   isPreviewableAttachmentKind: vi.fn(() => true),
   isHtmlFile: vi.fn(() => false),
 
-  // attachmentSyncService
+  // attachmentIndexService
   indexAttachmentRefs: vi.fn(),
   sha256Hex: vi.fn(async (_data?: unknown) => "a".repeat(64)),
 
@@ -39,7 +39,7 @@ vi.mock("../models/services/attachmentService", () => ({
   isHtmlFile: mocks.isHtmlFile,
 }));
 
-vi.mock("$lib/sync/attachmentSyncService", () => ({
+vi.mock("$lib/attachments/attachmentIndexService", () => ({
   indexAttachmentRefs: mocks.indexAttachmentRefs,
   sha256Hex: mocks.sha256Hex,
 }));

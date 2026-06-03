@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-04-22T21:45:09Z
+updated: 2026-06-03T23:22:05Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -37,7 +37,6 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Publish - Publishing and export UI wiring - apps/web/src/lib/publish/README.md
 │   │   │   │   ├── Settings - Settings panel components - apps/web/src/lib/settings/README.md
 │   │   │   │   ├── Share - Legacy share/publish panel module - apps/web/src/lib/share/README.md
-│   │   │   │   ├── Sync - Host-side sync plugin integration services - apps/web/src/lib/sync/README.md
 │   │   │   │   ├── Storage - Storage abstraction layer - apps/web/src/lib/storage/README.md
 │   │   │   │   ├── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
 │   │   │   │   └── diaryx_wasm - WASM bindings for diaryx_core - apps/web/src/lib/wasm/README.md
@@ -73,11 +72,9 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │       ├── Auth module - Authentication middleware and magic link handling - crates/diaryx_sync_server/src/auth/README.md
 │   │       ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
-│   │       ├── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
-│   │       └── Y-sync v2 Module - Siphonophore-based sync implementation (experimental) - crates/diaryx_sync_server/src/sync_v2/README.md
+│   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
 │   ├── crates/diaryx_extism/README.md
 │   ├── crates/plugins/diaryx_plugin_sdk/README.md
-│   ├── Sync - Real-time multi-device sync across Diaryx workspaces - crates/plugins/diaryx_sync_extism/README.md
 │   └── Publish - Export and publish content with optional format conversion - crates/plugins/diaryx_publish_extism/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 ├── TESTING - TESTING.md

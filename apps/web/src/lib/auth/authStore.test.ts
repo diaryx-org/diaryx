@@ -38,13 +38,7 @@ const mockSetCoreAuthServerUrl = vi.hoisted(() =>
   vi.fn().mockResolvedValue(undefined),
 );
 
-const mockCollaborationStore = vi.hoisted(() => ({
-  collaborationStore: {
-    setServerOffline: vi.fn(),
-    setEnabled: vi.fn(),
-    setSyncStatus: vi.fn(),
-  },
-}));
+// Removed mockCollaborationStore
 
 const mockProxyFetch = vi.hoisted(() => vi.fn());
 
@@ -75,7 +69,7 @@ vi.mock("./coreAuthRouter", () => ({
   setCoreAuthServerUrl: mockSetCoreAuthServerUrl,
 }));
 
-vi.mock("@/models/stores/collaborationStore.svelte", () => mockCollaborationStore);
+// Removed collaborationStore mock
 
 vi.mock("$lib/backend/proxyFetch", () => ({
   proxyFetch: mockProxyFetch,
@@ -131,8 +125,6 @@ import {
   getWorkspaceLimit,
   getStorageUsage,
   getToken,
-  enableSync,
-  isSyncEnabled,
 } from "./authStore.svelte";
 
 // ---------------------------------------------------------------------------
@@ -363,9 +355,7 @@ describe("authStore", () => {
 
       await initAuth();
 
-      expect(
-        mockCollaborationStore.collaborationStore.setServerOffline,
-      ).toHaveBeenCalledWith(true);
+      // Removed serverOffline check
       // Should still restore cached user
       expect(isAuthenticated()).toBe(true);
       expect(getUser()).toEqual({ id: "u1", email: "test@example.com" });
@@ -384,10 +374,7 @@ describe("authStore", () => {
       expect(getWorkspaces()).toEqual(meResponse.workspaces);
       expect(getWorkspaceLimit()).toBe(3);
       expect(getAuthState().tier).toBe("plus");
-      // Should clear offline state
-      expect(
-        mockCollaborationStore.collaborationStore.setServerOffline,
-      ).toHaveBeenCalledWith(false);
+      // Removed serverOffline check
     });
 
     it("clears auth on 401 from getMe", async () => {
@@ -415,38 +402,11 @@ describe("authStore", () => {
       mockAuthService.getMe.mockRejectedValue(new Error("Network timeout"));
 
       await initAuth();
-
       expect(isAuthenticated()).toBe(true);
       expect(getUser()?.email).toBe("cached@example.com");
     });
 
-    it("re-enables sync when diaryx_sync_enabled was true", async () => {
-      localStorage.setItem("diaryx_sync_server_url", "https://sync.example.com");
-      localStorage.setItem("diaryx_sync_enabled", "true");
-      mockProxyFetch.mockResolvedValue({ ok: true });
-      mockAuthService.getMe.mockResolvedValue(makeMeResponse());
-
-      await initAuth();
-
-      expect(
-        mockCollaborationStore.collaborationStore.setEnabled,
-      ).toHaveBeenCalledWith(true);
-      expect(
-        mockCollaborationStore.collaborationStore.setSyncStatus,
-      ).toHaveBeenCalledWith("idle");
-    });
-
-    it("does not enable sync when diaryx_sync_enabled is absent", async () => {
-      localStorage.setItem("diaryx_sync_server_url", "https://sync.example.com");
-      mockProxyFetch.mockResolvedValue({ ok: true });
-      mockAuthService.getMe.mockResolvedValue(makeMeResponse());
-
-      await initAuth();
-
-      expect(
-        mockCollaborationStore.collaborationStore.setEnabled,
-      ).not.toHaveBeenCalled();
-    });
+    // Removed legacy sync enable tests
   });
 
   // =========================================================================
@@ -648,19 +608,9 @@ describe("authStore", () => {
       await logout();
 
       expect(localStorage.removeItem).toHaveBeenCalledWith("diaryx_user");
-      expect(localStorage.removeItem).toHaveBeenCalledWith("diaryx_sync_enabled");
     });
 
-    it("disables collaboration", async () => {
-      setServerUrl("https://sync.example.com");
-      mockAuthService.logout.mockResolvedValue(undefined);
-
-      await logout();
-
-      expect(
-        mockCollaborationStore.collaborationStore.setEnabled,
-      ).toHaveBeenCalledWith(false);
-    });
+    // Removed legacy collaboration disable test
 
     it("calls server logout (fire-and-forget)", async () => {
       setServerUrl("https://sync.example.com");
@@ -926,30 +876,5 @@ describe("authStore", () => {
     });
   });
 
-  // =========================================================================
-  // enableSync / isSyncEnabled
-  // =========================================================================
 
-  describe("enableSync / isSyncEnabled", () => {
-    it("enableSync sets localStorage flag and enables collaboration", () => {
-      enableSync();
-
-      expect(localStorage.setItem).toHaveBeenCalledWith(
-        "diaryx_sync_enabled",
-        "true",
-      );
-      expect(
-        mockCollaborationStore.collaborationStore.setEnabled,
-      ).toHaveBeenCalledWith(true);
-    });
-
-    it("isSyncEnabled returns true when flag is set", () => {
-      localStorage.setItem("diaryx_sync_enabled", "true");
-      expect(isSyncEnabled()).toBe(true);
-    });
-
-    it("isSyncEnabled returns false when flag is absent", () => {
-      expect(isSyncEnabled()).toBe(false);
-    });
-  });
 });

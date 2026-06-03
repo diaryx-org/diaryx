@@ -18,10 +18,9 @@ import {
   loadPluginIcon,
   getCachedPluginIcon,
 } from "$lib/plugins/pluginIconResolver";
-import {
-  getBuiltinWorkspaceProviders,
-} from "$lib/sync/builtinProviders";
-import type { WorkspaceProviderDescriptor } from "$lib/sync/providerTypes";
+
+
+
 import {
   listWorkspaceChildDirectories,
   readWorkspaceText,
@@ -53,13 +52,6 @@ const PLUGIN_ENABLED_KEY = "diaryx-plugin-enabled";
 
 /** Callback to persist disabled_plugins to workspace config; wired up by hydrateDisabledPlugins(). */
 let persistDisabledPlugins: ((disabledIds: string[]) => Promise<void>) | null = null;
-const WORKSPACE_PROVIDER_COMMANDS = [
-  "GetProviderStatus",
-  "ListRemoteWorkspaces",
-  "LinkWorkspace",
-  "UnlinkWorkspace",
-  "DownloadWorkspace",
-] as const;
 
 type LegacyUiContribution = Record<string, unknown>;
 type LegacyStorageProviderContribution = {
@@ -141,35 +133,6 @@ function getUiEntries(manifest: PluginManifest): LegacyUiContribution[] {
   return (manifest as { ui: LegacyUiContribution[] }).ui;
 }
 
-function getCustomCommands(manifest: PluginManifest): Set<string> {
-  const commands = new Set<string>();
-  const caps = Array.isArray((manifest as { capabilities?: unknown }).capabilities)
-    ? ((manifest as { capabilities: unknown[] }).capabilities)
-    : [];
-
-  for (const cap of caps) {
-    if (!cap || typeof cap !== "object" || !("CustomCommands" in cap)) {
-      continue;
-    }
-    const raw = (cap as { CustomCommands?: { commands?: unknown } }).CustomCommands;
-    const list = Array.isArray(raw?.commands) ? raw!.commands : [];
-    for (const cmd of list) {
-      if (typeof cmd === "string" && cmd.length > 0) {
-        commands.add(cmd);
-      }
-    }
-  }
-
-  return commands;
-}
-
-function hasCustomCommands(
-  manifest: PluginManifest,
-  required: readonly string[],
-): boolean {
-  const commands = getCustomCommands(manifest);
-  return required.every((name) => commands.has(name));
-}
 
 function getManifestId(raw: Record<string, unknown>): string | null {
   const id = raw.id;
@@ -474,51 +437,6 @@ function getStatusBarItems(): Array<{
   );
 }
 
-/** Workspace provider entries (legacy slot or command-capability synthesis). */
-function getWorkspaceProviders(): WorkspaceProviderDescriptor[] {
-  const result: WorkspaceProviderDescriptor[] = [];
-
-  for (const manifest of manifests) {
-    const pluginId = String(manifest.id);
-    let hasExplicit = false;
-
-    for (const ui of getUiEntries(manifest)) {
-      if (ui.slot !== "WorkspaceProvider") continue;
-      hasExplicit = true;
-      const id = typeof ui.id === "string" ? ui.id : pluginId;
-      const label =
-        typeof ui.label === "string" && ui.label.length > 0
-          ? ui.label
-          : String(manifest.name ?? id);
-      const description = typeof ui.description === "string" ? ui.description : null;
-      result.push({
-        pluginId: manifest.id,
-        contribution: { id, label, description },
-        source: "plugin",
-      });
-    }
-
-    if (hasExplicit) continue;
-
-    // Compatibility path: infer a workspace provider from the command surface.
-    if (hasCustomCommands(manifest, WORKSPACE_PROVIDER_COMMANDS)) {
-      result.push({
-        pluginId: manifest.id,
-        contribution: {
-          id: pluginId,
-          label: String(manifest.name ?? pluginId),
-          description:
-            typeof manifest.description === "string"
-              ? manifest.description
-              : null,
-        },
-        source: "plugin",
-      });
-    }
-  }
-
-  return [...result, ...getBuiltinWorkspaceProviders()];
-}
 
 /** Storage provider entries (legacy slot only). */
 function getStorageProviders(): Array<{
@@ -822,9 +740,7 @@ export function getPluginStore() {
     get statusBarItems() {
       return getStatusBarItems();
     },
-    get workspaceProviders() {
-      return getWorkspaceProviders();
-    },
+
     get storageProviders() {
       return getStorageProviders();
     },

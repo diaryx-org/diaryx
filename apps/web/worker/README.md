@@ -14,10 +14,7 @@ Worker-native deployment entrypoint for `app.diaryx.org`.
 Responsibilities:
 
 - serve the built SPA from Workers Static Assets
-- run the `/api/*` same-origin browser proxy before asset serving
-- normalize the public sync route to `/api/ns/{namespace_id}/sync`
-- preserve the legacy `/api/sync2?workspace_id=...` compatibility path
-- forward API traffic to the current Rust sync origin during migration
+- run the `/api/*` same-origin browser proxy to forward API requests to the backend server before asset serving
 
 Production routing is configured in `wrangler.jsonc` as a Worker Custom Domain
 for `app.diaryx.org`, with Preview URLs enabled for non-production validation

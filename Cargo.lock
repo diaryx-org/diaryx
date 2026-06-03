@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "bookmatter"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "indexmap 2.13.1",
  "ryu",
@@ -2012,7 +2012,7 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "crossfs"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "futures-io",
 ]
@@ -2418,7 +2418,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2487,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_cloudflare_e2e"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "diaryx_extism",
  "diaryx_server",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_core"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "async-trait",
  "bookmatter",
@@ -2552,7 +2552,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_extism"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2641,7 +2641,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_native"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "diaryx_core",
  "dirs 6.0.0",
@@ -2670,7 +2670,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_plugin_sdk"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "base64 0.22.1",
  "extism-pdk",
@@ -2702,7 +2702,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_server"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -2797,7 +2797,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync_server"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "async-stripe",
  "async-trait",
@@ -2847,7 +2847,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_tauri"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2908,7 +2908,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_wasm"
-version = "1.5.1"
+version = "1.6.0"
 dependencies = [
  "async-trait",
  "chrono",

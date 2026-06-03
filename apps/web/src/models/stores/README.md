@@ -30,4 +30,8 @@ Workspace switches re-run `pluginStore.init(...)` against the new backend so
 workspace-scoped plugin manifests update immediately without requiring a full
 webview reload. `init(...)` clears the previous backend manifest set before
 awaiting the new backend so background manifest refreshes do not briefly show
-plugin surfaces from the prior workspace.
+plugin surfaces from the prior workspace. While backend manifests are still
+loading, `pluginStore` reads cached workspace plugin manifests from
+`.diaryx/plugins/*/manifest.json` to infer whether left or right sidebar plugin
+tabs are expected, allowing sidebars to show a temporary "Plugins loading..."
+placeholder only where plugin tabs are likely to appear.

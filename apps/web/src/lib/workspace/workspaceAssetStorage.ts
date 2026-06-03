@@ -162,6 +162,19 @@ export async function listWorkspaceFiles(prefix: string): Promise<string[]> {
   return files;
 }
 
+export async function listWorkspaceChildDirectories(prefix: string): Promise<string[]> {
+  const normalizedPrefix = normalizePath(prefix);
+  const tree = await getTree(normalizedPrefix);
+  if (!tree) {
+    return [];
+  }
+
+  const children = Array.isArray(tree.children) ? tree.children : [];
+  return children
+    .filter((child) => child.is_index === true && typeof child.path === "string" && child.path.length > 0)
+    .map((child) => normalizePath(child.path));
+}
+
 export async function deleteWorkspaceTree(prefix: string): Promise<void> {
   const files = await listWorkspaceFiles(prefix);
   await Promise.all(files.map((file) => deleteWorkspacePath(file)));

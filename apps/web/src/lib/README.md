@@ -203,6 +203,9 @@ when invalid editor content makes decoration refresh fail.
 - Marketplace tabs now own appearance customization (`Themes`, `Typography`, `Bundles`) in addition to plugin browsing, with curated + local registries for themes and typography presets.
 - `mobileSwipe.ts` centralizes app-shell gesture gating so sidebar-open swipes are edge-triggered and modal/drawer or text-selection gestures do not leak through to the shell.
 - Plugin sidebars are host-rendered with `components/PluginSidebarPanel.svelte`.
+- Left and right sidebar tab bars show a temporary "Plugins loading..."
+  placeholder when cached plugin manifests indicate that still-loading plugins
+  intend to contribute sidebar tabs.
 - Status-bar plugin items are host-rendered with `components/PluginStatusItems.svelte`, which only displays plugin-reported status and leaves plugin-specific actions to the plugin itself.
 - `RightSidebar.svelte` resets collapse-button tooltip state when collapsing to
   prevent stale tooltip visibility when reopening the panel.

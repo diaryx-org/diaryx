@@ -47,6 +47,7 @@ import {
   writeWorkspaceBinary,
   deleteWorkspacePath,
   listWorkspaceFiles,
+  listWorkspaceChildDirectories,
   deleteWorkspaceTree,
 } from "./workspaceAssetStorage";
 
@@ -236,6 +237,30 @@ describe("workspaceAssetStorage", () => {
         ],
       });
       expect(await listWorkspaceFiles("root")).toEqual([]);
+    });
+  });
+
+  describe("listWorkspaceChildDirectories", () => {
+    it("returns only immediate directory children", async () => {
+      mockGetFilesystemTree.mockResolvedValueOnce({
+        name: "plugins", path: ".diaryx/plugins", children: [
+          { name: "diaryx.daily", path: ".diaryx/plugins/diaryx.daily", is_index: true, children: [] },
+          { name: "manifest.json", path: ".diaryx/plugins/manifest.json", is_index: false, children: [] },
+          { name: "diaryx.publish", path: ".diaryx/plugins/diaryx.publish", is_index: true, children: [
+            { name: "plugin.wasm", path: ".diaryx/plugins/diaryx.publish/plugin.wasm", is_index: false, children: [] },
+          ] },
+        ],
+      });
+
+      expect(await listWorkspaceChildDirectories(".diaryx/plugins")).toEqual([
+        ".diaryx/plugins/diaryx.daily",
+        ".diaryx/plugins/diaryx.publish",
+      ]);
+    });
+
+    it("returns empty array when directory is missing", async () => {
+      mockGetFilesystemTree.mockRejectedValueOnce(new Error("No such file or directory (os error 2)"));
+      expect(await listWorkspaceChildDirectories(".diaryx/plugins")).toEqual([]);
     });
   });
 

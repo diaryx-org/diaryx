@@ -159,6 +159,7 @@
   const pluginSidebarTabs = $derived.by(() => {
     return pluginStore.rightSidebarTabs;
   });
+  const rightSidebarPluginsLoading = $derived(pluginStore.rightSidebarLoading);
   let authState = $derived(getAuthState());
 
   let aiPluginConfig = $state<Record<string, JsonValue>>({});
@@ -179,6 +180,7 @@
     const validTabIds = new Set<string>([
       "properties",
       ...pluginSidebarTabs.map((tab) => tab.contribution.id),
+      ...(rightSidebarPluginsLoading ? ["__plugins-loading"] : []),
     ]);
     if (!validTabIds.has(activeTab)) {
       activeTab = "properties";
@@ -1358,7 +1360,12 @@
     {:else if activeTab !== "properties"}
       <!-- Plugin Tab -->
       {@const pluginTab = pluginSidebarTabs.find(t => t.contribution.id === activeTab)}
-      {#if pluginTab && api}
+      {#if activeTab === "__plugins-loading"}
+        <div class="h-full flex flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+          <Loader2 class="size-4 animate-spin" />
+          <p>Plugins loading...</p>
+        </div>
+      {:else if pluginTab && api}
         <div class="h-full">
           {#if String(pluginTab.pluginId) === "diaryx.ai" && aiConfigLoading}
             <div class="h-full flex items-center justify-center text-sm text-muted-foreground">
@@ -1384,7 +1391,7 @@
   </div>
 
   <!-- Tab Toggle (hidden when only the properties tab is visible) -->
-  {#if pluginSidebarTabs.length > 0}
+  {#if pluginSidebarTabs.length > 0 || rightSidebarPluginsLoading}
   <div class="px-3 pt-1 pb-1 shrink-0">
     <div class="flex items-center gap-1 bg-muted rounded-md p-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       <button
@@ -1403,6 +1410,16 @@
           {tab.contribution.label}
         </button>
       {/each}
+      {#if rightSidebarPluginsLoading}
+        <button
+          type="button"
+          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors inline-flex items-center justify-center gap-1.5 {activeTab === '__plugins-loading' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = "__plugins-loading"}
+        >
+          <Loader2 class="size-3 animate-spin" />
+          Plugins loading...
+        </button>
+      {/if}
     </div>
   </div>
   {/if}

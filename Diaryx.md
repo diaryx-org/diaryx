@@ -21,7 +21,7 @@ audience:
 - agents
 exclude:
 - '**/{target,dist}'
-- '**/*.!(md|png|bin|json|wasm)'
+- '**/*.!(md|png)'
 workspace_config:
   link_format: markdown_root
   audience_colors:

@@ -22,6 +22,10 @@ import {
   getBuiltinWorkspaceProviders,
 } from "$lib/sync/builtinProviders";
 import type { WorkspaceProviderDescriptor } from "$lib/sync/providerTypes";
+import {
+  listWorkspaceChildDirectories,
+  readWorkspaceText,
+} from "$lib/workspace/workspaceAssetStorage";
 
 /** Where an insert command appears in editor UI surfaces. */
 export type InsertCommandPlacement = "Picker" | "PickerAndStylePicker" | "All";
@@ -76,6 +80,10 @@ type LegacyBlockPickerContribution = {
   params?: Record<string, unknown>;
   prompt?: LegacyBlockPickerPrompt | null;
 };
+type SidebarLoadIntent = {
+  left: boolean;
+  right: boolean;
+};
 
 // ============================================================================
 // State
@@ -83,6 +91,12 @@ type LegacyBlockPickerContribution = {
 
 /** Manifests from the native backend (Rust plugin registry). */
 let backendManifests = $state<PluginManifest[]>([]);
+
+/** True while the native/backend manifest refresh is in flight. */
+let backendManifestsLoading = $state(false);
+
+/** Best-effort sidebar intent inferred from cached workspace plugin manifests. */
+let cachedSidebarIntent = $state<SidebarLoadIntent>({ left: false, right: false });
 
 /** Runtime manifest overrides (for plugins loaded outside backend registry). */
 let runtimeManifestOverrides = $state<Record<string, PluginManifest>>({});
@@ -155,6 +169,102 @@ function hasCustomCommands(
 ): boolean {
   const commands = getCustomCommands(manifest);
   return required.every((name) => commands.has(name));
+}
+
+function getManifestId(raw: Record<string, unknown>): string | null {
+  const id = raw.id;
+  if (typeof id === "string") return id;
+  if (id && typeof id === "object" && typeof (id as { 0?: unknown })[0] === "string") {
+    return (id as { 0: string })[0];
+  }
+  return null;
+}
+
+function parseCachedManifest(raw: string | null): { id: string; ui: LegacyUiContribution[] } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const manifest = parsed as Record<string, unknown>;
+    const id = getManifestId(manifest);
+    const ui = Array.isArray(manifest.ui) ? (manifest.ui as LegacyUiContribution[]) : [];
+    if (!id) return null;
+    return { id, ui };
+  } catch {
+    return null;
+  }
+}
+
+function sidebarIntentFromUi(ui: LegacyUiContribution[]): SidebarLoadIntent {
+  const intent: SidebarLoadIntent = { left: false, right: false };
+  for (const contribution of ui) {
+    if (contribution.slot !== "SidebarTab") continue;
+    if (contribution.side === "Left") intent.left = true;
+    if (contribution.side === "Right") intent.right = true;
+  }
+  return intent;
+}
+
+function mergeSidebarIntent(target: SidebarLoadIntent, next: SidebarLoadIntent): void {
+  target.left ||= next.left;
+  target.right ||= next.right;
+}
+
+async function inferCachedSidebarIntent(loadGeneration: number): Promise<void> {
+  try {
+    const pluginDirs = await getCachedPluginDirectories();
+    const nextIntent: SidebarLoadIntent = { left: false, right: false };
+
+    await Promise.all(
+      pluginDirs.map(async (pluginDir) => {
+        const raw = await readWorkspaceText(`${pluginDir}/manifest.json`);
+        const cached = parseCachedManifest(raw);
+        if (!cached || !isPluginEnabled(cached.id)) return;
+        mergeSidebarIntent(nextIntent, sidebarIntentFromUi(cached.ui));
+      }),
+    );
+
+    if (loadGeneration === backendManifestLoadGeneration && backendManifestsLoading) {
+      cachedSidebarIntent = nextIntent;
+    }
+  } catch {
+    if (loadGeneration === backendManifestLoadGeneration && backendManifestsLoading) {
+      cachedSidebarIntent = { left: false, right: false };
+    }
+  }
+}
+
+async function getCachedPluginDirectories(): Promise<string[]> {
+  const dirsFromFrontmatter = await getCachedPluginDirectoriesFromFrontmatter();
+  if (dirsFromFrontmatter.length > 0) {
+    return dirsFromFrontmatter;
+  }
+  return listWorkspaceChildDirectories(".diaryx/plugins");
+}
+
+async function getCachedPluginDirectoriesFromFrontmatter(): Promise<string[]> {
+  const api = activeManifestApi;
+  if (!api) return [];
+
+  try {
+    const rootIndexPath = await api.resolveWorkspaceRootIndexPath(null);
+    if (!rootIndexPath) return [];
+
+    const frontmatter = await api.getFrontmatter(rootIndexPath);
+    const plugins = frontmatter.plugins;
+    if (!plugins || typeof plugins !== "object" || Array.isArray(plugins)) {
+      return [];
+    }
+
+    return Object.keys(plugins as Record<string, unknown>)
+      .filter((pluginId) => pluginId.length > 0)
+      .sort((a, b) => a.localeCompare(b))
+      .map((pluginId) => `.diaryx/plugins/${pluginId}`);
+  } catch {
+    return [];
+  }
 }
 
 function loadPluginEnabledState(): Record<string, boolean> {
@@ -290,6 +400,14 @@ function getRightSidebarTabs(): Array<{
       )
       .map((contribution) => ({ pluginId: m.id, contribution })),
   );
+}
+
+function isSidebarLoading(side: "Left" | "Right"): boolean {
+  if (!backendManifestsLoading) return false;
+  if (side === "Left") {
+    return cachedSidebarIntent.left && getLeftSidebarTabs().length === 0;
+  }
+  return cachedSidebarIntent.right && getRightSidebarTabs().length === 0;
 }
 
 /** Command palette item contributions. */
@@ -612,16 +730,34 @@ async function preloadInsertCommandIcons(): Promise<void> {
 // Actions
 // ============================================================================
 
+let backendManifestLoadGeneration = 0;
+let activeManifestApi: Api | null = null;
+
 /** Fetch plugin manifests from the backend. Call once during app init. */
 async function init(api: Api): Promise<void> {
+  const loadGeneration = ++backendManifestLoadGeneration;
+  activeManifestApi = api;
   pluginEnabledState = loadPluginEnabledState();
   backendManifests = [];
+  cachedSidebarIntent = { left: false, right: false };
+  backendManifestsLoading = true;
+  void inferCachedSidebarIntent(loadGeneration);
 
   try {
-    backendManifests = await api.getPluginManifests();
+    const nextManifests = await api.getPluginManifests();
+    if (loadGeneration === backendManifestLoadGeneration) {
+      backendManifests = nextManifests;
+    }
   } catch (e) {
     console.warn("[pluginStore] Failed to load plugin manifests:", e);
-    backendManifests = [];
+    if (loadGeneration === backendManifestLoadGeneration) {
+      backendManifests = [];
+    }
+  } finally {
+    if (loadGeneration === backendManifestLoadGeneration) {
+      backendManifestsLoading = false;
+      cachedSidebarIntent = { left: false, right: false };
+    }
   }
 }
 
@@ -667,6 +803,12 @@ export function getPluginStore() {
     },
     get rightSidebarTabs() {
       return getRightSidebarTabs();
+    },
+    get leftSidebarLoading() {
+      return isSidebarLoading("Left");
+    },
+    get rightSidebarLoading() {
+      return isSidebarLoading("Right");
     },
     get commandPaletteItems() {
       return getCommandPaletteItems();

@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   getCachedPluginIcon: vi.fn(() => ({}) as any),
   loadPluginIcon: vi.fn(async () => ({}) as any),
   getBuiltinWorkspaceProviders: vi.fn(() => [] as any[]),
+  listWorkspaceChildDirectories: vi.fn(async () => [] as string[]),
+  readWorkspaceText: vi.fn(async (_path: string) => null as string | null),
 }));
 
 vi.mock("$lib/plugins/browserPluginManager.svelte", () => ({
@@ -24,6 +26,11 @@ vi.mock("$lib/plugins/pluginIconResolver", () => ({
 
 vi.mock("$lib/sync/builtinProviders", () => ({
   getBuiltinWorkspaceProviders: mocks.getBuiltinWorkspaceProviders,
+}));
+
+vi.mock("$lib/workspace/workspaceAssetStorage", () => ({
+  listWorkspaceChildDirectories: mocks.listWorkspaceChildDirectories,
+  readWorkspaceText: mocks.readWorkspaceText,
 }));
 
 import { getPluginStore } from "./pluginStore.svelte";
@@ -73,6 +80,8 @@ describe("pluginStore", () => {
     localStorage.clear();
     mocks.getBrowserManifests.mockReturnValue([]);
     mocks.getBuiltinWorkspaceProviders.mockReturnValue([]);
+    mocks.listWorkspaceChildDirectories.mockResolvedValue([]);
+    mocks.readWorkspaceText.mockResolvedValue(null);
     store = getPluginStore();
     // Reset all module-level state: init reads pluginEnabledState from
     // (now-empty) localStorage and resets backendManifests to [].
@@ -616,6 +625,46 @@ describe("pluginStore", () => {
 
       expect(store.leftSidebarTabs).toHaveLength(1);
       expect(store.rightSidebarTabs).toHaveLength(1);
+    });
+
+    it("infers sidebar loading intent from cached plugin manifests while backend manifests load", async () => {
+      let resolveManifests: ((manifests: PluginManifest[]) => void) | undefined;
+      mocks.listWorkspaceChildDirectories.mockResolvedValue([
+        ".diaryx/plugins/left.plugin",
+        ".diaryx/plugins/right.plugin",
+      ]);
+      mocks.readWorkspaceText.mockImplementation(async (path: string) => {
+        if (path.includes("left.plugin")) {
+          return JSON.stringify({
+            id: "left.plugin",
+            ui: [{ slot: "SidebarTab", side: "Left", id: "left", label: "Left" }],
+          });
+        }
+        if (path.includes("right.plugin")) {
+          return JSON.stringify({
+            id: "right.plugin",
+            ui: [{ slot: "SidebarTab", side: "Right", id: "right", label: "Right" }],
+          });
+        }
+        return null;
+      });
+
+      const initPromise = store.init({
+        getPluginManifests: () => new Promise<PluginManifest[]>((resolve) => {
+          resolveManifests = resolve;
+        }),
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(store.leftSidebarLoading).toBe(true);
+        expect(store.rightSidebarLoading).toBe(true);
+      });
+
+      resolveManifests?.([]);
+      await initPromise;
+
+      expect(store.leftSidebarLoading).toBe(false);
+      expect(store.rightSidebarLoading).toBe(false);
     });
 
     it("returns status bar items", async () => {

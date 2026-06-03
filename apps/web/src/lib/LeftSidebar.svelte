@@ -227,6 +227,7 @@
 
   const pluginStore = getPluginStore();
   const contextMenuOwner = $derived(pluginStore.leftSidebarContextMenuOwner);
+  const leftSidebarPluginsLoading = $derived(pluginStore.leftSidebarLoading);
   let showPluginContextMenu = $state(false);
   let pluginContextTarget = $state<TreeNodeMenuData | null>(null);
 
@@ -261,6 +262,16 @@
         icon: tab.contribution.icon,
         pluginId: tab.pluginId,
         component: tab.contribution.component,
+      });
+    }
+
+    if (leftSidebarPluginsLoading) {
+      tabMap.set("__plugins-loading", {
+        id: "__plugins-loading",
+        label: "Plugins loading...",
+        icon: "loading",
+        pluginId: null,
+        component: null,
       });
     }
 
@@ -1341,7 +1352,12 @@
       {/if}
     {:else}
       {@const activePluginTab = leftTabs.find((tab) => tab.id === leftTab) ?? null}
-      {#if activePluginTab?.pluginId && activePluginTab.component && api}
+      {#if leftTab === "__plugins-loading"}
+        <div class="h-full flex flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+          <Loader2 class="size-4 animate-spin" />
+          <p>Plugins loading...</p>
+        </div>
+      {:else if activePluginTab?.pluginId && activePluginTab.component && api}
         <PluginSidebarPanel
           pluginId={activePluginTab.pluginId}
           component={activePluginTab.component}
@@ -1369,6 +1385,8 @@
         >
           {#if tab.id === "files"}
             <FolderTree class="size-3 {leftTab === tab.id ? 'text-accent-foreground' : ''}" />
+          {:else if tab.icon === "loading"}
+            <Loader2 class="size-3 animate-spin {leftTab === tab.id ? 'text-accent-foreground' : ''}" />
           {:else if tab.icon === "share"}
             <Share2 class="size-3 {leftTab === tab.id ? 'text-accent-foreground' : ''}" />
           {:else if tab.icon === "history"}

@@ -28,4 +28,6 @@ the host renders these generically from plugin contributions.
 
 Workspace switches re-run `pluginStore.init(...)` against the new backend so
 workspace-scoped plugin manifests update immediately without requiring a full
-webview reload.
+webview reload. `init(...)` clears the previous backend manifest set before
+awaiting the new backend so background manifest refreshes do not briefly show
+plugin surfaces from the prior workspace.

@@ -136,6 +136,18 @@
     return { measure, logSummary };
   }
 
+  function refreshPluginStoreInBackground(
+    apiInstance: Api,
+    label: string,
+    tracer?: ReturnType<typeof createStartupTracer>,
+  ): void {
+    const work = () => getPluginStore().init(apiInstance);
+    const promise = tracer ? tracer.measure(label, work) : work();
+    void promise.catch((e) => {
+      console.warn(`[App] Failed to refresh plugin store (${label}):`, e);
+    });
+  }
+
   // Initialize theme store immediately
   const themeStore = getThemeStore();
 
@@ -442,11 +454,7 @@
     }
 
     const apiInstance = createApi(backendInstance);
-    try {
-      await getPluginStore().init(apiInstance);
-    } catch (e) {
-      console.warn("[App] Failed to initialize plugins for file navigation mode:", e);
-    }
+    refreshPluginStoreInBackground(apiInstance, "file navigation plugin manifest init");
 
     fileNavigationMode = true;
     fileNavigationRootFile = resolvedPath;
@@ -1291,12 +1299,10 @@
       const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
       workspaceStore.setWorkspaceId(sharedWorkspaceId);
 
-      // Run plugin manifest fetch and tree refresh in parallel — both are
-      // independent backend calls that don't depend on each other.
-      await Promise.all([
-        startupTracer.measure("plugin manifest init", () => getPluginStore().init(apiInstance)),
-        startupTracer.measure("initial refreshTree", () => refreshTree()),
-      ]);
+      // Native plugin manifest reads wait for Extism loading. Keep that off the
+      // first-render path so the tree and root entry can display immediately.
+      refreshPluginStoreInBackground(apiInstance, "plugin manifest init", startupTracer);
+      await startupTracer.measure("initial refreshTree", () => refreshTree());
 
       // Open the root entry immediately — the editor doesn't need config
       // hydration to render. Run config hydration in parallel.
@@ -1500,8 +1506,8 @@
       workspaceStore.setBackend(backendInstance);
 
       const apiInstance = createApi(backendInstance);
-      await getPluginStore().init(apiInstance);
       cleanupEventSubscription = initEventSubscription(backendInstance);
+      refreshPluginStoreInBackground(apiInstance, "FSA reconnect plugin manifest init");
 
       const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
       workspaceStore.setWorkspaceId(sharedWorkspaceId);

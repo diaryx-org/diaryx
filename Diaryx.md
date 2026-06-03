@@ -20,18 +20,8 @@ audience:
 - developers
 - agents
 exclude:
-- '*.lock'
-- '**/target'
-- '**/*.rs'
-- '**/*.ts'
-- .git
-- patches
-- '**/dist'
-- '**/*.toml'
-- deploy
-- flake.nix
-- '**/*.sh'
-- '**/*.pkg'
+- '**/{target,dist}'
+- '**/*.!(md|png|bin|json|wasm)'
 workspace_config:
   link_format: markdown_root
   audience_colors:

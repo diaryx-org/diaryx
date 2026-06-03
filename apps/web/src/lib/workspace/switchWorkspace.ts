@@ -38,7 +38,9 @@ export async function switchWorkspace(
   );
   workspaceStore.setBackend(backend);
   const api = createApi(backend);
-  await getPluginStore().init(api);
+  void getPluginStore().init(api).catch((error) => {
+    console.warn("[switchWorkspace] Failed to refresh plugin manifests:", error);
+  });
   await hydrateProviderLinksFromFrontmatter(workspaceId, api, backend);
 
   options?.onReady?.();

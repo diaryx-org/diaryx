@@ -61,9 +61,10 @@ workspace directory or the actual root index file should use those helpers
 or `api.resolveWorkspaceRootIndexPath(...)` instead of hardcoding
 `README.md` / `index.md` filename assumptions.
 
-Workspace switches now also refresh `pluginStore` against the newly-created
-backend in `workspace/switchWorkspace.ts`, so marketplace/settings/sidebar
-plugin surfaces do not momentarily show manifests from the previous workspace.
+Workspace switches now also start a `pluginStore` refresh against the
+newly-created backend in `workspace/switchWorkspace.ts`, while letting the tree
+and root entry render without waiting for native Extism startup. Plugin-driven
+marketplace/settings/sidebar/editor surfaces update as soon as manifests arrive.
 
 Rapid entry navigation now also uses `latestOnlyRunner.ts` to coalesce repeated
 open-entry requests to the most recent target instead of letting every

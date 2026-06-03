@@ -95,6 +95,13 @@ URLs (`convertFileSrc`) for local verified attachment files. When native
 loading is unavailable or out-of-scope, the preview path falls back to the
 shared blob resolver.
 
+Tauri loads Extism plugins after the basic workspace instance is available, but
+plugin-facing IPC commands wait for that background load before consulting the
+registry. In particular, `GetPluginManifests` should not return the early empty
+registry just because startup tree/config work reached the backend first. The
+frontend schedules those manifest reads in the background during startup and
+workspace switching so editor content does not wait for plugin initialization.
+
 ## ZIP Import Memory Use
 
 `workerBackendNew.ts` now imports ZIP files via a streaming reader (`@zip.js/zip.js`)

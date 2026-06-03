@@ -615,6 +615,7 @@ async function preloadInsertCommandIcons(): Promise<void> {
 /** Fetch plugin manifests from the backend. Call once during app init. */
 async function init(api: Api): Promise<void> {
   pluginEnabledState = loadPluginEnabledState();
+  backendManifests = [];
 
   try {
     backendManifests = await api.getPluginManifests();

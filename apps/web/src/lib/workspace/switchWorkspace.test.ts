@@ -86,25 +86,35 @@ describe("switchWorkspace", () => {
     expect(mocks.pluginStore.init).toHaveBeenCalledWith(mocks.api);
   });
 
-  it("waits for plugin manifest refresh before reporting readiness", async () => {
+  it("does not wait for plugin manifest refresh before reporting readiness", async () => {
     const sequence: string[] = [];
-    mocks.pluginStore.init.mockImplementation(async () => {
+    let resolvePluginInit: (() => void) | undefined;
+    mocks.pluginStore.init.mockImplementation(() => new Promise<void>((resolve) => {
       sequence.push("plugin-init");
-    });
+      resolvePluginInit = resolve;
+    }));
     mocks.hydrateProviderLinksFromFrontmatter.mockImplementation(async () => {
       sequence.push("hydrate");
     });
 
-    await switchWorkspace("workspace-2", "Workspace Two", {
+    const switchPromise = switchWorkspace("workspace-2", "Workspace Two", {
       onReady: () => {
         sequence.push("ready");
       },
     });
 
+    const readiness = await Promise.race([
+      switchPromise.then(() => "ready"),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(readiness).toBe("ready");
     expect(sequence).toEqual(["plugin-init", "hydrate", "ready"]);
+    resolvePluginInit?.();
+    await switchPromise;
   });
 
-  it("hydrates provider links from frontmatter after plugin init", async () => {
+  it("hydrates provider links from frontmatter during switch readiness", async () => {
     await switchWorkspace("workspace-2", "Workspace Two");
 
     expect(mocks.hydrateProviderLinksFromFrontmatter).toHaveBeenCalledWith(

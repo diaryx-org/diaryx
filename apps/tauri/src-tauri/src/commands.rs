@@ -229,6 +229,16 @@ impl Default for AppState {
     }
 }
 
+fn command_waits_for_plugin_registry(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::PluginCommand { .. }
+            | Command::GetPluginManifests
+            | Command::GetPluginConfig { .. }
+            | Command::SetPluginConfig { .. }
+    )
+}
+
 /// State for guest mode - holds an in-memory filesystem when active.
 ///
 /// When a Tauri user joins a share session as a guest, this state holds
@@ -2823,7 +2833,16 @@ pub async fn execute<R: Runtime>(
         })?
     } else {
         // Normal mode: use real filesystem
-        let diaryx = get_or_init_tauri_diaryx(&app).await?;
+        let mut diaryx = get_or_init_tauri_diaryx(&app).await?;
+
+        if command_waits_for_plugin_registry(&cmd) {
+            log::trace!(
+                "[execute] Waiting for background plugin registry before plugin-facing command"
+            );
+            let app_state = app.state::<AppState>();
+            app_state.plugins_ready.wait().await;
+            diaryx = get_or_init_tauri_diaryx(&app).await?;
+        }
 
         match diaryx.execute(cmd).await {
             Ok(response) => response,
@@ -6366,6 +6385,37 @@ mod tests {
             exclude: exclude.iter().map(|value| (*value).to_string()).collect(),
             quota_bytes: None,
         }
+    }
+
+    #[test]
+    fn plugin_registry_commands_wait_for_background_load() {
+        assert!(command_waits_for_plugin_registry(
+            &Command::GetPluginManifests
+        ));
+        assert!(command_waits_for_plugin_registry(&Command::PluginCommand {
+            plugin: "diaryx.publish".to_string(),
+            command: "status".to_string(),
+            params: JsonValue::Null,
+        }));
+        assert!(command_waits_for_plugin_registry(
+            &Command::GetPluginConfig {
+                plugin: "diaryx.publish".to_string(),
+            }
+        ));
+        assert!(command_waits_for_plugin_registry(
+            &Command::SetPluginConfig {
+                plugin: "diaryx.publish".to_string(),
+                config: JsonValue::Null,
+            }
+        ));
+
+        assert!(!command_waits_for_plugin_registry(
+            &Command::GetWorkspaceTree {
+                path: None,
+                depth: None,
+                audience: None,
+            }
+        ));
     }
 
     #[test]

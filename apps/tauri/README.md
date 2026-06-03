@@ -50,6 +50,12 @@ For plugin parity with the browser host, Tauri now also exposes native plugin
 inspection before install (so the shared frontend can review requested
 permissions on both paths) and temporary file-byte bridging for
 `host_request_file` during plugin command execution.
+Plugin-facing commands, including `GetPluginManifests`, wait for native
+background plugin loading to finish before reading the registry. That keeps the
+frontend from caching an empty plugin list when startup tree/config calls race
+ahead of Extism initialization. The frontend treats manifest refresh as a
+background task so workspace content can render from the basic instance while
+Extism finishes loading.
 
 Desktop builds also register `tauri-plugin-opener` so the shared left sidebar
 can reveal the selected entry in Finder/Explorer/the system file manager.

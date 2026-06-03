@@ -16,9 +16,6 @@ const mockAuthService = vi.hoisted(() => ({
   renameDevice: vi.fn(),
   deleteDevice: vi.fn(),
   deleteAccount: vi.fn(),
-  createWorkspace: vi.fn(),
-  renameWorkspace: vi.fn(),
-  deleteWorkspace: vi.fn(),
   createCheckoutSession: vi.fn(),
   createPortalSession: vi.fn(),
   verifyAppleTransaction: vi.fn(),
@@ -29,14 +26,7 @@ const mockAuthService = vi.hoisted(() => ({
   finishPasskeyAuthentication: vi.fn(),
   listPasskeys: vi.fn(),
   deletePasskey: vi.fn(),
-  checkUserHasData: vi.fn(),
-  downloadWorkspaceSnapshot: vi.fn(),
-  uploadWorkspaceSnapshot: vi.fn(),
-  initAttachmentUpload: vi.fn(),
-  uploadAttachmentPart: vi.fn(),
-  completeAttachmentUpload: vi.fn(),
-  downloadAttachment: vi.fn(),
-  // CoreAuthService methods (the migrated 12 + helpers).
+  // CoreAuthService methods.
   isAuthenticated: vi.fn().mockResolvedValue(false),
   getMetadata: vi.fn().mockResolvedValue(null),
   refreshToken: vi.fn(),
@@ -76,8 +66,8 @@ vi.mock("./authService", async (importOriginal) => {
   };
 });
 
-// The auth store routes the migrated 12 methods (verifyMagicLink, getMe,
-// logout, createWorkspace, etc.) through `coreAuthService` from
+// The auth store routes core methods (verifyMagicLink, getMe, logout, etc.)
+// through `coreAuthService` from
 // `./coreAuthRouter`, so the same mock object backs both. This avoids loading
 // the real wasm/tauri implementations during tests.
 vi.mock("./coreAuthRouter", () => ({

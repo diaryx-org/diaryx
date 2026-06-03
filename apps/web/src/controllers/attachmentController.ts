@@ -23,19 +23,10 @@ import {
   type AttachmentMediaKind,
 } from '../models/services/attachmentService';
 import {
-  enqueueAttachmentUpload,
   indexAttachmentRefs,
   sha256Hex,
-  isAttachmentSyncEnabled,
-  onQueueItemStateChange,
 } from '$lib/sync/attachmentSyncService';
-import type { QueueItemEvent } from '$lib/sync/attachmentSyncService';
-import { showLoading } from '../models/services/toastService';
-import {
-  getCurrentWorkspaceId,
-  getServerWorkspaceId,
-  isWorkspaceSyncEnabled,
-} from '$lib/storage/localWorkspaceRegistry.svelte';
+import { getCurrentWorkspaceId } from '$lib/storage/localWorkspaceRegistry.svelte';
 import { toast } from 'svelte-sonner';
 
 // ============================================================================
@@ -43,53 +34,6 @@ import { toast } from 'svelte-sonner';
 // ============================================================================
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-
-// ============================================================================
-// Upload progress toast
-// ============================================================================
-
-const activeUploadIds = new Set<string>();
-let uploadToast: ReturnType<typeof showLoading> | null = null;
-let uploadListenerInstalled = false;
-
-function uploadToastMessage(): string {
-  const count = activeUploadIds.size;
-  if (count === 1) return 'Syncing attachment to cloud...';
-  return `Syncing ${count} attachments to cloud...`;
-}
-
-function handleUploadEvent(event: QueueItemEvent): void {
-  if (event.kind !== 'upload' || !activeUploadIds.has(event.id)) return;
-
-  if (event.state === 'complete' || event.state === 'failed') {
-    const failed = event.state === 'failed';
-    activeUploadIds.delete(event.id);
-    if (activeUploadIds.size === 0 && uploadToast) {
-      if (failed) {
-        const filename = event.attachmentPath.split('/').pop() || 'attachment';
-        uploadToast.error(`Failed to sync ${filename}`);
-      } else {
-        uploadToast.success('Attachment synced to cloud');
-      }
-      uploadToast = null;
-    } else if (uploadToast) {
-      uploadToast.update(uploadToastMessage());
-    }
-  }
-}
-
-function trackUpload(queueItemId: string): void {
-  if (!uploadListenerInstalled) {
-    uploadListenerInstalled = true;
-    onQueueItemStateChange(handleUploadEvent);
-  }
-  activeUploadIds.add(queueItemId);
-  if (!uploadToast) {
-    uploadToast = showLoading(uploadToastMessage());
-  } else {
-    uploadToast.update(uploadToastMessage());
-  }
-}
 
 // ============================================================================
 // Helpers
@@ -104,13 +48,6 @@ function normalizeFrontmatter(frontmatter: any): Record<string, any> {
     return Object.fromEntries(frontmatter.entries());
   }
   return frontmatter;
-}
-
-function getActiveSyncWorkspaceId(): string | null {
-  const localWorkspaceId = getCurrentWorkspaceId();
-  if (!localWorkspaceId) return null;
-  if (!isWorkspaceSyncEnabled(localWorkspaceId)) return null;
-  return getServerWorkspaceId(localWorkspaceId);
 }
 
 function indexAttachmentMetadata(
@@ -155,7 +92,7 @@ export async function enqueueIncrementalAttachmentUpload(
   file: File,
   bytes?: Uint8Array,
 ): Promise<void> {
-  const workspaceId = getActiveSyncWorkspaceId();
+  const workspaceId = getCurrentWorkspaceId();
   if (!workspaceId) return;
   const resolvedBytes = bytes ?? new Uint8Array(await file.arrayBuffer());
   const hash = await sha256Hex(resolvedBytes);
@@ -167,20 +104,6 @@ export async function enqueueIncrementalAttachmentUpload(
     file.size,
     workspaceId,
   );
-  const syncEnabled = isAttachmentSyncEnabled();
-  console.log('[AttachmentController] enqueue: workspaceId=', workspaceId, 'syncEnabled=', syncEnabled);
-  const queueId = enqueueAttachmentUpload({
-    workspaceId,
-    entryPath,
-    attachmentPath: attachmentMetadataPath,
-    hash,
-    mimeType: file.type || getMimeType(file.name),
-    sizeBytes: file.size,
-  });
-  console.log('[AttachmentController] enqueued queueId=', queueId);
-  if (syncEnabled) {
-    trackUpload(queueId);
-  }
 }
 
 async function formatSourceRelativeAttachmentPath(

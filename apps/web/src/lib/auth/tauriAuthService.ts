@@ -21,7 +21,6 @@ import type {
   MagicLinkResponse,
   MeResponse,
   VerifyResponse,
-  Workspace,
 } from "./coreAuthTypes";
 import { AuthError } from "./coreAuthTypes";
 
@@ -134,18 +133,6 @@ export function createTauriAuthService(): CoreAuthService {
 
     async deleteAccount() {
       await call<void>("auth_delete_account");
-    },
-
-    createWorkspace(name) {
-      return call<Workspace>("auth_create_workspace", { name });
-    },
-
-    async renameWorkspace(workspaceId, newName) {
-      await call<void>("auth_rename_workspace", { workspaceId, newName });
-    },
-
-    async deleteWorkspace(workspaceId) {
-      await call<void>("auth_delete_workspace", { workspaceId });
     },
   };
 }

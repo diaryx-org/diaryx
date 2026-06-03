@@ -15,23 +15,11 @@ const mocks = vi.hoisted(() => ({
   isHtmlFile: vi.fn(() => false),
 
   // attachmentSyncService
-  enqueueAttachmentUpload: vi.fn(() => "queue-item-1"),
   indexAttachmentRefs: vi.fn(),
   sha256Hex: vi.fn(async (_data?: unknown) => "a".repeat(64)),
-  isAttachmentSyncEnabled: vi.fn(() => false),
-  onQueueItemStateChange: vi.fn(() => () => {}),
-
-  // toastService
-  showLoading: vi.fn(() => ({
-    success: vi.fn(),
-    error: vi.fn(),
-    update: vi.fn(),
-  })),
 
   // localWorkspaceRegistry
   getCurrentWorkspaceId: vi.fn(() => null as string | null),
-  getServerWorkspaceId: vi.fn(() => null as string | null),
-  isWorkspaceSyncEnabled: vi.fn(() => false),
 
   // entryStore
   setCurrentEntry: vi.fn(),
@@ -52,21 +40,12 @@ vi.mock("../models/services/attachmentService", () => ({
 }));
 
 vi.mock("$lib/sync/attachmentSyncService", () => ({
-  enqueueAttachmentUpload: mocks.enqueueAttachmentUpload,
   indexAttachmentRefs: mocks.indexAttachmentRefs,
   sha256Hex: mocks.sha256Hex,
-  isAttachmentSyncEnabled: mocks.isAttachmentSyncEnabled,
-  onQueueItemStateChange: mocks.onQueueItemStateChange,
-}));
-
-vi.mock("../models/services/toastService", () => ({
-  showLoading: mocks.showLoading,
 }));
 
 vi.mock("$lib/storage/localWorkspaceRegistry.svelte", () => ({
   getCurrentWorkspaceId: mocks.getCurrentWorkspaceId,
-  getServerWorkspaceId: mocks.getServerWorkspaceId,
-  isWorkspaceSyncEnabled: mocks.isWorkspaceSyncEnabled,
 }));
 
 vi.mock("../models/stores", () => ({
@@ -901,43 +880,10 @@ describe("attachmentController", () => {
       );
 
       expect(mocks.indexAttachmentRefs).not.toHaveBeenCalled();
-      expect(mocks.enqueueAttachmentUpload).not.toHaveBeenCalled();
     });
 
-    it("does nothing when workspace sync is disabled", async () => {
+    it("indexes metadata against the current local workspace", async () => {
       mocks.getCurrentWorkspaceId.mockReturnValue("local-1");
-      mocks.isWorkspaceSyncEnabled.mockReturnValue(false);
-
-      await enqueueIncrementalAttachmentUpload(
-        "entry.md",
-        "_attachments/photo.png",
-        createMockFile()
-      );
-
-      expect(mocks.enqueueAttachmentUpload).not.toHaveBeenCalled();
-    });
-
-    it("does nothing when server workspace id is null", async () => {
-      mocks.getCurrentWorkspaceId.mockReturnValue("local-1");
-      mocks.isWorkspaceSyncEnabled.mockReturnValue(true);
-      mocks.getServerWorkspaceId.mockReturnValue(null);
-
-      const file = createMockFile();
-      await enqueueIncrementalAttachmentUpload(
-        "entry.md",
-        "_attachments/photo.png",
-        file
-      );
-
-      expect(mocks.indexAttachmentRefs).not.toHaveBeenCalled();
-      expect(mocks.enqueueAttachmentUpload).not.toHaveBeenCalled();
-    });
-
-    it("indexes metadata and enqueues upload when sync is active", async () => {
-      mocks.getCurrentWorkspaceId.mockReturnValue("local-1");
-      mocks.isWorkspaceSyncEnabled.mockReturnValue(true);
-      mocks.getServerWorkspaceId.mockReturnValue("server-ws-1");
-      mocks.isAttachmentSyncEnabled.mockReturnValue(false);
 
       const file = createMockFile("photo.png", 1024, "image/png");
 
@@ -957,55 +903,12 @@ describe("attachmentController", () => {
             hash: "a".repeat(64),
           }),
         ]),
-        "server-ws-1"
+        "local-1"
       );
-      expect(mocks.enqueueAttachmentUpload).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceId: "server-ws-1",
-          entryPath: "entry.md",
-          attachmentPath: "_attachments/photo.png",
-          hash: "a".repeat(64),
-          mimeType: "image/png",
-          sizeBytes: 1024,
-        })
-      );
-    });
-
-    it("tracks upload toast when attachment sync is enabled", async () => {
-      mocks.getCurrentWorkspaceId.mockReturnValue("local-1");
-      mocks.isWorkspaceSyncEnabled.mockReturnValue(true);
-      mocks.getServerWorkspaceId.mockReturnValue("server-ws-1");
-      mocks.isAttachmentSyncEnabled.mockReturnValue(true);
-
-      await enqueueIncrementalAttachmentUpload(
-        "entry.md",
-        "_attachments/photo.png",
-        createMockFile()
-      );
-
-      expect(mocks.onQueueItemStateChange).toHaveBeenCalled();
-      expect(mocks.showLoading).toHaveBeenCalled();
-    });
-
-    it("does not show upload toast when attachment sync is disabled", async () => {
-      mocks.getCurrentWorkspaceId.mockReturnValue("local-1");
-      mocks.isWorkspaceSyncEnabled.mockReturnValue(true);
-      mocks.getServerWorkspaceId.mockReturnValue("server-ws-1");
-      mocks.isAttachmentSyncEnabled.mockReturnValue(false);
-
-      await enqueueIncrementalAttachmentUpload(
-        "entry.md",
-        "_attachments/photo.png",
-        createMockFile()
-      );
-
-      expect(mocks.showLoading).not.toHaveBeenCalled();
     });
 
     it("uses provided bytes instead of reading from file", async () => {
       mocks.getCurrentWorkspaceId.mockReturnValue("local-1");
-      mocks.isWorkspaceSyncEnabled.mockReturnValue(true);
-      mocks.getServerWorkspaceId.mockReturnValue("server-ws-1");
 
       const providedBytes = new Uint8Array([1, 2, 3]);
 
@@ -1021,8 +924,6 @@ describe("attachmentController", () => {
 
     it("reads bytes from file when not provided", async () => {
       mocks.getCurrentWorkspaceId.mockReturnValue("local-1");
-      mocks.isWorkspaceSyncEnabled.mockReturnValue(true);
-      mocks.getServerWorkspaceId.mockReturnValue("server-ws-1");
 
       const file = createMockFile("photo.png", 64);
 

@@ -286,7 +286,7 @@ function readPluginNamespaceId(
 ): string | null {
   // Plugins store namespace references under different keys:
   //   - publish plugin: namespace_id / namespaceId
-  //   - sync plugin (via workspaceProviderService): remoteWorkspaceId / serverId
+  //   - legacy sync metadata: remoteWorkspaceId / serverId
   const raw =
     metadata?.namespace_id ??
     metadata?.namespaceId ??

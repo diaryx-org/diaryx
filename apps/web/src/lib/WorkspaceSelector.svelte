@@ -22,10 +22,6 @@
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import type { StorageType } from "$lib/backend/storageType";
   import { switchWorkspace } from "$lib/workspace/switchWorkspace";
-  import {
-    getWorkspaces as getServerWorkspaces,
-    renameServerWorkspace,
-  } from "$lib/auth";
   import { toast } from "svelte-sonner";
   import { deleteLocalWorkspaceData } from "$lib/settings/clearData";
   import { BackendError } from "$lib/backend/interface";
@@ -181,11 +177,6 @@
     if (!renamingId || !renameValue.trim()) return;
     renameLoading = true;
     try {
-      const serverWorkspaces = getServerWorkspaces();
-      const isServer = serverWorkspaces.some(w => w.id === renamingId);
-      if (isServer) {
-        await renameServerWorkspace(renamingId!, renameValue.trim());
-      }
       renameLocalWorkspace(renamingId!, renameValue.trim());
       toast.success("Workspace renamed");
       cancelRename();

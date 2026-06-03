@@ -459,37 +459,4 @@ impl AuthClient {
     pub async fn delete_account(&self) -> Result<(), JsValue> {
         self.inner.delete_account().await.map_err(auth_error_to_js)
     }
-
-    // =========================================================================
-    // Workspace CRUD
-    // =========================================================================
-
-    #[wasm_bindgen(js_name = createWorkspace)]
-    pub async fn create_workspace(&self, name: String) -> Result<JsValue, JsValue> {
-        self.inner
-            .create_workspace(&name)
-            .await
-            .map_err(auth_error_to_js)
-            .and_then(|r| to_js_ok(&r))
-    }
-
-    #[wasm_bindgen(js_name = renameWorkspace)]
-    pub async fn rename_workspace(
-        &self,
-        workspace_id: String,
-        new_name: String,
-    ) -> Result<(), JsValue> {
-        self.inner
-            .rename_workspace(&workspace_id, &new_name)
-            .await
-            .map_err(auth_error_to_js)
-    }
-
-    #[wasm_bindgen(js_name = deleteWorkspace)]
-    pub async fn delete_workspace(&self, workspace_id: String) -> Result<(), JsValue> {
-        self.inner
-            .delete_workspace(&workspace_id)
-            .await
-            .map_err(auth_error_to_js)
-    }
 }

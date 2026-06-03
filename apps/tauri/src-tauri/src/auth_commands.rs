@@ -27,8 +27,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use diaryx_core::auth::{
-    AuthError, AuthMetadata, AuthService, Device, MagicLinkResponse, MeResponse, ServerWorkspace,
-    User, VerifyResponse,
+    AuthError, AuthMetadata, AuthService, Device, MagicLinkResponse, MeResponse, User,
+    VerifyResponse,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
@@ -344,45 +344,4 @@ pub async fn auth_delete_account(
 ) -> Result<(), SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
     service.delete_account().await.map_err(Into::into)
-}
-
-// ============================================================================
-// Workspace CRUD
-// ============================================================================
-
-#[tauri::command]
-pub async fn auth_create_workspace(
-    state: State<'_, AuthServiceState>,
-    app: AppHandle,
-    name: String,
-) -> Result<ServerWorkspace, SerializableAuthError> {
-    let service = ensure_service(&state, &app).await?;
-    service.create_workspace(&name).await.map_err(Into::into)
-}
-
-#[tauri::command]
-pub async fn auth_rename_workspace(
-    state: State<'_, AuthServiceState>,
-    app: AppHandle,
-    workspace_id: String,
-    new_name: String,
-) -> Result<(), SerializableAuthError> {
-    let service = ensure_service(&state, &app).await?;
-    service
-        .rename_workspace(&workspace_id, &new_name)
-        .await
-        .map_err(Into::into)
-}
-
-#[tauri::command]
-pub async fn auth_delete_workspace(
-    state: State<'_, AuthServiceState>,
-    app: AppHandle,
-    workspace_id: String,
-) -> Result<(), SerializableAuthError> {
-    let service = ensure_service(&state, &app).await?;
-    service
-        .delete_workspace(&workspace_id)
-        .await
-        .map_err(Into::into)
 }

@@ -38,7 +38,6 @@ import type {
   VerifyResponse,
   MeResponse,
   Device,
-  Workspace,
 } from "./coreAuthTypes";
 import { AuthError } from "./coreAuthTypes";
 
@@ -383,33 +382,6 @@ export function createWasmAuthService(
       try {
         const r = await remote();
         await r.authDeleteAccount();
-      } catch (err) {
-        throw wrapError(err);
-      }
-    },
-
-    async createWorkspace(name) {
-      try {
-        const r = await remote();
-        return parseJson<Workspace>(await r.authCreateWorkspace(name));
-      } catch (err) {
-        throw wrapError(err);
-      }
-    },
-
-    async renameWorkspace(workspaceId, newName) {
-      try {
-        const r = await remote();
-        await r.authRenameWorkspace(workspaceId, newName);
-      } catch (err) {
-        throw wrapError(err);
-      }
-    },
-
-    async deleteWorkspace(workspaceId) {
-      try {
-        const r = await remote();
-        await r.authDeleteWorkspace(workspaceId);
       } catch (err) {
         throw wrapError(err);
       }

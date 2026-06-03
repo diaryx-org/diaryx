@@ -9,7 +9,7 @@ import type { Api } from '$lib/backend/api';
 import { isTauri } from '$lib/backend/interface';
 import { parseLinkDisplay } from '$lib/utils/linkParser';
 import { normalizeSlashes } from '$lib/utils/path';
-import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from '$lib/sync/attachmentSyncService';
+import { getAttachmentMetadata, sha256Hex } from '$lib/sync/attachmentSyncService';
 
 // ============================================================================
 // State
@@ -597,14 +597,6 @@ function createHtmlPreviewBlobFromBytes(bytes: Uint8Array, mimeType: string): Bl
   return new Blob([encoder.encode(bridgedHtml)], { type: mimeType });
 }
 
-async function injectHtmlAttachmentPreviewBridgeIntoBlob(
-  blob: Blob,
-  mimeType: string,
-): Promise<Blob> {
-  const html = await blob.text();
-  return new Blob([injectHtmlAttachmentPreviewBridge(html)], { type: mimeType });
-}
-
 async function resolveAttachmentFromPaths(
   api: Api,
   entryPath: string,
@@ -636,41 +628,6 @@ async function resolveAttachmentFromPaths(
     return blobUrl;
   }
 
-  /**
-   * Try fetching from the server. Returns blob URL or null.
-   */
-  async function tryServerFetch(): Promise<string | null> {
-    if (signal.aborted) return null;
-    const serverUrl =
-      getServerAttachmentUrl(entryPath, sourceRelativePath) ||
-      (canonicalPath !== sourceRelativePath
-        ? getServerAttachmentUrl(entryPath, canonicalPath)
-        : null);
-    if (!serverUrl) return null;
-    try {
-      const resp = await fetch(serverUrl, { signal });
-      if (!resp.ok) return null;
-      const assetPathHint = getAttachmentAssetPathHint(canonicalPath);
-      const mimeType = getMimeType(assetPathHint);
-      let blob = await resp.blob();
-      if (signal.aborted) return null;
-      if (isHtmlFile(assetPathHint)) {
-        blob = await injectHtmlAttachmentPreviewBridgeIntoBlob(blob, mimeType);
-      } else if (blob.type !== mimeType) {
-        blob = new Blob([blob], { type: mimeType });
-      }
-      if (isHeicFile(assetPathHint)) {
-        blob = await convertHeicToJpeg(blob);
-        if (signal.aborted) return null;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      blobUrlMap.set(sourceRelativePath, blobUrl);
-      return blobUrl;
-    } catch {
-      return null;
-    }
-  }
-
   try {
     const storagePath = await api.resolveAttachmentStoragePath(entryPath, sourceRelativePath);
     if (signal.aborted) return null;
@@ -689,18 +646,10 @@ async function resolveAttachmentFromPaths(
       signal,
     );
     if (verification === 'aborted') return null;
-    if (verification === 'stale') {
-      const serverBlobUrl = await tryServerFetch();
-      if (serverBlobUrl) return serverBlobUrl;
-    }
 
     return await createBlobUrlFromBytes(bytes);
   } catch (e) {
     if (signal.aborted) return null;
-    // Attachment not found locally — try streaming from server.
-    const serverBlobUrl = await tryServerFetch();
-    if (serverBlobUrl) return serverBlobUrl;
-
     if (logFailure) {
       console.warn(`[AttachmentService] Could not load attachment: ${sourceRelativePath}`, e);
     }
@@ -715,32 +664,6 @@ async function readAttachmentBytes(
 ): Promise<Uint8Array> {
   const storagePath = await api.resolveAttachmentStoragePath(sourceEntryPath, attachmentPath);
   return api.readBinary(storagePath);
-}
-
-async function fetchAttachmentBlobFromServer(
-  sourceEntryPath: string,
-  attachmentPath: string,
-): Promise<Blob | null> {
-  const serverUrl = getServerAttachmentUrl(sourceEntryPath, attachmentPath);
-  if (!serverUrl) return null;
-  try {
-    const response = await fetch(serverUrl);
-    if (!response.ok) return null;
-    let blob = await response.blob();
-    const assetPathHint = getAttachmentAssetPathHint(attachmentPath);
-    const mimeType = getMimeType(assetPathHint);
-    if (isHtmlFile(assetPathHint)) {
-      blob = await injectHtmlAttachmentPreviewBridgeIntoBlob(blob, mimeType);
-    } else if (blob.type !== mimeType) {
-      blob = new Blob([blob], { type: mimeType });
-    }
-    if (isHeicFile(assetPathHint)) {
-      blob = await convertHeicToJpeg(blob);
-    }
-    return blob;
-  } catch {
-    return null;
-  }
 }
 
 async function createThumbnailBlob(blob: Blob): Promise<Blob> {
@@ -1050,17 +973,17 @@ export async function attachmentExistsLocally(
 }
 
 /**
- * Resolve whether an attachment is available locally, only remotely, or unknown.
+ * Resolve whether an attachment is available locally or is missing/unknown.
  */
 export async function getAttachmentAvailability(
   api: Api,
   sourceEntryPath: string,
   attachmentPath: string,
-): Promise<'local' | 'remote' | 'unknown'> {
+): Promise<'local' | 'unknown'> {
   if (await attachmentExistsLocally(api, sourceEntryPath, attachmentPath)) {
     return 'local';
   }
-  return getAttachmentMetadata(sourceEntryPath, attachmentPath) ? 'remote' : 'unknown';
+  return 'unknown';
 }
 
 /**
@@ -1093,7 +1016,7 @@ export async function getAttachmentThumbnailUrl(
           blob = await convertHeicToJpeg(blob);
         }
       } catch {
-        blob = await fetchAttachmentBlobFromServer(sourceEntryPath, attachmentPath);
+        blob = null;
       }
 
       if (!blob) return undefined;

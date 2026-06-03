@@ -308,67 +308,6 @@ impl<C: AuthenticatedClient> AuthService<C> {
         self.client.clear_session().await;
         Ok(())
     }
-
-    // =========================================================================
-    // Workspace CRUD
-    // =========================================================================
-
-    /// Create a workspace on the server.
-    pub async fn create_workspace(&self, name: &str) -> Result<ServerWorkspace, AuthError> {
-        let body = serde_json::json!({ "name": name }).to_string();
-        let resp = self.client.post("/api/workspaces", Some(&body)).await?;
-
-        if !resp.is_success() {
-            let msg = resp
-                .json::<serde_json::Value>()
-                .ok()
-                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from));
-            if resp.status == 403 {
-                return Err(AuthError::new(
-                    msg.unwrap_or_else(|| "Workspace limit reached".into()),
-                    403,
-                ));
-            }
-            if resp.status == 409 {
-                return Err(AuthError::new(
-                    msg.unwrap_or_else(|| "Workspace name already taken".into()),
-                    409,
-                ));
-            }
-            return Err(AuthError::new(
-                msg.unwrap_or_else(|| "Failed to create workspace".into()),
-                resp.status,
-            ));
-        }
-
-        resp.json()
-    }
-
-    /// Rename a workspace on the server.
-    pub async fn rename_workspace(
-        &self,
-        workspace_id: &str,
-        new_name: &str,
-    ) -> Result<(), AuthError> {
-        let path = format!("/api/workspaces/{}", workspace_id);
-        let body = serde_json::json!({ "name": new_name }).to_string();
-
-        let resp = self.client.patch(&path, Some(&body)).await?;
-        if !resp.is_success() {
-            return Err(AuthError::new("Failed to rename workspace", resp.status));
-        }
-        Ok(())
-    }
-
-    /// Delete a workspace on the server.
-    pub async fn delete_workspace(&self, workspace_id: &str) -> Result<(), AuthError> {
-        let path = format!("/api/workspaces/{}", workspace_id);
-        let resp = self.client.delete(&path).await?;
-        if !resp.is_success() {
-            return Err(AuthError::new("Failed to delete workspace", resp.status));
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

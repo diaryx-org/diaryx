@@ -31,7 +31,7 @@ origin remains behind that proxy during the migration.
 - **Multi-device support**: Track and manage connected devices
 - **Live share sessions**: Real-time collaboration with guests via shareable codes
 - **Persistent storage**: SQLite-based storage for user data and CRDT state
-- **Static site hosting pipeline**: Publish audience-filtered HTML to a dedicated R2 bucket
+- **Namespace object storage**: Authenticated namespace-scoped object APIs with audience-gated public reads
 
 ## Quick Start
 
@@ -60,17 +60,15 @@ cargo run -p diaryx_sync_server
 | `SESSION_EXPIRY_DAYS`                 | `30`                                           | Session token expiration in days                                                                                                            |
 | `MAGIC_LINK_EXPIRY_MINUTES`           | `15`                                           | Magic link expiration in minutes                                                                                                            |
 | `CORS_ORIGINS`                        | `http://localhost:5174,http://localhost:5175`  | Comma-separated CORS origins (methods: GET, POST, PUT, PATCH, DELETE, OPTIONS; headers: Authorization, Content-Type, Cache-Control, Pragma) |
-| `SNAPSHOT_UPLOAD_MAX_BYTES`           | `1073741824`                                   | Max snapshot upload size accepted by the API                                                                                                |
-| `BLOB_STORE_PATH`                     | `./blobs` (sibling of `DATABASE_PATH`)         | Local filesystem path for blob storage. Used automatically when R2 is not configured.                                                       |
+| `BLOB_STORE_PATH`                     | `./blobs` (sibling of `DATABASE_PATH`)         | Local filesystem path for namespace object storage. Used automatically when R2 is not configured.                                           |
 | `BLOB_STORE_IN_MEMORY`                | `false`                                        | Set to `1` or `true` to use a volatile in-memory blob store instead of local filesystem (data lost on restart).                             |
-| `R2_BUCKET`                           | `diaryx-user-data`                             | Cloudflare R2 bucket for attachment blobs                                                                                                   |
+| `R2_BUCKET`                           | `diaryx-user-data`                             | Cloudflare R2 bucket for namespace objects                                                                                                  |
 | `R2_ACCOUNT_ID`                       | -                                              | Cloudflare account ID                                                                                                                       |
 | `R2_ACCESS_KEY_ID`                    | -                                              | R2 access key ID                                                                                                                            |
 | `R2_SECRET_ACCESS_KEY`                | -                                              | R2 secret access key                                                                                                                        |
 | `R2_ENDPOINT`                         | -                                              | Optional custom S3 endpoint override                                                                                                        |
 | `R2_PREFIX`                           | `diaryx-sync`                                  | Object key prefix inside the bucket                                                                                                         |
 | `R2_GC_RETENTION_DAYS`                | `7`                                            | Soft-delete retention before blob garbage collection                                                                                        |
-| `ATTACHMENT_INCREMENTAL_SYNC_ENABLED` | `true`                                         | Enable incremental multipart attachment APIs                                                                                                |
 | `SITES_R2_BUCKET`                     | `diaryx-sites`                                 | Cloudflare R2 bucket for published static site files                                                                                        |
 | `PUBLISHED_SITE_LIMIT`                | `1`                                            | Per-user max published sites                                                                                                                |
 | `SITES_BASE_URL`                      | `APP_BASE_URL`                                 | Public base URL used when generating tokenized links                                                                                        |
@@ -171,76 +169,86 @@ devices return `404` with `{"error":"Device not found"}`.
 
 ### API
 
-#### Server Status
+#### Health and Capabilities
 
 ```text
-GET /api/status
+GET /api/health
+GET /api/capabilities
 ```
 
-Response:
+`/api/health` returns `OK`. `/api/capabilities` returns the site/domain
+features enabled for the current server:
 
 ```json
 {
-  "status": "ok",
-  "version": "0.10.0",
-  "active_connections": 5,
-  "active_rooms": 2
+  "site_base_url": "https://diaryx.org",
+  "site_domain": "diaryx.org",
+  "subdomains_available": true,
+  "custom_domains_available": true
 }
 ```
 
-#### List Workspaces
+#### Namespaces
 
 ```text
-GET /api/workspaces
+POST   /api/namespaces
+GET    /api/namespaces
+GET    /api/namespaces/{namespace_id}
+PATCH  /api/namespaces/{namespace_id}
+DELETE /api/namespaces/{namespace_id}
 Authorization: Bearer <session_token>
 ```
 
-#### Download Workspace Snapshot
+Namespaces are the current server-side container for workspace/publish data.
+Workspace-like namespaces are identified by client metadata such as
+`{"type":"workspace"}`.
+
+#### Namespace Objects
 
 ```text
-GET /api/workspaces/{workspace_id}/snapshot?include_attachments=true|false
+GET    /api/namespaces/{namespace_id}/objects
+PUT    /api/namespaces/{namespace_id}/objects/{key}
+GET    /api/namespaces/{namespace_id}/objects/{key}
+DELETE /api/namespaces/{namespace_id}/objects/{key}
+POST   /api/namespaces/{namespace_id}/batch/objects
+POST   /api/namespaces/{namespace_id}/batch/objects/multipart
+GET    /api/public/{namespace_id}/objects/{key}
 Authorization: Bearer <session_token>
 ```
 
-Response: zip archive containing markdown files with frontmatter and (optionally)
-attachment binaries resolved from blob storage.
+Object writes support an optional `X-Audience` header. Public reads enforce the
+namespace audience gates and may require an `audience_token` query parameter.
 
-#### Upload Workspace Snapshot
-
-```text
-POST /api/workspaces/{workspace_id}/snapshot?mode=replace|merge&include_attachments=true|false
-Authorization: Bearer <session_token>
-Content-Type: application/zip
-```
-
-Response:
-
-```json
-{ "files_imported": 123 }
-```
-
-#### User Attachment Storage Usage
+#### Audiences, Domains, and Sessions
 
 ```text
-GET /api/user/storage
+PUT    /api/namespaces/{namespace_id}/audiences/{name}
+GET    /api/namespaces/{namespace_id}/audiences
+GET    /api/namespaces/{namespace_id}/audiences/{name}/token
+POST   /api/namespaces/{namespace_id}/audiences/{name}/unlock
+POST   /api/namespaces/{namespace_id}/audiences/{name}/rotate-password
+DELETE /api/namespaces/{namespace_id}/audiences/{name}
+GET    /api/namespaces/{namespace_id}/domains
+PUT    /api/namespaces/{namespace_id}/domains/{domain}
+DELETE /api/namespaces/{namespace_id}/domains/{domain}
+PUT    /api/namespaces/{namespace_id}/subdomain
+DELETE /api/namespaces/{namespace_id}/subdomain
+POST   /api/sessions
+GET    /api/sessions/{code}
+DELETE /api/sessions/{code}
 Authorization: Bearer <session_token>
 ```
 
-Response:
+#### Usage
 
-```json
-{
-  "used_bytes": 123456,
-  "blob_count": 42,
-  "limit_bytes": 209715200,
-  "warning_threshold": 0.8,
-  "over_limit": false,
-  "scope": "attachments"
-}
+```text
+GET /api/usage
+GET /api/namespaces/{namespace_id}/usage
+Authorization: Bearer <session_token>
 ```
 
-`limit_bytes` is per-user. New/existing users default to 200 MiB unless the
-`users.attachment_limit_bytes` value is changed in the database.
+Usage endpoints report namespace object storage and proxy usage. The old
+workspace snapshot and multipart attachment APIs are no longer mounted.
 
 #### Managed AI Proxy
 
@@ -259,78 +267,6 @@ Behavior:
 - Per-user monthly quota enforced (`429` with `error: "quota_exceeded"`).
 - Upstream/provider failures return `503` with `error: "provider_unavailable"`.
 - Success returns OpenRouter response JSON as-is.
-
-#### Incremental Attachment Upload (Resumable)
-
-```text
-POST /api/workspaces/{workspace_id}/attachments/uploads
-Authorization: Bearer <session_token>
-Content-Type: application/json
-```
-
-Initializes or resumes a multipart attachment upload session.
-If an upload fits in a single part, the server uses a direct object upload path
-internally (no remote multipart session is created).
-
-```text
-PUT /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/parts/{part_no}
-Authorization: Bearer <session_token>
-Content-Type: application/octet-stream
-```
-
-Uploads one part for a multipart session.
-
-```text
-POST /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/complete
-Authorization: Bearer <session_token>
-Content-Type: application/json
-```
-
-Completes upload and registers blob metadata for dedupe/usage accounting.
-
-If the user's attachment usage would exceed their limit, upload initialization
-or completion returns:
-
-```json
-{
-  "error": "storage_limit_exceeded",
-  "message": "Attachment storage limit exceeded",
-  "used_bytes": 123,
-  "limit_bytes": 209715200,
-  "requested_bytes": 456
-}
-```
-
-#### Attachment Download by Hash
-
-```text
-GET /api/workspaces/{workspace_id}/attachments/{hash}
-Authorization: Bearer <session_token>
-Range: bytes=start-end (optional)
-```
-
-Returns attachment bytes for hashes referenced by the workspace.
-
-#### Published Site Management
-
-```text
-POST   /api/workspaces/{workspace_id}/site
-GET    /api/workspaces/{workspace_id}/site
-DELETE /api/workspaces/{workspace_id}/site
-POST   /api/workspaces/{workspace_id}/site/publish                (deprecated)
-POST   /api/workspaces/{workspace_id}/site/publish-with-fallback
-POST   /api/workspaces/{workspace_id}/site/tokens
-GET    /api/workspaces/{workspace_id}/site/tokens
-DELETE /api/workspaces/{workspace_id}/site/tokens/{token_id}
-Authorization: Bearer <session_token>
-```
-
-These endpoints manage static site configuration, trigger publish jobs, and
-issue/revoke audience-scoped access tokens for the Cloudflare Worker.
-Audience builds (including `public`) use frontmatter audience filtering; files
-without explicit or inherited audience are excluded by default.
-Each publish replaces prior artifacts under `/{slug}/{audience}/` to avoid
-stale files remaining accessible.
 
 ### Billing (Stripe)
 

@@ -218,9 +218,6 @@ pub fn run() {
             auth_commands::auth_rename_device,
             auth_commands::auth_delete_device,
             auth_commands::auth_delete_account,
-            auth_commands::auth_create_workspace,
-            auth_commands::auth_rename_workspace,
-            auth_commands::auth_delete_workspace,
             // Namespace service (reuses the same keyring-backed client)
             namespace_commands::namespace_get,
             namespace_commands::namespace_create,

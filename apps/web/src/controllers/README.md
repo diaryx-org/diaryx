@@ -14,19 +14,19 @@ Controller logic for UI actions, mediating between views and models.
 
 | File | Purpose |
 |------|---------|
-| `attachmentController.ts` | Attachment upload/management + incremental sync enqueue + BinaryRef hash metadata updates (writes attachment bytes through the backend binary path, registers lightweight attachment refs separately, creates missing `BinaryRef` entries when needed, and enqueues uploads with canonical metadata paths so server-side path canonicalization stays consistent for nested entries). Sync hashing work is skipped entirely when the current workspace is not linked to sync, and upload flows reuse already-read bytes instead of re-reading files. Inline insert handling now also preserves the original uploaded filename alongside note-backed attachment refs so uploaded HTML attachments keep the embed path instead of falling back to markdown-rewrite insertion. Shows a grouped loading toast when cloud sync is active to track upload progress. |
+| `attachmentController.ts` | Attachment upload/management + BinaryRef hash metadata updates (writes attachment bytes through the backend binary path, registers lightweight attachment refs separately, and creates missing `BinaryRef` entries when needed). Incremental attachment bookkeeping now only indexes local hash metadata for the active workspace; it no longer enqueues cloud uploads or shows sync-progress toasts. Inline insert handling also preserves the original uploaded filename alongside note-backed attachment refs so uploaded HTML attachments keep the embed path instead of falling back to markdown-rewrite insertion. |
 | `commandPaletteController.ts` | Command palette actions, including word/page count feedback |
 | `entryController.ts` | Entry creation, editing, deletion, and frontmatter-safe property updates (normalizes `Map` frontmatter before merges/removals). Title changes delegate rename logic to the Rust backend (`SetFrontmatterProperty` handler reads workspace config for `auto_rename_to_title` and `filename_style`). When the renamed entry is the workspace root index, an optional `onRootIndexRenamed` callback fires so callers can sync the workspace display name to the new title. Entry-open flow supports request-scoped guards so stale `openEntry` results do not overwrite newer navigation intents. |
 | `linkController.ts` | Link handling and navigation |
-| `onboardingController.ts` | Onboarding orchestration (E2E bypass, starter workspace seeding, iOS first-run bootstrap, default workspace auto-creation, folder workspace choose/open-or-initialize, bundle application, welcome screen callback orchestration). Folder targets register a local workspace first, then initialize the backend against that selected directory/handle; the active flow opens an existing root index when present and seeds starter content otherwise. Legacy provider restore helpers remain for old sync tests/cleanup work, but the active welcome UI no longer exposes remote workspace restore or provider-backed creation. Pure .ts with dependency injection for testability. |
+| `onboardingController.ts` | Onboarding orchestration (E2E bypass, starter workspace seeding, iOS first-run bootstrap, default workspace auto-creation, folder workspace choose/open-or-initialize, bundle application, welcome screen callback orchestration). Folder targets register a local workspace first, then initialize the backend against that selected directory/handle; the active flow opens an existing root index when present and seeds starter content otherwise. Provider-backed workspace creation and remote restore now fail fast with removal messages so callers use local folder flows. Pure .ts with dependency injection for testability. |
 | `workspaceController.ts` | Workspace operations (tree refresh, lazy child loading, validation). Tree refresh now normalizes backend workspace paths that already point at a root markdown file (for example `Diaryx.md`, `README.md`, or `index.md`) before asking the backend to rediscover the root index, which avoids spurious `WorkspaceNotFound` errors on Tauri workspaces that use nonstandard root filenames. |
 
 ## Sync-time tree refresh behavior
 
 `workspaceController.refreshTree` retries transient "workspace/file not found"
-errors during sync-safe writes and avoids replacing a valid tree with a
-temporary empty `.` filesystem tree. This prevents UI collapse during
-snapshot import and initial body bootstrap.
+errors during backend writes and avoids replacing a valid tree with a temporary
+empty `.` filesystem tree. This prevents UI collapse during initial body
+bootstrap or file-system handoff windows.
 
 `entryController.saveEntry` and `saveEntryWithSync` also retry transient write
 errors (`NotFoundError`, `NoModificationAllowedError`) with escalating backoff

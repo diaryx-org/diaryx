@@ -94,9 +94,9 @@ everything → save manifest" it interleaves the work:
   `"DownloadWorkspace cancelled"`. Re-invoking with the same `remote_id`
   resumes from the manifest.
 
-The host UI (`apps/web/src/lib/sync/workspaceProviderService.ts`)
-generates the cancel token, exposes a handle for cancel buttons, and
-preserves the partial workspace on cancel so resume "just works."
+The legacy host provider command layer in `apps/web/src/lib/sync/`
+generates the cancel token for compatibility callers. The active web UI no
+longer exposes remote workspace download controls.
 
 ## Build
 

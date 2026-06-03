@@ -28,8 +28,8 @@ export interface CoreAuthMetadata {
 }
 
 /**
- * Narrow surface that the three concrete AuthServices (wasm, tauri, legacy)
- * all implement. Exactly the 12 methods in `diaryx_core::auth::AuthService`.
+ * Narrow surface that the concrete AuthServices (wasm and tauri)
+ * both implement.
  */
 export interface CoreAuthService {
   isAuthenticated(): Promise<boolean>;
@@ -59,10 +59,4 @@ export interface CoreAuthService {
   deleteDevice(deviceId: string): Promise<void>;
 
   deleteAccount(): Promise<void>;
-
-  createWorkspace(
-    name: string,
-  ): Promise<import("./authService").Workspace>;
-  renameWorkspace(workspaceId: string, newName: string): Promise<void>;
-  deleteWorkspace(workspaceId: string): Promise<void>;
 }

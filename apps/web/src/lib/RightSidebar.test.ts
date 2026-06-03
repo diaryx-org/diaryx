@@ -119,8 +119,6 @@ vi.mock("$lib/auth", () => ({
 // --- Services ---
 vi.mock("$lib/sync/attachmentSyncService", () => ({
   getAttachmentMetadata: vi.fn(() => null),
-  enqueueAttachmentDownload: vi.fn(),
-  isAttachmentSyncEnabled: vi.fn(() => false),
 }));
 
 vi.mock("@/models/services/attachmentService", () => ({

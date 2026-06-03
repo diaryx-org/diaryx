@@ -3,7 +3,6 @@
  */
 
 import { proxyFetch } from "$lib/backend/proxyFetch";
-import { isTauri } from "$lib/backend/interface";
 
 export interface User {
   id: string;
@@ -44,11 +43,6 @@ export interface MagicLinkResponse {
   dev_code?: string;
 }
 
-export interface UserHasDataResponse {
-  has_data: boolean;
-  file_count: number;
-}
-
 export interface NamespaceEntry {
   id: string;
   owner_user_id: string;
@@ -78,52 +72,6 @@ export interface UserStorageUsageResponse {
   warning_threshold: number;
   over_limit: boolean;
   scope: "attachments";
-}
-
-export interface InitAttachmentUploadRequest {
-  entry_path: string;
-  attachment_path: string;
-  hash: string;
-  size_bytes: number;
-  mime_type: string;
-  part_size?: number;
-  total_parts?: number;
-}
-
-export interface InitAttachmentUploadResponse {
-  upload_id: string | null;
-  status: "uploading" | "already_exists";
-  part_size: number;
-  uploaded_parts: number[];
-}
-
-export interface CompleteAttachmentUploadRequest {
-  entry_path: string;
-  attachment_path: string;
-  hash: string;
-  size_bytes: number;
-  mime_type: string;
-}
-
-export interface CompleteAttachmentUploadResponse {
-  ok: boolean;
-  blob_hash: string;
-  r2_key: string;
-  missing_parts: number[] | null;
-}
-
-export interface DownloadAttachmentResponse {
-  bytes: Uint8Array;
-  status: number;
-  contentRange: string | null;
-}
-
-export interface StorageLimitExceededErrorResponse {
-  error: "storage_limit_exceeded";
-  message: string;
-  used_bytes: number;
-  limit_bytes: number;
-  requested_bytes: number;
 }
 
 export interface PasskeyListItem {
@@ -172,15 +120,6 @@ export class AuthService {
     }
   }
 
-  private parseJsonString(raw: string | null | undefined): unknown | null {
-    if (!raw) return null;
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-
   private errorMessageFromBody(data: unknown | null, fallback: string): string {
     if (!data || typeof data !== "object") return fallback;
 
@@ -210,14 +149,6 @@ export class AuthService {
     );
   }
 
-  private formatQuotaMessage(
-    payload: StorageLimitExceededErrorResponse,
-  ): string {
-    const usedMb = (payload.used_bytes / 1024 / 1024).toFixed(1);
-    const limitMb = (payload.limit_bytes / 1024 / 1024).toFixed(1);
-    return `${payload.message} (${usedMb} MB / ${limitMb} MB)`;
-  }
-
   /** Build headers for an authenticated request. If authToken is provided, sets
    *  Authorization: Bearer. Otherwise relies on cookie (browser) or auto-injected
    *  header (Tauri proxyFetch). */
@@ -226,91 +157,6 @@ export class AuthService {
       return { Authorization: `Bearer ${authToken}` };
     }
     return {};
-  }
-
-  private uploadWorkspaceSnapshotWithProgress(
-    authToken: string | undefined,
-    url: string,
-    snapshot: Blob,
-    onUploadProgress: (uploadedBytes: number, totalBytes: number) => void,
-  ): Promise<{ files_imported: number }> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", url);
-      if (authToken) {
-        xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
-      }
-      xhr.withCredentials = true;
-      xhr.setRequestHeader("Content-Type", "application/zip");
-      xhr.responseType = "text";
-
-      xhr.upload.onprogress = (event: ProgressEvent<EventTarget>) => {
-        const total = event.lengthComputable ? event.total : snapshot.size;
-        onUploadProgress(event.loaded, total);
-      };
-
-      xhr.onerror = () => {
-        reject(new AuthError("Failed to upload snapshot", 0));
-      };
-
-      xhr.onabort = () => {
-        reject(new AuthError("Snapshot upload canceled", 0));
-      };
-
-      xhr.onload = () => {
-        const status = xhr.status;
-        const rawResponse =
-          typeof xhr.response === "string" ? xhr.response : xhr.responseText;
-        const parsed = this.parseJsonString(rawResponse);
-
-        if (status >= 200 && status < 300) {
-          if (
-            parsed &&
-            typeof parsed === "object" &&
-            "files_imported" in parsed
-          ) {
-            resolve(parsed as { files_imported: number });
-            return;
-          }
-          // Some deployments return an empty 2xx body for imports.
-          resolve({ files_imported: 0 });
-          return;
-        }
-
-        const retryAfter = xhr.getResponseHeader("Retry-After");
-        if (status === 429) {
-          const waitSuffix = retryAfter ? ` Try again in ${retryAfter}s.` : "";
-          reject(
-            new AuthError(
-              `Snapshot upload rate limit exceeded.${waitSuffix}`,
-              status,
-              parsed,
-            ),
-          );
-          return;
-        }
-
-        if (
-          status === 413 &&
-          parsed &&
-          typeof parsed === "object" &&
-          (parsed as any).error === "storage_limit_exceeded"
-        ) {
-          reject(
-            new AuthError(
-              this.formatQuotaMessage(parsed as StorageLimitExceededErrorResponse),
-              status,
-              parsed,
-            ),
-          );
-          return;
-        }
-
-        reject(new AuthError("Failed to upload snapshot", status, parsed));
-      };
-
-      xhr.send(snapshot);
-    });
   }
 
   /**
@@ -507,127 +353,6 @@ export class AuthService {
   }
 
   /**
-   * Check if user has synced data on the server.
-   */
-  async checkUserHasData(authToken?: string): Promise<UserHasDataResponse> {
-    const response = await proxyFetch(`${this.serverUrl}/api/user/has-data`, {
-      headers: this.authHeaders(authToken),
-    });
-
-    if (!response.ok) {
-      throw new AuthError("Failed to check user data", response.status);
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Download a workspace snapshot zip from the server.
-   */
-  async downloadWorkspaceSnapshot(
-    authToken: string | undefined,
-    workspaceId: string,
-    includeAttachments = true,
-    commitId?: string,
-  ): Promise<Blob> {
-    const url = new URL(
-      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
-    );
-    url.searchParams.set("include_attachments", String(includeAttachments));
-    if (commitId) {
-      url.searchParams.set("commit_id", commitId);
-    }
-
-    const response = await proxyFetch(
-      url.toString(),
-      {
-        headers: this.authHeaders(authToken),
-      },
-    );
-
-    if (!response.ok) {
-      throw new AuthError("Failed to download snapshot", response.status);
-    }
-
-    return response.blob();
-  }
-
-  /**
-   * Upload a workspace snapshot zip to seed server CRDT state.
-   */
-  async uploadWorkspaceSnapshot(
-    authToken: string | undefined,
-    workspaceId: string,
-    snapshot: Blob,
-    mode: "replace" | "merge" = "replace",
-    includeAttachments = true,
-    onUploadProgress?: (uploadedBytes: number, totalBytes: number) => void,
-  ): Promise<{ files_imported: number }> {
-    const url = new URL(
-      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
-    );
-    url.searchParams.set("mode", mode);
-    url.searchParams.set("include_attachments", String(includeAttachments));
-
-    // Tauri should use proxyFetch (native HTTP) to avoid WebView/CORS/XHR edge cases.
-    if (onUploadProgress && typeof XMLHttpRequest !== "undefined" && !isTauri()) {
-      return this.uploadWorkspaceSnapshotWithProgress(
-        authToken,
-        url.toString(),
-        snapshot,
-        onUploadProgress,
-      );
-    }
-
-    const response = await proxyFetch(
-      url.toString(),
-      {
-        method: "POST",
-        headers: {
-          ...this.authHeaders(authToken),
-          "Content-Type": "application/zip",
-        },
-        body: snapshot,
-      },
-    );
-
-    if (!response.ok) {
-      const data = await this.parseErrorBody(response);
-      if (response.status === 429) {
-        const retryAfter = response.headers.get("Retry-After");
-        const waitSuffix = retryAfter ? ` Try again in ${retryAfter}s.` : "";
-        throw new AuthError(
-          `Snapshot upload rate limit exceeded.${waitSuffix}`,
-          response.status,
-          data,
-        );
-      }
-      if (
-        response.status === 413 &&
-        data &&
-        typeof data === "object" &&
-        (data as any).error === "storage_limit_exceeded"
-      ) {
-        throw new AuthError(
-          this.formatQuotaMessage(data as StorageLimitExceededErrorResponse),
-          response.status,
-          data,
-        );
-      }
-      throw new AuthError("Failed to upload snapshot", response.status, data);
-    }
-    try {
-      const parsed = await response.json();
-      if (parsed && typeof parsed === "object" && "files_imported" in parsed) {
-        return parsed as { files_imported: number };
-      }
-      return { files_imported: 0 };
-    } catch {
-      return { files_imported: 0 };
-    }
-  }
-
-  /**
    * List namespaces owned by the authenticated user.
    */
   async listNamespaces(authToken?: string): Promise<NamespaceEntry[]> {
@@ -640,235 +365,6 @@ export class AuthService {
     }
 
     return response.json();
-  }
-
-  /**
-   * Initialize a resumable attachment upload session.
-   */
-  async initAttachmentUpload(
-    authToken: string | undefined,
-    workspaceId: string,
-    request: InitAttachmentUploadRequest,
-  ): Promise<InitAttachmentUploadResponse> {
-    const response = await proxyFetch(
-      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/uploads`,
-      {
-        method: "POST",
-        headers: {
-          ...this.authHeaders(authToken),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(request),
-      },
-    );
-
-    if (!response.ok) {
-      const data = await this.parseErrorBody(response);
-      if (
-        response.status === 413 &&
-        data &&
-        typeof data === "object" &&
-        (data as any).error === "storage_limit_exceeded"
-      ) {
-        throw new AuthError(
-          this.formatQuotaMessage(data as StorageLimitExceededErrorResponse),
-          response.status,
-          data,
-        );
-      }
-      throw new AuthError(
-        "Failed to initialize attachment upload",
-        response.status,
-        data,
-      );
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Upload one attachment multipart chunk.
-   */
-  async uploadAttachmentPart(
-    authToken: string | undefined,
-    workspaceId: string,
-    uploadId: string,
-    partNo: number,
-    bytes: ArrayBuffer,
-  ): Promise<{ ok: boolean; part_no: number }> {
-    const response = await proxyFetch(
-      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/uploads/${encodeURIComponent(uploadId)}/parts/${partNo}`,
-      {
-        method: "PUT",
-        headers: {
-          ...this.authHeaders(authToken),
-          "Content-Type": "application/octet-stream",
-        },
-        body: bytes,
-      },
-    );
-
-    if (!response.ok) {
-      throw new AuthError("Failed to upload attachment part", response.status);
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Complete a resumable attachment upload session.
-   * Returns a conflict payload when missing parts are detected.
-   */
-  async completeAttachmentUpload(
-    authToken: string | undefined,
-    workspaceId: string,
-    uploadId: string,
-    request: CompleteAttachmentUploadRequest,
-  ): Promise<CompleteAttachmentUploadResponse> {
-    const response = await proxyFetch(
-      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/uploads/${encodeURIComponent(uploadId)}/complete`,
-      {
-        method: "POST",
-        headers: {
-          ...this.authHeaders(authToken),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(request),
-      },
-    );
-
-    if (response.status === 409) {
-      return response.json();
-    }
-
-    if (!response.ok) {
-      const data = await this.parseErrorBody(response);
-      if (
-        response.status === 413 &&
-        data &&
-        typeof data === "object" &&
-        (data as any).error === "storage_limit_exceeded"
-      ) {
-        throw new AuthError(
-          this.formatQuotaMessage(data as StorageLimitExceededErrorResponse),
-          response.status,
-          data,
-        );
-      }
-      throw new AuthError(
-        "Failed to complete attachment upload",
-        response.status,
-        data,
-      );
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Download attachment bytes by hash for a workspace.
-   */
-  async downloadAttachment(
-    authToken: string | undefined,
-    workspaceId: string,
-    hash: string,
-    range?: { start: number; end?: number },
-  ): Promise<DownloadAttachmentResponse> {
-    const headers: Record<string, string> = {
-      ...this.authHeaders(authToken),
-    };
-    if (range) {
-      headers.Range = `bytes=${range.start}-${range.end ?? ""}`;
-    }
-
-    const response = await proxyFetch(
-      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(hash)}`,
-      {
-        headers,
-      },
-    );
-
-    if (!response.ok) {
-      throw new AuthError("Failed to download attachment", response.status);
-    }
-
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    return {
-      bytes,
-      status: response.status,
-      contentRange: response.headers.get("Content-Range"),
-    };
-  }
-
-  // =========================================================================
-  // Workspace CRUD
-  // =========================================================================
-
-  /**
-   * Create a new workspace.
-   * Returns the created workspace object.
-   * Throws 403 if workspace limit reached, 409 if name taken.
-   */
-  async createWorkspace(authToken: string | undefined, name: string): Promise<Workspace> {
-    const response = await proxyFetch(`${this.serverUrl}/api/workspaces`, {
-      method: "POST",
-      headers: {
-        ...this.authHeaders(authToken),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ name }),
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      if (response.status === 403) {
-        throw new AuthError(data.error || "Workspace limit reached", 403);
-      }
-      if (response.status === 409) {
-        throw new AuthError(data.error || "Workspace name already taken", 409);
-      }
-      throw new AuthError(data.error || "Failed to create workspace", response.status);
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Rename a workspace.
-   */
-  async renameWorkspace(authToken: string | undefined, workspaceId: string, newName: string): Promise<void> {
-    const response = await proxyFetch(`${this.serverUrl}/api/workspaces/${workspaceId}`, {
-      method: "PATCH",
-      headers: {
-        ...this.authHeaders(authToken),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ name: newName }),
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new AuthError(data.error || "Failed to rename workspace", response.status);
-    }
-  }
-
-  /**
-   * Delete a workspace.
-   */
-  async deleteWorkspace(authToken: string | undefined, workspaceId: string): Promise<void> {
-    const response = await proxyFetch(`${this.serverUrl}/api/workspaces/${workspaceId}`, {
-      method: "DELETE",
-      headers: this.authHeaders(authToken),
-    });
-
-    if (response.status === 404) {
-      return;
-    }
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new AuthError(data.error || "Failed to delete workspace", response.status);
-    }
   }
 
   // =========================================================================

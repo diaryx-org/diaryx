@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ---------------------------------------------------------------------------
 
 const mocks = vi.hoisted(() => ({
-  downloadWorkspace: vi.fn(),
   fetchPluginRegistry: vi.fn(),
   fetchStarterWorkspaceRegistry: vi.fn(),
   fetchStarterWorkspaceZip: vi.fn(),
@@ -16,7 +15,6 @@ const mocks = vi.hoisted(() => ({
   installRegistryPlugin: vi.fn(),
   isTauri: vi.fn(() => false),
   isIOS: vi.fn(() => false),
-  linkWorkspace: vi.fn(),
   loadAllPlugins: vi.fn(),
   planBundleApply: vi.fn(),
   executeBundleApply: vi.fn(),
@@ -64,11 +62,6 @@ vi.mock("$lib/plugins/pluginRegistry", () => ({
 
 vi.mock("$lib/plugins/pluginInstallService", () => ({
   installRegistryPlugin: mocks.installRegistryPlugin,
-}));
-
-vi.mock("$lib/sync/workspaceProviderService", () => ({
-  downloadWorkspace: mocks.downloadWorkspace,
-  linkWorkspace: mocks.linkWorkspace,
 }));
 
 vi.mock("$lib/sync/builtinProviders", () => ({
@@ -1037,126 +1030,27 @@ describe("onboardingController", () => {
   // -------------------------------------------------------------------------
 
   describe("handleCreateWithProvider", () => {
-    it("infers registry plugins from restored workspace frontmatter", async () => {
-      const providerOverrideBytes = new Uint8Array([1, 2, 3, 4]).buffer;
-      const pluginConfig = new Map<string, unknown>([
-        ["diaryx.sync", new Map<string, unknown>()],
-        ["diaryx.daily", { enabled: true }],
-        ["custom.local", { enabled: true }],
-      ]);
-      const frontmatter = new Map<string, unknown>([
-        ["plugins", pluginConfig],
-        ["disabled_plugins", ["diaryx.hidden"]],
-      ]);
-      const restoredBackend = {
-        getWorkspacePath: vi.fn(() => "/workspace/README.md"),
-      };
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn().mockResolvedValue("/workspace/README.md"),
-        getFrontmatter: vi.fn().mockResolvedValue(frontmatter),
-      };
-
-      mocks.downloadWorkspace.mockResolvedValue({
-        localId: "workspace-1",
-        filesImported: 7,
-      });
-      mocks.getBackend.mockResolvedValue(restoredBackend);
-      mocks.fetchPluginRegistry.mockResolvedValue({
-        plugins: [
-          { id: "diaryx.sync", name: "Sync" },
-          { id: "diaryx.daily", name: "Daily" },
-          { id: "diaryx.hidden", name: "Hidden" },
-        ],
-      });
-
-      const deps = {
-        autoCreateDeps: {
-          createApi: vi.fn(() => api),
-          initEventSubscription: vi.fn(() => () => {}),
-          persistPermissionDefaults: vi.fn(),
-          setBackend: vi.fn(),
-          setCleanupEventSubscription: vi.fn(),
-        },
-        dismissLaunchOverlay: vi.fn(),
-        expandNode: vi.fn(),
-        getTree: vi.fn(() => ({ path: "/workspace/README.md" })),
-        installLocalPlugin: vi.fn().mockResolvedValue(undefined),
-        openEntry: vi.fn().mockResolvedValue(undefined),
-        persistPermissionDefaults: vi.fn(),
-        refreshTree: vi.fn().mockResolvedValue(undefined),
-        runValidation: vi.fn().mockResolvedValue(undefined),
-        switchWorkspace: vi.fn(),
-      };
-
-      const result = await handleCreateWithProvider(
-        deps as any,
-        null,
-        "diaryx.sync",
-        [{
-          targetPluginId: "diaryx.sync",
-          fileName: "sync-local.wasm",
-          bytes: providerOverrideBytes,
-        }],
-        {
-          id: "remote-1",
-          metadata: {
-            name: "Restored Workspace",
-            provider: "diaryx.sync",
-          },
-        },
-      );
-
-      expect(mocks.downloadWorkspace).toHaveBeenCalledWith(
-        "diaryx.sync",
-        {
-          remoteId: "remote-1",
-          name: "Restored Workspace",
-          link: true,
-        },
-        undefined,
-        undefined,
-        expect.any(Uint8Array),
-      );
-      expect(mocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-1");
-      expect(mocks.loadAllPlugins).toHaveBeenCalledTimes(1);
-      expect(deps.installLocalPlugin).toHaveBeenCalledWith(
-        providerOverrideBytes,
-        "sync-local",
-      );
-      expect(api.resolveWorkspaceRootIndexPath).toHaveBeenCalledWith("/workspace/README.md");
-      expect(mocks.installRegistryPlugin).toHaveBeenCalledTimes(2);
-      expect(mocks.installRegistryPlugin).toHaveBeenNthCalledWith(1, {
-        id: "diaryx.daily",
-        name: "Daily",
-      });
-      expect(mocks.installRegistryPlugin).toHaveBeenNthCalledWith(2, {
-        id: "diaryx.hidden",
-        name: "Hidden",
-      });
-      expect(result).toEqual({ spotlightSteps: null });
-    });
-
-    it("creates new workspace with provider link when no restoreNamespace", async () => {
+    it("creates a local workspace when no provider or restore namespace is supplied", async () => {
       const { deps } = makeCreateWithProviderDeps();
 
       const result = await handleCreateWithProvider(
         deps as any,
         { plugins: [] } as any,
-        "my-sync-plugin",
+        null,
         null,
         null,
       );
 
-      expect(mocks.linkWorkspace).toHaveBeenCalledWith(
-        "my-sync-plugin",
-        { localId: "ws-1", name: "My Workspace" },
-      );
+      expect(deps.refreshTree).toHaveBeenCalled();
+      expect(deps.expandNode).toHaveBeenCalledWith("/workspace/index.md");
+      expect(deps.openEntry).toHaveBeenCalledWith("/workspace/index.md");
+      expect(deps.runValidation).toHaveBeenCalled();
+      expect(deps.dismissLaunchOverlay).toHaveBeenCalled();
       expect(result.spotlightSteps).toBeNull();
     });
 
-    it("returns spotlight steps from bundle when no restoreNamespace", async () => {
+    it("returns spotlight steps from the selected bundle", async () => {
       const { deps } = makeCreateWithProviderDeps();
-
       const bundle = {
         plugins: [],
         spotlight: [{ step: "intro" }],
@@ -1173,428 +1067,14 @@ describe("onboardingController", () => {
       expect(result.spotlightSteps).toEqual([{ step: "intro" }]);
     });
 
-    it("skips link when no providerPluginId on new workspace path", async () => {
-      const { deps } = makeCreateWithProviderDeps();
-
-      await handleCreateWithProvider(
-        deps as any,
-        { plugins: [] } as any,
-        null,
-        null,
-        null,
-      );
-
-      expect(mocks.linkWorkspace).not.toHaveBeenCalled();
-    });
-
-    it("uses builtin provider (null wasm) for restore path", async () => {
-      mocks.downloadWorkspace.mockResolvedValue({ localId: "ws-1", filesImported: 3 });
-      const restoredBackend = { getWorkspacePath: vi.fn(() => "/ws/README.md") };
-      mocks.getBackend.mockResolvedValue(restoredBackend);
-
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn().mockResolvedValue(null),
-        getFrontmatter: vi.fn(),
-      };
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => api),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await handleCreateWithProvider(
-        deps as any,
-        null,
-        "builtin.icloud",
-        null,
-        { id: "remote-1", metadata: { name: "iCloud WS" } },
-      );
-
-      expect(mocks.downloadWorkspace).toHaveBeenCalledWith(
-        "builtin.icloud",
-        expect.objectContaining({ remoteId: "remote-1", name: "iCloud WS" }),
-        undefined,
-        undefined,
-        null,
-      );
-    });
-
-    it("throws user-friendly error when download is unsupported", async () => {
-      mocks.downloadWorkspace.mockRejectedValue(
-        new Error("only available in host-integrated runtimes"),
-      );
-
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn(),
-        getFrontmatter: vi.fn(),
-      };
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => api),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await expect(
-        handleCreateWithProvider(
-          deps as any,
-          null,
-          "builtin.icloud",
-          null,
-          { id: "remote-1", metadata: { name: "WS" } },
-        ),
-      ).rejects.toThrow("does not support downloading workspaces");
-    });
-
-    it("re-throws non-unsupported download errors", async () => {
-      mocks.downloadWorkspace.mockRejectedValue(new Error("network timeout"));
-
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn(),
-        getFrontmatter: vi.fn(),
-      };
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => api),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await expect(
-        handleCreateWithProvider(
-          deps as any,
-          null,
-          "builtin.icloud",
-          null,
-          { id: "remote-1", metadata: { name: "WS" } },
-        ),
-      ).rejects.toThrow("network timeout");
-    });
-
-    it("fetches plugin wasm from registry when no override and not builtin", async () => {
-      const wasmBytes = new Uint8Array([10, 20, 30]);
-      mocks.fetchPluginRegistry.mockResolvedValue({
-        plugins: [
-          { id: "custom.sync", name: "Custom Sync", artifact: { url: "https://example.com/plugin.wasm" } },
-        ],
-      });
-      mocks.proxyFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(wasmBytes.buffer),
-      });
-      mocks.downloadWorkspace.mockResolvedValue({ localId: "ws-2", filesImported: 5 });
-      const restoredBackend = { getWorkspacePath: vi.fn(() => "/ws/README.md") };
-      mocks.getBackend.mockResolvedValue(restoredBackend);
-
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn().mockResolvedValue(null),
-        getFrontmatter: vi.fn(),
-      };
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => api),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await handleCreateWithProvider(
-        deps as any,
-        null,
-        "custom.sync",
-        null,
-        { id: "remote-1", metadata: { name: "WS" } },
-      );
-
-      expect(mocks.proxyFetch).toHaveBeenCalledWith("https://example.com/plugin.wasm");
-      expect(mocks.downloadWorkspace).toHaveBeenCalledWith(
-        "custom.sync",
-        expect.any(Object),
-        undefined,
-        undefined,
-        expect.any(Uint8Array),
-      );
-    });
-
-    it("throws when plugin not found in registry and no override", async () => {
-      mocks.fetchPluginRegistry.mockResolvedValue({ plugins: [] });
-
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn(),
-        getFrontmatter: vi.fn(),
-      };
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => api),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await expect(
-        handleCreateWithProvider(
-          deps as any,
-          null,
-          "unknown.plugin",
-          null,
-          { id: "remote-1", metadata: { name: "WS" } },
-        ),
-      ).rejects.toThrow("Could not download the sync plugin");
-    });
-
-    it("throws when proxyFetch returns non-ok response", async () => {
-      mocks.fetchPluginRegistry.mockResolvedValue({
-        plugins: [
-          { id: "custom.sync", artifact: { url: "https://example.com/plugin.wasm" } },
-        ],
-      });
-      mocks.proxyFetch.mockResolvedValue({ ok: false });
-
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn(),
-        getFrontmatter: vi.fn(),
-      };
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => api),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await expect(
-        handleCreateWithProvider(
-          deps as any,
-          null,
-          "custom.sync",
-          null,
-          { id: "remote-1", metadata: { name: "WS" } },
-        ),
-      ).rejects.toThrow("Could not download the sync plugin");
-    });
-
-    it("falls back to metadata.provider when providerPluginId is null", async () => {
-      mocks.downloadWorkspace.mockResolvedValue({ localId: "ws-1", filesImported: 1 });
-      const restoredBackend = { getWorkspacePath: vi.fn(() => "/ws/README.md") };
-      mocks.getBackend.mockResolvedValue(restoredBackend);
-
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn().mockResolvedValue(null),
-        getFrontmatter: vi.fn(),
-      };
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => api),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await handleCreateWithProvider(
-        deps as any,
-        null,
-        null,
-        null,
-        { id: "remote-1", metadata: { provider: "builtin.icloud", name: "WS" } },
-      );
-
-      expect(mocks.downloadWorkspace).toHaveBeenCalledWith(
-        "builtin.icloud",
-        expect.any(Object),
-        undefined,
-        undefined,
-        null,
-      );
-    });
-
-    it("defaults provider to diaryx.sync when no providerPluginId or metadata.provider", async () => {
-      mocks.fetchPluginRegistry.mockResolvedValue({
-        plugins: [
-          { id: "diaryx.sync", artifact: { url: "https://example.com/sync.wasm" } },
-        ],
-      });
-      const wasmBytes = new Uint8Array([1, 2]);
-      mocks.proxyFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(wasmBytes.buffer),
-      });
-      mocks.downloadWorkspace.mockResolvedValue({ localId: "ws-1", filesImported: 1 });
-      const restoredBackend = { getWorkspacePath: vi.fn(() => "/ws/README.md") };
-      mocks.getBackend.mockResolvedValue(restoredBackend);
-
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn().mockResolvedValue(null),
-        getFrontmatter: vi.fn(),
-      };
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => api),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await handleCreateWithProvider(
-        deps as any,
-        null,
-        null,
-        null,
-        { id: "remote-1", metadata: null },
-      );
-
-      expect(mocks.downloadWorkspace).toHaveBeenCalledWith(
-        "diaryx.sync",
-        expect.objectContaining({ name: "Restored Workspace" }),
-        undefined,
-        undefined,
-        expect.any(Uint8Array),
-      );
-    });
-
-    it("skips overridden plugins during registry inference", async () => {
-      const providerOverrideBytes = new Uint8Array([1]).buffer;
-      const pluginOverrideBytes = new Uint8Array([2]).buffer;
-      const frontmatter = {
-        plugins: { "diaryx.daily": { enabled: true }, "custom.overridden": {} },
-      };
-      const restoredBackend = { getWorkspacePath: vi.fn(() => "/ws/README.md") };
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn().mockResolvedValue("/ws/README.md"),
-        getFrontmatter: vi.fn().mockResolvedValue(frontmatter),
-      };
-
-      mocks.downloadWorkspace.mockResolvedValue({ localId: "ws-1", filesImported: 3 });
-      mocks.getBackend.mockResolvedValue(restoredBackend);
-      mocks.fetchPluginRegistry.mockResolvedValue({
-        plugins: [
-          { id: "diaryx.daily", name: "Daily" },
-          { id: "custom.overridden", name: "Overridden" },
-        ],
-      });
-
-      const deps = {
-        autoCreateDeps: {
-          createApi: vi.fn(() => api),
-          initEventSubscription: vi.fn(() => () => {}),
-          persistPermissionDefaults: vi.fn(),
-          setBackend: vi.fn(),
-          setCleanupEventSubscription: vi.fn(),
-        },
-        dismissLaunchOverlay: vi.fn(),
-        expandNode: vi.fn(),
-        getTree: vi.fn(() => null),
-        installLocalPlugin: vi.fn().mockResolvedValue(undefined),
-        openEntry: vi.fn().mockResolvedValue(undefined),
-        persistPermissionDefaults: vi.fn(),
-        refreshTree: vi.fn().mockResolvedValue(undefined),
-        runValidation: vi.fn().mockResolvedValue(undefined),
-        switchWorkspace: vi.fn(),
-      };
-
-      await handleCreateWithProvider(
-        deps as any,
-        null,
-        "builtin.icloud",
-        [
-          { targetPluginId: "builtin.icloud", bytes: providerOverrideBytes, fileName: "icloud.wasm" },
-          { targetPluginId: "custom.overridden", bytes: pluginOverrideBytes, fileName: "custom.wasm" },
-        ],
-        { id: "remote-1", metadata: { name: "WS" } },
-      );
-
-      // custom.overridden should be skipped by installRegistryPlugin
-      expect(mocks.installRegistryPlugin).toHaveBeenCalledTimes(1);
-      expect(mocks.installRegistryPlugin).toHaveBeenCalledWith({ id: "diaryx.daily", name: "Daily" });
-    });
-
-    it("tolerates plugin inference failure on restore (non-fatal)", async () => {
-      mocks.downloadWorkspace.mockResolvedValue({ localId: "ws-1", filesImported: 1 });
-      const restoredBackend = { getWorkspacePath: vi.fn(() => "/ws/README.md") };
-      mocks.getBackend.mockResolvedValue(restoredBackend);
-
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn().mockRejectedValue(new Error("resolve error")),
-        getFrontmatter: vi.fn(),
-      };
-
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const deps = {
-        autoCreateDeps: {
-          createApi: vi.fn(() => api),
-          initEventSubscription: vi.fn(() => () => {}),
-          persistPermissionDefaults: vi.fn(),
-          setBackend: vi.fn(),
-          setCleanupEventSubscription: vi.fn(),
-        },
-        dismissLaunchOverlay: vi.fn(),
-        expandNode: vi.fn(),
-        getTree: vi.fn(() => null),
-        installLocalPlugin: vi.fn().mockResolvedValue(undefined),
-        openEntry: vi.fn().mockResolvedValue(undefined),
-        persistPermissionDefaults: vi.fn(),
-        refreshTree: vi.fn().mockResolvedValue(undefined),
-        runValidation: vi.fn().mockResolvedValue(undefined),
-        switchWorkspace: vi.fn(),
-      };
-
-      // Should not throw
-      await handleCreateWithProvider(
-        deps as any,
-        null,
-        "builtin.icloud",
-        null,
-        { id: "remote-1", metadata: { name: "WS" } },
-      );
-
-      expect(warnSpy).toHaveBeenCalled();
-      warnSpy.mockRestore();
-    });
-
-    it("installs overrides in new workspace path (no restoreNamespace)", async () => {
+    it("installs local plugin overrides after creating the workspace", async () => {
       const { deps } = makeCreateWithProviderDeps();
       const overrideBytes = new ArrayBuffer(8);
 
       await handleCreateWithProvider(
         deps as any,
         { plugins: [{ plugin_id: "p1" }, { plugin_id: "p2" }] } as any,
-        "my-sync",
+        null,
         [{ targetPluginId: "p1", bytes: overrideBytes, fileName: "p1.wasm" }],
         null,
       );
@@ -1602,139 +1082,40 @@ describe("onboardingController", () => {
       expect(deps.installLocalPlugin).toHaveBeenCalledWith(overrideBytes, "p1");
     });
 
-    it("warns when restored workspace references unknown plugin", async () => {
-      const frontmatter = { plugins: { "unknown.plugin": {} } };
-      const restoredBackend = { getWorkspacePath: vi.fn(() => "/ws/README.md") };
-      const api = {
-        resolveWorkspaceRootIndexPath: vi.fn().mockResolvedValue("/ws/README.md"),
-        getFrontmatter: vi.fn().mockResolvedValue(frontmatter),
-      };
+    it("rejects provider-backed workspace creation", async () => {
+      const { deps } = makeCreateWithProviderDeps();
 
-      mocks.downloadWorkspace.mockResolvedValue({ localId: "ws-1", filesImported: 1 });
-      mocks.getBackend.mockResolvedValue(restoredBackend);
-      mocks.fetchPluginRegistry.mockResolvedValue({ plugins: [] });
-
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const deps = {
-        autoCreateDeps: {
-          createApi: vi.fn(() => api),
-          initEventSubscription: vi.fn(() => () => {}),
-          persistPermissionDefaults: vi.fn(),
-          setBackend: vi.fn(),
-          setCleanupEventSubscription: vi.fn(),
-        },
-        dismissLaunchOverlay: vi.fn(),
-        expandNode: vi.fn(),
-        getTree: vi.fn(() => null),
-        installLocalPlugin: vi.fn().mockResolvedValue(undefined),
-        openEntry: vi.fn().mockResolvedValue(undefined),
-        persistPermissionDefaults: vi.fn(),
-        refreshTree: vi.fn().mockResolvedValue(undefined),
-        runValidation: vi.fn().mockResolvedValue(undefined),
-        switchWorkspace: vi.fn(),
-      };
-
-      await handleCreateWithProvider(
-        deps as any,
-        null,
-        "builtin.icloud",
-        null,
-        { id: "remote-1", metadata: { name: "WS" } },
+      await expect(
+        handleCreateWithProvider(
+          deps as any,
+          { plugins: [] } as any,
+          "my-sync-plugin",
+          null,
+          null,
+        ),
+      ).rejects.toThrow(
+        "Provider-backed workspace creation has been removed. Create or open a local folder workspace instead.",
       );
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("unknown.plugin"),
+      expect(deps.autoCreateDeps.createLocalWorkspace).not.toHaveBeenCalled();
+    });
+
+    it("rejects remote workspace restore", async () => {
+      const { deps } = makeCreateWithProviderDeps();
+
+      await expect(
+        handleCreateWithProvider(
+          deps as any,
+          null,
+          null,
+          null,
+          { id: "remote-1", metadata: { name: "Restored Workspace" } },
+        ),
+      ).rejects.toThrow(
+        "Remote workspace restore has been removed. Create or open a local folder workspace instead.",
       );
-      expect(mocks.installRegistryPlugin).not.toHaveBeenCalled();
-      warnSpy.mockRestore();
-    });
 
-    it("handles 'not implemented' download error as unsupported", async () => {
-      mocks.downloadWorkspace.mockRejectedValue(new Error("not implemented"));
-
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => ({
-              resolveWorkspaceRootIndexPath: vi.fn(),
-              getFrontmatter: vi.fn(),
-            })),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await expect(
-        handleCreateWithProvider(
-          deps as any,
-          null,
-          "builtin.icloud",
-          null,
-          { id: "remote-1", metadata: { name: "WS" } },
-        ),
-      ).rejects.toThrow("does not support downloading workspaces");
-    });
-
-    it("handles 'Unknown command' download error as unsupported", async () => {
-      mocks.downloadWorkspace.mockRejectedValue(new Error("Unknown command download_workspace"));
-
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => ({
-              resolveWorkspaceRootIndexPath: vi.fn(),
-              getFrontmatter: vi.fn(),
-            })),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await expect(
-        handleCreateWithProvider(
-          deps as any,
-          null,
-          "builtin.icloud",
-          null,
-          { id: "remote-1", metadata: { name: "WS" } },
-        ),
-      ).rejects.toThrow("does not support downloading workspaces");
-    });
-
-    it("handles 'No plugin X handles command' download error as unsupported", async () => {
-      mocks.downloadWorkspace.mockRejectedValue(new Error("No plugin foo handles command bar"));
-
-      const { deps } = makeCreateWithProviderDeps({
-        providerDeps: {
-          autoCreateDeps: {
-            createApi: vi.fn(() => ({
-              resolveWorkspaceRootIndexPath: vi.fn(),
-              getFrontmatter: vi.fn(),
-            })),
-            initEventSubscription: vi.fn(() => () => {}),
-            persistPermissionDefaults: vi.fn(),
-            setBackend: vi.fn(),
-            setCleanupEventSubscription: vi.fn(),
-          },
-        },
-      });
-
-      await expect(
-        handleCreateWithProvider(
-          deps as any,
-          null,
-          "builtin.icloud",
-          null,
-          { id: "remote-1", metadata: { name: "WS" } },
-        ),
-      ).rejects.toThrow("does not support downloading workspaces");
+      expect(deps.autoCreateDeps.createLocalWorkspace).not.toHaveBeenCalled();
     });
   });
 

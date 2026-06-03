@@ -36,7 +36,6 @@
     Replace,
     Eye,
     Settings2,
-    CloudDownload,
     Download,
     CheckCircle2,
     Loader2,
@@ -60,17 +59,13 @@
   import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
   import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
   import {
-    getAttachmentMetadata,
-    enqueueAttachmentDownload,
-    isAttachmentSyncEnabled,
-  } from "$lib/sync/attachmentSyncService";
-  import {
     getAttachmentAvailability,
     getAttachmentMediaKind,
     getMimeType,
     getAttachmentThumbnailUrl,
     isPreviewableAttachmentKind,
   } from "@/models/services/attachmentService";
+  import { getAttachmentMetadata } from "$lib/sync/attachmentSyncService";
   import { parseLinkDisplay } from "$lib/utils/linkParser";
   import MoveConfigDialog from "$lib/components/MoveConfigDialog.svelte";
 
@@ -331,43 +326,6 @@
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
-
-  function downloadAttachment(attachPath: string): void {
-    if (!entry) return;
-    const meta = getAttachmentMetadata(entry.path, attachPath);
-    if (!meta) return;
-    attachmentStatuses.set(attachPath, 'downloading');
-    attachmentStatuses = new Map(attachmentStatuses);
-    enqueueAttachmentDownload({
-      workspaceId: meta.workspaceId,
-      entryPath: entry.path,
-      attachmentPath: attachPath,
-      hash: meta.hash,
-      mimeType: meta.mimeType,
-      sizeBytes: meta.sizeBytes,
-    });
-    // Also bump this file to the front of the deferred download queue
-    // (in case it was deferred during initial workspace download).
-    try {
-      import("$lib/sync/deferredFileQueue").then(({ prioritizeFile }) => {
-        prioritizeFile(`files/${attachPath}`);
-      }).catch(() => {});
-    } catch { /* deferred queue may not be initialized */ }
-  }
-
-  function downloadAllRemoteAttachments(): void {
-    if (!entry) return;
-    for (const attachment of getAttachments()) {
-      const attachPath = getAttachmentPath(attachment);
-      if (attachmentStatuses.get(attachPath) === 'remote') {
-        downloadAttachment(attachPath);
-      }
-    }
-  }
-
-  const hasRemoteAttachments = $derived(
-    [...attachmentStatuses.values()].some(s => s === 'remote')
-  );
 
   // Attachment thumbnail cache (attachPath -> blob URL)
   let attachmentThumbnails = $state<Map<string, string>>(new Map());
@@ -953,18 +911,6 @@
                               </Button>
                               {#if status === 'local'}
                                 <CheckCircle2 class="size-3 text-green-500" />
-                              {:else if status === 'downloading'}
-                                <Loader2 class="size-3 text-muted-foreground animate-spin" />
-                              {:else if status === 'remote'}
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  class="size-11 md:size-5"
-                                  onclick={(e: MouseEvent) => { e.stopPropagation(); downloadAttachment(attachPath); }}
-                                  aria-label="Download attachment"
-                                >
-                                  <Download class="size-4 md:size-3 text-muted-foreground" />
-                                </Button>
                               {/if}
                               <Button
                                 variant="ghost"
@@ -979,17 +925,6 @@
                           </div>
                         {/each}
                       </div>
-                      {#if isAttachmentSyncEnabled() && hasRemoteAttachments}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          class="w-full h-11 md:h-7 text-xs mb-2"
-                          onclick={() => downloadAllRemoteAttachments()}
-                        >
-                          <CloudDownload class="size-3 mr-1" />
-                          Download All
-                        </Button>
-                      {/if}
                     {:else}
                       <p class="text-xs text-muted-foreground mb-2">No attachments</p>
                     {/if}

@@ -5,7 +5,7 @@ Platform-agnostic authentication for the Diaryx sync server.
 ## Architecture
 
 `AuthService<C>` is the single source of truth for the magic-link flow,
-session management, device management, and workspace CRUD. All platform
+session management, device management, and account deletion. All platform
 differences are encapsulated in a concrete `AuthenticatedClient`
 implementation that the service wraps:
 
@@ -24,7 +24,7 @@ somewhere platform-appropriate. The service never touches the raw token.
 
 | Type                   | Description                                                                     |
 | ---------------------- | ------------------------------------------------------------------------------- |
-| `AuthService`          | Magic link, `get_me`, device + workspace CRUD, account deletion                 |
+| `AuthService`          | Magic link, `get_me`, device management, account deletion                       |
 | `AuthenticatedClient`  | Trait bundling authenticated HTTP + `store/clear_session_token` + metadata I/O |
 | `AuthMetadata`         | Non-secret session metadata (`email`, `workspace_id`)                           |
 | `AuthError`            | `{ message, status_code, devices }` — `devices` populated on 403 device-limit  |
@@ -53,7 +53,7 @@ status messages.
   `apps/tauri/src-tauri/src/auth_client.rs` stores the token in the OS
   keyring (`org.diaryx.app`/`session_token`) and writes non-secret metadata
   (server URL + `email`/`workspace_id`) to `<app_data>/auth.json`. The
-  twelve `AuthService` methods are exposed to the web layer via the
+  `AuthService` methods are exposed to the web layer via the
   `auth_*` Tauri IPC commands in `auth_commands.rs`.
 - **Browser** — `WasmAuthenticatedClient` in `crates/diaryx_wasm/src/auth.rs`
   delegates HTTP to a JavaScript `fetch` callback (which runs

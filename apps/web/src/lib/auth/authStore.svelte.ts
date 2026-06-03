@@ -18,13 +18,7 @@ import {
   type PasskeyListItem,
   AuthError,
   type NamespaceEntry,
-  type UserHasDataResponse,
   type UserStorageUsageResponse,
-  type InitAttachmentUploadRequest,
-  type InitAttachmentUploadResponse,
-  type CompleteAttachmentUploadRequest,
-  type CompleteAttachmentUploadResponse,
-  type DownloadAttachmentResponse,
   isWorkspaceNamespace,
 } from "./authService";
 import { coreAuthService, setCoreAuthServerUrl } from "./coreAuthRouter";
@@ -470,7 +464,7 @@ export function setServerUrl(url: string | null): void {
   if (url) {
     localStorage.setItem(STORAGE_KEYS.SERVER_URL, url);
     // Legacy `authService` powers the non-migrated endpoints (passkeys,
-    // billing, snapshots, attachments). The new `coreAuthService` picks up
+    // billing, namespaces). The new `coreAuthService` picks up
     // the URL change via `setCoreAuthServerUrl` below.
     authService = createAuthService(url);
     void setCoreAuthServerUrl(url);
@@ -535,7 +529,7 @@ export async function verifyMagicLink(token: string, customDeviceName?: string, 
     );
 
     // Tauri: mirror the token into the legacy credential store so that
-    // non-migrated endpoints (passkeys, billing, snapshots) can still
+    // non-migrated endpoints (passkeys, billing, namespaces) can still
     // inject it as a Bearer header via proxyFetch. On the browser the
     // token is stored in an HttpOnly cookie by the server and JS never
     // sees it.
@@ -861,42 +855,6 @@ function getDeviceName(): string {
 }
 
 // ============================================================================
-// Workspace CRUD (server-side)
-// ============================================================================
-
-/**
- * Create a new workspace on the server.
- * Refreshes the workspace list on success.
- */
-export async function createServerWorkspace(name: string): Promise<Workspace> {
-  if (!state.serverUrl) throw new Error("Not authenticated");
-  const ws = await coreAuthService.createWorkspace(name);
-  await refreshUserInfo();
-  return ws;
-}
-
-/**
- * Rename a workspace on the server.
- * Refreshes the workspace list on success.
- */
-export async function renameServerWorkspace(workspaceId: string, newName: string): Promise<void> {
-  if (!state.serverUrl) throw new Error("Not authenticated");
-  await coreAuthService.renameWorkspace(workspaceId, newName);
-  await refreshUserInfo();
-}
-
-/**
- * Delete a workspace on the server.
- * Refreshes the workspace list on success.
- */
-export async function deleteServerWorkspace(workspaceId: string): Promise<void> {
-  if (!state.serverUrl) throw new Error("Not authenticated");
-  await coreAuthService.deleteWorkspace(workspaceId);
-  await refreshUserInfo();
-  await refreshUserStorageUsage();
-}
-
-// ============================================================================
 // Stripe Billing
 // ============================================================================
 
@@ -1082,150 +1040,4 @@ export async function deletePasskey(id: string): Promise<void> {
   const token = await getTokenAsync();
   if (!authService) throw new Error("Not authenticated");
   await authService.deletePasskey(token ?? undefined, id);
-}
-
-// ============================================================================
-// Data Queries
-// ============================================================================
-
-/**
- * Check if user has synced data on the server.
- * Returns null if not authenticated or server URL not configured.
- */
-export async function checkUserHasData(): Promise<UserHasDataResponse | null> {
-  const url = state.serverUrl;
-  if (!url || !authService) return null;
-  const token = await getTokenAsync();
-
-  try {
-    return await authService.checkUserHasData(token ?? undefined);
-  } catch (err) {
-    console.error("[AuthStore] Failed to check user data:", err);
-    return null;
-  }
-}
-
-/**
- * Download a workspace snapshot zip from the server.
- */
-export async function downloadWorkspaceSnapshot(
-  workspaceId: string,
-  includeAttachments = true,
-  commitId?: string,
-): Promise<Blob | null> {
-  const url = state.serverUrl;
-  if (!url || !authService) return null;
-  const token = await getTokenAsync();
-
-  try {
-    return await authService.downloadWorkspaceSnapshot(
-      token ?? undefined,
-      workspaceId,
-      includeAttachments,
-      commitId,
-    );
-  } catch (err) {
-    console.error("[AuthStore] Failed to download snapshot:", err);
-    return null;
-  }
-}
-
-/**
- * Upload a workspace snapshot zip to the server.
- */
-export async function uploadWorkspaceSnapshot(
-  workspaceId: string,
-  snapshot: Blob,
-  mode: "replace" | "merge" = "replace",
-  includeAttachments = true,
-  onUploadProgress?: (uploadedBytes: number, totalBytes: number) => void,
-): Promise<{ files_imported: number } | null> {
-  const url = state.serverUrl;
-  if (!url || !authService) {
-    throw new Error("Not authenticated");
-  }
-  const token = await getTokenAsync();
-
-  try {
-    const result = await authService.uploadWorkspaceSnapshot(
-      token ?? undefined,
-      workspaceId,
-      snapshot,
-      mode,
-      includeAttachments,
-      onUploadProgress,
-    );
-    await refreshUserStorageUsage();
-    return result;
-  } catch (err) {
-    console.error("[AuthStore] Failed to upload snapshot:", err);
-    if (err instanceof Error) throw err;
-    throw new Error("Failed to upload snapshot");
-  }
-}
-
-/**
- * Initialize resumable attachment upload.
- */
-export async function initAttachmentUpload(
-  workspaceId: string,
-  request: InitAttachmentUploadRequest,
-): Promise<InitAttachmentUploadResponse> {
-  const url = state.serverUrl;
-  if (!url || !authService) {
-    throw new Error("Not authenticated");
-  }
-  const token = await getTokenAsync();
-  return authService.initAttachmentUpload(token ?? undefined, workspaceId, request);
-}
-
-/**
- * Upload one attachment part.
- */
-export async function uploadAttachmentPart(
-  workspaceId: string,
-  uploadId: string,
-  partNo: number,
-  bytes: ArrayBuffer,
-): Promise<{ ok: boolean; part_no: number }> {
-  const url = state.serverUrl;
-  if (!url || !authService) {
-    throw new Error("Not authenticated");
-  }
-  const token = await getTokenAsync();
-  return authService.uploadAttachmentPart(token ?? undefined, workspaceId, uploadId, partNo, bytes);
-}
-
-/**
- * Complete resumable attachment upload.
- */
-export async function completeAttachmentUpload(
-  workspaceId: string,
-  uploadId: string,
-  request: CompleteAttachmentUploadRequest,
-): Promise<CompleteAttachmentUploadResponse> {
-  const url = state.serverUrl;
-  if (!url || !authService) {
-    throw new Error("Not authenticated");
-  }
-  const token = await getTokenAsync();
-  const result = await authService.completeAttachmentUpload(token ?? undefined, workspaceId, uploadId, request);
-  await refreshUserStorageUsage();
-  return result;
-}
-
-/**
- * Download workspace attachment by hash.
- */
-export async function downloadAttachment(
-  workspaceId: string,
-  hash: string,
-  range?: { start: number; end?: number },
-): Promise<DownloadAttachmentResponse> {
-  const url = state.serverUrl;
-  if (!url || !authService) {
-    throw new Error("Not authenticated");
-  }
-  const token = await getTokenAsync();
-  return authService.downloadAttachment(token ?? undefined, workspaceId, hash, range);
 }

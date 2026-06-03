@@ -8,7 +8,6 @@
  * - Default workspace auto-creation
  * - Bundle application during onboarding
  * - Folder workspace callback orchestration
- * - Legacy provider-backed onboarding helpers retained during sync unwinding
  */
 
 import type { Api } from '../lib/backend/api';
@@ -39,19 +38,7 @@ import { fetchPluginRegistry } from '$lib/plugins/pluginRegistry';
 import { isTauri, resetBackend } from '../lib/backend';
 import { isIOS } from '$lib/hooks/useMobile.svelte';
 import { removeLocalWorkspace } from '$lib/storage/localWorkspaceRegistry.svelte';
-import { isBuiltinProvider } from '$lib/sync/builtinProviders';
-import {
-  BUILTIN_ICLOUD_PROVIDER_ID,
-  getIcloudWorkspaceKeyFromRemoteId,
-  makeIcloudNamespaceId,
-} from '$lib/sync/builtinProviders';
-import {
-  createNamespace,
-  updateNamespaceMetadata,
-} from '$lib/namespace/namespaceService';
-import { isAuthenticated } from '$lib/auth/authStore.svelte';
 import { getWorkspaceDirectoryPath as getWorkspaceDirectoryPathFromRoot } from '$lib/utils/path';
-import { generateUUID } from '$lib/utils';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -63,35 +50,6 @@ function normalizeFrontmatter(frontmatter: any): Record<string, any> {
     return Object.fromEntries(frontmatter.entries());
   }
   return frontmatter;
-}
-
-function getWorkspacePluginIds(frontmatter: unknown): string[] {
-  const normalized = normalizeFrontmatter(frontmatter);
-  const pluginIds = new Set<string>();
-
-  const pluginsRaw = normalized.plugins;
-  const plugins =
-    pluginsRaw instanceof Map
-      ? Object.fromEntries(pluginsRaw.entries())
-      : pluginsRaw;
-  if (plugins && typeof plugins === "object") {
-    for (const pluginId of Object.keys(plugins)) {
-      if (pluginId.trim()) {
-        pluginIds.add(pluginId);
-      }
-    }
-  }
-
-  const disabledPlugins = normalized.disabled_plugins;
-  if (Array.isArray(disabledPlugins)) {
-    for (const pluginId of disabledPlugins) {
-      if (typeof pluginId === "string" && pluginId.trim()) {
-        pluginIds.add(pluginId);
-      }
-    }
-  }
-
-  return Array.from(pluginIds);
 }
 
 export function getWorkspaceDirectoryPath(backendInstance: { getWorkspacePath(): string }): string {
@@ -121,29 +79,6 @@ export function isWorkspaceAlreadyExistsError(error: unknown): boolean {
     message.includes("Workspace already exists") ||
     message.includes("WorkspaceAlreadyExists")
   );
-}
-
-async function ensureIcloudNamespace(args: {
-  remoteId: string;
-  name: string;
-}): Promise<string> {
-  const workspaceKey = getIcloudWorkspaceKeyFromRemoteId(args.remoteId) ?? generateUUID();
-  const namespaceId = makeIcloudNamespaceId(workspaceKey);
-  const metadata = {
-    type: "workspace",
-    kind: "workspace",
-    provider: BUILTIN_ICLOUD_PROVIDER_ID,
-    name: args.name,
-    platform_scope: "apple-tauri",
-    availability_hint: "local-container",
-    workspace_key: workspaceKey,
-  };
-  try {
-    await createNamespace(namespaceId, metadata);
-  } catch {
-    await updateNamespaceMetadata(namespaceId, metadata);
-  }
-  return namespaceId;
 }
 
 export function shouldBypassWelcomeScreenForE2E(): boolean {
@@ -802,191 +737,24 @@ export async function handleCreateWithProvider(
   onProgress?: (progress: OnboardingProgress) => void,
 ): Promise<OnCreateWithProviderResult> {
   if (restoreNamespace) {
-    // Restore from remote: download provider plugin bytes, restore the
-    // workspace, then infer/install any additional registry plugins from the
-    // restored workspace's own root frontmatter.
-    const providerId = providerPluginId ?? restoreNamespace.metadata?.provider ?? "diaryx.sync";
+    throw new Error("Remote workspace restore has been removed. Create or open a local folder workspace instead.");
+  }
+  if (providerPluginId) {
+    throw new Error("Provider-backed workspace creation has been removed. Create or open a local folder workspace instead.");
+  }
 
-    // Check if the user provided a local override for the provider plugin
-    const providerOverride = pluginOverrides?.find(
-      (o) => o.targetPluginId === providerId,
-    );
-
-    let pluginWasm: Uint8Array | null = null;
-    if (isBuiltinProvider(providerId)) {
-      pluginWasm = null;
-    } else if (providerOverride) {
-      onProgress?.({ percent: 12, message: "Preparing provider plugin..." });
-      // Use the user-provided override instead of fetching from the marketplace
-      pluginWasm = new Uint8Array(providerOverride.bytes);
-      console.info(`[onboarding] Using local override for provider plugin "${providerId}"`);
-    } else {
-      onProgress?.({ percent: 12, message: "Downloading provider plugin..." });
-      // Fetch the sync plugin wasm bytes from registry (don't install yet — no workspace context)
-      const { fetchPluginRegistry } = await import("$lib/plugins/pluginRegistry");
-      const registry = await fetchPluginRegistry();
-      const syncPlugin = registry.plugins.find((p) => p.id === providerId);
-      if (syncPlugin) {
-        const { proxyFetch } = await import("$lib/backend/proxyFetch");
-        const resp = await proxyFetch(syncPlugin.artifact.url);
-        if (resp.ok) {
-          pluginWasm = new Uint8Array(await resp.arrayBuffer());
-        }
-      }
-      if (!pluginWasm) {
-        throw new Error(
-          `Could not download the sync plugin${syncPlugin ? "" : ` "${providerId}"`}. Check your network connection and try again.`,
-        );
-      }
-    }
-
-    // Download workspace from remote, providing pre-fetched plugin bytes
-    const { downloadWorkspace } = await import("$lib/sync/workspaceProviderService");
-    const name = restoreNamespace.metadata?.name ?? "Restored Workspace";
-    let effectiveRestoreNamespace = restoreNamespace;
-    if (
-      providerId === BUILTIN_ICLOUD_PROVIDER_ID
-      && isAuthenticated()
-      && !restoreNamespace.id.startsWith("workspace:icloud:")
-    ) {
-      const namespaceId = await ensureIcloudNamespace({
-        remoteId: restoreNamespace.id,
-        name,
-      });
-      effectiveRestoreNamespace = {
-        ...restoreNamespace,
-        id: namespaceId,
-        metadata: {
-          ...(restoreNamespace.metadata ?? {}),
-          provider: BUILTIN_ICLOUD_PROVIDER_ID,
-          name,
-        },
-      };
-    }
-    let result: { localId: string; filesImported: number; filesResumedSkip: number };
-    try {
-      result = await downloadWorkspace(providerId, {
-        remoteId: effectiveRestoreNamespace.id,
-        name,
-        link: true,
-      }, onProgress, undefined, pluginWasm);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const isUnsupported = msg.includes("only available in host-integrated runtimes")
-        || msg.includes("not implemented")
-        || msg.includes("Unknown command")
-        || /No plugin .* handles command/.test(msg);
-      if (isUnsupported) {
-        throw new Error(
-          "The selected storage provider does not support downloading workspaces. Try a different provider or create a new local workspace instead.",
-        );
-      }
-      throw err;
-    }
-
-    // Wire up the UI to the workspace that downloadWorkspace already created.
-    // Do NOT call switchWorkspace — it calls resetBackend() which would
-    // destroy the backend instance that the downloaded content was written
-    // through, potentially creating a fresh empty OPFS directory.
-    const { setActiveWorkspaceId } = await import("$lib/auth");
-    setActiveWorkspaceId(result.localId);
-    const dlBackend = await (await import("$lib/backend")).getBackend();
-    const dlApi = deps.autoCreateDeps.createApi(dlBackend);
-    deps.autoCreateDeps.setBackend(dlBackend);
-    deps.autoCreateDeps.setCleanupEventSubscription(
-      deps.autoCreateDeps.initEventSubscription(dlBackend),
-    );
-
-    // Reload plugins with full lifecycle now that the workspace has content
-    onProgress?.({ percent: 78, message: "Loading restored workspace..." });
-    const { loadAllPlugins } = await import("$lib/plugins/browserPluginManager.svelte");
-    await loadAllPlugins();
-
-    // Install local overrides first so they take precedence over marketplace versions
-    if (pluginOverrides?.length) {
-      for (const o of pluginOverrides) {
-        await deps.installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
-      }
-    }
-
-    try {
-      onProgress?.({ percent: 86, message: "Checking restored plugins..." });
-      const rootIndexPath = await dlApi.resolveWorkspaceRootIndexPath(
-        dlBackend.getWorkspacePath(),
-      );
-      if (rootIndexPath) {
-        const frontmatter = await dlApi.getFrontmatter(rootIndexPath);
-        const pluginIds = getWorkspacePluginIds(frontmatter).filter(
-          (pluginId) => pluginId !== providerId,
-        );
-        if (pluginIds.length > 0) {
-          const { fetchPluginRegistry } = await import("$lib/plugins/pluginRegistry");
-          const { installRegistryPlugin } = await import("$lib/plugins/pluginInstallService");
-          const registry = await fetchPluginRegistry();
-          const registryPlugins = new Map(
-            registry.plugins.map((plugin) => [plugin.id, plugin]),
-          );
-          const overriddenPluginIds = new Set(
-            pluginOverrides?.map((override) => override.targetPluginId) ?? [],
-          );
-
-          for (const pluginId of pluginIds) {
-            if (overriddenPluginIds.has(pluginId)) continue;
-            const plugin = registryPlugins.get(pluginId);
-            if (!plugin) {
-              console.warn(
-                `[onboarding] Restored workspace requested plugin "${pluginId}" but it was not found in the registry`,
-              );
-              continue;
-            }
-            await installRegistryPlugin(plugin);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("[App] Plugin inference on restored workspace failed (non-fatal):", e);
-    }
-  } else {
-    // New workspace from bundle — install overrides before bundle apply so they aren't overwritten
-    const overrideIds = new Set(pluginOverrides?.map((o) => o.targetPluginId) ?? []);
-    const effectiveBundle = bundle && overrideIds.size > 0
-      ? excludeOverriddenPlugins(bundle, pluginOverrides)
-      : bundle;
-    onProgress?.({ percent: 10, message: "Creating workspace..." });
-    const { id, name } = await autoCreateDefaultWorkspace(deps.autoCreateDeps, effectiveBundle);
-    if (pluginOverrides?.length) {
-      onProgress?.({ percent: 36, message: "Installing selected plugins..." });
-      for (const o of pluginOverrides) {
-        await deps.installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
-      }
-    }
-    if (providerPluginId) {
-      const { linkWorkspace } = await import("$lib/sync/workspaceProviderService");
-      let remoteId: string | undefined;
-      if (providerPluginId === BUILTIN_ICLOUD_PROVIDER_ID && isAuthenticated()) {
-        onProgress?.({ percent: 48, message: "Preparing cloud workspace..." });
-        const workspaceKey = generateUUID();
-        remoteId = makeIcloudNamespaceId(workspaceKey);
-        await createNamespace(remoteId, {
-          type: "workspace",
-          kind: "workspace",
-          provider: BUILTIN_ICLOUD_PROVIDER_ID,
-          name,
-          platform_scope: "apple-tauri",
-          availability_hint: "local-container",
-          workspace_key: workspaceKey,
-        });
-      }
-      const linkParams = {
-        localId: id,
-        name,
-        ...(remoteId ? { remoteId } : {}),
-      };
-      if (onProgress) {
-        await linkWorkspace(providerPluginId, linkParams, onProgress);
-      } else {
-        await linkWorkspace(providerPluginId, linkParams);
-      }
+  // New workspace from bundle — install overrides before bundle apply so they
+  // are not overwritten by marketplace artifacts.
+  const overrideIds = new Set(pluginOverrides?.map((o) => o.targetPluginId) ?? []);
+  const effectiveBundle = bundle && overrideIds.size > 0
+    ? excludeOverriddenPlugins(bundle, pluginOverrides)
+    : bundle;
+  onProgress?.({ percent: 10, message: "Creating workspace..." });
+  await autoCreateDefaultWorkspace(deps.autoCreateDeps, effectiveBundle);
+  if (pluginOverrides?.length) {
+    onProgress?.({ percent: 36, message: "Installing selected plugins..." });
+    for (const o of pluginOverrides) {
+      await deps.installLocalPlugin(o.bytes, o.fileName.replace(/\.wasm$/, ""));
     }
   }
 
@@ -1001,11 +769,7 @@ export async function handleCreateWithProvider(
   await deps.dismissLaunchOverlay();
 
   return {
-    spotlightSteps: restoreNamespace
-      ? null
-      : bundle?.spotlight?.length
-        ? bundle.spotlight
-        : null,
+    spotlightSteps: bundle?.spotlight?.length ? bundle.spotlight : null,
   };
 }
 

@@ -42,15 +42,6 @@ export {
 } from './updaterService';
 
 export {
-  setAttachmentSyncBackend,
-  setAttachmentSyncContext,
-  enqueueAttachmentUpload,
-  enqueueAttachmentDownload,
-  enqueueMissingDownloadsFromMetadata,
-  requestMissingBlobDownload,
-  retryFailedAttachmentJobs,
   indexAttachmentRefs,
   sha256Hex,
-  isTerminalAttachmentSyncError,
-  getAttachmentSyncQueueSnapshot,
 } from '$lib/sync/attachmentSyncService';

@@ -39,15 +39,6 @@ export default defineConfig({
       testIgnore: ['plugins/**/*.spec.ts'],
       use: { ...devices['Desktop Safari'] },
     },
-    {
-      name: 'sync-e2e',
-      testMatch: ['plugins/sync/**/*.spec.ts'],
-      use: {
-        ...devices['Desktop Chrome'],
-      },
-      fullyParallel: false,
-      timeout: 300000,
-    },
   ],
   webServer: {
     command: `bun run dev -- --host ${webHost} --port ${webPort} --strictPort`,

@@ -23,8 +23,6 @@ Settings panel components for `SettingsDialog.svelte`.
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. Account device rename/delete failures surface the server-provided error message and log the failed device action for debugging. |
 | `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified, and local installs review requested permissions on both browser and Tauri paths before install. Uninstall also clears workspace-level `plugins.<id>` / `disabled_plugins` entries through the Rust backend command path and drops plugin-owned local metadata / namespaces when present. |
 | `PluginSettingsTab.svelte` | Declarative plugin field renderer, including generic host actions, follow-up commands, workspace metadata patch handling, and temporary file-byte bridging for plugin commands that call `host_request_file`. |
-| `SyncLinkSettings.svelte` / `ICloudSettings.svelte` | Legacy sync settings components retained while the old provider-sync implementation is unwound; not rendered by `SettingsDialog.svelte`. |
-| `syncSettingsLogic.ts` | Legacy sync/storage usage helpers used by legacy settings UIs. |
 
 `WorkspaceManagement.svelte` now shows only local workspaces and explains that
 users can place the folder in an external sync tool such as iCloud Drive,
@@ -40,9 +38,9 @@ provider-unavailable workspaces.
 - Declarative field contributions render via `PluginSettingsTab`
 - `PluginSettingsTab` can invoke arbitrary host-managed actions, apply config patches, write plugin-scoped workspace metadata patches from command results, gate nested field groups with conditions like `authenticated` or `config:import_format=markdown`, and pass selected file bytes through both browser and native plugin command paths
 
-Declarative plugin settings remain available for non-sync plugins and
-host-managed actions such as OAuth. Legacy sync provider settings should stay
-out of the active settings tabs unless the product direction changes again.
+Declarative plugin settings remain available for plugins and host-managed
+actions such as OAuth. Legacy provider-sync settings were removed from the
+active settings module.
 
 ## Mobile Drawer Layout
 

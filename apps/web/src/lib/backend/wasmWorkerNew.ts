@@ -629,18 +629,6 @@ export const workerApi = {
   async authDeleteAccount(): Promise<void> {
     return requireAuthClient().deleteAccount();
   },
-  async authCreateWorkspace(name: string): Promise<unknown> {
-    return requireAuthClient().createWorkspace(name);
-  },
-  async authRenameWorkspace(
-    workspaceId: string,
-    newName: string,
-  ): Promise<void> {
-    return requireAuthClient().renameWorkspace(workspaceId, newName);
-  },
-  async authDeleteWorkspace(workspaceId: string): Promise<void> {
-    return requireAuthClient().deleteWorkspace(workspaceId);
-  },
 
   // =========================================================================
   // Namespace (WASM NamespaceClient)
@@ -1127,25 +1115,6 @@ export const workerApi = {
   // =========================================================================
   // Attachment Sync (Rust-backed)
   // =========================================================================
-
-  async syncUploadAttachment(
-    serverUrl: string, authToken: string, workspaceId: string,
-    entryPath: string, attachmentPath: string, hash: string,
-    mimeType: string, data: Uint8Array,
-  ): Promise<void> {
-    return getBackend().uploadAttachment(
-      serverUrl, authToken, workspaceId,
-      entryPath, attachmentPath, hash,
-      mimeType, Array.from(data),
-    );
-  },
-
-  async syncDownloadAttachment(
-    serverUrl: string, authToken: string, workspaceId: string, hash: string,
-  ): Promise<Uint8Array> {
-    const bytes = await getBackend().downloadAttachment(serverUrl, authToken, workspaceId, hash);
-    return new Uint8Array(bytes);
-  },
 
   // =========================================================================
   // ZIP Import (runs entirely in worker — no main-thread decompression)

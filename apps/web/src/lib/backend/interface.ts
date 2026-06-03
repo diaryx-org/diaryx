@@ -144,7 +144,7 @@ export interface PluginInspection {
 
 /**
  * Events emitted by Backend operations.
- * Subscribe to these to automatically update CRDT state.
+ * Subscribe to these to refresh host UI state after local file changes.
  */
 export type BackendEventType =
   | 'file:created'
@@ -213,7 +213,7 @@ export type FileSystemEvent =
   | { type: 'FileMoved'; path: string; old_parent?: string; new_parent?: string }
   | { type: 'MetadataChanged'; path: string; frontmatter: unknown }
   | { type: 'ContentsChanged'; path: string; body: string }
-  // Sync events
+  // Legacy plugin/runtime sync events
   | { type: 'SyncStarted'; doc_name: string }
   | { type: 'SyncCompleted'; doc_name: string; files_synced: number }
   | { type: 'SyncStatusChanged'; status: string; error?: string }
@@ -226,7 +226,7 @@ export type FileSystemEvent =
       message?: string;
       path?: string;
     }
-  // Send sync message event - emitted by Rust after CRDT updates
+  // Legacy sync message event retained for plugin/runtime event payloads
   | { type: 'SendSyncMessage'; doc_name: string; message: number[]; is_body: boolean }
   // Peer/session events from Rust sync
   | { type: 'PeerJoined'; peer_count: number }
@@ -311,21 +311,6 @@ export interface Backend {
    */
   getAppPaths(): Record<string, string | boolean | null> | null;
 
-  // --------------------------------------------------------------------------
-  // CrdtFs Control
-  // --------------------------------------------------------------------------
-
-  /**
-   * Enable or disable CrdtFs (CRDT updates on file writes).
-   * CrdtFs starts disabled and should be enabled after sync handshake completes.
-   */
-  setCrdtEnabled?(enabled: boolean): Promise<void>;
-
-  /**
-   * Check whether CrdtFs is currently enabled.
-   */
-  isCrdtEnabled?(): Promise<boolean>;
-
   /**
    * Enter an isolated guest workspace mode.
    * Hosts may swap to an in-memory backend or otherwise isolate local writes.
@@ -371,7 +356,7 @@ export interface Backend {
 
   /**
    * Subscribe to backend events.
-   * Use this to automatically update CRDT state when files change.
+   * Use this to refresh host UI state when files change.
    */
   on(event: BackendEventType, listener: BackendEventListener): void;
 
@@ -512,64 +497,6 @@ export interface Backend {
    */
   eventSubscriberCount?(): number;
 
-  // --------------------------------------------------------------------------
-  // Native Sync (Tauri only)
-  // --------------------------------------------------------------------------
-
-  /**
-   * Start native WebSocket sync to a server.
-   * Available in Tauri (native Rust sync client) and WASM (Rust-owned WebSocket).
-   *
-   * @param serverUrl The WebSocket server URL (will be converted to ws:// if http://)
-   * @param docNameOrWorkspaceId The document name (Tauri) or workspace ID (WASM) for sync
-   * @param authToken Optional JWT auth token
-   * @param sessionCode Optional share session code (WASM only)
-   */
-  startSync?(serverUrl: string, docNameOrWorkspaceId: string, authToken?: string, sessionCode?: string): Promise<void>;
-
-  /**
-   * Stop WebSocket sync.
-   * Available in Tauri and WASM.
-   */
-  stopSync?(): Promise<void>;
-
-  /**
-   * Get native sync status.
-   * Only available in Tauri.
-   *
-   * @returns Sync status with connected, running, and detailed status info
-   */
-  getSyncStatus?(): Promise<SyncStatus>;
-
-  /**
-   * Check if native sync is available.
-   * Returns true for Tauri, false for WASM/web.
-   */
-  hasNativeSync?(): boolean;
-
-  /**
-   * Subscribe to native sync events.
-   * Only available in Tauri.
-   *
-   * @param callback Function called with each sync event
-   * @returns Unsubscribe function
-   */
-  onSyncEvent?(callback: SyncEventCallback): () => void;
-
-  /**
-   * Focus on specific files for body sync.
-   * Available in Tauri (native Rust sync).
-   * For browser-loaded plugins, body sync is handled by the Extism host bridge.
-   */
-  focusSyncFiles?(files: string[]): Promise<void>;
-
-  /**
-   * Request body sync for specific files.
-   * Available in Tauri (native Rust sync).
-   * For browser-loaded plugins, body sync is handled by the Extism host bridge.
-   */
-  requestBodySync?(files: string[]): Promise<void>;
-
   // =========================================================================
   // Plugin Management (Tauri only)
   // =========================================================================
@@ -591,48 +518,6 @@ export interface Backend {
   ): Promise<unknown>;
 
 }
-
-// ============================================================================
-// Sync Types
-// ============================================================================
-
-/**
- * Sync status returned by getSyncStatus().
- */
-export interface SyncStatus {
-  /** Whether both metadata and body connections are established */
-  connected: boolean;
-  /** Whether the sync client is running (may be reconnecting) */
-  running: boolean;
-  /** Detailed connection status */
-  status?: ConnectionStatus;
-}
-
-/**
- * Detailed connection status for sync.
- */
-export interface ConnectionStatus {
-  /** Metadata WebSocket connection state */
-  metadata: 'disconnected' | 'connecting' | 'connected';
-  /** Body sync WebSocket connection state */
-  body: 'disconnected' | 'connecting' | 'connected';
-}
-
-/**
- * Sync events emitted by native sync.
- */
-export type SyncEvent =
-  | { type: 'status-changed'; status: ConnectionStatus }
-  | { type: 'files-changed'; paths: string[] }
-  | { type: 'body-changed'; path: string }
-  | { type: 'progress'; completed: number; total: number }
-  | { type: 'error'; message: string };
-
-/**
- * Callback type for sync event subscriptions.
- */
-export type SyncEventCallback = (event: SyncEvent) => void;
-
 // ============================================================================
 // Error Types
 // ============================================================================

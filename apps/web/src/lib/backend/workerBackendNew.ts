@@ -594,10 +594,6 @@ export class WorkerBackendNew implements Backend {
   // Proxy methods - delegate to worker (legacy, will be deprecated)
   // =========================================================================
 
-  // CrdtFs control
-  setCrdtEnabled = (enabled: boolean) => this.remote!.setCrdtEnabled(enabled);
-  isCrdtEnabled = () => this.remote!.isCrdtEnabled();
-
   // Root index discovery
   findRootIndex = (dirPath?: string) => this.remote!.findRootIndex(dirPath);
   getDefaultWorkspacePath = () => this.remote!.getDefaultWorkspacePath();

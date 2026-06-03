@@ -79,6 +79,10 @@ Sync and publish functionality are provided by Extism guest plugins
 plugin manager. CRDT commands are routed to the sync plugin via the frontend
 command router before reaching the WASM backend.
 
+`DiaryxBackend` itself does not expose native sync or CRDT compatibility
+methods such as `startSync`, `stopSync`, `hasNativeSync`, `setCrdtEnabled`, or
+`isCrdtEnabled`; the backend surface is storage plus the unified command API.
+
 ### Storage Backends
 
 Unlike the CLI and Tauri backends which use `RealFileSystem` (native filesystem),
@@ -196,7 +200,7 @@ const allFiles = await asyncFs.list_all_files_recursive("workspace");
 const data = await asyncFs.read_binary("workspace/image.png");
 await asyncFs.write_binary("workspace/copy.png", data);
 
-// Bulk operations for IndexedDB sync
+// Bulk operations for exporting/importing browser storage
 const backupData = await asyncFs.get_backup_data();
 // ... persist to IndexedDB ...
 await asyncFs.restore_from_backup(backupData);
@@ -223,159 +227,59 @@ While the underlying `InMemoryFileSystem` is synchronous, `DiaryxAsyncFilesystem
 2. Allows for future integration with truly async operations
 3. Works well with JavaScript's event loop
 
-### Diaryx (Command API with CRDT)
+### DiaryxBackend Command API
 
-The `Diaryx` class provides a unified command API that includes CRDT operations for real-time collaboration. Commands are executed via `execute()` (returns typed result) or `executeJs()` (returns JS-friendly object).
+`DiaryxBackend` is the main browser storage entry point. It executes
+`diaryx_core::Command` values through `execute()` and returns serialized
+`diaryx_core::Response` values.
 
 ```javascript
-import init, { Diaryx } from "./wasm/diaryx_wasm.js";
+import init, { DiaryxBackend } from "./wasm/diaryx_wasm.js";
 
 await init();
-const diaryx = new Diaryx();
+const backend = await DiaryxBackend.createOpfs("My Journal");
 
-// All CRDT commands use the execute/executeJs pattern
-```
-
-#### CRDT Workspace Operations
-
-```javascript
-// Set file metadata in the CRDT workspace
-await diaryx.executeJs({
-  type: "SetFileMetadata",
-  path: "notes/my-note.md",
-  metadata: {
-    title: "My Note",
-    audience: ["public"],
-    part_of: "README.md",
+const tree = JSON.parse(await backend.execute(JSON.stringify({
+  type: "GetWorkspaceTree",
+  params: {
+    path: ".",
+    depth: null,
+    audience: null,
   },
-});
+})));
 
-// Get file metadata
-const result = await diaryx.executeJs({
-  type: "GetFileMetadata",
-  path: "notes/my-note.md",
-});
-console.log(result.metadata); // { title: "My Note", ... }
+await backend.execute(JSON.stringify({
+  type: "CreateEntry",
+  params: {
+    path: "notes/my-note.md",
+    options: {
+      title: "My Note",
+      part_of: null,
+      template: null,
+    },
+  },
+}));
 
-// List all files in workspace
-const files = await diaryx.executeJs({ type: "ListFiles" });
-console.log(files.files); // ["notes/my-note.md", ...]
-
-// Remove a file from workspace
-await diaryx.executeJs({
-  type: "RemoveFile",
-  path: "notes/my-note.md",
-});
+await backend.writeBinary("_attachments/photo.png", photoBytes);
+const photo = await backend.readBinary("_attachments/photo.png");
 ```
 
-#### CRDT Body Document Operations
+The frontend normally calls this through `apps/web/src/lib/backend/api.ts` and
+`wasmWorkerNew.ts`, so application code should prefer those host abstractions
+over direct WASM calls.
+
+#### Event Subscription
+
+The backend emits local filesystem events through `onFileSystemEvent()`:
 
 ```javascript
-// Set document body content
-await diaryx.executeJs({
-  type: "SetBody",
-  path: "notes/my-note.md",
-  content: "# Hello World\n\nThis is my note.",
+const id = backend.onFileSystemEvent((eventJson) => {
+  const event = JSON.parse(eventJson);
+  console.log("file event", event.type, event.path);
 });
 
-// Get document body
-const body = await diaryx.executeJs({
-  type: "GetBody",
-  path: "notes/my-note.md",
-});
-console.log(body.content);
-
-// Insert text at position (collaborative editing)
-await diaryx.executeJs({
-  type: "InsertAt",
-  path: "notes/my-note.md",
-  position: 0,
-  text: "Prefix: ",
-});
-
-// Delete text range
-await diaryx.executeJs({
-  type: "DeleteRange",
-  path: "notes/my-note.md",
-  start: 0,
-  end: 8,
-});
+backend.offFileSystemEvent(id);
 ```
-
-#### CRDT Sync Operations
-
-For synchronizing with Hocuspocus or other Y.js-compatible servers:
-
-```javascript
-// Get sync state (state vector) for initial handshake
-const syncState = await diaryx.executeJs({
-  type: "GetSyncState",
-  doc_type: "workspace", // or "body"
-  doc_name: null, // required for "body" type
-});
-const stateVector = syncState.state_vector; // Uint8Array
-
-// Apply remote update from server
-await diaryx.executeJs({
-  type: "ApplyRemoteUpdate",
-  doc_type: "workspace",
-  doc_name: null,
-  update: remoteUpdateBytes, // Uint8Array from WebSocket
-});
-
-// Encode full state to send to server
-const state = await diaryx.executeJs({
-  type: "EncodeState",
-  doc_type: "workspace",
-  doc_name: null,
-});
-sendToServer(state.state); // Uint8Array
-
-// Encode incremental update since a state vector
-const diff = await diaryx.executeJs({
-  type: "EncodeStateAsUpdate",
-  doc_type: "workspace",
-  doc_name: null,
-  state_vector: remoteStateVector, // Uint8Array
-});
-sendToServer(diff.update); // Uint8Array
-```
-
-#### Version History
-
-```javascript
-// Get version history for a document
-const history = await diaryx.executeJs({
-  type: "GetHistory",
-  doc_type: "workspace", // or "body"
-  doc_name: null, // required for "body" type
-});
-
-for (const entry of history.entries) {
-  console.log(`Version ${entry.version} at ${entry.timestamp}`);
-  console.log(`  Origin: ${entry.origin}`); // "local" or "remote"
-  console.log(`  Size: ${entry.update.length} bytes`);
-}
-
-// Restore to a specific version (time travel)
-await diaryx.executeJs({
-  type: "RestoreToVersion",
-  doc_type: "workspace",
-  doc_name: null,
-  version: 5,
-});
-```
-
-#### Document Types
-
-CRDT operations use `doc_type` to specify which document to operate on:
-
-
-| doc_type    | doc_name  | Description                                |
-| ----------- | --------- | ------------------------------------------ |
-| `workspace` | `null`    | The workspace file hierarchy metadata      |
-| `body`      | file path | Per-file body content (e.g., `notes/a.md`) |
-
 
 ## Node.js / Obsidian / Electron Usage
 

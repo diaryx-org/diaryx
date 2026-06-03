@@ -173,7 +173,7 @@ Unsupported mock commands now throw instead of silently returning `Ok`. That
 keeps preview/test failures localized to the missing command rather than
 surfacing later as confusing response-type mismatches.
 
-## Sync Boundary (Legacy)
+## Sync Boundary
 
 The web backend no longer initializes a host-side CRDT storage bridge, and the
 active app shell no longer exposes provider sync setup or manual sync controls.
@@ -184,34 +184,10 @@ active app shell no longer exposes provider sync setup or manual sync controls.
   old sidecar implementation is retired.
 - Runtime context passed to Extism guests can include legacy provider-link
   metadata for backward compatibility.
-- `setupCrdtStorage()` remains a compatibility no-op in the worker API.
-
-## Native Sync (Legacy Tauri API)
-
-The `TauriBackend` still provides native sync methods that use the Rust sync
-client. These methods are retained as legacy API surface and are not called by
-the current folder-first web app shell:
-
-```typescript
-// Check if native sync is available
-if (backend.hasNativeSync?.()) {
-  // Start native sync (uses Rust TokioTransport + SyncClient)
-  await backend.startSync(serverUrl, docName, authToken);
-
-  // Subscribe to sync events
-  const unsubscribe = backend.onSyncEvent?.((event) => {
-    console.log("Sync event:", event.type, event);
-  });
-
-  // Get sync status
-  const status = await backend.getSyncStatus?.();
-
-  // Stop sync
-  await backend.stopSync?.();
-}
-```
-
-Event types: `status-changed`, `files-changed`, `body-changed`, `progress`, `error`
+- Legacy native sync methods (`startSync`, `stopSync`, `getSyncStatus`,
+  `hasNativeSync`, `onSyncEvent`) and CRDT toggles (`setupCrdtStorage`,
+  `setCrdtEnabled`, `isCrdtEnabled`) are no longer part of the backend
+  interface or Tauri/WASM adapter surface.
 
 ## Link Parser Command
 
@@ -233,7 +209,7 @@ state.
 `proxyFetch.ts` bridges HTTP through Tauri native networking when running in
 Tauri. The bridge now maps null-body HTTP statuses (`204`, `205`, `304`, and
 other fetch null-body statuses) to `Response` objects with `null` bodies so
-no-content endpoints (for example, `DELETE /api/workspaces/{id}`) do not throw
+no-content endpoints (for example, `DELETE /api/namespaces/{id}`) do not throw
 `Response cannot have a body with the given status`.
 
 The proxy helper also has direct unit coverage for browser-vs-Tauri routing,

@@ -66,8 +66,6 @@ let eventPort: MessagePort | null = null;
 // Subscription ID for filesystem events (to clean up on shutdown)
 let fsEventSubscriptionId: number | null = null;
 
-// WasmSyncClient instance (created by createSyncClient, lives in worker)
-
 // Clear cached root path (call after rename operations)
 function clearRootPathCache() {
   rootPath = null;
@@ -524,14 +522,6 @@ export const workerApi = {
   init,
   initWithDirectoryHandle,
 
-  /**
-   * Legacy no-op kept for compatibility with older callers.
-   * Web host no longer initializes a CRDT storage bridge.
-   */
-  async setupCrdtStorage(): Promise<void> {
-    // Intentionally empty.
-  },
-
   isReady(): boolean {
     return backend !== null;
   },
@@ -544,18 +534,6 @@ export const workerApi = {
     console.warn(
       "[WasmWorker] Events are forwarded via MessagePort, not off()",
     );
-  },
-
-  // =========================================================================
-  // CrdtFs Control
-  // =========================================================================
-
-  setCrdtEnabled(enabled: boolean): void {
-    getBackend().setCrdtEnabled(enabled);
-  },
-
-  isCrdtEnabled(): boolean {
-    return getBackend().isCrdtEnabled();
   },
 
   // =========================================================================
@@ -1043,63 +1021,6 @@ export const workerApi = {
       { root_path: rootPath, audience },
       "BinaryFilePaths",
     );
-  },
-
-  // =========================================================================
-  // Rust-Owned Sync (Rust owns the WebSocket)
-  // =========================================================================
-
-  /**
-   * Start sync — Rust owns the WebSocket connection.
-   * Creates a WasmSyncTransport, connects to the server, and subscribes
-   * to local CRDT updates. All sync events are forwarded via the filesystem
-   * event port (MessagePort).
-   */
-  startSync(
-    serverUrl: string,
-    workspaceId: string,
-    authToken?: string,
-    sessionCode?: string,
-  ): void {
-    getBackend().startSync(
-      serverUrl,
-      workspaceId,
-      authToken ?? null,
-      sessionCode ?? null,
-    );
-    console.log(
-      "[WasmWorker] Started Rust-owned sync for workspace:",
-      workspaceId,
-    );
-  },
-
-  /**
-   * Stop sync — disconnect and drop the transport.
-   */
-  stopSync(): void {
-    getBackend().stopSync();
-    console.log("[WasmWorker] Stopped Rust-owned sync");
-  },
-
-  /**
-   * Focus on specific files for body sync (Rust-owned).
-   */
-  focusSyncFiles(files: string[]): void {
-    getBackend().focusSyncFiles(files);
-  },
-
-  /**
-   * Unfocus specific files (Rust-owned).
-   */
-  unfocusSyncFiles(files: string[]): void {
-    getBackend().unfocusSyncFiles(files);
-  },
-
-  /**
-   * Request body sync for specific files (Rust-owned).
-   */
-  requestBodySync(files: string[]): void {
-    getBackend().requestBodySync(files);
   },
 
   /**

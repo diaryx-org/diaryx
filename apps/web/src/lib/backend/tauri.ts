@@ -12,9 +12,6 @@ import type {
   Config,
   FileSystemEvent,
   FileSystemEventCallback,
-  SyncStatus,
-  SyncEvent,
-  SyncEventCallback,
   PluginInspection,
 } from "./interface";
 
@@ -35,10 +32,6 @@ interface AppPaths {
   log_file: string;
   is_mobile: boolean;
   is_apple_build: boolean;
-  /** Whether CRDT storage was successfully initialized */
-  crdt_initialized: boolean;
-  /** Error message if CRDT initialization failed */
-  crdt_error: string | null;
   /** iCloud workspace path (if iCloud is enabled and available) */
   icloud_workspace: string | null;
   /** Whether iCloud storage is currently active */
@@ -181,10 +174,6 @@ export class TauriBackend implements Backend {
   private nextFsEventId = 1;
   private recentWatchEvents = new Map<string, number>();
 
-  // Sync event listeners
-  private syncEventCallbacks = new Set<SyncEventCallback>();
-  private syncEventUnlisteners: UnlistenFn[] = [];
-
   /** When true, reinitialize_workspace will create the directory if missing. */
   private createWorkspace = false;
 
@@ -275,20 +264,15 @@ export class TauriBackend implements Backend {
         const workspacePath = ws?.path;
 
         if (workspacePath) {
-          // Only create CRDT storage for remote (server-assigned) workspace IDs
-          const needsCrdt = !workspaceId.startsWith('local-');
           console.log(
             "[TauriBackend] Reinitializing for workspace path:",
             workspacePath,
-            "needs_crdt:",
-            needsCrdt,
           );
           const nativeInitStartedAt = getTimingNow();
           const result = await this.invokeInitWithRetry<AppPaths>(
             "reinitialize_workspace",
             {
               workspacePath,
-              needsCrdt,
               ...(this.createWorkspace ? { create: true } : {}),
             },
           );
@@ -402,7 +386,6 @@ export class TauriBackend implements Backend {
       unlisten();
     }
     this.extismEventUnlisteners = [];
-    this.cleanupSyncEventListeners();
     this.eventEmitter.removeAllListeners();
     this.fsEventCallbacks.clear();
     this.pluginsReadyCallbacks.clear();
@@ -585,21 +568,6 @@ export class TauriBackend implements Backend {
    */
   isMobile(): boolean {
     return this.appPaths?.is_mobile ?? false;
-  }
-
-  /**
-   * Check if CRDT storage was successfully initialized.
-   * If false, sync and history features may not work.
-   */
-  isCrdtInitialized(): boolean {
-    return this.appPaths?.crdt_initialized ?? false;
-  }
-
-  /**
-   * Get the CRDT initialization error message, if any.
-   */
-  getCrdtError(): string | null {
-    return this.appPaths?.crdt_error ?? null;
   }
 
   // --------------------------------------------------------------------------
@@ -840,252 +808,6 @@ export class TauriBackend implements Backend {
   async isGuestMode(): Promise<boolean> {
     const invoke = this.getInvoke();
     return await invoke<boolean>("is_guest_mode");
-  }
-
-  // --------------------------------------------------------------------------
-  // CrdtFs Control
-  // --------------------------------------------------------------------------
-
-  /**
-   * Lazily initialize CRDT storage for the current workspace.
-   * Called before sync connects if the workspace was initially created
-   * without CRDT (local-only) and is later promoted to remote.
-   */
-  async setupCrdtStorage(): Promise<void> {
-    if (this.appPaths?.crdt_initialized) return; // Already set up
-    const workspacePath = this.getWorkspacePath()
-      .replace(/\/index\.md$/, '')
-      .replace(/\/README\.md$/, '');
-    console.log("[TauriBackend] Lazily initializing CRDT storage for:", workspacePath);
-    const result = await this.getInvoke()<AppPaths>("reinitialize_workspace", {
-      workspacePath,
-      needsCrdt: true,
-    });
-    this.appPaths = result;
-  }
-
-  /**
-   * Enable or disable CRDT updates on the decorated filesystem.
-   * When enabled, file writes will populate CRDTs for sync.
-   */
-  async setCrdtEnabled(enabled: boolean): Promise<void> {
-    await this.getInvoke()("set_crdt_enabled", { enabled });
-  }
-
-  /**
-   * Check if CRDT updates are currently enabled.
-   */
-  async isCrdtEnabled(): Promise<boolean> {
-    return await this.getInvoke()<boolean>("is_crdt_enabled", {});
-  }
-
-  // --------------------------------------------------------------------------
-  // Native Sync (Tauri-specific)
-  // --------------------------------------------------------------------------
-
-  /**
-   * Check if native sync is available.
-   * Always true for Tauri.
-   */
-  hasNativeSync(): boolean {
-    return true;
-  }
-
-  /**
-   * Start native WebSocket sync to a server.
-   * Uses the Rust sync client for efficient native sync.
-   *
-   * @param serverUrl The WebSocket server URL
-   * @param docName The document name for sync
-   * @param authToken Optional JWT auth token
-   */
-  async startSync(
-    serverUrl: string,
-    docName: string,
-    authToken?: string,
-  ): Promise<void> {
-    const invoke = this.getInvoke();
-    console.log(
-      "[TauriBackend] Starting native sync:",
-      serverUrl,
-      docName,
-      authToken ? "(with auth)" : "(no auth)",
-    );
-
-    // Set up event listeners before starting sync
-    await this.setupSyncEventListeners();
-
-    await invoke("start_websocket_sync", {
-      serverUrl,
-      docName,
-      authToken: authToken ?? null,
-    });
-
-    console.log("[TauriBackend] Native sync started");
-  }
-
-  /**
-   * Stop native WebSocket sync.
-   */
-  async stopSync(): Promise<void> {
-    const invoke = this.getInvoke();
-    console.log("[TauriBackend] Stopping native sync");
-
-    // Remove event listeners
-    this.cleanupSyncEventListeners();
-
-    await invoke("stop_websocket_sync", {});
-
-    console.log("[TauriBackend] Native sync stopped");
-  }
-
-  /**
-   * Get native sync status.
-   */
-  async getSyncStatus(): Promise<SyncStatus> {
-    const invoke = this.getInvoke();
-    const result = await invoke<{
-      connected: boolean;
-      running: boolean;
-      status?: {
-        metadata: string;
-        body: string;
-      };
-    }>("get_websocket_sync_status", {});
-
-    return {
-      connected: result.connected,
-      running: result.running,
-      status: result.status
-        ? {
-            metadata: result.status.metadata as
-              | "disconnected"
-              | "connecting"
-              | "connected",
-            body: result.status.body as
-              | "disconnected"
-              | "connecting"
-              | "connected",
-          }
-        : undefined,
-    };
-  }
-
-  /**
-   * Subscribe to native sync events.
-   */
-  onSyncEvent(callback: SyncEventCallback): () => void {
-    this.syncEventCallbacks.add(callback);
-    return () => this.syncEventCallbacks.delete(callback);
-  }
-
-  /**
-   * Set up Tauri event listeners for sync events.
-   */
-  private async setupSyncEventListeners(): Promise<void> {
-    if (!this.listen) {
-      console.warn("[TauriBackend] Cannot set up sync events: listen not available");
-      return;
-    }
-
-    // Clean up any existing listeners first
-    this.cleanupSyncEventListeners();
-
-    const listen = this.listen;
-
-    // Listen for status changes
-    const unlistenStatus = await listen<{ metadata: string; body: string }>(
-      "sync-status-changed",
-      (event) => {
-        const syncEvent: SyncEvent = {
-          type: "status-changed",
-          status: {
-            metadata: event.payload.metadata as
-              | "disconnected"
-              | "connecting"
-              | "connected",
-            body: event.payload.body as
-              | "disconnected"
-              | "connecting"
-              | "connected",
-          },
-        };
-        this.notifySyncEvent(syncEvent);
-      },
-    );
-    this.syncEventUnlisteners.push(unlistenStatus);
-
-    // Listen for files changed
-    const unlistenFiles = await listen<string[]>("sync-files-changed", (event) => {
-      const syncEvent: SyncEvent = {
-        type: "files-changed",
-        paths: event.payload,
-      };
-      this.notifySyncEvent(syncEvent);
-    });
-    this.syncEventUnlisteners.push(unlistenFiles);
-
-    // Listen for body changed
-    const unlistenBody = await listen<string>("sync-body-changed", (event) => {
-      const syncEvent: SyncEvent = {
-        type: "body-changed",
-        path: event.payload,
-      };
-      this.notifySyncEvent(syncEvent);
-    });
-    this.syncEventUnlisteners.push(unlistenBody);
-
-    // Listen for progress
-    const unlistenProgress = await listen<{ completed: number; total: number }>(
-      "sync-progress",
-      (event) => {
-        const syncEvent: SyncEvent = {
-          type: "progress",
-          completed: event.payload.completed,
-          total: event.payload.total,
-        };
-        this.notifySyncEvent(syncEvent);
-      },
-    );
-    this.syncEventUnlisteners.push(unlistenProgress);
-
-    // Listen for errors
-    const unlistenError = await listen<string>("sync-error", (event) => {
-      const syncEvent: SyncEvent = {
-        type: "error",
-        message: event.payload,
-      };
-      this.notifySyncEvent(syncEvent);
-    });
-    this.syncEventUnlisteners.push(unlistenError);
-
-    console.log(
-      "[TauriBackend] Sync event listeners set up:",
-      this.syncEventUnlisteners.length,
-    );
-  }
-
-  /**
-   * Clean up sync event listeners.
-   */
-  private cleanupSyncEventListeners(): void {
-    for (const unlisten of this.syncEventUnlisteners) {
-      unlisten();
-    }
-    this.syncEventUnlisteners = [];
-  }
-
-  /**
-   * Notify all sync event callbacks.
-   */
-  private notifySyncEvent(event: SyncEvent): void {
-    for (const callback of this.syncEventCallbacks) {
-      try {
-        callback(event);
-      } catch (e) {
-        console.error("[TauriBackend] Sync event callback error:", e);
-      }
-    }
   }
 
   // =========================================================================

@@ -352,20 +352,6 @@ impl DiaryxBackend {
     }
 
     // ========================================================================
-    // CrdtFs Control (no-op — sync handled by Extism plugin)
-    // ========================================================================
-
-    /// No-op — CrdtFs is not used; sync handled by Extism plugin.
-    #[wasm_bindgen(js_name = "setCrdtEnabled")]
-    pub fn set_crdt_enabled(&self, _enabled: bool) {}
-
-    /// Always returns false — CrdtFs is not used; sync handled by Extism plugin.
-    #[wasm_bindgen(js_name = "isCrdtEnabled")]
-    pub fn is_crdt_enabled(&self) -> bool {
-        false
-    }
-
-    // ========================================================================
     // Unified Command API
     // ========================================================================
 
@@ -508,12 +494,5 @@ impl DiaryxBackend {
     #[wasm_bindgen(js_name = "eventSubscriberCount")]
     pub fn event_subscriber_count(&self) -> usize {
         self.wasm_event_registry.subscriber_count()
-    }
-
-    /// Check if this backend has native sync support.
-    /// Always false — sync is handled by the Extism sync plugin loaded at runtime.
-    #[wasm_bindgen(js_name = "hasNativeSync")]
-    pub fn has_native_sync(&self) -> bool {
-        false
     }
 }

@@ -52,6 +52,8 @@ fn update_cargo_toml(path: &Path, version: &str) -> Result<(), String> {
         "diaryx_server",
         "diaryx_extism",
         "diaryx_plugin_sdk",
+        "bookmatter",
+        "crossfs",
     ] {
         let dep = &mut doc["workspace"]["dependencies"][name];
         if dep.is_none() {

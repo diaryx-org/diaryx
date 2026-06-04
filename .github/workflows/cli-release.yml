@@ -19,58 +19,6 @@ env:
   BINARY_NAME: diaryx
 
 jobs:
-  # Publish to crates.io (only after all builds succeed)
-  publish:
-    name: Publish to crates.io
-    needs: [build]
-    if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
-    runs-on: ubuntu-latest
-    env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Publish diaryx_core
-        run: cargo publish -p diaryx_core
-        continue-on-error: true # May already be published
-
-      - name: Wait for crates.io index update
-        run: sleep 10
-
-      - name: Publish diaryx_extism
-        run: cargo publish -p diaryx_extism
-        continue-on-error: true # May already be published
-
-      - name: Wait for crates.io index update
-        run: sleep 10
-
-      - name: Wait for dependency crates to be indexed
-        run: |
-          VERSION=$(cargo pkgid -p diaryx_extism | sed 's/.*#//')
-          for crate in diaryx_core diaryx_extism; do
-            echo "Waiting for ${crate}@${VERSION} in crates.io index..."
-            for i in {1..30}; do
-              if cargo info "${crate}@${VERSION}" >/dev/null 2>&1; then
-                echo "Found ${crate}@${VERSION}"
-                break
-              fi
-              if [ "$i" -eq 30 ]; then
-                echo "Timed out waiting for ${crate}@${VERSION}" >&2
-                exit 1
-              fi
-              sleep 10
-            done
-          done
-
-      - name: Publish diaryx (CLI)
-        run: cargo publish -p diaryx
   # Build binaries for cargo-binstall
   build:
     name: Build ${{ matrix.target }}
@@ -164,11 +112,8 @@ jobs:
   # Create GitHub Release with binaries
   release:
     name: Create Release
-    needs: [publish, build]
-    if: |
-      always() &&
-      needs.build.result == 'success' &&
-      (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    needs: [build]
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -213,14 +158,15 @@ jobs:
           body: |
             ## Installation
 
-            ### Via Cargo (from crates.io)
+            ### Via Homebrew (macOS & Linux)
             ```bash
-            cargo install diaryx
+            brew tap diaryx-org/tap
+            brew install diaryx
             ```
 
-            ### Via cargo-binstall (pre-built binary)
+            ### Via cargo-binstall (pre-compiled binary)
             ```bash
-            cargo binstall diaryx
+            cargo binstall --git https://github.com/diaryx-org/diaryx diaryx
             ```
 
             ### Manual Download
@@ -229,3 +175,53 @@ jobs:
             release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout Homebrew tap
+        if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
+        uses: actions/checkout@v4
+        with:
+          repository: diaryx-org/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Homebrew Formula
+        if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
+        run: |
+          VERSION=$(echo "${{ steps.tag.outputs.tag }}" | sed 's/^v//')
+          SHA_INTEL=$(sha256sum release/diaryx-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_ARM=$(sha256sum release/diaryx-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+
+          mkdir -p homebrew-tap/Formula
+          cat <<EOF > homebrew-tap/Formula/diaryx.rb
+          class Diaryx < Formula
+            desc "Local-first journal with audience visibility control"
+            homepage "https://diaryx.org/"
+            version "${VERSION}"
+
+            if Hardware::CPU.intel?
+              url "https://github.com/diaryx-org/diaryx/releases/download/v#{version}/diaryx-x86_64-apple-darwin.tar.gz"
+              sha256 "${SHA_INTEL}"
+            else
+              url "https://github.com/diaryx-org/diaryx/releases/download/v#{version}/diaryx-aarch64-apple-darwin.tar.gz"
+              sha256 "${SHA_ARM}"
+            end
+
+            def install
+              bin.install "diaryx"
+            end
+
+            test do
+              system "#{bin}/diaryx", "--version"
+            end
+          end
+          EOF
+
+      - name: Commit and Push to Homebrew tap
+        if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/diaryx.rb
+          git commit -m "Update diaryx CLI to ${{ steps.tag.outputs.tag }}" || exit 0
+          git push origin main

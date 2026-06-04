@@ -135,3 +135,84 @@ jobs:
           releaseDraft: true
           prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
           generateReleaseNotes: true
+
+  publish-cask:
+    name: Publish Homebrew Cask
+    needs: [build-tauri]
+    if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download macOS Casks from GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p release
+          gh release download ${{ steps.tag.outputs.tag }} --repo ${{ github.repository }} --pattern "*.dmg" --dir release
+          ls -la release
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: diaryx-org/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Cask
+        run: |
+          VERSION=$(echo "${{ steps.tag.outputs.tag }}" | sed 's/^v//')
+          DMG_INTEL=$(cd release && ls *x64.dmg *x86_64.dmg 2>/dev/null | head -n1 || true)
+          DMG_ARM=$(cd release && ls *aarch64.dmg *arm64.dmg 2>/dev/null | head -n1 || true)
+
+          if [ -z "$DMG_INTEL" ] || [ -z "$DMG_ARM" ]; then
+            echo "Error: Could not find both Intel and ARM .dmg files" >&2
+            exit 1
+          fi
+
+          SHA_INTEL=$(sha256sum release/$DMG_INTEL | cut -d' ' -f1)
+          SHA_ARM=$(sha256sum release/$DMG_ARM | cut -d' ' -f1)
+
+          mkdir -p homebrew-tap/Casks
+          cat <<EOF > homebrew-tap/Casks/diaryx.rb
+          cask "diaryx" do
+            version "${VERSION}"
+
+            if Hardware::CPU.intel?
+              sha256 "${SHA_INTEL}"
+              url "https://github.com/diaryx-org/diaryx/releases/download/v#{version}/${DMG_INTEL}"
+            else
+              sha256 "${SHA_ARM}"
+              url "https://github.com/diaryx-org/diaryx/releases/download/v#{version}/${DMG_ARM}"
+            end
+
+            name "Diaryx"
+            desc "Local-first journal with audience visibility control"
+            homepage "https://diaryx.org/"
+
+            app "Diaryx.app"
+
+            zap trash: [
+              "~/Library/Application Support/org.diaryx.app",
+              "~/Library/Preferences/org.diaryx.app.plist",
+              "~/Library/Saved Application State/org.diaryx.app.savedState",
+            ]
+          end
+          EOF
+
+      - name: Commit and Push Cask to Homebrew tap
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/diaryx.rb
+          git commit -m "Update diaryx Cask to ${{ steps.tag.outputs.tag }}" || exit 0
+          git push origin main

@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.6.0
-updated: 2026-06-02T00:00:00-06:00
+updated: 2026-06-04T14:24:18-07:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -60,33 +60,6 @@ plugins:
         state: public
         email_on_publish: false
     namespace_id: e108abba-9268-4fa6-a786-f3b94cfe357e
-  diaryx.sync:
-    permissions:
-      read_files:
-        include:
-        - all
-        exclude: []
-      edit_files:
-        include:
-        - all
-        exclude: []
-      create_files:
-        include:
-        - all
-        exclude: []
-      delete_files:
-        include:
-        - all
-        exclude: []
-      http_requests:
-        include:
-        - all
-        exclude: []
-      plugin_storage:
-        include:
-        - all
-        exclude: []
-    workspace_id: 8fd558fa-1c3c-4260-a506-0f52866089e0
 links:
 - '[ROADMAP](/ROADMAP.md)'
 - '[PHILOSOPHY](/PHILOSOPHY.md)'

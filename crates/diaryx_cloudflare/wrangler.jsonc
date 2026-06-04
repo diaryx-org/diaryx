@@ -16,6 +16,10 @@
 		{
 			"tag": "v1",
 			"new_sqlite_classes": ["NamespaceSyncDO"]
+		},
+		{
+			"tag": "v2",
+			"deleted_classes": ["NamespaceSyncDO"]
 		}
 	],
 
@@ -77,15 +81,7 @@
 					"id": "92891768520a46e883f4eb111c02b4d8",
 					"remote": true
 				}
-			],
-			"durable_objects": {
-				"bindings": [
-					{
-						"name": "NAMESPACE_SYNC",
-						"class_name": "NamespaceSyncDO"
-					}
-				]
-			}
+			]
 		},
 		"dev": {
 			"vars": {
@@ -117,15 +113,7 @@
 					"binding": "diaryx_domain_mapping",
 					"id": "92891768520a46e883f4eb111c02b4d8"
 				}
-			],
-			"durable_objects": {
-				"bindings": [
-					{
-						"name": "NAMESPACE_SYNC",
-						"class_name": "NamespaceSyncDO"
-					}
-				]
-			}
+			]
 		}
 	}
 }

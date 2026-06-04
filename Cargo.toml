@@ -65,13 +65,26 @@ diaryx_plugin_sdk = { path = "crates/plugins/diaryx_plugin_sdk", version = "1.6.
 
 # cargo-release configuration
 [workspace.metadata.release]
-# Shared release configuration
 shared-version = true
+consolidate-commits = true
+push = false
+publish = false
+tag = false
 tag-name = "v{{version}}"
 tag-message = "Release v{{version}}"
 pre-release-commit-message = "chore: release v{{version}}"
-publish = true
-push = true
+
+[[workspace.metadata.release.pre-release-replacements]]
+file = "README.md"
+search = "diaryx = \"[0-9]+\\.[0-9]+\\.[0-9]+\""
+replace = "diaryx = \"{{version}}\""
+exactly = 0
+
+[[workspace.metadata.release.pre-release-replacements]]
+file = "README.md"
+search = "cargo install diaryx@[0-9]+\\.[0-9]+\\.[0-9]+"
+replace = "cargo install diaryx@{{version}}"
+exactly = 0
 
 [profile.release]
 # LTO and single codegen-unit improve WASM size (~20-30% smaller).

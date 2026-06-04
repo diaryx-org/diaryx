@@ -43,3 +43,7 @@ url = { version = "2", optional = true }
 wasmtime = "41"
 wasi-common = { version = "41", optional = true, features = ["sync"] }
 tempfile = { version = "3", optional = true }
+
+[package.metadata.release]
+# Extism runtime library should be published
+publish = true

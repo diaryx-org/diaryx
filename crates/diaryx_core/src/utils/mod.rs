@@ -52,7 +52,7 @@ pub fn is_workspace_skip_dir(path: &Path) -> bool {
 ///
 /// Examples:
 /// - `*.lock` matches `Cargo.lock`, `package-lock.json`
-/// - `*.toml` matches `Cargo.toml`, `release.toml`
+/// - `*.toml` matches `Cargo.toml`, `config.toml`
 /// - `build/*` matches `build/output.js` but not `build/sub/file.js`
 /// - `build/**` matches `build/output.js` and `build/sub/file.js`
 pub fn matches_glob_pattern(pattern: &str, path: &str) -> bool {
@@ -154,7 +154,7 @@ mod glob_tests {
         assert!(matches_glob_pattern("*.lock", "Cargo.lock"));
         assert!(!matches_glob_pattern("*.lock", "package-lock.json"));
         assert!(matches_glob_pattern("*.toml", "Cargo.toml"));
-        assert!(matches_glob_pattern("*.toml", "release.toml"));
+        assert!(matches_glob_pattern("*.toml", "config.toml"));
         assert!(matches_glob_pattern("*.md", "README.md"));
         assert!(!matches_glob_pattern("*.md", "file.txt"));
     }

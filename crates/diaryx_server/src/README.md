@@ -46,7 +46,7 @@ The `schema/` module is the single source of truth for the database schema. It c
 | Adapter | Mechanism |
 |---|---|
 | `diaryx_sync_server` | `db::schema::init_database()` reads `PRAGMA user_version`, applies pending migrations from `diaryx_server::schema::MIGRATIONS`, updates `user_version`. Legacy (pre-versioned) databases are detected and brought up to date via `legacy_migrate()`. |
-| `diaryx_cloudflare` | D1 migration files in `crates/diaryx_cloudflare/migrations/`. Applied by `wrangler d1 migrations apply`. Must be kept identical to the canonical SQL files. |
+| `diaryx_cloudflare` | D1 migration files in `crates/diaryx_cloudflare/migrations/`. Applied automatically in CI/CD via `wrangler d1 migrations apply` upon deployment. Must be kept identical to the canonical SQL files. |
 
 ### Non-SQLite adapters
 

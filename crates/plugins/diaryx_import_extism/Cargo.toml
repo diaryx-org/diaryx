@@ -20,7 +20,6 @@ diaryx_plugin_sdk = { workspace = true, features = ["core", "files"] }
 extism-pdk = "1.4"
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml_ng.workspace = true
 indexmap.workspace = true
 base64 = "0.22"
 chrono.workspace = true

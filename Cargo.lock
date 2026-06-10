@@ -2423,7 +2423,6 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
@@ -2523,7 +2522,6 @@ dependencies = [
  "pathdiff",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "thiserror 2.0.18",
 ]
 
@@ -2552,7 +2550,6 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
@@ -2611,7 +2608,6 @@ dependencies = [
  "mailparse",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "zip 2.4.2",
 ]
 
@@ -2652,7 +2648,6 @@ dependencies = [
  "pathdiff",
  "serde",
  "serde_json",
- "serde_yaml_ng",
 ]
 
 [[package]]
@@ -2683,7 +2678,6 @@ dependencies = [
  "pathdiff",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "urlencoding",
 ]
 
@@ -2793,7 +2787,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "tempfile",
  "tokio",
@@ -2836,7 +2829,6 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -2871,7 +2863,6 @@ dependencies = [
  "indexmap 2.13.1",
  "serde",
  "serde_json",
- "serde_yaml_ng",
 ]
 
 [[package]]
@@ -2891,7 +2882,6 @@ dependencies = [
  "pathdiff",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -3632,7 +3622,7 @@ dependencies = [
 [[package]]
 name = "fig"
 version = "0.0.0"
-source = "git+ssh://git@github.com/adammharris/fig.git?rev=4ce5b2a#4ce5b2ad56704873c17abd3f5b2b582bf89ae665"
+source = "git+ssh://git@github.com/adammharris/fig.git?rev=a66eb02#a66eb0293c7c835a01c8c4963537229c61fd3c09"
 dependencies = [
  "serde",
 ]
@@ -12630,7 +12620,6 @@ dependencies = [
  "indexmap 2.13.1",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "toml_edit 0.22.27",
  "ureq",

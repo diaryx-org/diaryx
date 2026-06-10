@@ -776,7 +776,7 @@ fn extract_title_from_file(path: &Path) -> Option<String> {
     let frontmatter_str = &rest[..end_idx];
 
     // Parse YAML
-    let frontmatter: yaml::Value = serde_yaml_ng::from_str(frontmatter_str).ok()?;
+    let frontmatter: yaml::Value = diaryx_core::yaml::from_str(frontmatter_str).ok()?;
 
     // Extract title
     if let yaml::Value::Mapping(map) = frontmatter
@@ -875,7 +875,7 @@ pub fn format_value(value: &yaml::Value) -> String {
             let items_str: Vec<String> = items.iter().map(format_value).collect();
             format!("[{}]", items_str.join(", "))
         }
-        _ => serde_yaml_ng::to_string(value)
+        _ => diaryx_core::yaml::to_string(value)
             .unwrap_or_default()
             .trim()
             .to_string(),

@@ -255,17 +255,14 @@ pub fn replace_body(content: &str, new_body: &str) -> String {
 /// rest of the document (comments, key order, formatting). Creates a
 /// frontmatter block when the document has none.
 ///
-/// fig's in-place editor splices the new value at its node span; it reliably
-/// edits *scalar* values but cannot reframe between inline and block forms for
-/// collections (e.g. replacing `contents: []` with a block list would emit the
-/// invalid `contents: - item`, and the reverse silently mis-parses). So a
-/// scalar value is edited in place (comment-preserving), while a sequence or
-/// mapping value reserializes the document wholesale (always valid YAML, but
-/// not comment-preserving for that one write). Extending comment preservation
-/// to collection values needs an inline/block reframing replace in fig's editor.
+/// fig's editor reframes inline↔block when replacing a mapping value (a scalar
+/// stays inline; a sequence/mapping descends onto its own lines), so both scalar
+/// and collection values edit in place and keep surrounding comments. The
+/// wholesale reserialize stays as a fallback for shapes fig can't splice
+/// (creating frontmatter where there is none, or a value fig's editor declines)
+/// — always valid YAML, though not comment-preserving for that one write.
 pub fn set_property_in_text(content: &str, key: &str, value: &Value) -> Result<String> {
-    let is_scalar = !matches!(value, Value::Sequence(_) | Value::Mapping(_));
-    if is_scalar && let Ok(mut fm) = Frontmatter::open(content.as_bytes()) {
+    if let Ok(mut fm) = Frontmatter::open(content.as_bytes()) {
         // Replace in place if the key exists, otherwise append it.
         let applied = match fm.replace(&[Segment::Key(key)], value) {
             Ok(()) => true,
@@ -520,6 +517,40 @@ mod tests {
         let parsed = parse(&out).unwrap();
         assert_eq!(parsed.frontmatter.get("title").unwrap().as_str(), Some("T"));
         assert!(parsed.body.contains("just body"));
+    }
+
+    #[test]
+    fn set_collection_property_preserves_comments() {
+        // Replacing an array value (a collection) keeps comments elsewhere —
+        // relies on fig's editor reframing the value in place rather than the
+        // whole-document reserialize fallback.
+        let tags = Value::Sequence(vec![Value::String("x".into()), Value::String("y".into())]);
+        let out = set_property_in_text(NOTE, "tags", &tags).unwrap();
+        assert!(out.contains("# keep this comment"), "comment lost: {out}");
+        let parsed = parse(&out).unwrap();
+        let got = parsed
+            .frontmatter
+            .get("tags")
+            .unwrap()
+            .as_sequence()
+            .unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].as_str(), Some("x"));
+        // A freshly-populated empty array reframes inline `[]` -> a block list.
+        let seeded = "---\ntitle: T\n# c\nitems: []\n---\nbody\n";
+        let out2 = set_property_in_text(seeded, "items", &tags).unwrap();
+        assert!(out2.contains("# c"));
+        assert_eq!(
+            parse(&out2)
+                .unwrap()
+                .frontmatter
+                .get("items")
+                .unwrap()
+                .as_sequence()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

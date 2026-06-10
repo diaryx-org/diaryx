@@ -14,10 +14,10 @@
 use std::path::Path;
 
 use diaryx_core::visibility;
+use diaryx_core::yaml::Value as YamlValue;
 use handlebars::Handlebars;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
-use serde_yaml_ng::Value as YamlValue;
 
 /// Render-time body template renderer.
 ///
@@ -184,41 +184,9 @@ pub fn render_for_audiences(
     }
 }
 
-/// Convert a `serde_yaml_ng::Value` to a `serde_json::Value`.
+/// Convert a YAML [`YamlValue`] to a `serde_json::Value`.
 pub fn yaml_to_json(value: &YamlValue) -> JsonValue {
-    match value {
-        YamlValue::Null => JsonValue::Null,
-        YamlValue::Bool(b) => JsonValue::Bool(*b),
-        YamlValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                JsonValue::Number(i.into())
-            } else if let Some(u) = n.as_u64() {
-                JsonValue::Number(u.into())
-            } else if let Some(f) = n.as_f64() {
-                serde_json::Number::from_f64(f)
-                    .map(JsonValue::Number)
-                    .unwrap_or(JsonValue::Null)
-            } else {
-                JsonValue::Null
-            }
-        }
-        YamlValue::String(s) => JsonValue::String(s.clone()),
-        YamlValue::Sequence(seq) => JsonValue::Array(seq.iter().map(yaml_to_json).collect()),
-        YamlValue::Mapping(map) => {
-            let obj: serde_json::Map<String, JsonValue> = map
-                .iter()
-                .filter_map(|(k, v)| {
-                    let key = match k {
-                        YamlValue::String(s) => s.clone(),
-                        other => serde_yaml_ng::to_string(other).ok()?.trim().to_string(),
-                    };
-                    Some((key, yaml_to_json(v)))
-                })
-                .collect();
-            JsonValue::Object(obj)
-        }
-        YamlValue::Tagged(tagged) => yaml_to_json(&tagged.value),
-    }
+    JsonValue::from(value.clone())
 }
 
 #[cfg(test)]
@@ -226,7 +194,7 @@ mod tests {
     use super::*;
 
     fn make_frontmatter(yaml: &str) -> IndexMap<String, YamlValue> {
-        serde_yaml_ng::from_str(yaml).unwrap()
+        diaryx_core::yaml::from_str(yaml).unwrap()
     }
 
     #[test]

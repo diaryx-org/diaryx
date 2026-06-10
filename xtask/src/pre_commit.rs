@@ -1,5 +1,4 @@
 use crate::util::{run_checked, workspace_root};
-use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -276,11 +275,12 @@ fn run_check_yaml(root: &Path, paths: &[String], failures: &mut Vec<String>) {
     for rel in yamls {
         let abs = root.join(rel);
         let Ok(bytes) = fs::read(&abs) else { continue };
-        for (idx, doc) in serde_yaml_ng::Deserializer::from_slice(&bytes).enumerate() {
-            if let Err(e) = serde_yaml_ng::Value::deserialize(doc) {
-                failures.push(format!("check-yaml: {rel} (doc {idx}): {e}"));
-                break;
-            }
+        let text = String::from_utf8_lossy(&bytes);
+        // Validate with fig — the project's own YAML parser. Multi-document YAML
+        // is out of fig's scope (the repo uses single-document YAML); such a file
+        // would be flagged here.
+        if let Err(e) = diaryx_core::yaml::from_str::<diaryx_core::yaml::Value>(&text) {
+            failures.push(format!("check-yaml: {rel}: {e}"));
         }
     }
 }

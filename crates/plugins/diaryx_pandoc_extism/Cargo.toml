@@ -16,7 +16,6 @@ pathdiff = "0.2"
 extism-pdk = "1.4"
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml_ng.workspace = true
 indexmap.workspace = true
 base64 = "0.22"
 log = "0.4"

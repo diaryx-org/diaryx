@@ -14,11 +14,11 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::creation::{Template, TemplateContext, TemplateInfo};
 use chrono::{DateTime, FixedOffset};
+use diaryx_core::yaml::Value as YamlValue;
 use diaryx_plugin_sdk::prelude::*;
 use extism_pdk::*;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
-use serde_yaml_ng::Value as YamlValue;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct InitParams {
@@ -370,32 +370,9 @@ fn dispatch_command(command: &str, params: JsonValue) -> Result<JsonValue, Strin
     }
 }
 
-/// Convert `serde_json::Value` to `serde_yaml_ng::Value`.
+/// Convert `serde_json::Value` to a YAML [`YamlValue`].
 fn json_to_yaml(value: &JsonValue) -> YamlValue {
-    match value {
-        JsonValue::Null => YamlValue::Null,
-        JsonValue::Bool(b) => YamlValue::Bool(*b),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                YamlValue::Number(i.into())
-            } else if let Some(u) = n.as_u64() {
-                YamlValue::Number(u.into())
-            } else if let Some(f) = n.as_f64() {
-                YamlValue::Number(serde_yaml_ng::Number::from(f))
-            } else {
-                YamlValue::Null
-            }
-        }
-        JsonValue::String(s) => YamlValue::String(s.clone()),
-        JsonValue::Array(arr) => YamlValue::Sequence(arr.iter().map(json_to_yaml).collect()),
-        JsonValue::Object(map) => {
-            let mapping: serde_yaml_ng::Mapping = map
-                .iter()
-                .map(|(k, v)| (YamlValue::String(k.clone()), json_to_yaml(v)))
-                .collect();
-            YamlValue::Mapping(mapping)
-        }
-    }
+    YamlValue::from(value.clone())
 }
 
 fn all_commands() -> Vec<String> {

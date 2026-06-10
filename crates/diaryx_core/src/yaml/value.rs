@@ -279,7 +279,7 @@ impl std::fmt::Display for Value {
                 f.write_str(buf.format(*v))
             }
             Value::String(s) => write!(f, "{s}"),
-            Value::Sequence(_) | Value::Mapping(_) => match serde_yaml_ng::to_string(self) {
+            Value::Sequence(_) | Value::Mapping(_) => match super::to_string(self) {
                 Ok(s) => write!(f, "{}", s.trim()),
                 Err(_) => write!(f, "<complex value>"),
             },
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn round_trip_yaml() {
         let yaml = "title: Hello\ncount: 42\ntags:\n- a\n- b\n";
-        let value: Value = serde_yaml_ng::from_str(yaml).unwrap();
+        let value: Value = crate::yaml::from_str(yaml).unwrap();
 
         assert!(value.is_mapping());
         let map = value.as_mapping().unwrap();

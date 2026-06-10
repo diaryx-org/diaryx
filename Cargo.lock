@@ -2491,6 +2491,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "crossfs",
+ "fig",
  "futures-lite 2.6.1",
  "futures-util",
  "indexmap 2.13.1",
@@ -3626,6 +3627,14 @@ checksum = "38e2275cc4e4fc009b0669731a1e5ab7ebf11f469eaede2bab9309a5b4d6057f"
 dependencies = [
  "memoffset",
  "rustc_version",
+]
+
+[[package]]
+name = "fig"
+version = "0.0.0"
+source = "git+ssh://git@github.com/adammharris/fig.git?rev=4ce5b2a#4ce5b2ad56704873c17abd3f5b2b582bf89ae665"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

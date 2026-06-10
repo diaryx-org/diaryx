@@ -46,8 +46,8 @@ license-file = "LICENSE.md"
 
 [workspace.dependencies]
 # Shared dependencies across workspace
-# fig: Zig-backed YAML parser/editor (replacing serde_yaml_ng). SPIKE: linking test.
-fig = { git = "ssh://git@github.com/adammharris/fig.git", rev = "2bbd912" }
+# fig: Zig-backed YAML parser/editor (replaces serde_yaml_ng in diaryx_core).
+fig = { git = "ssh://git@github.com/adammharris/fig.git", rev = "4ce5b2a" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml_ng = "0.10"

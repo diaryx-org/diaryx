@@ -515,11 +515,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 source: e,
             })?;
 
-        let (frontmatter_str, body) = bookmatter::frontmatter::yaml::split(&content)
+        let (frontmatter_str, body) = crate::frontmatter::split(&content)
             .ok_or_else(|| DiaryxError::NoFrontmatter(path.to_path_buf()))?;
 
         let frontmatter: IndexFrontmatter =
-            bookmatter::yaml::from_str(frontmatter_str).map_err(|e| DiaryxError::YamlParse {
+            crate::yaml::from_str(frontmatter_str).map_err(|e| DiaryxError::YamlParse {
                 path: path.to_path_buf(),
                 message: e.to_string(),
             })?;
@@ -1139,12 +1139,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             format!("{}\n\n{}", target_index.body.trim_end(), source_index.body)
         };
 
-        let content =
-            bookmatter::frontmatter::yaml::serialize_with_body(&target_frontmatter, &new_body)
-                .map_err(|e| DiaryxError::YamlParse {
-                    path: target_path.to_path_buf(),
-                    message: e.to_string(),
-                })?;
+        let content = crate::frontmatter::serialize_with_body(&target_frontmatter, &new_body)
+            .map_err(|e| DiaryxError::YamlParse {
+                path: target_path.to_path_buf(),
+                message: e.to_string(),
+            })?;
 
         self.fs
             .write(target_path, content.as_bytes())
@@ -1421,7 +1420,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     source: e,
                 })?;
 
-        let parsed = bookmatter::frontmatter::yaml::parse_or_empty(&content)?;
+        let parsed = crate::frontmatter::parse_or_empty(&content)?;
         let mut frontmatter = parsed.frontmatter;
         let body = parsed.body;
 
@@ -1463,7 +1462,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         // Set the new field value
         config_map.insert(field.to_string(), yaml_value);
 
-        let new_content = bookmatter::frontmatter::yaml::serialize(&frontmatter, &body)?;
+        let new_content = crate::frontmatter::serialize(&frontmatter, &body)?;
 
         self.fs
             .write(root_index_path, new_content.as_bytes())
@@ -2310,12 +2309,10 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             }
         };
 
-        match bookmatter::frontmatter::yaml::parse(&content) {
+        match crate::frontmatter::parse(&content) {
             Ok(parsed) => Ok(parsed.frontmatter.get(key).cloned()),
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => Ok(None),
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::Yaml(err)) => {
-                Err(DiaryxError::Yaml(err))
-            }
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => Ok(None),
+            Err(crate::frontmatter::FrontmatterError::Yaml(err)) => Err(DiaryxError::Yaml(err)),
         }
     }
 
@@ -2332,7 +2329,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 // Create new file with just this property
                 let mut frontmatter = indexmap::IndexMap::new();
                 frontmatter.insert(key.to_string(), value);
-                let new_content = bookmatter::frontmatter::yaml::serialize(&frontmatter, "")?;
+                let new_content = crate::frontmatter::serialize(&frontmatter, "")?;
                 return self
                     .fs
                     .write(path, new_content.as_bytes())
@@ -2350,12 +2347,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             }
         };
 
-        let parsed = bookmatter::frontmatter::yaml::parse_or_empty(&content)?;
+        let parsed = crate::frontmatter::parse_or_empty(&content)?;
         let mut frontmatter = parsed.frontmatter;
         let body = parsed.body;
 
         frontmatter.insert(key.to_string(), value);
-        let new_content = bookmatter::frontmatter::yaml::serialize(&frontmatter, &body)?;
+        let new_content = crate::frontmatter::serialize(&frontmatter, &body)?;
 
         self.fs
             .write(path, new_content.as_bytes())
@@ -2373,10 +2370,10 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             Err(_) => return Ok(()), // File doesn't exist, nothing to remove
         };
 
-        let parsed = match bookmatter::frontmatter::yaml::parse(&content) {
+        let parsed = match crate::frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => return Ok(()),
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::Yaml(err)) => {
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(crate::frontmatter::FrontmatterError::Yaml(err)) => {
                 return Err(DiaryxError::Yaml(err));
             }
         };
@@ -2384,7 +2381,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let body = parsed.body;
         frontmatter.shift_remove(key);
 
-        let new_content = bookmatter::frontmatter::yaml::serialize(&frontmatter, &body)?;
+        let new_content = crate::frontmatter::serialize(&frontmatter, &body)?;
 
         self.fs
             .write(path, new_content.as_bytes())
@@ -4250,11 +4247,11 @@ fn is_root_index_sync(fs: &dyn crate::fs::FileSystem, path: &Path) -> bool {
         Err(_) => return false,
     };
 
-    let frontmatter_str = match bookmatter::frontmatter::yaml::split(&content) {
+    let frontmatter_str = match crate::frontmatter::split(&content) {
         Some((yaml_value, _)) => yaml_value,
         None => return false,
     };
-    match bookmatter::yaml::from_str::<IndexFrontmatter>(frontmatter_str) {
+    match crate::yaml::from_str::<IndexFrontmatter>(frontmatter_str) {
         Ok(fm) => fm.is_root(),
         Err(_) => false,
     }

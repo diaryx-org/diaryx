@@ -1149,19 +1149,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bookmatter"
-version = "1.6.0"
-dependencies = [
- "indexmap 2.13.1",
- "ryu",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "thiserror 2.0.18",
- "ts-rs",
-]
-
-[[package]]
 name = "brotli"
 version = "8.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2502,7 +2489,6 @@ name = "diaryx_core"
 version = "1.6.0"
 dependencies = [
  "async-trait",
- "bookmatter",
  "chrono",
  "crossfs",
  "futures-lite 2.6.1",
@@ -2513,6 +2499,7 @@ dependencies = [
  "ryu",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",

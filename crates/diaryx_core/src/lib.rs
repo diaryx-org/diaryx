@@ -38,12 +38,10 @@ pub mod fs;
 /// Search (query frontmatter or search content)
 pub mod search;
 
-/// Frontmatter parsing and manipulation utilities.
+/// Frontmatter parsing and manipulation utilities (YAML between `---` fences).
 ///
-/// Re-exported from the [`bookmatter`] crate, where this module now lives.
-pub mod frontmatter {
-    pub use bookmatter::frontmatter::yaml::*;
-}
+/// Formerly the `bookmatter` crate, consolidated into diaryx_core.
+pub mod frontmatter;
 
 /// Audience visibility directive filtering for markdown bodies
 pub mod visibility;
@@ -79,10 +77,8 @@ pub mod plugin;
 
 /// YAML format primitives (Value, Mapping, Error, from_str, to_string).
 ///
-/// Re-exported from the [`bookmatter`] crate, where this module now lives.
-pub mod yaml {
-    pub use bookmatter::yaml::*;
-}
+/// Formerly the `bookmatter` crate, consolidated into diaryx_core.
+pub mod yaml;
 
 // Re-exports for backwards compatibility
 pub use utils::date;

@@ -21,13 +21,13 @@ use std::path::PathBuf;
 use serde::Serialize;
 use thiserror::Error;
 
-impl From<bookmatter::frontmatter::yaml::FrontmatterError> for DiaryxError {
-    fn from(err: bookmatter::frontmatter::yaml::FrontmatterError) -> Self {
+impl From<crate::frontmatter::FrontmatterError> for DiaryxError {
+    fn from(err: crate::frontmatter::FrontmatterError) -> Self {
         match err {
-            bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter => {
+            crate::frontmatter::FrontmatterError::NoFrontmatter => {
                 DiaryxError::NoFrontmatter(PathBuf::new())
             }
-            bookmatter::frontmatter::yaml::FrontmatterError::Yaml(e) => DiaryxError::Yaml(e),
+            crate::frontmatter::FrontmatterError::Yaml(e) => DiaryxError::Yaml(e),
         }
     }
 }
@@ -86,9 +86,9 @@ pub enum DiaryxError {
 
     /// An error that occured while serializing or deserializing YAML data from the frontmatter.
     ///
-    /// Inherited from `bookmatter::yaml::Error` (deserialization)
+    /// Inherited from `crate::yaml::Error` (deserialization)
     #[error("YAML parsing error: {0}")]
-    Yaml(#[from] bookmatter::yaml::Error),
+    Yaml(#[from] crate::yaml::Error),
 
     /// YAML parsing error with file path context.
     /// Use this when you know which file caused the YAML parse error.

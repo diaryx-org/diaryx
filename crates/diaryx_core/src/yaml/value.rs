@@ -291,7 +291,6 @@ impl std::fmt::Display for Value {
 // Conversions
 // ============================================================================
 
-#[cfg(feature = "json")]
 impl From<serde_json::Value> for Value {
     fn from(json: serde_json::Value) -> Self {
         match json {
@@ -319,7 +318,6 @@ impl From<serde_json::Value> for Value {
     }
 }
 
-#[cfg(feature = "json")]
 impl From<Value> for serde_json::Value {
     fn from(yaml: Value) -> Self {
         match yaml {
@@ -390,7 +388,6 @@ mod tests {
         assert!(map.get("tags").unwrap().is_sequence());
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn json_round_trip() {
         let yaml_val = Value::Mapping(IndexMap::from([

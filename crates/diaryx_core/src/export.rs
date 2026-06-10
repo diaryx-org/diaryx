@@ -436,9 +436,9 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         filtered: &[String],
         options: &ExportOptions,
     ) -> Result<String> {
-        let parsed = match bookmatter::frontmatter::yaml::parse(content) {
+        let parsed = match crate::frontmatter::parse(content) {
             Ok(p) => p,
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => {
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => {
                 // Distinguish "no opener at all" (pass through) from "opened but
                 // never closed" (hard error) — preserves pre-migration behavior.
                 if content.starts_with("---\n") || content.starts_with("---\r\n") {
@@ -446,7 +446,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
                 }
                 return Ok(content.to_string());
             }
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::Yaml(err)) => {
+            Err(crate::frontmatter::FrontmatterError::Yaml(err)) => {
                 return Err(DiaryxError::Yaml(err));
             }
         };
@@ -471,20 +471,17 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
             frontmatter.shift_remove("audience");
         }
 
-        Ok(bookmatter::frontmatter::yaml::serialize(
-            &frontmatter,
-            &body,
-        )?)
+        Ok(crate::frontmatter::serialize(&frontmatter, &body)?)
     }
 
     /// Remove audience property from a file.
     fn remove_audience_property(&self, content: &str) -> Result<String> {
-        let parsed = match bookmatter::frontmatter::yaml::parse(content) {
+        let parsed = match crate::frontmatter::parse(content) {
             Ok(p) => p,
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => {
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => {
                 return Ok(content.to_string());
             }
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::Yaml(err)) => {
+            Err(crate::frontmatter::FrontmatterError::Yaml(err)) => {
                 return Err(DiaryxError::Yaml(err));
             }
         };
@@ -496,10 +493,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
             return Ok(content.to_string());
         }
 
-        Ok(bookmatter::frontmatter::yaml::serialize(
-            &frontmatter,
-            &body,
-        )?)
+        Ok(crate::frontmatter::serialize(&frontmatter, &body)?)
     }
 }
 

@@ -207,9 +207,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         let content = self.read_raw(path).await?;
         match frontmatter::parse(&content) {
             Ok(parsed) => Ok(parsed.frontmatter),
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => {
-                Ok(IndexMap::new())
-            }
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => Ok(IndexMap::new()),
             Err(e) => Err(e.into()),
         }
     }
@@ -250,7 +248,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let mut parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
 
@@ -268,7 +266,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
 
@@ -531,7 +529,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let mut parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
 
@@ -567,7 +565,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
         let parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
-            Err(bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
 

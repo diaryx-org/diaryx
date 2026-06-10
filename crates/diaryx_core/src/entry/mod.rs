@@ -114,11 +114,11 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
                 source: e,
             })?;
 
-        let parsed = bookmatter::frontmatter::yaml::parse(&content).map_err(|e| match e {
-            bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter => {
+        let parsed = crate::frontmatter::parse(&content).map_err(|e| match e {
+            crate::frontmatter::FrontmatterError::NoFrontmatter => {
                 DiaryxError::NoFrontmatter(path_buf.clone())
             }
-            bookmatter::frontmatter::yaml::FrontmatterError::Yaml(err) => DiaryxError::Yaml(err),
+            crate::frontmatter::FrontmatterError::Yaml(err) => DiaryxError::Yaml(err),
         })?;
 
         Ok((parsed.frontmatter, parsed.body))
@@ -149,7 +149,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
             }
         };
 
-        let parsed = bookmatter::frontmatter::yaml::parse_or_empty(&content)?;
+        let parsed = crate::frontmatter::parse_or_empty(&content)?;
         Ok((parsed.frontmatter, parsed.body))
     }
 
@@ -160,7 +160,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         frontmatter: &IndexMap<String, yaml::Value>,
         body: &str,
     ) -> Result<()> {
-        let content = bookmatter::frontmatter::yaml::serialize(frontmatter, body)?;
+        let content = crate::frontmatter::serialize(frontmatter, body)?;
         self.fs
             .write(std::path::Path::new(path), content.as_bytes())
             .await
@@ -444,11 +444,11 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
                 source: e,
             })?;
 
-        let parsed = bookmatter::frontmatter::yaml::parse(&content).map_err(|e| match e {
-            bookmatter::frontmatter::yaml::FrontmatterError::NoFrontmatter => {
+        let parsed = crate::frontmatter::parse(&content).map_err(|e| match e {
+            crate::frontmatter::FrontmatterError::NoFrontmatter => {
                 DiaryxError::NoFrontmatter(path_buf.clone())
             }
-            bookmatter::frontmatter::yaml::FrontmatterError::Yaml(err) => DiaryxError::Yaml(err),
+            crate::frontmatter::FrontmatterError::Yaml(err) => DiaryxError::Yaml(err),
         })?;
 
         Ok((parsed.frontmatter, parsed.body))
@@ -479,7 +479,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
             }
         };
 
-        let parsed = bookmatter::frontmatter::yaml::parse_or_empty(&content)?;
+        let parsed = crate::frontmatter::parse_or_empty(&content)?;
         Ok((parsed.frontmatter, parsed.body))
     }
 
@@ -490,7 +490,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         frontmatter: &IndexMap<String, yaml::Value>,
         body: &str,
     ) -> Result<()> {
-        let content = bookmatter::frontmatter::yaml::serialize(frontmatter, body)?;
+        let content = crate::frontmatter::serialize(frontmatter, body)?;
         self.fs
             .write_file(std::path::Path::new(path), &content)
             .map_err(|e| DiaryxError::FileWrite {
@@ -726,11 +726,11 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
             Err(_) => return Ok(None),
         };
 
-        let frontmatter_str = match bookmatter::frontmatter::yaml::split(&content) {
+        let frontmatter_str = match crate::frontmatter::split(&content) {
             Some((yaml, _body)) => yaml,
             None => return Ok(None),
         };
-        let frontmatter: IndexFrontmatter = match bookmatter::yaml::from_str(frontmatter_str) {
+        let frontmatter: IndexFrontmatter = match crate::yaml::from_str(frontmatter_str) {
             Ok(fm) => fm,
             Err(_) => return Ok(None),
         };

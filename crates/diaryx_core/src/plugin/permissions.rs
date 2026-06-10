@@ -729,8 +729,8 @@ mod tests {
             },
         };
 
-        let yaml = bookmatter::yaml::to_string(&config).unwrap();
-        let parsed: PluginConfig = bookmatter::yaml::from_str(&yaml).unwrap();
+        let yaml = crate::yaml::to_string(&config).unwrap();
+        let parsed: PluginConfig = crate::yaml::from_str(&yaml).unwrap();
 
         assert_eq!(parsed.download, config.download);
         assert!(parsed.permissions.read_files.is_some());

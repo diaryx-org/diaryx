@@ -450,50 +450,39 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
                 return Err(DiaryxError::Yaml(err));
             }
         };
-        let mut frontmatter = parsed.frontmatter;
-        let body = parsed.body;
-
-        // Filter contents array
-        if let Some(contents) = frontmatter.get_mut("contents")
-            && let Some(arr) = contents.as_sequence_mut()
-        {
-            arr.retain(|item| {
-                if let Some(s) = item.as_str() {
-                    !filtered.iter().any(|f| f == s)
-                } else {
-                    true
-                }
-            });
+        // Filter the `contents` array, replacing only that node (the rest of
+        // the frontmatter — comments, key order — is preserved by fig).
+        let mut out = content.to_string();
+        if let Some(crate::yaml::Value::Sequence(arr)) = parsed.frontmatter.get("contents") {
+            let kept: Vec<crate::yaml::Value> = arr
+                .iter()
+                .filter(|item| match item.as_str() {
+                    Some(s) => !filtered.iter().any(|f| f == s),
+                    None => true,
+                })
+                .cloned()
+                .collect();
+            out = crate::frontmatter::set_property_in_text(
+                &out,
+                "contents",
+                &crate::yaml::Value::Sequence(kept),
+            )?;
         }
 
         // Optionally remove audience property
         if !options.keep_audience {
-            frontmatter.shift_remove("audience");
+            out = crate::frontmatter::remove_property_in_text(&out, "audience")?;
         }
 
-        Ok(crate::frontmatter::serialize(&frontmatter, &body)?)
+        Ok(out)
     }
 
-    /// Remove audience property from a file.
+    /// Remove audience property from a file (comment-preserving; returns the
+    /// text unchanged when there is no frontmatter or no `audience` key).
     fn remove_audience_property(&self, content: &str) -> Result<String> {
-        let parsed = match crate::frontmatter::parse(content) {
-            Ok(p) => p,
-            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => {
-                return Ok(content.to_string());
-            }
-            Err(crate::frontmatter::FrontmatterError::Yaml(err)) => {
-                return Err(DiaryxError::Yaml(err));
-            }
-        };
-        let mut frontmatter = parsed.frontmatter;
-        let body = parsed.body;
-
-        if frontmatter.shift_remove("audience").is_none() {
-            // No audience property — preserve original byte-for-byte
-            return Ok(content.to_string());
-        }
-
-        Ok(crate::frontmatter::serialize(&frontmatter, &body)?)
+        Ok(crate::frontmatter::remove_property_in_text(
+            content, "audience",
+        )?)
     }
 }
 

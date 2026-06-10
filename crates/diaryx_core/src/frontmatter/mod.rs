@@ -4,6 +4,7 @@
 //! `---` fences and a YAML body in between. For format-only parsing (no
 //! delimiter handling), see [`crate::yaml`].
 
+use fig::{Frontmatter, Segment};
 use indexmap::IndexMap;
 use thiserror::Error;
 
@@ -239,6 +240,86 @@ pub fn replace_body(content: &str, new_body: &str) -> String {
     format!("{}\n{}", &content[..header_end], new_body)
 }
 
+// ============================================================================
+// Comment-preserving in-place edits (fig backend)
+//
+// Unlike [`serialize`], which reserializes the whole frontmatter (discarding
+// comments and original formatting), these edit only the targeted node's bytes
+// via fig's frontmatter editor — comments, key order, quoting, and blank lines
+// everywhere else stay byte-identical. Each takes the full markdown text and
+// returns the new text. They operate on top-level frontmatter keys (the shape
+// Diaryx's property commands use).
+// ============================================================================
+
+/// Set (insert-or-replace) a top-level frontmatter property, preserving the
+/// rest of the document (comments, key order, formatting). Creates a
+/// frontmatter block when the document has none.
+///
+/// fig's in-place editor splices the new value at its node span; it reliably
+/// edits *scalar* values but cannot reframe between inline and block forms for
+/// collections (e.g. replacing `contents: []` with a block list would emit the
+/// invalid `contents: - item`, and the reverse silently mis-parses). So a
+/// scalar value is edited in place (comment-preserving), while a sequence or
+/// mapping value reserializes the document wholesale (always valid YAML, but
+/// not comment-preserving for that one write). Extending comment preservation
+/// to collection values needs an inline/block reframing replace in fig's editor.
+pub fn set_property_in_text(content: &str, key: &str, value: &Value) -> Result<String> {
+    let is_scalar = !matches!(value, Value::Sequence(_) | Value::Mapping(_));
+    if is_scalar && let Ok(mut fm) = Frontmatter::open(content.as_bytes()) {
+        // Replace in place if the key exists, otherwise append it.
+        let applied = match fm.replace(&[Segment::Key(key)], value) {
+            Ok(()) => true,
+            Err(fig::Error::NotFound) => fm.insert(&[], key, value).is_ok(),
+            Err(_) => false,
+        };
+        if applied {
+            return Ok(fm.render()?.to_string());
+        }
+    }
+    wholesale_set(content, key, value)
+}
+
+/// Fallback for [`set_property_in_text`]: parse, set the key in the map, and
+/// reserialize the whole frontmatter. Correct but not comment-preserving.
+fn wholesale_set(content: &str, key: &str, value: &Value) -> Result<String> {
+    let parsed = parse_or_empty(content)?;
+    let mut map = parsed.frontmatter;
+    map.insert(key.to_string(), value.clone());
+    serialize(&map, &parsed.body)
+}
+
+/// Remove a top-level frontmatter property. Returns the text unchanged when the
+/// document has no frontmatter or the key is absent.
+pub fn remove_property_in_text(content: &str, key: &str) -> Result<String> {
+    match Frontmatter::open(content.as_bytes()) {
+        Ok(mut fm) => match fm.delete(&[Segment::Key(key)]) {
+            Ok(()) => Ok(fm.render()?.to_string()),
+            Err(fig::Error::NotFound) => Ok(content.to_string()),
+            Err(e) => Err(e.into()),
+        },
+        Err(fig::Error::NotFound) => Ok(content.to_string()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Rename a top-level frontmatter key in place (value and position preserved).
+/// Returns `None` when the document has no frontmatter or the key is absent.
+pub fn rename_property_in_text(
+    content: &str,
+    old_key: &str,
+    new_key: &str,
+) -> Result<Option<String>> {
+    match Frontmatter::open(content.as_bytes()) {
+        Ok(mut fm) => match fm.replace_key(&[Segment::Key(old_key)], new_key) {
+            Ok(()) => Ok(Some(fm.render()?.to_string())),
+            Err(fig::Error::NotFound) => Ok(None),
+            Err(e) => Err(e.into()),
+        },
+        Err(fig::Error::NotFound) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Sort frontmatter keys alphabetically.
 pub fn sort_alphabetically(frontmatter: IndexMap<String, Value>) -> IndexMap<String, Value> {
     let mut pairs: Vec<_> = frontmatter.into_iter().collect();
@@ -401,5 +482,88 @@ mod tests {
         let sorted = sort_by_pattern(fm, "title,*");
         let keys: Vec<_> = sorted.keys().collect();
         assert_eq!(keys, vec!["title", "apple", "zebra"]);
+    }
+
+    // ---- comment-preserving in-place edits ----
+
+    const NOTE: &str =
+        "---\ntitle: Hello\n# keep this comment\ntags:\n- a\n- b\n---\n# Body\n\nprose\n";
+
+    #[test]
+    fn set_property_replaces_preserving_comment_and_body() {
+        let out = set_property_in_text(NOTE, "title", &Value::String("Hi there".into())).unwrap();
+        assert!(out.contains("title: Hi there"));
+        assert!(out.contains("# keep this comment"));
+        assert!(out.contains("prose"));
+        // Re-reading reflects the change.
+        let parsed = parse(&out).unwrap();
+        assert_eq!(
+            parsed.frontmatter.get("title").unwrap().as_str(),
+            Some("Hi there")
+        );
+    }
+
+    #[test]
+    fn set_property_inserts_new_key() {
+        let out = set_property_in_text(NOTE, "author", &Value::String("me".into())).unwrap();
+        let parsed = parse(&out).unwrap();
+        assert_eq!(
+            parsed.frontmatter.get("author").unwrap().as_str(),
+            Some("me")
+        );
+        assert!(out.contains("# keep this comment"));
+    }
+
+    #[test]
+    fn set_property_creates_frontmatter_when_missing() {
+        let out = set_property_in_text("just body\n", "title", &Value::String("T".into())).unwrap();
+        let parsed = parse(&out).unwrap();
+        assert_eq!(parsed.frontmatter.get("title").unwrap().as_str(), Some("T"));
+        assert!(parsed.body.contains("just body"));
+    }
+
+    #[test]
+    fn remove_property_drops_key_keeps_comment() {
+        let out = remove_property_in_text(NOTE, "title").unwrap();
+        assert!(!out.contains("title:"));
+        assert!(out.contains("# keep this comment"));
+        assert!(out.contains("prose"));
+    }
+
+    #[test]
+    fn remove_absent_key_is_unchanged() {
+        assert_eq!(remove_property_in_text(NOTE, "nope").unwrap(), NOTE);
+        assert_eq!(
+            remove_property_in_text("plain body", "x").unwrap(),
+            "plain body"
+        );
+    }
+
+    #[test]
+    fn rename_property_preserves_value_and_returns_some() {
+        let out = rename_property_in_text(NOTE, "title", "name")
+            .unwrap()
+            .unwrap();
+        let parsed = parse(&out).unwrap();
+        assert!(parsed.frontmatter.get("title").is_none());
+        assert_eq!(
+            parsed.frontmatter.get("name").unwrap().as_str(),
+            Some("Hello")
+        );
+        assert!(out.contains("# keep this comment"));
+    }
+
+    #[test]
+    fn rename_absent_or_no_frontmatter_returns_none() {
+        assert!(
+            rename_property_in_text(NOTE, "nope", "x")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            rename_property_in_text("plain", "a", "b")
+                .unwrap()
+                .is_none()
+        );
     }
 }

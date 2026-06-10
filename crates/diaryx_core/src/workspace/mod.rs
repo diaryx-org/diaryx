@@ -2316,7 +2316,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         }
     }
 
-    /// Set a frontmatter property in a file
+    /// Set a frontmatter property in a file (comment-preserving in-place edit;
+    /// creates the file/frontmatter when missing).
     pub async fn set_frontmatter_property(
         &self,
         path: &Path,
@@ -2325,20 +2326,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     ) -> Result<()> {
         let content = match self.fs.read_to_string(path).await {
             Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Create new file with just this property
-                let mut frontmatter = indexmap::IndexMap::new();
-                frontmatter.insert(key.to_string(), value);
-                let new_content = crate::frontmatter::serialize(&frontmatter, "")?;
-                return self
-                    .fs
-                    .write(path, new_content.as_bytes())
-                    .await
-                    .map_err(|e| DiaryxError::FileWrite {
-                        path: path.to_path_buf(),
-                        source: e,
-                    });
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => {
                 return Err(DiaryxError::FileRead {
                     path: path.to_path_buf(),
@@ -2346,16 +2334,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 });
             }
         };
-
-        let parsed = crate::frontmatter::parse_or_empty(&content)?;
-        let mut frontmatter = parsed.frontmatter;
-        let body = parsed.body;
-
-        frontmatter.insert(key.to_string(), value);
-        let new_content = crate::frontmatter::serialize(&frontmatter, &body)?;
-
+        let updated = crate::frontmatter::set_property_in_text(&content, key, &value)?;
         self.fs
-            .write(path, new_content.as_bytes())
+            .write(path, updated.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: path.to_path_buf(),
@@ -2363,33 +2344,23 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             })
     }
 
-    /// Remove a frontmatter property from a file
+    /// Remove a frontmatter property from a file (comment-preserving).
     async fn remove_frontmatter_property(&self, path: &Path, key: &str) -> Result<()> {
         let content = match self.fs.read_to_string(path).await {
             Ok(c) => c,
             Err(_) => return Ok(()), // File doesn't exist, nothing to remove
         };
-
-        let parsed = match crate::frontmatter::parse(&content) {
-            Ok(p) => p,
-            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
-            Err(crate::frontmatter::FrontmatterError::Yaml(err)) => {
-                return Err(DiaryxError::Yaml(err));
-            }
-        };
-        let mut frontmatter = parsed.frontmatter;
-        let body = parsed.body;
-        frontmatter.shift_remove(key);
-
-        let new_content = crate::frontmatter::serialize(&frontmatter, &body)?;
-
-        self.fs
-            .write(path, new_content.as_bytes())
-            .await
-            .map_err(|e| DiaryxError::FileWrite {
-                path: path.to_path_buf(),
-                source: e,
-            })
+        let updated = crate::frontmatter::remove_property_in_text(&content, key)?;
+        if updated != content {
+            self.fs
+                .write(path, updated.as_bytes())
+                .await
+                .map_err(|e| DiaryxError::FileWrite {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?;
+        }
+        Ok(())
     }
 
     /// Normalize a path string by stripping leading "./" prefix

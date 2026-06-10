@@ -171,7 +171,35 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         Ok(())
     }
 
+    /// Reads a file's full text, returning an empty string if it doesn't exist.
+    async fn read_text_or_empty(&self, path: &str) -> Result<String> {
+        match self.fs.read_to_string(std::path::Path::new(path)).await {
+            Ok(c) => Ok(c),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(DiaryxError::FileRead {
+                path: PathBuf::from(path),
+                source: e,
+            }),
+        }
+    }
+
+    /// Writes full text to a file.
+    async fn write_text(&self, path: &str, text: &str) -> Result<()> {
+        self.fs
+            .write(std::path::Path::new(path), text.as_bytes())
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: PathBuf::from(path),
+                source: e,
+            })
+    }
+
     // ==================== Frontmatter Methods ====================
+    //
+    // Property edits splice only the targeted node's bytes via fig's
+    // comment-preserving editor (see `crate::frontmatter`), so comments, key
+    // order, and formatting elsewhere survive — unlike a parse/serialize round
+    // trip through the `IndexMap`.
 
     /// Adds or updates a frontmatter property.
     /// Creates frontmatter if none exists.
@@ -181,22 +209,31 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         key: &str,
         value: yaml::Value,
     ) -> Result<()> {
-        let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path).await?;
-        frontmatter.insert(key.to_string(), value);
-        self.reconstruct_file(path, &frontmatter, &body).await
+        let content = self.read_text_or_empty(path).await?;
+        let updated = crate::frontmatter::set_property_in_text(&content, key, &value)?;
+        self.write_text(path, &updated).await
     }
 
     /// Removes a frontmatter property.
     /// Does nothing if no frontmatter exists or key is not found.
     pub async fn remove_frontmatter_property(&self, path: &str, key: &str) -> Result<()> {
-        match self.parse_file(path).await {
-            Ok((mut frontmatter, body)) => {
-                frontmatter.shift_remove(key);
-                self.reconstruct_file(path, &frontmatter, &body).await
+        let content = match self.fs.read_to_string(std::path::Path::new(path)).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: PathBuf::from(path),
+                    source: e,
+                });
             }
-            Err(DiaryxError::NoFrontmatter(_)) => Ok(()), // No frontmatter, nothing to remove
-            Err(e) => Err(e),
+        };
+        let updated = crate::frontmatter::remove_property_in_text(&content, key)?;
+        // Only rewrite when something actually changed (no frontmatter or a
+        // missing key leaves the text untouched).
+        if updated != content {
+            self.write_text(path, &updated).await?;
         }
+        Ok(())
     }
 
     /// Renames a frontmatter property key.
@@ -207,28 +244,23 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         old_key: &str,
         new_key: &str,
     ) -> Result<bool> {
-        let (frontmatter, body) = match self.parse_file(path).await {
-            Ok(result) => result,
-            Err(DiaryxError::NoFrontmatter(_)) => return Ok(false), // No frontmatter, key not found
-            Err(e) => return Err(e),
-        };
-
-        if !frontmatter.contains_key(old_key) {
-            return Ok(false);
-        }
-
-        // Rebuild the map, replacing old_key with new_key at the same position
-        let mut result: IndexMap<String, yaml::Value> = IndexMap::new();
-        for (k, v) in frontmatter {
-            if k == old_key {
-                result.insert(new_key.to_string(), v);
-            } else {
-                result.insert(k, v);
+        let content = match self.fs.read_to_string(std::path::Path::new(path)).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: PathBuf::from(path),
+                    source: e,
+                });
             }
+        };
+        match crate::frontmatter::rename_property_in_text(&content, old_key, new_key)? {
+            Some(updated) => {
+                self.write_text(path, &updated).await?;
+                Ok(true)
+            }
+            None => Ok(false),
         }
-
-        self.reconstruct_file(path, &result, &body).await?;
-        Ok(true)
     }
 
     /// Gets a frontmatter property value.
@@ -500,7 +532,30 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         Ok(())
     }
 
-    /// Adds or updates a frontmatter property.
+    /// Reads a file's full text, returning an empty string if it doesn't exist.
+    fn read_text_or_empty(&self, path: &str) -> Result<String> {
+        match self.fs.read_to_string(std::path::Path::new(path)) {
+            Ok(c) => Ok(c),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(DiaryxError::FileRead {
+                path: PathBuf::from(path),
+                source: e,
+            }),
+        }
+    }
+
+    /// Writes full text to a file.
+    fn write_text(&self, path: &str, text: &str) -> Result<()> {
+        self.fs
+            .write_file(std::path::Path::new(path), text)
+            .map_err(|e| DiaryxError::FileWrite {
+                path: PathBuf::from(path),
+                source: e,
+            })
+    }
+
+    /// Adds or updates a frontmatter property (comment-preserving for scalar
+    /// values; see [`crate::frontmatter::set_property_in_text`]).
     /// Creates frontmatter if none exists.
     pub fn set_frontmatter_property(
         &self,
@@ -508,25 +563,32 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         key: &str,
         value: yaml::Value,
     ) -> Result<()> {
-        let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
-        frontmatter.insert(key.to_string(), value);
-        self.reconstruct_file(path, &frontmatter, &body)
+        let content = self.read_text_or_empty(path)?;
+        let updated = crate::frontmatter::set_property_in_text(&content, key, &value)?;
+        self.write_text(path, &updated)
     }
 
-    /// Removes a frontmatter property.
+    /// Removes a frontmatter property (comment-preserving).
     /// Does nothing if no frontmatter exists or key is not found.
     pub fn remove_frontmatter_property(&self, path: &str, key: &str) -> Result<()> {
-        match self.parse_file(path) {
-            Ok((mut frontmatter, body)) => {
-                frontmatter.shift_remove(key);
-                self.reconstruct_file(path, &frontmatter, &body)
+        let content = match self.fs.read_to_string(std::path::Path::new(path)) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: PathBuf::from(path),
+                    source: e,
+                });
             }
-            Err(DiaryxError::NoFrontmatter(_)) => Ok(()), // No frontmatter, nothing to remove
-            Err(e) => Err(e),
+        };
+        let updated = crate::frontmatter::remove_property_in_text(&content, key)?;
+        if updated != content {
+            self.write_text(path, &updated)?;
         }
+        Ok(())
     }
 
-    /// Renames a frontmatter property key.
+    /// Renames a frontmatter property key (comment-preserving).
     /// Returns Ok(true) if the key was found and renamed, Ok(false) if key was not found or no frontmatter.
     pub fn rename_frontmatter_property(
         &self,
@@ -534,28 +596,23 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         old_key: &str,
         new_key: &str,
     ) -> Result<bool> {
-        let (frontmatter, body) = match self.parse_file(path) {
-            Ok(result) => result,
-            Err(DiaryxError::NoFrontmatter(_)) => return Ok(false), // No frontmatter, key not found
-            Err(e) => return Err(e),
-        };
-
-        if !frontmatter.contains_key(old_key) {
-            return Ok(false);
-        }
-
-        // Rebuild the map, replacing old_key with new_key at the same position
-        let mut result: IndexMap<String, yaml::Value> = IndexMap::new();
-        for (k, v) in frontmatter {
-            if k == old_key {
-                result.insert(new_key.to_string(), v);
-            } else {
-                result.insert(k, v);
+        let content = match self.fs.read_to_string(std::path::Path::new(path)) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: PathBuf::from(path),
+                    source: e,
+                });
             }
+        };
+        match crate::frontmatter::rename_property_in_text(&content, old_key, new_key)? {
+            Some(updated) => {
+                self.write_text(path, &updated)?;
+                Ok(true)
+            }
+            None => Ok(false),
         }
-
-        self.reconstruct_file(path, &result, &body)?;
-        Ok(true)
     }
 
     /// Get body content (excluding frontmatter). If no frontmatter exists, returns entire file.

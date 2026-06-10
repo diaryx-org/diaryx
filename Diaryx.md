@@ -6,15 +6,14 @@ version: v1.6.0
 updated: 2026-06-04T14:24:18-07:00
 contents:
 - '[AGENTS](/AGENTS.md)'
-- '[CONTRIBUTING](/CONTRIBUTING.md)'
+- '[Contributing To Diaryx](</Contributing to Diaryx.md>)'
 - '[LICENSE](/LICENSE.md)'
 - '[PHILOSOPHY](/PHILOSOPHY.md)'
-- '[Privacy Policy](/privacy.md)'
+- '[Privacy](/privacy.md)'
 - '[README](/apps/README.md)'
 - '[README](/crates/README.md)'
 - '[ROADMAP](/ROADMAP.md)'
-- '[TESTING](/TESTING.md)'
-- '[Terms of Service](/terms.md)'
+- '[Terms](/terms.md)'
 audience:
 - public
 - developers

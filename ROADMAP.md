@@ -3,40 +3,32 @@ title: ROADMAP
 description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
-updated: 2026-06-02T00:00:00-06:00
+updated: 2026-06-07T23:46:03-07:00
 part_of: '[Diaryx](/Diaryx.md)'
 link_of:
 - '[Diaryx](/Diaryx.md)'
+- '[Diaryx](/diaryx.md)'
 attachments: []
 link: '[ROADMAP](/ROADMAP.md)'
 ---
 # ROADMAP
 
-Immediate goal
+Diaryx is currently at version v1.6.0. However, recently the vision for Diaryx has shifted from journaling to archiving, so it is considered alpha-level software at the moment.
 
+The next immediate goal is designing opaque identifiers for Diaryx workspaces, and the files inside.
 
-## Unorganized ideas
+The design:
 
-- Pages format—either use premium TipTap plugin, or make a bespoke one.
-- Support for arbitrary rich/CSS styling via custom markdown syntax
-- Quick notes! A key command similar to CMD+Space on Mac, or a similar "launchpad" shortcut, to record a note quickly. Needs thought for giving it a spot/attaching an audience quickly. Simplest method: pre-configured space for quick notes. Should Extism plugins be able to also be a Tauri plugin?
+`ark:99999/dxBBBBBBC/BBBBC[.<FILE>][?<QUERY>][#<CALLOUT>]`
 
-## Would be cool (long term, low priority)
+Eventually Diaryx as an organization will register for a NAAN, which will replace `99999`. `dx` is the “shoulder” of the ID, which allows for changing the ID format in the future if needed. Each capital `B` is a betanumeric character from this alphabet to reduce ambiguity:
 
-- Abstract away kinds of metadata—instead of YAML frontmatter, why not TOML, JSON, or other format? Why not endmatter or an arbitrary metadata code block?
-- Revisit first-party sync only after the folder-based workspace model is solid; any future sync should build on local folders instead of a separate sidecar workspace location.
-- Interactive functionality in published Diaryx
-- [x] Cleaned up first-party sync code from `diaryx_sync_server`/Cloudflare backend while keeping auth/account/publishing functionality.
+`b c d f g h j k m n p q r s t v w x y z 2 3 4 5 6 7 8 9`
 
-**AI plugin**
+Each capital `C` is a checksum character calculated from the previous ID sequence, to capture transcription errors.
 
-- [ ] Pin down Diaryx philosophy with AI, brainstorm good AI integrations
-- [ ] “AI iframe” plugin, similar to Claude’s interactive diagrams?
+`.<FILE>` is a way of accessing different versions of the same file. `?<QUERY>` is a way of accessing metadata for a file. `#<CALLOUT>` is a client-only method of highlighting a specific portion of the content and isn’t actually used by the server.
 
-## Dreams (long term, high priority)
+ARKs typically reserve `?info` and `?json`, as well as `??`. I was thinking I would reserve these values alongside `content` to have special query functionality rather than mapping literally to frontmatter metadata key names. To access a literal `info` or other reserved-name frontmatter key, I was thinking maybe a namespace like `?meta=info` or perhaps a leading dot like `?.info`.
 
-- Different UI chrome. The only webview needed is for the TipTap editor—everything else could theoretically use a different UI. Possibly test with a Tauri plugin to turn sidebars into SwiftUI, similar to the mobile toolbar plugin.
-- Persistent identifier support for qualified files (ARK). Useful for academia/family history.
-- Integration with FamilySearch API for family history records—import/export
-- Per-audience workspace settings
-- [x] First-party sync has been removed completely, so the backend and plugins now focus only on local folder workspaces, auth, billing, and publishing.
+I believe 6 characters to identify a workspace is enough for worldwide Diaryx usage (28^6 = 481,890,304), and 4 characters should be plenty of files allowed for a workspace (28^4 = 614,656). If usage somehow exceeds this, I can change the `dx` shoulder to make a new ID format that allows for more room.

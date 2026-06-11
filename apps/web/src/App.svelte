@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { getBackend, isTauri, isNativePluginBackend, replaceBackend, resetBackend, type Backend, type TreeNode } from "./lib/backend";
+  import { getBackend, isTauri, isNativePluginBackend, replaceBackend, resetBackend, type Backend, type TreeNode, type LinkFormat } from "./lib/backend";
   import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
   import { BackendError } from "./lib/backend/interface";
   import {
@@ -907,8 +907,7 @@
 
   // Markdown preview state
   let markdownPreviewOpen = $state(false);
-  let markdownPreviewBody = $state("");
-  let markdownPreviewFrontmatter: Record<string, unknown> = $state({});
+  let markdownPreviewRaw = $state("");
 
   // Note: Blob URL management is now in attachmentService.ts
 
@@ -2772,11 +2771,11 @@
     await handleCopyAsMarkdown(editorRef, currentEntry);
   }
 
-  function cmdViewMarkdown() {
-    const result = handleViewMarkdown(editorRef, currentEntry);
+  async function cmdViewMarkdown() {
+    if (!api) return;
+    const result = await handleViewMarkdown(api, currentEntry);
     if (result) {
-      markdownPreviewBody = result.body;
-      markdownPreviewFrontmatter = result.frontmatter;
+      markdownPreviewRaw = result.raw;
       markdownPreviewOpen = true;
     }
   }
@@ -3081,12 +3080,42 @@
       const currentContents = parentEntry.frontmatter.contents;
       if (!Array.isArray(currentContents)) return;
 
+      // Tree paths are absolute on the Tauri/native backend (the workspace root
+      // is an absolute dir) but workspace-relative on web, while canonicalizeLink
+      // always returns workspace-relative paths. Normalize the parent and child
+      // paths to workspace-relative so the mapping below matches on both
+      // backends — otherwise the lookup misses, newContents falls back to the
+      // original order, and the reorder silently no-ops (while still toasting).
+      // The workspace root dir is the directory of the root index file.
+      const wsRootDir = (() => {
+        const p = tree?.path ?? "";
+        const i = p.lastIndexOf("/");
+        return i >= 0 ? p.slice(0, i) : "";
+      })();
+      const toWorkspaceRelative = (p: string) =>
+        wsRootDir && p.startsWith(wsRootDir + "/") ? p.slice(wsRootDir.length + 1) : p;
+      const relativeParentPath = toWorkspaceRelative(parentPath);
+
+      // The hint is required for plain_canonical workspaces: their contents
+      // links are bare canonical paths, which the link parser treats as
+      // "ambiguous" and would otherwise resolve file-relative. With the
+      // workspace's actual link format as a hint, all four formats canonicalize
+      // correctly.
+      let linkFormatHint: LinkFormat | null = null;
+      if (tree?.path) {
+        try {
+          linkFormatHint = (await api.getWorkspaceConfig(tree.path)).link_format;
+        } catch {
+          // Fall back to no hint.
+        }
+      }
+
       // Build a map from canonical path -> original link string
       const linkByCanonical = new Map<string, string>();
       for (const link of currentContents) {
         const linkStr = String(link);
         try {
-          const canonical = await api.canonicalizeLink(linkStr, parentPath);
+          const canonical = await api.canonicalizeLink(linkStr, relativeParentPath, linkFormatHint);
           linkByCanonical.set(canonical, linkStr);
         } catch {
           // If canonicalization fails, skip
@@ -3096,7 +3125,7 @@
       // Reorder: build new contents array matching childPaths order
       const newContents: string[] = [];
       for (const childPath of childPaths) {
-        const originalLink = linkByCanonical.get(childPath);
+        const originalLink = linkByCanonical.get(toWorkspaceRelative(childPath));
         if (originalLink) {
           newContents.push(originalLink);
         }
@@ -3958,8 +3987,7 @@
 
 <MarkdownPreviewDialog
   open={markdownPreviewOpen}
-  body={markdownPreviewBody}
-  frontmatter={markdownPreviewFrontmatter}
+  raw={markdownPreviewRaw}
   onOpenChange={(open) => (markdownPreviewOpen = open)}
 />
 

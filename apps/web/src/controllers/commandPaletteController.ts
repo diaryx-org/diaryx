@@ -422,18 +422,24 @@ export function handleReorderFootnotes(editorRef: any): void {
 
 /**
  * View the current entry's markdown source.
- * Returns the body markdown and frontmatter so the caller can display them in a dialog.
+ *
+ * Reads the raw file from disk so the dialog shows the document exactly as
+ * stored — frontmatter comments, key order, blank lines and all — rather than a
+ * lossy round-trip through the editor's serializer and `yaml.dump`.
  */
-export function handleViewMarkdown(
-  editorRef: any,
+export async function handleViewMarkdown(
+  api: Api,
   currentEntry: EntryData | null
-): { body: string; frontmatter: Record<string, unknown> } | null {
-  if (!editorRef || !currentEntry) {
+): Promise<{ raw: string } | null> {
+  if (!currentEntry) {
     toast.error('No entry open');
     return null;
   }
-  const markdown = editorRef.getMarkdown() || '';
-  const body = reverseBlobUrlsToAttachmentPaths(markdown);
-  const frontmatter = currentEntry.frontmatter ?? {};
-  return { body, frontmatter };
+  try {
+    const raw = await api.readFile(currentEntry.path);
+    return { raw };
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : 'Failed to read file');
+    return null;
+  }
 }

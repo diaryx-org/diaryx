@@ -27,3 +27,4 @@ apps/web/test.sh
 .diaryx
 apps/web/src/LICENSE.md
 .zed
+**/target-ra

@@ -32,7 +32,7 @@ export type {
 export { BackendError, isTauri, isHttpBackend, isNativePluginBackend, setNativePluginBackend, getHttpApiUrl, isBrowser } from "./interface";
 
 // Re-export API types from generated
-export type { CreateChildResult } from "./generated";
+export type { CreateChildResult, LinkFormat } from "./generated";
 
 // Re-export API wrapper
 export { createApi, type Api } from "./api";

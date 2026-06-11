@@ -3,29 +3,26 @@
   import { Button } from "$lib/components/ui/button";
   import { Copy, Check, FileText } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
-  import yaml from "js-yaml";
 
   interface Props {
     open: boolean;
-    body: string;
-    frontmatter: Record<string, unknown>;
+    /** The raw file contents, exactly as stored on disk. */
+    raw: string;
     onOpenChange: (open: boolean) => void;
   }
 
-  let { open, body, frontmatter, onOpenChange }: Props = $props();
+  let { open, raw, onOpenChange }: Props = $props();
 
   let copiedContent = $state(false);
   let copiedFile = $state(false);
 
-  const hasFrontmatter = $derived(Object.keys(frontmatter).length > 0);
-
-  const frontmatterYaml = $derived(
-    hasFrontmatter ? yaml.dump(frontmatter, { lineWidth: -1 }).trimEnd() : ""
-  );
-
-  const fullFile = $derived(
-    hasFrontmatter ? `---\n${frontmatterYaml}\n---\n\n${body}` : body
-  );
+  // The body is everything after the closing frontmatter `---` fence. We split
+  // here only to support the "Copy Content" button; the displayed source is
+  // always the verbatim raw file.
+  const body = $derived.by(() => {
+    const match = raw.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+    return match ? raw.slice(match[0].length) : raw;
+  });
 
   async function copyContent() {
     try {
@@ -39,7 +36,7 @@
 
   async function copyFile() {
     try {
-      await navigator.clipboard.writeText(fullFile);
+      await navigator.clipboard.writeText(raw);
       copiedFile = true;
       setTimeout(() => (copiedFile = false), 2000);
     } catch {
@@ -53,13 +50,13 @@
     <Dialog.Header>
       <Dialog.Title>Markdown Source</Dialog.Title>
       <Dialog.Description>
-        The markdown output for this entry.
+        The raw file contents for this entry.
       </Dialog.Description>
     </Dialog.Header>
     <div class="flex-1 overflow-auto min-h-0">
       <pre
         class="text-sm font-mono whitespace-pre-wrap break-words bg-muted p-4 rounded-md border"
-      >{fullFile}</pre>
+      >{raw}</pre>
     </div>
     <Dialog.Footer class="gap-2 sm:gap-0">
       <Button variant="outline" size="sm" onclick={copyContent}>

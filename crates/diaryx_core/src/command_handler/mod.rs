@@ -1275,11 +1275,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
         }
 
-        // Write the file if modified and not dry run
+        // Write the file if modified and not dry run. This pass only ever
+        // rewrites the *values* of existing keys, so apply each changed key in
+        // place (preserving comments, key order, and formatting) rather than
+        // reserializing the whole frontmatter.
         if modified && !dry_run {
-            let new_content = frontmatter::serialize(&fm, &parsed.body)?;
-            // Use write_file directly to write the full content (frontmatter + body)
-            // Note: save_content only saves the body and preserves existing frontmatter
+            let mut new_content = content;
+            for (key, value) in &fm {
+                if parsed.frontmatter.get(key) != Some(value) {
+                    new_content = frontmatter::set_property_in_text(&new_content, key, value)?;
+                }
+            }
             self.fs().write(file_path, new_content.as_bytes()).await?;
         }
 

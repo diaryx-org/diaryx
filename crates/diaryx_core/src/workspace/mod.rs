@@ -1126,11 +1126,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             }
         }
 
-        // 4. Update target index with new contents and appended body
-        let mut target_frontmatter = target_index.frontmatter.clone();
-        target_frontmatter.contents = Some(new_target_contents);
-
-        // Append body
+        // 4. Update the target index: set the new `contents` list and append the
+        // body, both in place so the target index's comments and formatting
+        // survive (only the `contents` value and the body change).
         let new_body = if source_index.body.trim().is_empty() {
             target_index.body
         } else if target_index.body.trim().is_empty() {
@@ -1139,11 +1137,23 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             format!("{}\n\n{}", target_index.body.trim_end(), source_index.body)
         };
 
-        let content = crate::frontmatter::serialize_with_body(&target_frontmatter, &new_body)
-            .map_err(|e| DiaryxError::YamlParse {
-                path: target_path.to_path_buf(),
-                message: e.to_string(),
-            })?;
+        let target_raw =
+            self.fs
+                .read_to_string(target_path)
+                .await
+                .map_err(|e| DiaryxError::FileRead {
+                    path: target_path.to_path_buf(),
+                    source: e,
+                })?;
+        let contents_value = yaml::Value::Sequence(
+            new_target_contents
+                .into_iter()
+                .map(yaml::Value::String)
+                .collect(),
+        );
+        let with_contents =
+            crate::frontmatter::set_property_in_text(&target_raw, "contents", &contents_value)?;
+        let content = crate::frontmatter::replace_body(&with_contents, &new_body);
 
         self.fs
             .write(target_path, content.as_bytes())

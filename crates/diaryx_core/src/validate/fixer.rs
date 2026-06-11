@@ -101,14 +101,9 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         key: &str,
         value: crate::yaml::Value,
     ) -> Result<()> {
-        let (mut frontmatter, body) = match self.fs.read_to_string(path).await {
-            Ok(content) => {
-                let parsed = crate::frontmatter::parse_or_empty(&content)?;
-                (parsed.frontmatter, parsed.body)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                (indexmap::IndexMap::new(), String::new())
-            }
+        let content = match self.fs.read_to_string(path).await {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => {
                 return Err(crate::error::DiaryxError::FileRead {
                     path: path.to_path_buf(),
@@ -117,8 +112,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             }
         };
 
-        crate::frontmatter::set_property(&mut frontmatter, key, value);
-        let new_content = crate::frontmatter::serialize(&frontmatter, &body)?;
+        let new_content = crate::frontmatter::set_property_in_text(&content, key, &value)?;
 
         self.fs
             .write(path, new_content.as_bytes())
@@ -136,13 +130,10 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
             return Ok(()); // File doesn't exist — nothing to remove.
         };
 
-        let mut parsed = crate::frontmatter::parse_or_empty(&content)?;
-        if parsed.frontmatter.is_empty() {
-            return Ok(()); // No frontmatter or malformed block.
+        let new_content = crate::frontmatter::remove_property_in_text(&content, key)?;
+        if new_content == content {
+            return Ok(()); // No frontmatter, or key absent — nothing changed.
         }
-        crate::frontmatter::remove_property(&mut parsed.frontmatter, key);
-
-        let new_content = crate::frontmatter::serialize(&parsed.frontmatter, &parsed.body)?;
         self.fs
             .write(path, new_content.as_bytes())
             .await

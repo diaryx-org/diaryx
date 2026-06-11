@@ -3622,7 +3622,7 @@ dependencies = [
 [[package]]
 name = "fig"
 version = "0.0.0"
-source = "git+ssh://git@github.com/adammharris/fig.git?rev=a66eb02#a66eb0293c7c835a01c8c4963537229c61fd3c09"
+source = "git+ssh://git@github.com/adammharris/fig.git?rev=2b6079d683f5f5678f15401cde54404a683bc518#2b6079d683f5f5678f15401cde54404a683bc518"
 dependencies = [
  "serde",
 ]

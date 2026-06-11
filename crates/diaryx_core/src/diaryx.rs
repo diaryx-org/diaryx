@@ -234,9 +234,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         value: yaml::Value,
     ) -> Result<()> {
         let content = self.read_raw_or_empty(path).await?;
-        let mut parsed = frontmatter::parse_or_empty(&content)?;
-        frontmatter::set_property(&mut parsed.frontmatter, key, value);
-        self.write_parsed(path, &parsed).await
+        let updated = frontmatter::set_property_in_text(&content, key, &value)?;
+        self.write_raw(path, &updated).await
     }
 
     /// Remove a frontmatter property.
@@ -245,15 +244,11 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
             Ok(c) => c,
             Err(_) => return Ok(()), // File doesn't exist, nothing to remove
         };
-
-        let mut parsed = match frontmatter::parse(&content) {
-            Ok(p) => p,
-            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
-            Err(e) => return Err(e.into()),
-        };
-
-        frontmatter::remove_property(&mut parsed.frontmatter, key);
-        self.write_parsed(path, &parsed).await
+        let updated = frontmatter::remove_property_in_text(&content, key)?;
+        if updated != content {
+            self.write_raw(path, &updated).await?;
+        }
+        Ok(())
     }
 
     /// Reorder frontmatter keys to match the specified order.
@@ -263,32 +258,11 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
             Ok(c) => c,
             Err(_) => return Ok(()),
         };
-
-        let parsed = match frontmatter::parse(&content) {
-            Ok(p) => p,
-            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
-            Err(e) => return Err(e.into()),
-        };
-
-        let mut reordered = IndexMap::new();
-        // First, insert keys in the specified order
-        for key in keys {
-            if let Some(value) = parsed.frontmatter.get(key) {
-                reordered.insert(key.clone(), value.clone());
-            }
+        let updated = frontmatter::reorder_keys_in_text(&content, keys)?;
+        if updated != content {
+            self.write_raw(path, &updated).await?;
         }
-        // Then append any remaining keys not in the specified list
-        for (key, value) in &parsed.frontmatter {
-            if !reordered.contains_key(key) {
-                reordered.insert(key.clone(), value.clone());
-            }
-        }
-
-        let reordered_parsed = frontmatter::ParsedFile {
-            frontmatter: reordered,
-            body: parsed.body,
-        };
-        self.write_parsed(path, &reordered_parsed).await
+        Ok(())
     }
 
     /// Move a frontmatter section to an external file, replacing it with a markdown link.
@@ -300,7 +274,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         create_if_missing: bool,
     ) -> Result<()> {
         let source_content = self.read_raw(source_path).await?;
-        let mut source_parsed = frontmatter::parse(&source_content)?;
+        let source_parsed = frontmatter::parse(&source_content)?;
 
         let section_value = source_parsed
             .frontmatter
@@ -310,41 +284,32 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
                 DiaryxError::Validation(format!("Key '{}' not found in frontmatter", section_key))
             })?;
 
-        // Prepare target frontmatter
-        let target_fm = match &section_value {
-            yaml::Value::Mapping(map) => {
-                // Nested section: write nested keys as top-level frontmatter in target
-                map.clone()
-            }
-            other => {
-                // Flat config key: write as a single frontmatter property
-                let mut fm = IndexMap::new();
-                fm.insert(section_key.to_string(), other.clone());
-                fm
-            }
+        // The target keys to write: a nested mapping is spread as top-level
+        // frontmatter; a flat value becomes a single `section_key` property.
+        let target_entries: Vec<(String, yaml::Value)> = match section_value {
+            yaml::Value::Mapping(map) => map.into_iter().collect(),
+            other => vec![(section_key.to_string(), other)],
         };
 
-        // Write or update target file
+        // Write or update the target file by setting each key in place (a new
+        // file gets a fresh frontmatter block; an existing one keeps comments).
         let target_resolved = self.resolve_path(target_path);
-        if self
+        let exists = self
             .diaryx
             .fs
             .try_exists(&target_resolved)
             .await
-            .unwrap_or(false)
-        {
-            let target_content = self.read_raw_or_empty(target_path).await?;
-            let mut target_parsed = frontmatter::parse_or_empty(&target_content)?;
-            for (k, v) in target_fm {
-                target_parsed.frontmatter.insert(k, v);
-            }
-            self.write_parsed(target_path, &target_parsed).await?;
-        } else if create_if_missing {
-            let target_parsed = frontmatter::ParsedFile {
-                frontmatter: target_fm,
-                body: String::new(),
+            .unwrap_or(false);
+        if exists || create_if_missing {
+            let mut target_content = if exists {
+                self.read_raw_or_empty(target_path).await?
+            } else {
+                String::new()
             };
-            self.write_parsed(target_path, &target_parsed).await?;
+            for (k, v) in &target_entries {
+                target_content = frontmatter::set_property_in_text(&target_content, k, v)?;
+            }
+            self.write_raw(target_path, &target_content).await?;
         } else {
             return Err(DiaryxError::FileRead {
                 path: std::path::PathBuf::from(target_path),
@@ -355,7 +320,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
             });
         }
 
-        // Replace the key's value with a markdown link to the target file
+        // Replace the section's value in the source with a markdown link.
         let title = section_key.replace('_', " ");
         let title = title
             .split_whitespace()
@@ -369,11 +334,12 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
             .collect::<Vec<_>>()
             .join(" ");
         let link = format!("[{}]({})", title, target_path);
-        source_parsed
-            .frontmatter
-            .insert(section_key.to_string(), yaml::Value::String(link));
-
-        self.write_parsed(source_path, &source_parsed).await
+        let updated_source = frontmatter::set_property_in_text(
+            &source_content,
+            section_key,
+            &yaml::Value::String(link),
+        )?;
+        self.write_raw(source_path, &updated_source).await
     }
 
     // -------------------- Content Methods --------------------
@@ -390,9 +356,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     /// Creates frontmatter if none exists.
     pub async fn set_content(&self, path: &str, body: &str) -> Result<()> {
         let content = self.read_raw_or_empty(path).await?;
-        let mut parsed = frontmatter::parse_or_empty(&content)?;
-        parsed.body = body.to_string();
-        self.write_parsed(path, &parsed).await
+        let updated = frontmatter::replace_body(&content, body);
+        self.write_raw(path, &updated).await
     }
 
     /// Save content and update the 'updated' timestamp.
@@ -426,17 +391,18 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     /// Append content to the end of a file's body.
     pub async fn append_content(&self, path: &str, content: &str) -> Result<()> {
         let raw = self.read_raw_or_empty(path).await?;
-        let mut parsed = frontmatter::parse_or_empty(&raw)?;
+        let body = frontmatter::extract_body(&raw);
 
-        parsed.body = if parsed.body.is_empty() {
+        let new_body = if body.is_empty() {
             content.to_string()
-        } else if parsed.body.ends_with('\n') {
-            format!("{}{}", parsed.body, content)
+        } else if body.ends_with('\n') {
+            format!("{}{}", body, content)
         } else {
-            format!("{}\n{}", parsed.body, content)
+            format!("{}\n{}", body, content)
         };
 
-        self.write_parsed(path, &parsed).await
+        let updated = frontmatter::replace_body(&raw, &new_body);
+        self.write_raw(path, &updated).await
     }
 
     // -------------------- Raw I/O Methods --------------------
@@ -467,9 +433,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         }
     }
 
-    /// Write a parsed file back to disk.
-    async fn write_parsed(&self, path: &str, parsed: &frontmatter::ParsedFile) -> Result<()> {
-        let content = frontmatter::serialize(&parsed.frontmatter, &parsed.body)?;
+    /// Write raw file content to disk.
+    async fn write_raw(&self, path: &str, content: &str) -> Result<()> {
         let resolved = self.resolve_path(path);
         self.diaryx
             .fs
@@ -492,30 +457,37 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     /// Add an attachment to a file's attachments list.
     pub async fn add_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
         let content = self.read_raw_or_empty(path).await?;
-        let mut parsed = frontmatter::parse_or_empty(&content)?;
         let parsed_target = link_parser::parse_link(attachment_path);
         let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
-        let attachments = parsed
+        // Read the current list (read-only), append if absent, then write the
+        // whole `attachments` value back in place (other keys' comments survive).
+        let mut list = match frontmatter::parse_or_empty(&content)?
             .frontmatter
-            .entry("attachments".to_string())
-            .or_insert(yaml::Value::Sequence(vec![]));
-
-        if let yaml::Value::Sequence(list) = attachments {
-            let exists = list.iter().any(|item| {
-                if let yaml::Value::String(existing) = item {
-                    let parsed_existing = link_parser::parse_link(existing);
-                    return link_parser::to_canonical(&parsed_existing, Path::new(path))
-                        == target_canonical;
-                }
+            .get("attachments")
+        {
+            Some(yaml::Value::Sequence(s)) => s.clone(),
+            _ => Vec::new(),
+        };
+        let exists = list.iter().any(|item| {
+            if let yaml::Value::String(existing) = item {
+                let parsed_existing = link_parser::parse_link(existing);
+                link_parser::to_canonical(&parsed_existing, Path::new(path)) == target_canonical
+            } else {
                 false
-            });
-            if !exists {
-                list.push(yaml::Value::String(attachment_path.to_string()));
             }
+        });
+        if exists {
+            return Ok(());
         }
+        list.push(yaml::Value::String(attachment_path.to_string()));
 
-        self.write_parsed(path, &parsed).await
+        let updated = frontmatter::set_property_in_text(
+            &content,
+            "attachments",
+            &yaml::Value::Sequence(list),
+        )?;
+        self.write_raw(path, &updated).await
     }
 
     /// Remove an attachment from a file's attachments list.
@@ -527,28 +499,41 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         let parsed_target = link_parser::parse_link(attachment_path);
         let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
-        let mut parsed = match frontmatter::parse(&content) {
-            Ok(p) => p,
+        let frontmatter = match frontmatter::parse(&content) {
+            Ok(p) => p.frontmatter,
             Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
 
-        if let Some(yaml::Value::Sequence(list)) = parsed.frontmatter.get_mut("attachments") {
-            list.retain(|item| {
-                if let yaml::Value::String(s) = item {
-                    let parsed_existing = link_parser::parse_link(s);
-                    link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
-                } else {
-                    true
-                }
-            });
-
-            if list.is_empty() {
-                parsed.frontmatter.shift_remove("attachments");
+        let mut list = match frontmatter.get("attachments") {
+            Some(yaml::Value::Sequence(s)) => s.clone(),
+            _ => return Ok(()),
+        };
+        let before = list.len();
+        list.retain(|item| {
+            if let yaml::Value::String(s) = item {
+                let parsed_existing = link_parser::parse_link(s);
+                link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
+            } else {
+                true
             }
+        });
+        if list.len() == before {
+            return Ok(()); // nothing matched; leave the file untouched
         }
 
-        self.write_parsed(path, &parsed).await
+        // Drop the key entirely when the last attachment is removed, else write
+        // the trimmed list back in place.
+        let updated = if list.is_empty() {
+            frontmatter::remove_property_in_text(&content, "attachments")?
+        } else {
+            frontmatter::set_property_in_text(
+                &content,
+                "attachments",
+                &yaml::Value::Sequence(list),
+            )?
+        };
+        self.write_raw(path, &updated).await
     }
 
     // -------------------- Frontmatter Sorting --------------------
@@ -569,17 +554,18 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
             Err(e) => return Err(e.into()),
         };
 
-        let sorted_frontmatter = match pattern {
+        // Compute the sorted key order, then apply it in place (comment-preserving)
+        // rather than reserializing the parsed map.
+        let sorted = match pattern {
             Some(p) => frontmatter::sort_by_pattern(parsed.frontmatter, p),
             None => frontmatter::sort_alphabetically(parsed.frontmatter),
         };
-
-        let sorted_parsed = frontmatter::ParsedFile {
-            frontmatter: sorted_frontmatter,
-            body: parsed.body,
-        };
-
-        self.write_parsed(path, &sorted_parsed).await
+        let order: Vec<String> = sorted.keys().cloned().collect();
+        let updated = frontmatter::reorder_keys_in_text(&content, &order)?;
+        if updated != content {
+            self.write_raw(path, &updated).await?;
+        }
+        Ok(())
     }
 }
 

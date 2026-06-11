@@ -149,18 +149,6 @@ pub fn serialize_typed<T: serde::Serialize>(value: &T) -> std::result::Result<St
     Ok(format!("---\n{}---\n", s))
 }
 
-/// Serialize any Serde-serializable value as YAML frontmatter, with the given body.
-///
-/// Like [`serialize`], but accepts any `T: Serialize` rather than requiring the
-/// dynamic [`Mapping`]. Useful for round-tripping typed frontmatter structs.
-pub fn serialize_with_body<T: serde::Serialize>(
-    value: &T,
-    body: &str,
-) -> std::result::Result<String, yaml::Error> {
-    let s = yaml::to_string(value)?;
-    Ok(format!("---\n{}---\n{}", s, body))
-}
-
 /// Extract only the body from markdown content, stripping frontmatter.
 ///
 /// If no frontmatter exists, returns the content unchanged.
@@ -214,7 +202,13 @@ pub fn get_string_array(frontmatter: &IndexMap<String, Value>, key: &str) -> Vec
 }
 
 /// Replace only the body portion of a markdown string, preserving the raw
-/// frontmatter block byte-for-byte. This avoids a YAML round-trip.
+/// frontmatter block (and its closing fence) byte-for-byte. This avoids a YAML
+/// round-trip, so comments, key order, and formatting in the frontmatter are
+/// untouched.
+///
+/// `new_body` replaces everything after the closing `---` fence's newline —
+/// exactly the slice [`split`]/[`extract_body`] return as the body — so a
+/// `replace_body(c, extract_body(c))` round-trip is the identity.
 ///
 /// If `content` has no frontmatter (or has a malformed opening/closing
 /// delimiter), returns `new_body` as-is.
@@ -237,7 +231,7 @@ pub fn replace_body(content: &str, new_body: &str) -> String {
         return new_body.to_string();
     };
 
-    format!("{}\n{}", &content[..header_end], new_body)
+    format!("{}{}", &content[..header_end], new_body)
 }
 
 // ============================================================================
@@ -313,6 +307,22 @@ pub fn rename_property_in_text(
             Err(e) => Err(e.into()),
         },
         Err(fig::Error::NotFound) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Reorder top-level frontmatter keys to match `keys` (listed keys first, in
+/// that order; keys not listed keep their original relative order and follow),
+/// preserving comments and formatting via fig's in-place editor. Keys in `keys`
+/// that the frontmatter does not contain are ignored. Returns the text unchanged
+/// when the document has no frontmatter.
+pub fn reorder_keys_in_text(content: &str, keys: &[String]) -> Result<String> {
+    match Frontmatter::open(content.as_bytes()) {
+        Ok(mut fm) => {
+            fm.reorder_keys(&[] as &[Segment], keys)?;
+            Ok(fm.render()?.to_string())
+        }
+        Err(fig::Error::NotFound) => Ok(content.to_string()),
         Err(e) => Err(e.into()),
     }
 }
@@ -408,6 +418,24 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_body_preserves_frontmatter_comments() {
+        // A comment in the frontmatter must survive a body-only write.
+        let content = "---\ntitle: Test\n# keep this comment\ntags:\n- x\n---\noriginal body\n";
+        let updated = replace_body(content, "new body\n");
+        assert_eq!(
+            updated,
+            "---\ntitle: Test\n# keep this comment\ntags:\n- x\n---\nnew body\n",
+        );
+    }
+
+    #[test]
+    fn test_replace_body_round_trips_with_extract_body() {
+        // replace_body(c, extract_body(c)) is the identity (no spurious blank line).
+        let content = "---\ntitle: Test\n---\n\nBody content\n";
+        assert_eq!(replace_body(content, extract_body(content)), content);
+    }
+
+    #[test]
     fn test_extract_body_no_frontmatter() {
         let content = "Just body content";
         assert_eq!(extract_body(content), content);
@@ -427,8 +455,11 @@ mod tests {
 
     #[test]
     fn test_replace_body_with_frontmatter() {
+        // The body is everything after the closing fence's newline and owns its
+        // own leading blank line, so the new body is spliced in verbatim (this
+        // matches the slice `parse`/`extract_body` return as the body).
         let content = "---\ntitle: Test\n---\n\nOld body";
-        let result = replace_body(content, "New body");
+        let result = replace_body(content, "\nNew body");
         assert_eq!(result, "---\ntitle: Test\n---\n\nNew body");
     }
 
@@ -440,16 +471,17 @@ mod tests {
 
     #[test]
     fn test_replace_body_empty_new_body() {
+        // Clearing the body leaves just the frontmatter block + closing fence.
         let content = "---\ntitle: Test\n---\n\nOld body";
         let result = replace_body(content, "");
-        assert_eq!(result, "---\ntitle: Test\n---\n\n");
+        assert_eq!(result, "---\ntitle: Test\n---\n");
     }
 
     #[test]
     fn test_replace_body_crlf() {
         let content = "---\r\ntitle: Test\r\n---\r\n\r\nOld body";
-        let result = replace_body(content, "New body");
-        assert_eq!(result, "---\r\ntitle: Test\r\n---\r\n\nNew body");
+        let result = replace_body(content, "\r\nNew body");
+        assert_eq!(result, "---\r\ntitle: Test\r\n---\r\n\r\nNew body");
     }
 
     #[test]

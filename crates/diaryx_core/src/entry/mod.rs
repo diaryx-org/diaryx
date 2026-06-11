@@ -153,24 +153,6 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         Ok((parsed.frontmatter, parsed.body))
     }
 
-    /// Reconstructs a markdown file with updated frontmatter.
-    async fn reconstruct_file(
-        &self,
-        path: &str,
-        frontmatter: &IndexMap<String, yaml::Value>,
-        body: &str,
-    ) -> Result<()> {
-        let content = crate::frontmatter::serialize(frontmatter, body)?;
-        self.fs
-            .write(std::path::Path::new(path), content.as_bytes())
-            .await
-            .map_err(|e| DiaryxError::FileWrite {
-                path: PathBuf::from(path),
-                source: e,
-            })?;
-        Ok(())
-    }
-
     /// Reads a file's full text, returning an empty string if it doesn't exist.
     async fn read_text_or_empty(&self, path: &str) -> Result<String> {
         match self.fs.read_to_string(std::path::Path::new(path)).await {
@@ -295,11 +277,15 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         Ok(body)
     }
 
-    /// Set the content (body) of a file, preserving frontmatter.
-    /// Creates frontmatter if none exists.
+    /// Set the content (body) of a file, preserving the frontmatter block
+    /// (comments, key order, formatting) byte-for-byte via [`replace_body`].
+    /// If the file has no frontmatter, the body is written on its own.
+    ///
+    /// [`replace_body`]: crate::frontmatter::replace_body
     pub async fn set_content(&self, path: &str, content: &str) -> Result<()> {
-        let (frontmatter, _) = self.parse_file_or_create_frontmatter(path).await?;
-        self.reconstruct_file(path, &frontmatter, content).await
+        let existing = self.read_text_or_empty(path).await?;
+        let updated = crate::frontmatter::replace_body(&existing, content);
+        self.write_text(path, &updated).await
     }
 
     /// Clear the content (body) of a file, preserving frontmatter.
@@ -335,9 +321,10 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         Ok(())
     }
 
-    /// Append content to the end of a file's body.
+    /// Append content to the end of a file's body, preserving frontmatter.
     pub async fn append_content(&self, path: &str, content: &str) -> Result<()> {
-        let (frontmatter, body) = self.parse_file_or_create_frontmatter(path).await?;
+        let existing = self.read_text_or_empty(path).await?;
+        let body = crate::frontmatter::extract_body(&existing);
         let new_body = if body.is_empty() {
             content.to_string()
         } else if body.ends_with('\n') {
@@ -345,12 +332,14 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         } else {
             format!("{}\n{}", body, content)
         };
-        self.reconstruct_file(path, &frontmatter, &new_body).await
+        let updated = crate::frontmatter::replace_body(&existing, &new_body);
+        self.write_text(path, &updated).await
     }
 
-    /// Prepend content to the beginning of a file's body.
+    /// Prepend content to the beginning of a file's body, preserving frontmatter.
     pub async fn prepend_content(&self, path: &str, content: &str) -> Result<()> {
-        let (frontmatter, body) = self.parse_file_or_create_frontmatter(path).await?;
+        let existing = self.read_text_or_empty(path).await?;
+        let body = crate::frontmatter::extract_body(&existing);
         let new_body = if body.is_empty() {
             content.to_string()
         } else if content.ends_with('\n') {
@@ -358,7 +347,8 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         } else {
             format!("{}\n{}", content, body)
         };
-        self.reconstruct_file(path, &frontmatter, &new_body).await
+        let updated = crate::frontmatter::replace_body(&existing, &new_body);
+        self.write_text(path, &updated).await
     }
 
     // ==================== Attachment Methods ====================
@@ -366,58 +356,86 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     /// Add an attachment path to the entry's attachments list.
     /// Creates the attachments property if it doesn't exist.
     pub async fn add_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
-        let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path).await?;
+        let content = self.read_text_or_empty(path).await?;
         let from_path = Path::new(path);
         let target_key = attachment_dedup_key(attachment_path, from_path);
 
-        let attachments = frontmatter
-            .entry("attachments".to_string())
-            .or_insert(yaml::Value::Sequence(vec![]));
-
-        if let yaml::Value::Sequence(list) = attachments {
-            let exists = list.iter().any(|item| {
-                if let yaml::Value::String(existing) = item {
-                    attachment_dedup_key(existing, from_path) == target_key
-                } else {
-                    false
-                }
-            });
-
-            if !exists {
-                list.push(yaml::Value::String(attachment_path.to_string()));
+        // Read the current list, append if absent, then write the whole
+        // `attachments` value back in place (other keys' comments survive).
+        let mut list = match crate::frontmatter::parse_or_empty(&content)?
+            .frontmatter
+            .get("attachments")
+        {
+            Some(yaml::Value::Sequence(s)) => s.clone(),
+            _ => Vec::new(),
+        };
+        let exists = list.iter().any(|item| {
+            if let yaml::Value::String(existing) = item {
+                attachment_dedup_key(existing, from_path) == target_key
+            } else {
+                false
             }
+        });
+        if exists {
+            return Ok(());
         }
+        list.push(yaml::Value::String(attachment_path.to_string()));
 
-        self.reconstruct_file(path, &frontmatter, &body).await
+        let updated = crate::frontmatter::set_property_in_text(
+            &content,
+            "attachments",
+            &yaml::Value::Sequence(list),
+        )?;
+        self.write_text(path, &updated).await
     }
 
     /// Remove an attachment path from the entry's attachments list.
     /// Does nothing if the attachment isn't found.
     pub async fn remove_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
-        let (mut frontmatter, body) = match self.parse_file(path).await {
-            Ok(result) => result,
-            Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
-            Err(e) => return Err(e),
+        let content = match self.fs.read_to_string(std::path::Path::new(path)).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: PathBuf::from(path),
+                    source: e,
+                });
+            }
         };
         let from_path = Path::new(path);
         let target_key = attachment_dedup_key(attachment_path, from_path);
 
-        if let Some(yaml::Value::Sequence(list)) = frontmatter.get_mut("attachments") {
-            list.retain(|item| {
-                if let yaml::Value::String(s) = item {
-                    attachment_dedup_key(s, from_path) != target_key
-                } else {
-                    true
-                }
-            });
-
-            // Remove empty attachments array
-            if list.is_empty() {
-                frontmatter.shift_remove("attachments");
+        let frontmatter = match crate::frontmatter::parse(&content) {
+            Ok(p) => p.frontmatter,
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut list = match frontmatter.get("attachments") {
+            Some(yaml::Value::Sequence(s)) => s.clone(),
+            _ => return Ok(()),
+        };
+        let before = list.len();
+        list.retain(|item| {
+            if let yaml::Value::String(s) = item {
+                attachment_dedup_key(s, from_path) != target_key
+            } else {
+                true
             }
+        });
+        if list.len() == before {
+            return Ok(()); // nothing matched; leave the file untouched
         }
 
-        self.reconstruct_file(path, &frontmatter, &body).await
+        let updated = if list.is_empty() {
+            crate::frontmatter::remove_property_in_text(&content, "attachments")?
+        } else {
+            crate::frontmatter::set_property_in_text(
+                &content,
+                "attachments",
+                &yaml::Value::Sequence(list),
+            )?
+        };
+        self.write_text(path, &updated).await
     }
 
     /// Get the list of attachments directly declared in this entry.
@@ -515,23 +533,6 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         Ok((parsed.frontmatter, parsed.body))
     }
 
-    /// Reconstructs a markdown file with updated frontmatter.
-    fn reconstruct_file(
-        &self,
-        path: &str,
-        frontmatter: &IndexMap<String, yaml::Value>,
-        body: &str,
-    ) -> Result<()> {
-        let content = crate::frontmatter::serialize(frontmatter, body)?;
-        self.fs
-            .write_file(std::path::Path::new(path), &content)
-            .map_err(|e| DiaryxError::FileWrite {
-                path: PathBuf::from(path),
-                source: e,
-            })?;
-        Ok(())
-    }
-
     /// Reads a file's full text, returning an empty string if it doesn't exist.
     fn read_text_or_empty(&self, path: &str) -> Result<String> {
         match self.fs.read_to_string(std::path::Path::new(path)) {
@@ -623,10 +624,12 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         }
     }
 
-    /// Set body content, preserving (or creating) frontmatter.
+    /// Set body content, preserving the frontmatter block byte-for-byte. If the
+    /// file has no frontmatter, the body is written on its own.
     pub fn set_content(&self, path: &str, content: &str) -> Result<()> {
-        let (frontmatter, _old_body) = self.parse_file_or_create_frontmatter(path)?;
-        self.reconstruct_file(path, &frontmatter, content)
+        let existing = self.read_text_or_empty(path)?;
+        let updated = crate::frontmatter::replace_body(&existing, content);
+        self.write_text(path, &updated)
     }
 
     /// Clear file body content.
@@ -634,9 +637,10 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         self.set_content(path, "")
     }
 
-    /// Append content to end of body.
+    /// Append content to end of body, preserving frontmatter.
     pub fn append_content(&self, path: &str, content: &str) -> Result<()> {
-        let (frontmatter, mut body) = self.parse_file_or_create_frontmatter(path)?;
+        let existing = self.read_text_or_empty(path)?;
+        let mut body = crate::frontmatter::extract_body(&existing).to_string();
 
         if body.is_empty() {
             body = content.to_string();
@@ -647,12 +651,14 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
             body.push_str(content);
         }
 
-        self.reconstruct_file(path, &frontmatter, &body)
+        let updated = crate::frontmatter::replace_body(&existing, &body);
+        self.write_text(path, &updated)
     }
 
-    /// Prepend content to start of body.
+    /// Prepend content to start of body, preserving frontmatter.
     pub fn prepend_content(&self, path: &str, content: &str) -> Result<()> {
-        let (frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
+        let existing = self.read_text_or_empty(path)?;
+        let body = crate::frontmatter::extract_body(&existing);
         let new_body = if body.is_empty() {
             content.to_string()
         } else if content.ends_with('\n') {
@@ -660,7 +666,8 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         } else {
             format!("{}\n{}", content, body)
         };
-        self.reconstruct_file(path, &frontmatter, &new_body)
+        let updated = crate::frontmatter::replace_body(&existing, &new_body);
+        self.write_text(path, &updated)
     }
 
     /// Gets a frontmatter property value.
@@ -688,58 +695,84 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     /// Add an attachment path to the entry's attachments list.
     /// Creates the attachments property if it doesn't exist.
     pub fn add_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
-        let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
+        let content = self.read_text_or_empty(path)?;
         let from_path = Path::new(path);
         let target_key = attachment_dedup_key(attachment_path, from_path);
 
-        let attachments = frontmatter
-            .entry("attachments".to_string())
-            .or_insert(yaml::Value::Sequence(vec![]));
-
-        if let yaml::Value::Sequence(list) = attachments {
-            let exists = list.iter().any(|item| {
-                if let yaml::Value::String(existing) = item {
-                    attachment_dedup_key(existing, from_path) == target_key
-                } else {
-                    false
-                }
-            });
-
-            if !exists {
-                list.push(yaml::Value::String(attachment_path.to_string()));
+        let mut list = match crate::frontmatter::parse_or_empty(&content)?
+            .frontmatter
+            .get("attachments")
+        {
+            Some(yaml::Value::Sequence(s)) => s.clone(),
+            _ => Vec::new(),
+        };
+        let exists = list.iter().any(|item| {
+            if let yaml::Value::String(existing) = item {
+                attachment_dedup_key(existing, from_path) == target_key
+            } else {
+                false
             }
+        });
+        if exists {
+            return Ok(());
         }
+        list.push(yaml::Value::String(attachment_path.to_string()));
 
-        self.reconstruct_file(path, &frontmatter, &body)
+        let updated = crate::frontmatter::set_property_in_text(
+            &content,
+            "attachments",
+            &yaml::Value::Sequence(list),
+        )?;
+        self.write_text(path, &updated)
     }
 
     /// Remove an attachment path from the entry's attachments list.
     /// Does nothing if the attachment isn't found.
     pub fn remove_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
-        let (mut frontmatter, body) = match self.parse_file(path) {
-            Ok(result) => result,
-            Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
-            Err(e) => return Err(e),
+        let content = match self.fs.read_to_string(std::path::Path::new(path)) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: PathBuf::from(path),
+                    source: e,
+                });
+            }
         };
         let from_path = Path::new(path);
         let target_key = attachment_dedup_key(attachment_path, from_path);
 
-        if let Some(yaml::Value::Sequence(list)) = frontmatter.get_mut("attachments") {
-            list.retain(|item| {
-                if let yaml::Value::String(s) = item {
-                    attachment_dedup_key(s, from_path) != target_key
-                } else {
-                    true
-                }
-            });
-
-            // Remove empty attachments array
-            if list.is_empty() {
-                frontmatter.shift_remove("attachments");
+        let frontmatter = match crate::frontmatter::parse(&content) {
+            Ok(p) => p.frontmatter,
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut list = match frontmatter.get("attachments") {
+            Some(yaml::Value::Sequence(s)) => s.clone(),
+            _ => return Ok(()),
+        };
+        let before = list.len();
+        list.retain(|item| {
+            if let yaml::Value::String(s) = item {
+                attachment_dedup_key(s, from_path) != target_key
+            } else {
+                true
             }
+        });
+        if list.len() == before {
+            return Ok(());
         }
 
-        self.reconstruct_file(path, &frontmatter, &body)
+        let updated = if list.is_empty() {
+            crate::frontmatter::remove_property_in_text(&content, "attachments")?
+        } else {
+            crate::frontmatter::set_property_in_text(
+                &content,
+                "attachments",
+                &yaml::Value::Sequence(list),
+            )?
+        };
+        self.write_text(path, &updated)
     }
 
     /// Get the list of attachments directly declared in this entry.
@@ -833,18 +866,33 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     /// Example: "title,description,*" puts title first, description second, rest alphabetically
     /// Does nothing if no frontmatter exists (won't add empty frontmatter).
     pub fn sort_frontmatter(&self, path: &str, pattern: Option<&str>) -> Result<()> {
-        let (frontmatter, body) = match self.parse_file(path) {
-            Ok(result) => result,
-            Err(DiaryxError::NoFrontmatter(_)) => return Ok(()), // No frontmatter, nothing to sort
-            Err(e) => return Err(e),
+        let content = match self.fs.read_to_string(std::path::Path::new(path)) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: PathBuf::from(path),
+                    source: e,
+                });
+            }
+        };
+        let frontmatter = match crate::frontmatter::parse(&content) {
+            Ok(p) => p.frontmatter,
+            Err(crate::frontmatter::FrontmatterError::NoFrontmatter) => return Ok(()),
+            Err(e) => return Err(e.into()),
         };
 
+        // Compute the sorted key order, then apply it in place (comment-preserving).
         let sorted = match pattern {
             Some(p) => self.sort_by_pattern(frontmatter, p),
             None => self.sort_alphabetically(frontmatter),
         };
-
-        self.reconstruct_file(path, &sorted, &body)
+        let order: Vec<String> = sorted.keys().cloned().collect();
+        let updated = crate::frontmatter::reorder_keys_in_text(&content, &order)?;
+        if updated != content {
+            self.write_text(path, &updated)?;
+        }
+        Ok(())
     }
 
     fn sort_alphabetically(

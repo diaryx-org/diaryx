@@ -340,36 +340,22 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         if let Some(ref root) = self.root_path {
             let full_path = root.join(canonical_path);
             if let Ok(content) = self.fs.read_to_string(&full_path).await {
-                // Try to extract title from frontmatter
-                if let Some(title) = Self::extract_title_from_content(&content) {
-                    return title;
+                // Resolve the title through the shared frontmatter parser so
+                // inline YAML comments, quoting, and escapes are handled
+                // correctly. Hand-rolling this (an earlier `title:` line scan)
+                // leaked `# comment` text into the title — and from there into
+                // every link that references this file.
+                if let Ok(parsed) = crate::frontmatter::parse_or_empty(&content)
+                    && let Some(title) =
+                        crate::frontmatter::get_string(&parsed.frontmatter, "title")
+                    && !title.is_empty()
+                {
+                    return title.to_string();
                 }
             }
         }
         // Fallback: convert filename to title
         link_parser::path_to_title(canonical_path)
-    }
-
-    /// Extract title from file content's frontmatter
-    fn extract_title_from_content(content: &str) -> Option<String> {
-        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
-            return None;
-        }
-        let rest = &content[4..];
-        let end_idx = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n"))?;
-        let frontmatter_str = &rest[..end_idx];
-
-        // Simple extraction - look for "title: " line
-        for line in frontmatter_str.lines() {
-            let trimmed = line.trim();
-            if let Some(title) = trimmed.strip_prefix("title:") {
-                let title = title.trim().trim_matches('"').trim_matches('\'');
-                if !title.is_empty() {
-                    return Some(title.to_string());
-                }
-            }
-        }
-        None
     }
 
     /// Resolve a file's `part_of` frontmatter to an absolute parent index path.
@@ -2405,12 +2391,6 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
                 if !already_exists {
                     items.push(yaml::Value::String(normalized_entry.to_string()));
-                    // Sort contents for consistent ordering
-                    items.sort_by(|a, b| {
-                        let a_str = a.as_str().unwrap_or("");
-                        let b_str = b.as_str().unwrap_or("");
-                        a_str.cmp(b_str)
-                    });
                     self.set_frontmatter_property(
                         index_path,
                         "contents",
@@ -2473,12 +2453,6 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
                 if !already_exists {
                     items.push(yaml::Value::String(formatted_entry));
-                    // Sort contents for consistent ordering
-                    items.sort_by(|a, b| {
-                        let a_str = a.as_str().unwrap_or("");
-                        let b_str = b.as_str().unwrap_or("");
-                        a_str.cmp(b_str)
-                    });
                     self.set_frontmatter_property(
                         index_path,
                         "contents",
@@ -2562,12 +2536,6 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 });
 
                 if items.len() != before_len {
-                    // Sort contents for consistent ordering
-                    items.sort_by(|a, b| {
-                        let a_str = a.as_str().unwrap_or("");
-                        let b_str = b.as_str().unwrap_or("");
-                        a_str.cmp(b_str)
-                    });
                     self.set_frontmatter_property(
                         index_path,
                         "contents",
@@ -4350,6 +4318,79 @@ mod tests {
         assert_eq!(index.frontmatter.title, Some("Test".to_string()));
         assert!(index.frontmatter.is_index());
         assert!(index.body.contains("Body content"));
+    }
+
+    #[test]
+    fn test_resolve_title_strips_inline_comment() {
+        // Regression: an inline YAML comment after the title must not leak into
+        // the resolved title (and thence into links referencing this file).
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("note.md"),
+            "---\ntitle: My Title # note to self\n---\n\nBody".as_bytes(),
+        )
+        .unwrap();
+        fs.write(
+            Path::new("quoted.md"),
+            "---\ntitle: \"a # b\"\n---\n\nBody".as_bytes(),
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws =
+            Workspace::with_link_format(async_fs, PathBuf::from(""), LinkFormat::PlainRelative);
+
+        assert_eq!(block_on_test(ws.resolve_title("note.md")), "My Title");
+        // A '#' inside a quoted scalar is part of the value, not a comment.
+        assert_eq!(block_on_test(ws.resolve_title("quoted.md")), "a # b");
+    }
+
+    #[test]
+    fn test_contents_add_remove_preserves_order_and_comments() {
+        // Adding/removing a child must keep the user's manual order (no
+        // alphabetical re-sort) and preserve per-item comments.
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("index.md"),
+            "---\ntitle: Idx\ncontents:\n- z.md # zulu\n- a.md # alpha\n---\nbody\n".as_bytes(),
+        )
+        .unwrap();
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws =
+            Workspace::with_link_format(async_fs, PathBuf::from(""), LinkFormat::PlainRelative);
+
+        // Add: appends at end, does NOT sort to [a, m, z].
+        block_on_test(ws.add_to_index_contents(Path::new("index.md"), "m.md")).unwrap();
+        let after_add = block_on_test(ws.fs.read_to_string(Path::new("index.md"))).unwrap();
+        let order: Vec<String> = crate::frontmatter::parse(&after_add)
+            .unwrap()
+            .frontmatter
+            .get("contents")
+            .unwrap()
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(order, vec!["z.md", "a.md", "m.md"], "order not preserved");
+        assert!(after_add.contains("# zulu") && after_add.contains("# alpha"));
+
+        // Remove: keeps remaining order, preserves surviving comments.
+        block_on_test(ws.remove_from_index_contents(Path::new("index.md"), "z.md")).unwrap();
+        let after_rm = block_on_test(ws.fs.read_to_string(Path::new("index.md"))).unwrap();
+        let order2: Vec<String> = crate::frontmatter::parse(&after_rm)
+            .unwrap()
+            .frontmatter
+            .get("contents")
+            .unwrap()
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(order2, vec!["a.md", "m.md"]);
+        assert!(after_rm.contains("# alpha"), "surviving comment lost");
+        assert!(!after_rm.contains("# zulu"));
     }
 
     #[test]

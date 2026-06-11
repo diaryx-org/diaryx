@@ -256,23 +256,189 @@ pub fn replace_body(content: &str, new_body: &str) -> String {
 /// (creating frontmatter where there is none, or a value fig's editor declines)
 /// — always valid YAML, though not comment-preserving for that one write.
 pub fn set_property_in_text(content: &str, key: &str, value: &Value) -> Result<String> {
-    if let Ok(mut fm) = Frontmatter::open(content.as_bytes()) {
-        // Replace in place if the key exists, otherwise append it.
-        let applied = match fm.replace(&[Segment::Key(key)], value) {
-            Ok(()) => true,
-            Err(fig::Error::NotFound) => fm.insert(&[], key, value).is_ok(),
-            Err(_) => false,
-        };
-        if applied {
-            return Ok(fm.render()?.to_string());
-        }
+    // Fast path: when the property is a list of scalars (the shape of Diaryx's
+    // `contents` / `part_of` / `links` / … link lists), edit the sequence with
+    // fig's per-item primitives instead of replacing the whole node, so the
+    // comments attached to individual surviving items are preserved. Declines
+    // (returns `None`) for any shape it can't safely diff, falling through to
+    // the whole-value `replace`/`insert` path below.
+    if let Value::Sequence(new_seq) = value
+        && let Some(out) = try_seq_item_edit(content, key, new_seq)
+    {
+        return Ok(out);
     }
-    wholesale_set(content, key, value)
+
+    match Frontmatter::open(content.as_bytes()) {
+        Ok(mut fm) => {
+            // Replace in place if the key exists, otherwise insert it. Both edit
+            // only the targeted node's bytes, so comments and formatting
+            // elsewhere are preserved. A genuine fig error (not "key absent")
+            // is surfaced rather than papered over with a comment-dropping
+            // reserialize — the old reserialize fallback would have failed on
+            // the same input anyway.
+            match fm.replace(&[Segment::Key(key)], value) {
+                Ok(()) => {}
+                Err(fig::Error::NotFound) => fm.insert(&[], key, value)?,
+                Err(e) => return Err(e.into()),
+            }
+            Ok(fm.render()?.to_string())
+        }
+        // The document has no frontmatter block: create one. This is the only
+        // reserialize, and it is lossless — a document with no frontmatter has
+        // no comments or key ordering to preserve.
+        Err(fig::Error::NotFound) => create_frontmatter_block(content, key, value),
+        Err(e) => Err(e.into()),
+    }
 }
 
-/// Fallback for [`set_property_in_text`]: parse, set the key in the map, and
-/// reserialize the whole frontmatter. Correct but not comment-preserving.
-fn wholesale_set(content: &str, key: &str, value: &Value) -> Result<String> {
+/// True for YAML scalar values (no nested structure). The per-item sequence
+/// edit only matches items by value identity, which is only well-defined for
+/// scalars.
+fn is_scalar(v: &Value) -> bool {
+    matches!(
+        v,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::String(_)
+    )
+}
+
+/// A type-tagged identity string for a scalar, so distinct YAML types with the
+/// same text (`1` vs `"1"` vs `true`) never compare equal.
+fn scalar_ident(v: &Value) -> String {
+    match v {
+        Value::Null => "n:".to_string(),
+        Value::Bool(b) => format!("b:{b}"),
+        Value::Int(i) => format!("i:{i}"),
+        Value::Float(f) => format!("f:{f}"),
+        Value::String(s) => format!("s:{s}"),
+        // Gated to scalars by the caller.
+        _ => String::new(),
+    }
+}
+
+/// Occurrence-tagged identity keys: the k-th item with a given identity gets
+/// tag `(ident, k)`, so duplicate values are matched 1:1 between the old and
+/// new sequences rather than ambiguously by set membership.
+fn occurrence_keys(items: &[Value]) -> Vec<(String, usize)> {
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    items
+        .iter()
+        .map(|v| {
+            let id = scalar_ident(v);
+            let n = seen.entry(id.clone()).or_insert(0);
+            let k = *n;
+            *n += 1;
+            (id, k)
+        })
+        .collect()
+}
+
+/// Apply a new scalar-sequence value to `key` using fig's per-item primitives
+/// (`remove_item` / `append` / `reorder_items`) so surviving items keep their
+/// comments. Returns `Some(rendered)` on success, or `None` to decline — the
+/// caller then falls back to the whole-value replace path.
+///
+/// Declines when the edit isn't a safe item-level diff: the key is absent, the
+/// existing value isn't a non-empty scalar sequence, the new value isn't a
+/// non-empty scalar sequence, or every existing item would be removed (which
+/// would transiently empty the block list, a shape fig's item ops can't hold).
+///
+/// Known ambiguity: when duplicate values are dropped (old has N copies, new
+/// has M < N), the first M occurrences are kept as survivors and the trailing
+/// N−M removed — so a comment owned by a removed duplicate may end up beside a
+/// surviving equal-valued item. This is benign for link lists.
+fn try_seq_item_edit(content: &str, key: &str, new_seq: &[Value]) -> Option<String> {
+    use std::collections::{HashMap, HashSet};
+
+    // New value must be a non-empty list of scalars.
+    if new_seq.is_empty() || !new_seq.iter().all(is_scalar) {
+        return None;
+    }
+
+    let parsed = parse_or_empty(content).ok()?;
+    // Key must already exist as a non-empty scalar sequence.
+    let old_seq = match parsed.frontmatter.get(key)? {
+        Value::Sequence(s) if !s.is_empty() && s.iter().all(is_scalar) => s,
+        _ => return None,
+    };
+
+    let old_keys = occurrence_keys(old_seq);
+    let new_keys = occurrence_keys(new_seq);
+    let old_set: HashSet<&(String, usize)> = old_keys.iter().collect();
+    let new_set: HashSet<&(String, usize)> = new_keys.iter().collect();
+
+    // Old positions whose value no longer appears (with matching multiplicity).
+    let removed: HashSet<usize> = (0..old_keys.len())
+        .filter(|i| !new_set.contains(&old_keys[*i]))
+        .collect();
+    // Removing every item would leave fig with an empty block list mid-edit.
+    if removed.len() == old_seq.len() {
+        return None;
+    }
+    // New positions whose value wasn't present before, in new order.
+    let additions: Vec<usize> = (0..new_keys.len())
+        .filter(|j| !old_set.contains(&new_keys[*j]))
+        .collect();
+
+    // The sequence after removals (survivors in old order) then appends
+    // (additions in new order) — this is the order fig will be in before the
+    // final reorder.
+    let mut current_keys: Vec<&(String, usize)> = Vec::with_capacity(new_keys.len());
+    for (i, k) in old_keys.iter().enumerate() {
+        if !removed.contains(&i) {
+            current_keys.push(k);
+        }
+    }
+    for &j in &additions {
+        current_keys.push(&new_keys[j]);
+    }
+
+    // Target permutation: for each new position, where that item currently sits.
+    let mut pos: HashMap<&(String, usize), usize> = HashMap::with_capacity(current_keys.len());
+    for (idx, k) in current_keys.iter().enumerate() {
+        pos.insert(*k, idx);
+    }
+    let mut order: Vec<usize> = Vec::with_capacity(new_keys.len());
+    for k in &new_keys {
+        order.push(*pos.get(k)?);
+    }
+    // `order` must be a full permutation of current positions, or fig's
+    // out-of-range-ignoring reorder would silently produce a wrong document.
+    if order.len() != current_keys.len() {
+        return None;
+    }
+
+    // Pure no-op (same items, same order): return the input untouched so a
+    // redundant set is byte-identical and never churns formatting.
+    let is_identity = removed.is_empty()
+        && additions.is_empty()
+        && order.iter().enumerate().all(|(i, &o)| i == o);
+    if is_identity {
+        return Some(content.to_string());
+    }
+
+    // Apply on a fresh editor; any fig error → decline and fall back.
+    let mut fm = Frontmatter::open(content.as_bytes()).ok()?;
+    // Remove high indices first so lower indices stay valid.
+    let mut removals_desc: Vec<usize> = removed.into_iter().collect();
+    removals_desc.sort_unstable_by(|a, b| b.cmp(a));
+    for idx in removals_desc {
+        fm.remove_item(&[Segment::Key(key)], idx).ok()?;
+    }
+    for &j in &additions {
+        fm.append(&[Segment::Key(key)], &new_seq[j]).ok()?;
+    }
+    if order.iter().enumerate().any(|(i, &o)| i != o) {
+        fm.reorder_items(&[Segment::Key(key)], &order).ok()?;
+    }
+    Some(fm.render().ok()?.to_string())
+}
+
+/// Create a frontmatter block for a document that has none, with `key: value`
+/// as its sole property, preserving the original body. Used only when
+/// [`Frontmatter::open`] reports no frontmatter — so there is nothing to
+/// preserve and the serialize is lossless. (For a document that already has
+/// frontmatter, [`set_property_in_text`] edits it in place via fig instead.)
+fn create_frontmatter_block(content: &str, key: &str, value: &Value) -> Result<String> {
     let parsed = parse_or_empty(content)?;
     let mut map = parsed.frontmatter;
     map.insert(key.to_string(), value.clone());
@@ -583,6 +749,132 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    // ---- Per-item sequence edits (comment-preserving) ----
+
+    fn seq(items: &[&str]) -> Value {
+        Value::Sequence(items.iter().map(|s| Value::String((*s).into())).collect())
+    }
+
+    fn list_of(out: &str, key: &str) -> Vec<String> {
+        parse(out)
+            .unwrap()
+            .frontmatter
+            .get(key)
+            .unwrap()
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    // A note whose `contents` items carry their own inline/leading comments.
+    const CONTENTS: &str =
+        "---\ntitle: T\ncontents:\n- a # note a\n# leading c\n- c\n- b\n---\nbody\n";
+
+    #[test]
+    fn seq_reorder_preserves_item_comments() {
+        let out = set_property_in_text(CONTENTS, "contents", &seq(&["c", "a", "b"])).unwrap();
+        assert_eq!(list_of(&out, "contents"), vec!["c", "a", "b"]);
+        // Item comments ride with their items.
+        assert!(out.contains("# note a"), "lost inline comment: {out}");
+        assert!(out.contains("# leading c"), "lost leading comment: {out}");
+    }
+
+    #[test]
+    fn seq_remove_middle_keeps_other_comments() {
+        // Remove `c`; `a`'s inline comment must survive.
+        let out = set_property_in_text(CONTENTS, "contents", &seq(&["a", "b"])).unwrap();
+        assert_eq!(list_of(&out, "contents"), vec!["a", "b"]);
+        assert!(out.contains("# note a"));
+        // The removed item carried its own leading comment, which goes with it.
+        assert!(!out.contains("- c"));
+    }
+
+    #[test]
+    fn seq_append_keeps_existing_comments() {
+        let out = set_property_in_text(CONTENTS, "contents", &seq(&["a", "c", "b", "d"])).unwrap();
+        assert_eq!(list_of(&out, "contents"), vec!["a", "c", "b", "d"]);
+        assert!(out.contains("# note a"));
+        assert!(out.contains("# leading c"));
+    }
+
+    #[test]
+    fn seq_add_remove_reorder_combined() {
+        // old [a, c, b] -> new [b, d, a]: remove c, add d, reorder.
+        let out = set_property_in_text(CONTENTS, "contents", &seq(&["b", "d", "a"])).unwrap();
+        assert_eq!(list_of(&out, "contents"), vec!["b", "d", "a"]);
+        assert!(
+            out.contains("# note a"),
+            "comment on surviving `a` lost: {out}"
+        );
+    }
+
+    #[test]
+    fn seq_duplicate_survivor_and_removed_duplicate() {
+        let src = "---\nx:\n- a # first\n- a # second\n- a # third\n---\nbody\n";
+        let out = set_property_in_text(src, "x", &seq(&["a", "a"])).unwrap();
+        assert_eq!(list_of(&out, "x"), vec!["a", "a"]);
+        // First two occurrences (and their comments) survive; the third is gone.
+        assert!(out.contains("# first"));
+        assert!(out.contains("# second"));
+        assert!(!out.contains("# third"));
+    }
+
+    #[test]
+    fn seq_duplicate_with_reorder_no_spurious_churn() {
+        // old [a, b, a] -> new [a, a, b]: both a's are survivors, b moves last.
+        let src = "---\nx:\n- a # one\n- b # two\n- a # three\n---\nbody\n";
+        let out = set_property_in_text(src, "x", &seq(&["a", "a", "b"])).unwrap();
+        assert_eq!(list_of(&out, "x"), vec!["a", "a", "b"]);
+        assert!(out.contains("# one") && out.contains("# two") && out.contains("# three"));
+    }
+
+    #[test]
+    fn seq_flow_reorder_stays_flow() {
+        let src = "---\nx: [a, b, c]\n---\nbody\n";
+        let out = set_property_in_text(src, "x", &seq(&["c", "a", "b"])).unwrap();
+        assert!(out.contains("[c, a, b]"), "expected flow list: {out}");
+    }
+
+    #[test]
+    fn seq_noop_is_byte_identical() {
+        let out = set_property_in_text(CONTENTS, "contents", &seq(&["a", "c", "b"])).unwrap();
+        assert_eq!(out, CONTENTS);
+    }
+
+    #[test]
+    fn seq_falls_back_when_not_eligible() {
+        // Empty old sequence -> whole-value replace path (still preserves the
+        // unrelated comment), exercising the decline branch.
+        let empty = "---\ntitle: T\n# c\nitems: []\n---\nbody\n";
+        let out = set_property_in_text(empty, "items", &seq(&["x", "y"])).unwrap();
+        assert!(out.contains("# c"));
+        assert_eq!(list_of(&out, "items"), vec!["x", "y"]);
+
+        // Clearing to empty -> whole-value replace (item ops can't hold []).
+        let out2 = set_property_in_text(CONTENTS, "contents", &Value::Sequence(vec![])).unwrap();
+        assert!(out2.contains("title: T"));
+        assert!(
+            parse(&out2)
+                .unwrap()
+                .frontmatter
+                .get("contents")
+                .unwrap()
+                .as_sequence()
+                .unwrap()
+                .is_empty()
+        );
+
+        // Disjoint replacement (all old removed) -> whole-value replace.
+        let out3 = set_property_in_text(CONTENTS, "contents", &seq(&["p", "q"])).unwrap();
+        assert_eq!(list_of(&out3, "contents"), vec!["p", "q"]);
+
+        // Key absent -> insert path.
+        let out4 = set_property_in_text(CONTENTS, "newlist", &seq(&["z"])).unwrap();
+        assert_eq!(list_of(&out4, "newlist"), vec!["z"]);
     }
 
     #[test]

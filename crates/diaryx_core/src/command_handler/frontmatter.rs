@@ -218,6 +218,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         Ok(Response::Frontmatter(fm))
     }
 
+    /// Parse the frontmatter of a raw markdown string, no filesystem access.
+    /// Mirrors [`Self::cmd_get_frontmatter`] but takes the content directly so
+    /// the frontend can reuse the core YAML parser (e.g. for CDN-fetched
+    /// registry manifests) instead of bundling its own.
+    pub(crate) async fn cmd_parse_frontmatter(&self, content: String) -> Result<Response> {
+        let parsed = crate::frontmatter::parse_or_empty(&content)?;
+        Ok(Response::Frontmatter(parsed.frontmatter))
+    }
+
     pub(crate) async fn cmd_set_frontmatter_property(
         &self,
         path: String,

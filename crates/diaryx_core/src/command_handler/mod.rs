@@ -98,6 +98,7 @@ impl CommandDomain {
 
             // Frontmatter operations
             Command::GetFrontmatter { .. }
+            | Command::ParseFrontmatter { .. }
             | Command::SetFrontmatterProperty { .. }
             | Command::RemoveFrontmatterProperty { .. }
             | Command::ReorderFrontmatterKeys { .. }
@@ -667,6 +668,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         Box::pin(async move {
             match command {
                 Command::GetFrontmatter { path } => self.cmd_get_frontmatter(path).await,
+                Command::ParseFrontmatter { content } => self.cmd_parse_frontmatter(content).await,
                 Command::SetFrontmatterProperty {
                     path,
                     key,

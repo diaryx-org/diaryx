@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { vi, beforeEach, afterEach } from 'vitest'
+import yaml from 'js-yaml'
 
 // ============================================================================
 // Mock Browser APIs
@@ -99,9 +100,22 @@ export const mockBackend = {
   persist: vi.fn().mockResolvedValue(undefined),
 }
 
+// Production code parses frontmatter through the Rust backend
+// (`api.parseFrontmatter`); the real parser isn't available under jsdom, so the
+// test mock stands in for it using js-yaml. js-yaml is a test-only
+// devDependency for exactly this — it is not in the shipped app bundle.
+export const mockApi = {
+  parseFrontmatter: vi.fn(async (content: string) => {
+    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+    return match ? (yaml.load(match[1]) as Record<string, unknown>) : {}
+  }),
+}
+
 vi.mock('$lib/backend', () => ({
   backend: mockBackend,
   isTauri: () => false,
+  getApi: async () => mockApi,
+  getApiSync: () => mockApi,
 }))
 
 // ============================================================================

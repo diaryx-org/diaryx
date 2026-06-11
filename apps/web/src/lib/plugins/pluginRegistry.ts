@@ -6,7 +6,7 @@
  * plugin array.
  */
 
-import yaml from "js-yaml";
+import { getApi } from "$lib/backend";
 import { proxyFetch } from "$lib/backend/proxyFetch";
 
 export interface PluginArtifact {
@@ -102,12 +102,13 @@ function readStringArray(obj: Record<string, unknown>, key: string): string[] {
   return value;
 }
 
-function parseMarkdownFrontmatter(text: string): { frontmatter: Record<string, unknown>; body: string } {
+async function parseMarkdownFrontmatter(text: string): Promise<{ frontmatter: Record<string, unknown>; body: string }> {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) {
     throw new Error("Plugin registry validation error: missing YAML frontmatter");
   }
-  const frontmatter = yaml.load(match[1]) as Record<string, unknown>;
+  const api = await getApi();
+  const frontmatter = await api.parseFrontmatter(text);
   if (!isRecord(frontmatter)) {
     throw new Error("Plugin registry validation error: frontmatter must be a YAML mapping");
   }
@@ -207,7 +208,7 @@ export async function fetchPluginRegistry(
   }
 
   const text = await resp.text();
-  const { frontmatter } = parseMarkdownFrontmatter(text);
+  const { frontmatter } = await parseMarkdownFrontmatter(text);
   cachedRegistry = validateMarketplaceRegistry(frontmatter);
   return cachedRegistry;
 }

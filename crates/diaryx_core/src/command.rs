@@ -295,6 +295,13 @@ pub enum Command {
         path: String,
     },
 
+    /// Parse the frontmatter of a raw markdown string (no filesystem access).
+    /// Lets the frontend reuse the core YAML parser instead of bundling its own.
+    ParseFrontmatter {
+        /// Raw markdown text, optionally with a `---` frontmatter block.
+        content: String,
+    },
+
     /// Set a frontmatter property.
     SetFrontmatterProperty {
         /// Path to the entry file.
@@ -793,6 +800,9 @@ enum CommandWire {
     GetFrontmatter {
         path: String,
     },
+    ParseFrontmatter {
+        content: String,
+    },
     SetFrontmatterProperty {
         path: String,
         key: String,
@@ -1046,6 +1056,7 @@ impl From<CommandWire> for Command {
             },
             CommandWire::CreateWorkspace { path, name } => Command::CreateWorkspace { path, name },
             CommandWire::GetFrontmatter { path } => Command::GetFrontmatter { path },
+            CommandWire::ParseFrontmatter { content } => Command::ParseFrontmatter { content },
             CommandWire::SetFrontmatterProperty {
                 path,
                 key,
@@ -1363,6 +1374,7 @@ fn assert_command_wire_in_sync(c: Command) -> CommandWire {
         },
         Command::CreateWorkspace { path, name } => CommandWire::CreateWorkspace { path, name },
         Command::GetFrontmatter { path } => CommandWire::GetFrontmatter { path },
+        Command::ParseFrontmatter { content } => CommandWire::ParseFrontmatter { content },
         Command::SetFrontmatterProperty {
             path,
             key,
@@ -1730,6 +1742,9 @@ impl Command {
 
             // --- Storage ---
             Command::GetStorageUsage => {}
+
+            // --- Content-only (no path to normalize) ---
+            Command::ParseFrontmatter { .. } => {}
 
             // --- Workspace configuration ---
             Command::GetLinkFormat { root_index_path }

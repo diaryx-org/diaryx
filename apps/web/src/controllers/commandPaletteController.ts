@@ -425,7 +425,7 @@ export function handleReorderFootnotes(editorRef: any): void {
  *
  * Reads the raw file from disk so the dialog shows the document exactly as
  * stored — frontmatter comments, key order, blank lines and all — rather than a
- * lossy round-trip through the editor's serializer and `yaml.dump`.
+ * lossy round-trip through the editor's serializer and a re-dumped frontmatter.
  */
 export async function handleViewMarkdown(
   api: Api,

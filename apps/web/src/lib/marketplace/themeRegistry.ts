@@ -1,4 +1,4 @@
-import yaml from "js-yaml";
+import { getApi } from "$lib/backend";
 
 import type {
   ThemeColorKey,
@@ -91,16 +91,17 @@ function readStringArray(obj: Record<string, unknown>, key: string): string[] {
   return value;
 }
 
-function parseMarkdownFrontmatter(text: string): {
+async function parseMarkdownFrontmatter(text: string): Promise<{
   frontmatter: Record<string, unknown>;
   body: string;
-} {
+}> {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) {
     throw new Error("Theme registry validation error: missing YAML frontmatter");
   }
 
-  const frontmatter = yaml.load(match[1]) as Record<string, unknown>;
+  const api = await getApi();
+  const frontmatter = await api.parseFrontmatter(text);
   if (!isRecord(frontmatter)) {
     throw new Error(
       "Theme registry validation error: frontmatter must be a YAML mapping",
@@ -253,7 +254,7 @@ export async function fetchThemeRegistry(
   }
 
   const text = await resp.text();
-  const { frontmatter } = parseMarkdownFrontmatter(text);
+  const { frontmatter } = await parseMarkdownFrontmatter(text);
   cachedRegistry = validateThemeRegistry(frontmatter);
   return cachedRegistry;
 }

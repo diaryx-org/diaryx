@@ -614,6 +614,16 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'Frontmatter').data;
     },
 
+    /**
+     * Parse the frontmatter of a raw markdown string using the core YAML parser
+     * (no filesystem access). Use this instead of a JS YAML library when you
+     * only need to read frontmatter out of an in-memory document.
+     */
+    async parseFrontmatter(content: string): Promise<Record<string, JsonValue | undefined>> {
+      const response = await backend.execute({ type: 'ParseFrontmatter', params: { content } });
+      return expectResponse(response, 'Frontmatter').data;
+    },
+
     /** Set a frontmatter property. Returns new path if a rename occurred (title + auto-rename), null otherwise. */
     async setFrontmatterProperty(path: string, key: string, value: JsonValue, rootIndexPath?: string): Promise<string | null> {
       const response = await backend.execute({

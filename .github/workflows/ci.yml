@@ -207,16 +207,16 @@ jobs:
           wasm-bindgen --target web --out-dir result-wasm \
             target/wasm32-unknown-unknown/release/diaryx_wasm.wasm
           wasm-opt -Oz -o result-wasm/diaryx_wasm_bg.wasm result-wasm/diaryx_wasm_bg.wasm
-          cat > result-wasm/package.json <<'EOF'
-          {
-            "name": "diaryx_wasm",
-            "type": "module",
-            "version": "1.4.0",
-            "main": "diaryx_wasm.js",
-            "types": "diaryx_wasm.d.ts",
-            "files": ["diaryx_wasm_bg.wasm", "diaryx_wasm.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]
-          }
-          EOF
+          WASM_VERSION=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "diaryx_wasm") | .version')
+          jq -n --arg version "$WASM_VERSION" '{
+            name: "diaryx_wasm",
+            type: "module",
+            version: $version,
+            main: "diaryx_wasm.js",
+            types: "diaryx_wasm.d.ts",
+            files: ["diaryx_wasm_bg.wasm", "diaryx_wasm.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]
+          }' > result-wasm/package.json
 
       - name: Generate TypeScript bindings
         run: cargo test -p diaryx_core --features typescript

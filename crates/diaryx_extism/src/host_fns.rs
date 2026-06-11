@@ -231,15 +231,15 @@ pub trait NamespaceProvider: Send + Sync {
 pub fn parse_multipart_batch(body: &[u8], boundary: &str) -> BatchGetResult {
     let mut result = BatchGetResult::default();
     let delim = format!("--{boundary}");
-    let closing = format!("--{boundary}--");
 
     // Split body on boundary markers.
     let delim_bytes = delim.as_bytes();
     let mut parts: Vec<&[u8]> = Vec::new();
     let mut start = 0;
+    let mut seen_first = false;
 
     while let Some(pos) = memmem(body, start, delim_bytes) {
-        if start > 0 {
+        if seen_first {
             // Trim trailing \r\n before boundary.
             let end = if pos >= 2 && body[pos - 2] == b'\r' && body[pos - 1] == b'\n' {
                 pos - 2
@@ -248,17 +248,24 @@ pub fn parse_multipart_batch(body: &[u8], boundary: &str) -> BatchGetResult {
             };
             parts.push(&body[start..end]);
         }
-        start = pos + delim_bytes.len();
-        // Skip \r\n after boundary line.
+        seen_first = true;
+
+        let after = pos + delim_bytes.len();
+
+        // A closing boundary is `--boundary--`: the two bytes immediately after
+        // the delimiter are `--`. Once we've recorded the part that precedes it,
+        // there is nothing left to parse.
+        if body[after..].starts_with(b"--") {
+            break;
+        }
+
+        // Skip the trailing \r\n on the boundary line.
+        start = after;
         if start < body.len() && body[start] == b'\r' {
             start += 1;
         }
         if start < body.len() && body[start] == b'\n' {
             start += 1;
-        }
-        // Check for closing boundary (--boundary--).
-        if start >= 2 && body[start - 2..start].starts_with(b"--") {
-            break;
         }
     }
 

@@ -21,7 +21,7 @@ ws-transport = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:u
 diaryx_core = { workspace = true, default-features = false }
 diaryx_native = { workspace = true }
 chrono.workspace = true
-extism = "1.21"
+extism = "1.30"
 serde.workspace = true
 serde_json.workspace = true
 async-trait = "0.1"
@@ -38,9 +38,12 @@ futures-util = { version = "0.3", optional = true }
 url = { version = "2", optional = true }
 
 # Used directly to configure the wasmtime engine (e.g. Pulley interpreter on iOS)
-# and by the WASI module runner.
-wasmtime = "41"
-wasi-common = { version = "41", optional = true, features = ["sync"] }
+# and by the WASI module runner. These MUST track the wasmtime version that
+# `extism` depends on (it re-exports wasmtime and `with_wasmtime_config` takes
+# wasmtime's `Config`) — bump all three together or the graph ends up with two
+# wasmtime versions and the `Config` types stop unifying.
+wasmtime = "43"
+wasi-common = { version = "43", optional = true, features = ["sync"] }
 tempfile = { version = "3", optional = true }
 
 [package.metadata.release]

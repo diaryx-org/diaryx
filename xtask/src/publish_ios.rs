@@ -1,4 +1,4 @@
-use crate::util::{require_env, run_checked, workspace_root};
+use crate::util::{require_env, run_checked, tauri_command, workspace_root};
 use std::process::Command;
 
 const USAGE: &str = "Usage: cargo xtask publish-ios\n\n\
@@ -36,14 +36,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let tauri_dir = root.join("apps/tauri");
 
     println!("==> Building iOS app...");
-    let mut build = Command::new("cargo");
+    let mut build = tauri_command();
     build
         .current_dir(&tauri_dir)
         .env("APPLE_API_KEY", &api_key)
         .env("APPLE_API_ISSUER", &api_issuer)
         .env("APPLE_API_KEY_PATH", &api_key_path)
         .args([
-            "tauri",
             "ios",
             "build",
             "--export-method",
@@ -52,7 +51,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             "--features",
             "apple",
         ]);
-    run_checked(&mut build, "cargo tauri ios build")?;
+    run_checked(&mut build, "tauri ios build")?;
 
     let ipa_dir = root.join("apps/tauri/src-tauri/gen/apple/build");
     let ipa = find_ipa(&ipa_dir)?;

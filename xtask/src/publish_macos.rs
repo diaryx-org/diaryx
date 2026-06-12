@@ -1,4 +1,4 @@
-use crate::util::{require_env, run_checked, workspace_root};
+use crate::util::{require_env, run_checked, tauri_command, workspace_root};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -52,17 +52,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let pkg_output = root.join("Diaryx.pkg");
 
     println!("==> Building Diaryx.app...");
-    let mut build = Command::new("cargo");
-    build.current_dir(&tauri_dir).args([
-        "tauri",
-        "build",
-        "--bundles",
-        "app",
-        "--",
-        "--features",
-        "apple",
-    ]);
-    run_checked(&mut build, "cargo tauri build")?;
+    let mut build = tauri_command();
+    build
+        .current_dir(&tauri_dir)
+        .args(["build", "--bundles", "app", "--", "--features", "apple"]);
+    run_checked(&mut build, "tauri build")?;
 
     let binary = app_bundle.join("Contents/MacOS/diaryx_tauri");
     println!("==> Rewriting Nix dylib paths to system libraries (no-op off Nix)...");

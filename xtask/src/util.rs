@@ -9,6 +9,27 @@ pub fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Build a `Command` for the Tauri CLI.
+///
+/// Prefers the npm-pinned CLI at `apps/web/node_modules/.bin/tauri` (the
+/// `@tauri-apps/cli` version in apps/web/package.json, matching what
+/// tauri-release.yml uses via `tauriScript`), and falls back to the
+/// `cargo tauri` cargo subcommand when that binary is absent (e.g. a local
+/// checkout where `bun install` hasn't run).
+///
+/// Callers append the tauri subcommand args (e.g. `ios`, `build`) — do NOT
+/// include a leading `tauri`, since the npm binary IS the tauri command.
+pub fn tauri_command() -> Command {
+    let npm_cli = workspace_root().join("apps/web/node_modules/.bin/tauri");
+    if npm_cli.is_file() {
+        Command::new(npm_cli)
+    } else {
+        let mut cmd = Command::new("cargo");
+        cmd.arg("tauri");
+        cmd
+    }
+}
+
 pub fn which(program: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)

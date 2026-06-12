@@ -1,8 +1,7 @@
-use crate::util::{require_env, run_checked, workspace_root};
+use crate::util::{require_env, run_checked, tauri_command, workspace_root};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const USAGE: &str = "Usage: cargo xtask tauri <subcommand> [args...]
 
@@ -49,9 +48,9 @@ fn run_macos(args: &[String]) -> Result<(), String> {
     }
 
     let tauri_dir = workspace_root().join("apps/tauri");
-    let mut cmd = Command::new("cargo");
-    cmd.current_dir(&tauri_dir).arg("tauri").args(&tauri_args);
-    run_checked(&mut cmd, "cargo tauri")
+    let mut cmd = tauri_command();
+    cmd.current_dir(&tauri_dir).args(&tauri_args);
+    run_checked(&mut cmd, "tauri")
 }
 
 fn run_ios(args: &[String]) -> Result<(), String> {
@@ -67,11 +66,9 @@ fn run_ios(args: &[String]) -> Result<(), String> {
     let tauri_args = inject_features_flag(tauri_args, "apple");
 
     let tauri_dir = workspace_root().join("apps/tauri");
-    let mut cmd = Command::new("cargo");
-    cmd.current_dir(&tauri_dir)
-        .args(["tauri", "ios"])
-        .args(&tauri_args);
-    run_checked(&mut cmd, "cargo tauri ios")
+    let mut cmd = tauri_command();
+    cmd.current_dir(&tauri_dir).arg("ios").args(&tauri_args);
+    run_checked(&mut cmd, "tauri ios")
 }
 
 fn extract_dev_ipc_flag(args: &[String]) -> (Vec<String>, bool) {

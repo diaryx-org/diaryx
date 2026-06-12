@@ -85,6 +85,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p diaryx_core -- -D warnings
 
@@ -100,6 +101,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p diaryx_core -p diaryx --verbose
       - run: cargo test -p diaryx --verbose
@@ -114,6 +116,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p diaryx
 
@@ -127,6 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p diaryx_server -p diaryx_sync_server --verbose
 
@@ -140,6 +144,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --target wasm32-unknown-unknown
         working-directory: crates/diaryx_cloudflare
@@ -156,6 +161,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p diaryx_plugin_sdk
       - run: cargo check -p diaryx_publish_extism --target wasm32-unknown-unknown
@@ -169,6 +175,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --target wasm32-unknown-unknown -p diaryx_publish_extism --release
       - name: Upload plugin WASM artifacts
@@ -190,6 +197,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
 
       - name: Install wasm-bindgen-cli
@@ -296,6 +304,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/tauri/src-tauri
@@ -387,6 +396,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
 
       - name: Install wasm-pack
@@ -439,6 +449,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
 
       - name: Install Wrangler

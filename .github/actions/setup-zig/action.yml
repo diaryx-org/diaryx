@@ -1,0 +1,12 @@
+name: 'Setup Zig'
+description: >-
+  Install Zig, a build requirement for the `fig` crate. `diaryx_core` depends on
+  `fig`, whose build.rs compiles a Zig static lib via `zig build`; any job that
+  compiles `diaryx_core` (or a crate that depends on it) needs Zig on PATH.
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: mlugg/setup-zig@v2
+      with:
+        version: 0.13.0

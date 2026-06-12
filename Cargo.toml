@@ -46,11 +46,10 @@ license-file = "LICENSE.md"
 
 [workspace.dependencies]
 # Shared dependencies across workspace
-# fig: Zig-backed YAML parser/editor (replaces serde_yaml_ng in diaryx_core).
+# fig: Zig-backed YAML parser/editor; the YAML backend for diaryx_core.
 fig = { git = "https://github.com/adammharris/fig.git", rev = "e3d0630a99d9a1e63c9ba6702a1096d49ed0809e" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml_ng = "0.10"
 thiserror = "2.0"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 indexmap = { version = "2.0", features = ["serde"] }

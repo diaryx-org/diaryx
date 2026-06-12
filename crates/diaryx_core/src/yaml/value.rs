@@ -1,9 +1,8 @@
 //! Dynamic YAML value type with order-preserving mappings.
 //!
-//! Replaces `serde_yaml_ng::Value` with a lightweight enum that uses String keys
-//! in mappings (rather than `serde_yaml_ng::Value` keys) and separates integers
-//! from floats. Uses hand-written Serialize/Deserialize impls to keep code
-//! generation minimal.
+//! A lightweight dynamic value enum that uses String keys in mappings and
+//! separates integers from floats. Uses hand-written Serialize/Deserialize
+//! impls to keep code generation minimal.
 
 use indexmap::IndexMap;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};

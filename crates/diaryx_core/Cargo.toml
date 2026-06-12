@@ -14,9 +14,9 @@ categories = ["text-processing"]
 crossfs.workspace = true
 chrono.workspace = true
 indexmap.workspace = true
-# YAML backend for the `yaml`/`frontmatter` modules (formerly the bookmatter
-# crate, formerly serde_yaml_ng). `fig` is a Zig-backed parser/editor; its
-# build.rs compiles the Zig static lib via `zig build` (zig is a build req).
+# YAML backend for the `yaml`/`frontmatter` modules. `fig` is a Zig-backed
+# parser/editor; its build.rs compiles the Zig static lib via `zig build`
+# (zig is a build req).
 fig.workspace = true
 log = "0.4"
 pathdiff = "0.2"
@@ -63,6 +63,3 @@ publish = true
 [dev-dependencies]
 tempfile = "3"
 futures-lite = "2"
-# Differential parity harness: assert the fig backend deserializes Diaryx
-# frontmatter identically to the previous serde_yaml_ng backend.
-serde_yaml_ng.workspace = true

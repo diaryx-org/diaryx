@@ -87,14 +87,15 @@ jobs:
           echo "key_path=$KEY_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Import signing certificates
-        if: matrix.platform == 'macos'
         env:
           # App Store uses the "Apple Distribution" cert, NOT the "Developer ID"
           # cert in APPLE_CERTIFICATE (that one is for tauri-release notarization).
+          # The Apple Distribution cert signs both iOS and macOS App Store apps.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
           MACOS_INSTALLER_CERTIFICATE: ${{ secrets.MACOS_INSTALLER_CERTIFICATE }}
           MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           KEYCHAIN_PATH="$RUNNER_TEMP/appstore.keychain-db"
@@ -109,10 +110,13 @@ jobs:
           security import "$APP_CERT" -P "$APPLE_CERTIFICATE_PASSWORD" \
             -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
 
-          INSTALLER_CERT="$RUNNER_TEMP/installer.p12"
-          printf '%s' "$MACOS_INSTALLER_CERTIFICATE" | base64 -d > "$INSTALLER_CERT"
-          security import "$INSTALLER_CERT" -P "$MACOS_INSTALLER_CERTIFICATE_PASSWORD" \
-            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          # The installer cert produces the macOS .pkg only; iOS doesn't need it.
+          if [ "$PLATFORM" = "macos" ]; then
+            INSTALLER_CERT="$RUNNER_TEMP/installer.p12"
+            printf '%s' "$MACOS_INSTALLER_CERTIFICATE" | base64 -d > "$INSTALLER_CERT"
+            security import "$INSTALLER_CERT" -P "$MACOS_INSTALLER_CERTIFICATE_PASSWORD" \
+              -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          fi
 
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
@@ -132,6 +136,9 @@ jobs:
           API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
           API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
           API_KEY_PATH: ${{ steps.asc-key.outputs.key_path }}
+          # Drives automatic provisioning: xcodebuild uses the team + the API key
+          # (written above) to fetch/create the iOS App Store profile at build time.
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: cargo xtask publish-ios
 
       - name: Publish macOS

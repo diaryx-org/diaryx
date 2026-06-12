@@ -32,8 +32,25 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let api_key = require_env("API_KEY")?;
     let api_issuer = require_env("API_ISSUER")?;
     let api_key_path = require_env("API_KEY_PATH")?;
+    // Needed so the generated Xcode project and automatic signing know which
+    // team to sign for. tauri reads this from APPLE_DEVELOPMENT_TEAM.
+    let development_team = std::env::var("APPLE_DEVELOPMENT_TEAM").ok();
 
     let tauri_dir = root.join("apps/tauri");
+
+    // The Xcode project under src-tauri/gen/apple is generated, not committed
+    // (it's gitignored), so it's absent on a fresh CI checkout. Generate it
+    // when missing; skip if a previous `tauri ios init` already created it.
+    let gen_apple = tauri_dir.join("src-tauri/gen/apple");
+    if !gen_apple.exists() {
+        println!("==> Initializing iOS Xcode project (tauri ios init)...");
+        let mut init = tauri_command();
+        init.current_dir(&tauri_dir).args(["ios", "init"]);
+        if let Some(team) = &development_team {
+            init.env("APPLE_DEVELOPMENT_TEAM", team);
+        }
+        run_checked(&mut init, "tauri ios init")?;
+    }
 
     println!("==> Building iOS app...");
     let mut build = tauri_command();
@@ -51,6 +68,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             "--features",
             "apple",
         ]);
+    if let Some(team) = &development_team {
+        build.env("APPLE_DEVELOPMENT_TEAM", team);
+    }
     run_checked(&mut build, "tauri ios build")?;
 
     let ipa_dir = root.join("apps/tauri/src-tauri/gen/apple/build");

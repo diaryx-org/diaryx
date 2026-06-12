@@ -71,7 +71,7 @@ jobs:
         if: matrix.zigbuild
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.13.0
+          version: 0.16.0
 
       - name: Build binary (native)
         if: '!matrix.zigbuild'

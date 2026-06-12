@@ -43,6 +43,17 @@ runs:
           NPM_TAG=dev
         fi
 
-        echo "Publishing $(jq -r '.version' package.json) as ${NPM_TAG}"
+        PUBLISH_VERSION=$(jq -r '.version' package.json)
+
+        # Idempotent publish: skip (success) if this exact version already
+        # exists on the registry. Release workflows get re-run after unrelated
+        # build failures, and npm rejects republishing an existing version.
+        EXISTING=$(npm view "${{ inputs.package-name }}@${PUBLISH_VERSION}" version 2>/dev/null || true)
+        if [[ -n "${EXISTING}" ]]; then
+          echo "${{ inputs.package-name }}@${PUBLISH_VERSION} already published; skipping."
+          exit 0
+        fi
+
+        echo "Publishing ${PUBLISH_VERSION} as ${NPM_TAG}"
         cat package.json
         npm publish --provenance --access public --tag "${NPM_TAG}"

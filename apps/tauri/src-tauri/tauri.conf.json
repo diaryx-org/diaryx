@@ -56,7 +56,8 @@
     ],
     "targets": "all",
     "iOS": {
-      "infoPlist": "Info.ios.plist"
+      "infoPlist": "Info.ios.plist",
+      "minimumSystemVersion": "16.0"
     },
     "macOS": {
       "minimumSystemVersion": "13.0",

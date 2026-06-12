@@ -46,6 +46,19 @@ jobs:
         with:
           targets: ${{ matrix.platform == 'ios' && 'aarch64-apple-ios' || 'aarch64-apple-darwin,x86_64-apple-darwin' }}
 
+      # iOS only: `cargo xtask publish-ios` drives the build with `cargo tauri`
+      # so the generated Xcode "Build Rust Code" phase re-invokes the CLI as
+      # `cargo tauri ios xcode-script` (cwd-independent). The npm-pinned
+      # `.bin/tauri` would bake an unresolvable `node tauri` instead. Pin to the
+      # same version as @tauri-apps/cli in apps/web/package.json.
+      - name: Set up cargo-binstall
+        if: matrix.platform == 'ios'
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Tauri CLI
+        if: matrix.platform == 'ios'
+        run: cargo binstall -y tauri-cli@2.10.1
+
       # Required by diaryx_core -> fig, whose build.rs shells out to `zig build`.
       - name: Install Zig
         uses: ./.github/actions/setup-zig

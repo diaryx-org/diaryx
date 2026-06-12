@@ -57,7 +57,12 @@ jobs:
 
       - name: Install Tauri CLI
         if: matrix.platform == 'ios'
-        run: cargo binstall -y tauri-cli@2.10.1
+        # Fetch the prebuilt cargo-tauri binary; never fall back to a source
+        # build (compiling tauri-cli hits a tauri-utils/time E0119 error and is
+        # slow). GITHUB_TOKEN lets binstall reach the GitHub release API.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo binstall -y --disable-strategies compile tauri-cli@2.10.1
 
       # Required by diaryx_core -> fig, whose build.rs shells out to `zig build`.
       - name: Install Zig

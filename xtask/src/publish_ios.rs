@@ -1,5 +1,27 @@
-use crate::util::{require_env, run_checked, tauri_command, workspace_root};
+use crate::util::{require_env, run_checked, workspace_root};
 use std::process::Command;
+
+/// Build a `cargo tauri` command for the iOS build.
+///
+/// iOS must use `cargo tauri` rather than the npm-pinned `.bin/tauri` (used
+/// elsewhere via `tauri_command`). `tauri ios init` bakes the CLI invocation
+/// into the generated Xcode "Build Rust Code" phase as
+/// `<tauri-binary> ios xcode-script ...`. Tauri derives that command from
+/// `std::env::args_os()`: when the npm CLI is spawned directly (not through a
+/// package manager), `argv[0]` is `node` and no `npm_execpath`/`PNPM_*` env is
+/// set, so Tauri bakes a bare `node tauri ...`. Xcode runs that phase from
+/// `gen/apple`, so node resolves `tauri` to `gen/apple/tauri` and fails with
+/// "Cannot find module '.../gen/apple/tauri'". The package-manager code paths
+/// can't help here either: this repo's package.json lives in apps/web, which is
+/// not an ancestor of gen/apple, so a baked `bun tauri`/`npm run tauri` would
+/// not resolve from the build phase's working directory. `cargo tauri` bakes
+/// `cargo tauri ios xcode-script ...`, which is cwd-independent (it only needs
+/// `cargo`/`cargo-tauri` on PATH, which Xcode inherits from the CI job).
+fn cargo_tauri() -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("tauri");
+    cmd
+}
 
 const USAGE: &str = "Usage: cargo xtask publish-ios\n\n\
 Builds the iOS App Store export (Tauri `apple` feature) and uploads the IPA to\n\
@@ -43,17 +65,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // when missing; skip if a previous `tauri ios init` already created it.
     let gen_apple = tauri_dir.join("src-tauri/gen/apple");
     if !gen_apple.exists() {
-        println!("==> Initializing iOS Xcode project (tauri ios init)...");
-        let mut init = tauri_command();
+        println!("==> Initializing iOS Xcode project (cargo tauri ios init)...");
+        let mut init = cargo_tauri();
         init.current_dir(&tauri_dir).args(["ios", "init"]);
         if let Some(team) = &development_team {
             init.env("APPLE_DEVELOPMENT_TEAM", team);
         }
-        run_checked(&mut init, "tauri ios init")?;
+        run_checked(&mut init, "cargo tauri ios init")?;
     }
 
     println!("==> Building iOS app...");
-    let mut build = tauri_command();
+    let mut build = cargo_tauri();
     build
         .current_dir(&tauri_dir)
         .env("APPLE_API_KEY", &api_key)
@@ -71,7 +93,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if let Some(team) = &development_team {
         build.env("APPLE_DEVELOPMENT_TEAM", team);
     }
-    run_checked(&mut build, "tauri ios build")?;
+    run_checked(&mut build, "cargo tauri ios build")?;
 
     let ipa_dir = root.join("apps/tauri/src-tauri/gen/apple/build");
     let ipa = find_ipa(&ipa_dir)?;

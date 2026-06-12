@@ -1263,7 +1263,7 @@
 >
   <!-- Content Area -->
   <div
-    class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''}"
+    class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : 'flex flex-col'}"
     bind:this={scrollContainer}
   >
     <!-- Sticky spacer: keeps content from scrolling behind macOS traffic lights.
@@ -1351,24 +1351,30 @@
       {/if}
     {:else}
       {@const activePluginTab = leftTabs.find((tab) => tab.id === leftTab) ?? null}
-      {#if leftTab === "__plugins-loading"}
-        <div class="h-full flex flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
-          <Loader2 class="size-4 animate-spin" />
-          <p>Plugins loading...</p>
-        </div>
-      {:else if activePluginTab?.pluginId && activePluginTab.component && api}
-        <PluginSidebarPanel
-          pluginId={activePluginTab.pluginId}
-          component={activePluginTab.component}
-          {api}
-          entry={currentEntry}
-          onHostAction={onPluginHostAction}
-        />
-      {:else}
-        <div class="p-4 text-sm text-muted-foreground">
-          No panel available for this tab.
-        </div>
-      {/if}
+      <!-- Fill the space after the sticky titlebar spacer. Using flex-1 (rather
+           than h-full) keeps the panel from overflowing the scroll container by
+           the spacer's height, which otherwise causes a spurious scrollbar when
+           the plugin's content is shorter than the sidebar. -->
+      <div class="flex-1 min-h-0">
+        {#if leftTab === "__plugins-loading"}
+          <div class="h-full flex flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+            <Loader2 class="size-4 animate-spin" />
+            <p>Plugins loading...</p>
+          </div>
+        {:else if activePluginTab?.pluginId && activePluginTab.component && api}
+          <PluginSidebarPanel
+            pluginId={activePluginTab.pluginId}
+            component={activePluginTab.component}
+            {api}
+            entry={currentEntry}
+            onHostAction={onPluginHostAction}
+          />
+        {:else}
+          <div class="p-4 text-sm text-muted-foreground">
+            No panel available for this tab.
+          </div>
+        {/if}
+      </div>
     {/if}
   </div>
 

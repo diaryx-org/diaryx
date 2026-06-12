@@ -61,17 +61,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Zig is required for every target: diaryx depends on diaryx_core -> fig,
+      # whose build.rs shells out to `zig build` regardless of zigbuild.
+      - name: Install Zig
+        uses: ./.github/actions/setup-zig
+
       - name: Install zigbuild
         if: matrix.zigbuild
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-zigbuild
-
-      - name: Install Zig
-        if: matrix.zigbuild
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
 
       - name: Build binary (native)
         if: '!matrix.zigbuild'

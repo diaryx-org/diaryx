@@ -61,6 +61,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Required by diaryx_core -> fig, whose build.rs shells out to `zig build`.
+      - name: Install Zig
+        uses: ./.github/actions/setup-zig
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:

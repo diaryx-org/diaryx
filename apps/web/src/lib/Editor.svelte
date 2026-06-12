@@ -2135,7 +2135,6 @@
     padding-left: 1em;
     margin-left: 0;
     color: var(--muted-foreground);
-    font-style: italic;
   }
 
   :global(.editor-content code) {

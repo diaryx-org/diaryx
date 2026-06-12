@@ -32,6 +32,37 @@ import { getCurrentWorkspaceId as registryGetCurrentWorkspaceId } from "$lib/sto
 import { isTauri } from "$lib/backend/interface";
 import { proxyFetch } from "$lib/backend/proxyFetch";
 
+/**
+ * Default timeout for session-validation network calls (`getMe`). Startup must
+ * never hang behind a slow-but-alive server: the health check already bounds
+ * reachability at 5s, and this bounds the validation request itself so we fall
+ * back to the cached user instead of stalling indefinitely.
+ */
+const GET_ME_TIMEOUT_MS = 8000;
+
+/**
+ * Race a promise against a timeout. Rejects with a plain `Error` (not an
+ * `AuthError`) on timeout so callers treat it as a transient network failure
+ * and keep the cached session rather than logging the user out.
+ */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 function setAuthToken(_token: string | undefined): void {
   // Sync plugin reads token through host callbacks/local auth state.
 }
@@ -364,8 +395,9 @@ export async function initAuth(): Promise<void> {
     try {
       // Validate session with server. On the browser, the HttpOnly cookie is
       // attached automatically; on Tauri, the keyring-backed AuthService
-      // injects the bearer header from native code.
-      const me = await coreAuthService.getMe();
+      // injects the bearer header from native code. Bounded so a slow network
+      // can't stall this call indefinitely — on timeout we keep the cached user.
+      const me = await withTimeout(coreAuthService.getMe(), GET_ME_TIMEOUT_MS, "getMe");
       state.user = me.user;
       state.workspaces = me.workspaces;
       state.devices = me.devices;
@@ -618,7 +650,7 @@ export async function refreshUserInfo(): Promise<void> {
   if (!state.serverUrl) return;
 
   try {
-    const me = await coreAuthService.getMe();
+    const me = await withTimeout(coreAuthService.getMe(), GET_ME_TIMEOUT_MS, "getMe");
     state.user = me.user;
     state.workspaces = me.workspaces;
     state.devices = me.devices;

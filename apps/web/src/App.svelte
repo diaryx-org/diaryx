@@ -1050,61 +1050,70 @@
       // - OPFS workspace discovery (filesystem scan)
       const [, editorModule] = await Promise.all([
         startupTracer.measure("auth bootstrap", async () => {
-          // Initialize auth state - if user was previously logged in,
-          // this will validate their token and enable collaboration automatically
+          const params =
+            typeof window !== "undefined"
+              ? new URLSearchParams(window.location.search)
+              : new URLSearchParams();
+          const token = params.get("token");
+          const checkoutResult = params.get("checkout");
+
+          // Magic-link verification and Stripe checkout confirmation are
+          // explicit, user-initiated flows that must complete before we
+          // continue — keep awaiting initAuth() (and the flow) in those cases.
+          // For normal startup, session validation is a background refresh of
+          // the already-cached user, so it must NOT gate the UI/content load:
+          // fire it off and let the reactive auth state update when it returns.
+          if (!token && !checkoutResult) {
+            void initAuth();
+            return;
+          }
+
+          // Initialize auth state before handling URL-driven flows so the
+          // auth service is initialized.
           await initAuth();
 
           // Check for magic link token in URL (auto-verify without wizard)
-          // This must happen AFTER initAuth() so the auth service is initialized
-          if (typeof window !== "undefined") {
-            const params = new URLSearchParams(window.location.search);
-            const token = params.get("token");
-            if (token) {
-              // Clear the token from URL immediately to prevent double verification
-              const url = new URL(window.location.href);
-              url.searchParams.delete("token");
-              window.history.replaceState({}, "", url.toString());
+          if (token) {
+            // Clear the token from URL immediately to prevent double verification
+            const url = new URL(window.location.href);
+            url.searchParams.delete("token");
+            window.history.replaceState({}, "", url.toString());
 
-              // If no server URL is configured, set the default before verifying
-              // This handles the case where user clicks magic link in a new browser/tab
-              const serverUrl = localStorage.getItem("diaryx_sync_server_url");
-              if (!serverUrl) {
-                setServerUrl("https://app.diaryx.org/api");
-              }
-              // Verify automatically and wait for completion before continuing
-              await handleMagicLinkToken(token);
+            // If no server URL is configured, set the default before verifying
+            // This handles the case where user clicks magic link in a new browser/tab
+            const serverUrl = localStorage.getItem("diaryx_sync_server_url");
+            if (!serverUrl) {
+              setServerUrl("https://app.diaryx.org/api");
             }
+            // Verify automatically and wait for completion before continuing
+            await handleMagicLinkToken(token);
           }
 
           // Check for Stripe checkout result in URL
-          if (typeof window !== "undefined") {
-            const params = new URLSearchParams(window.location.search);
-            const checkoutResult = params.get("checkout");
-            if (checkoutResult) {
-              const url = new URL(window.location.href);
-              url.searchParams.delete("checkout");
-              window.history.replaceState({}, "", url.toString());
+          if (checkoutResult) {
+            const url = new URL(window.location.href);
+            url.searchParams.delete("checkout");
+            window.history.replaceState({}, "", url.toString());
 
-              if (checkoutResult === "success") {
-                // Poll for tier update — the webhook often arrives after the redirect
-                let upgraded = false;
-                for (let i = 0; i < 10; i++) {
-                  await refreshUserInfo();
-                  if (getAuthState().tier === "plus") {
-                    upgraded = true;
-                    break;
-                  }
-                  await new Promise((r) => setTimeout(r, 1500));
+            if (checkoutResult === "success") {
+              // Poll for tier update — the webhook often arrives after the redirect
+              let upgraded = false;
+              for (let i = 0; i < 10; i++) {
+                await refreshUserInfo();
+                if (getAuthState().tier === "plus") {
+                  upgraded = true;
+                  break;
                 }
-                if (upgraded) {
-                  toast.success("Welcome to Diaryx Plus!", {
-                    description: "Your subscription is now active.",
-                  });
-                } else {
-                  toast.info("Payment received!", {
-                    description: "Your subscription is being activated. Please refresh in a moment.",
-                  });
-                }
+                await new Promise((r) => setTimeout(r, 1500));
+              }
+              if (upgraded) {
+                toast.success("Welcome to Diaryx Plus!", {
+                  description: "Your subscription is now active.",
+                });
+              } else {
+                toast.info("Payment received!", {
+                  description: "Your subscription is being activated. Please refresh in a moment.",
+                });
               }
             }
           }

@@ -19,8 +19,14 @@ import {
 import { workspaceStore } from '../models/stores';
 import { toast } from 'svelte-sonner';
 
-// Depth limit for initial tree loading (lazy loading)
+// Depth limit for the initial tree paint. Two levels gives a useful first
+// render (root + children + grandchildren) without walking the whole workspace.
 const TREE_INITIAL_DEPTH = 2;
+// Depth fetched when the user expands a node. One level keeps each expansion to
+// a single layer of reads — important on high-latency backends (FSA, remote)
+// where every node is a separate round-trip. Deeper levels load lazily on the
+// next expand.
+const TREE_EXPAND_DEPTH = 1;
 const TREE_REFRESH_RETRY_DELAYS_MS = [100, 200, 400, 800];
 
 function getTimingNow(): number {
@@ -222,10 +228,10 @@ export async function loadNodeChildren(
       const dirPath = nodePath.endsWith('.md')
         ? nodePath.substring(0, nodePath.lastIndexOf('/'))
         : nodePath;
-      subtree = await api.getFilesystemTree(dirPath, showHiddenFiles, TREE_INITIAL_DEPTH);
+      subtree = await api.getFilesystemTree(dirPath, showHiddenFiles, TREE_EXPAND_DEPTH);
     } else {
       // Workspace tree mode - use index file path directly
-      subtree = await api.getWorkspaceTree(nodePath, TREE_INITIAL_DEPTH, audiences);
+      subtree = await api.getWorkspaceTree(nodePath, TREE_EXPAND_DEPTH, audiences);
     }
 
     // Merge into existing tree

@@ -111,4 +111,24 @@ describe("bundleRegistry", () => {
       }),
     ).toThrow("plugin.required");
   });
+
+  it("treats an unpublished (incomplete) artifact as no artifact instead of throwing", () => {
+    // A locally-authored bundle has no published download — its artifact lacks a
+    // usable size. This must not reject the whole bundle (regression test).
+    const base = {
+      id: "bundle.local",
+      name: "Local",
+      version: "1.0.0",
+      summary: "Local",
+      description: "Local",
+      author: "Test",
+      license: "MIT",
+      theme_id: "theme.default",
+      plugins: [],
+    };
+
+    expect(normalizeBundleRegistryEntry({ ...base, artifact: { url: "", size: 0 } }).artifact).toBeNull();
+    expect(normalizeBundleRegistryEntry({ ...base, artifact: { url: "x.json" } }).artifact).toBeNull();
+    expect(normalizeBundleRegistryEntry({ ...base, artifact: null }).artifact).toBeNull();
+  });
 });

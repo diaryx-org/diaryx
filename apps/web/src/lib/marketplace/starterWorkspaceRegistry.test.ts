@@ -173,14 +173,19 @@ describe("normalizeStarterWorkspaceRegistryEntry", () => {
     expect(entry.artifact).toBeNull();
   });
 
-  it("validates artifact fields", () => {
-    expect(() =>
-      normalizeStarterWorkspaceRegistryEntry({
-        id: "x", name: "x", version: "1", summary: "x", description: "x",
-        author: "x", license: "x", file_count: 0, includes_templates: false,
-        artifact: { url: "u", sha256: "s", size: -1, published_at: "p" },
-      }),
-    ).toThrow("artifact.size must be a positive number");
+  it("treats an unpublished (incomplete) artifact as no artifact instead of throwing", () => {
+    // Locally-authored items have no published download — an incomplete artifact
+    // must not reject the whole entry (regression test).
+    const base = {
+      id: "x", name: "x", version: "1", summary: "x", description: "x",
+      author: "x", license: "x", file_count: 0, includes_templates: false,
+    };
+    expect(
+      normalizeStarterWorkspaceRegistryEntry({ ...base, artifact: { url: "u", sha256: "s", size: -1, published_at: "p" } }).artifact,
+    ).toBeNull();
+    expect(
+      normalizeStarterWorkspaceRegistryEntry({ ...base, artifact: { url: "u" } }).artifact,
+    ).toBeNull();
   });
 
   it("rejects non-object artifact", () => {

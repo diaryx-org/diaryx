@@ -172,13 +172,23 @@ function readArtifact(
     throw new Error("Theme registry validation error: artifact must be an object or null");
   }
 
+  // A present-but-incomplete artifact (no url, or a non-positive size) describes
+  // an item with no published download — e.g. a locally-authored/unpublished theme
+  // imported from a file. Treat it as "no artifact" rather than rejecting the whole
+  // entry; downstream consumers already handle a null artifact (`item.artifact?.…`).
+  const url = artifactRaw.url;
   const size = artifactRaw.size;
-  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) {
-    throw new Error("Theme registry validation error: artifact.size must be a positive number");
+  const hasUrl = typeof url === "string" && url.length > 0;
+  const hasSize = typeof size === "number" && Number.isFinite(size) && size > 0;
+  if (!hasUrl || !hasSize) {
+    if (hasUrl || hasSize) {
+      console.warn("Theme artifact incomplete; treating as unpublished (no artifact):", artifactRaw);
+    }
+    return null;
   }
 
   return {
-    url: readString(artifactRaw, "url"),
+    url,
     sha256: readString(artifactRaw, "sha256").toLowerCase(),
     size,
     published_at: readString(artifactRaw, "published_at"),

@@ -74,6 +74,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
         run_checked(&mut init, "cargo tauri ios init")?;
     }
 
+    // `tauri ios init` writes its own placeholder PNGs into the generated
+    // AppIcon.appiconset; nothing copies the committed app icons over them, so a
+    // fresh CI checkout ships the default Tauri icon. The committed
+    // `icons/ios/*.png` (produced by `tauri icon`) use the exact filenames the
+    // appiconset's Contents.json references, so copying them in is a drop-in
+    // replacement. gen/apple is gitignored and regenerated each run, so this
+    // sync has to happen here rather than being committed.
+    sync_ios_app_icon(&tauri_dir)?;
+
     println!("==> Building iOS app...");
     let mut build = cargo_tauri();
     build
@@ -108,6 +117,39 @@ pub fn run(args: &[String]) -> Result<(), String> {
     run_checked(&mut upload, "xcrun altool")?;
 
     println!("==> Done! Check App Store Connect for processing status.");
+    Ok(())
+}
+
+/// Copy the committed iOS app icons into the generated appiconset.
+///
+/// The icons under `src-tauri/icons/ios` share the exact filenames the
+/// generated `AppIcon.appiconset/Contents.json` references, so each one
+/// overwrites the placeholder `tauri ios init` produced.
+fn sync_ios_app_icon(tauri_dir: &std::path::Path) -> Result<(), String> {
+    let src = tauri_dir.join("src-tauri/icons/ios");
+    let dest = tauri_dir.join("src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset");
+    if !dest.is_dir() {
+        return Err(format!(
+            "appiconset not found at {} (did `tauri ios init` run?)",
+            dest.display()
+        ));
+    }
+    println!("==> Syncing app icons into {}...", dest.display());
+    let mut copied = 0;
+    for entry in std::fs::read_dir(&src).map_err(|e| format!("read_dir {}: {e}", src.display()))? {
+        let path = entry.map_err(|e| format!("dir entry: {e}"))?.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("png") {
+            continue;
+        }
+        let name = path.file_name().expect("png path has a file name");
+        std::fs::copy(&path, dest.join(name))
+            .map_err(|e| format!("copy {} -> appiconset: {e}", path.display()))?;
+        copied += 1;
+    }
+    if copied == 0 {
+        return Err(format!("no PNG icons found in {}", src.display()));
+    }
+    println!("==> Synced {copied} app icon images.");
     Ok(())
 }
 

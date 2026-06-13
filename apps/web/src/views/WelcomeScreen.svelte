@@ -10,7 +10,7 @@
   import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Progress } from "$lib/components/ui/progress";
-  import { ArrowLeft, Loader2, FileText, FolderOpen } from "@lucide/svelte";
+  import { ArrowLeft, Loader2, FileText, FolderOpen, Plus } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import { fetchBundleRegistry } from "$lib/marketplace/bundleRegistry";
   import { fetchThemeRegistry } from "$lib/marketplace/themeRegistry";
@@ -31,6 +31,12 @@
     onOpenFileNavigation?: (
       onProgress?: (progress: { percent: number; message: string; detail?: string }) => void,
     ) => boolean | void | Promise<boolean | void>;
+    /**
+     * Whether the runtime can pick a real folder (native app, or a browser with
+     * File System Access). When false (e.g. Safari/Firefox), the primary action
+     * creates a private in-browser workspace instead of picking a folder.
+     */
+    canPickFolder?: boolean;
     /** Called to show the launch zoom overlay — App.svelte owns rendering */
     onLaunch?: (info: BundleSelectInfo) => void;
     /** When set, user navigated here from an existing workspace — show a "Return" button */
@@ -47,6 +53,7 @@
     returnWorkspaceName = null,
     onReturn,
     initialView = null,
+    canPickFolder = true,
   }: Props = $props();
 
   // View state machine
@@ -125,7 +132,7 @@
   }
 
   async function handleChooseFolderWorkspace(bundle: BundleRegistryEntry | null, overrides?: PluginOverride[]) {
-    beginSetup("Choose a folder...");
+    beginSetup(canPickFolder ? "Choose a folder..." : "Creating workspace...");
     try {
       const run = () => onChooseFolderWorkspace(bundle, overrides, updateSetupProgress);
       const completed = launchInfo ? await playZoomThen(run) : await run();
@@ -232,8 +239,13 @@
               disabled={!animationDone || settingUp}
               onclick={() => handleChooseFolderWorkspace(null)}
             >
-              <FolderOpen class="size-4 mr-2" />
-              Choose workspace folder
+              {#if canPickFolder}
+                <FolderOpen class="size-4 mr-2" />
+                Choose workspace folder
+              {:else}
+                <Plus class="size-4 mr-2" />
+                Create workspace
+              {/if}
             </Button>
 
             {#if onOpenFileNavigation}

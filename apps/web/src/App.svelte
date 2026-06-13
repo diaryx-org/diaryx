@@ -91,6 +91,7 @@
     removeLocalWorkspace,
     renameLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
+  import { isStorageTypeSupported, resolveStorageType } from "$lib/backend/storageType";
 
   type StartupPhaseMeasurement = {
     label: string;
@@ -368,10 +369,13 @@
       }
     }
 
-    toast.error("Folder workspaces are not available in this browser.", {
-      description: "Use the Diaryx app, or a browser with local folder access such as Chrome or Edge.",
-    });
-    return null;
+    // Browser without File System Access (e.g. Safari/Firefox): there's no
+    // folder to pick, so create a private in-browser workspace (OPFS, falling
+    // back to IndexedDB) instead.
+    return {
+      name: "My Workspace",
+      storageType: await resolveStorageType(),
+    };
   }
 
   function fileNameFromPath(path: string): string {
@@ -3587,6 +3591,7 @@
     bind:this={welcomeScreenRef}
     initialView={welcomeInitialView}
     onLaunch={(info) => { launchOverlay = info; }}
+    canPickFolder={isTauri() || isStorageTypeSupported("filesystem-access")}
     onChooseFolderWorkspace={chooseWorkspaceFolder}
     onOpenFileNavigation={isTauri() && isIOS() ? async (onProgress) => {
       entryStore.setLoading(true);

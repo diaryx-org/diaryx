@@ -1,4 +1,5 @@
 import { getApi } from "$lib/backend";
+import { coerceBigIntsToNumbers } from "./coerceBigInt";
 
 import type {
   ThemeColorKey,
@@ -101,7 +102,7 @@ async function parseMarkdownFrontmatter(text: string): Promise<{
   }
 
   const api = await getApi();
-  const frontmatter = await api.parseFrontmatter(text);
+  const frontmatter = coerceBigIntsToNumbers(await api.parseFrontmatter(text));
   if (!isRecord(frontmatter)) {
     throw new Error(
       "Theme registry validation error: frontmatter must be a YAML mapping",

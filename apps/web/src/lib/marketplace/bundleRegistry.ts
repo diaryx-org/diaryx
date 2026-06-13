@@ -1,4 +1,5 @@
 import { getApi } from "$lib/backend";
+import { coerceBigIntsToNumbers } from "./coerceBigInt";
 
 import type { BundleRegistryEntry, SpotlightStep } from "./types";
 
@@ -67,7 +68,7 @@ async function parseMarkdownFrontmatter(text: string): Promise<{
   }
 
   const api = await getApi();
-  const frontmatter = await api.parseFrontmatter(text);
+  const frontmatter = coerceBigIntsToNumbers(await api.parseFrontmatter(text));
   if (!isRecord(frontmatter)) {
     throw new Error(
       "Bundle registry validation error: frontmatter must be a YAML mapping",

@@ -8,6 +8,7 @@
 
 import { getApi } from "$lib/backend";
 import { proxyFetch } from "$lib/backend/proxyFetch";
+import { coerceBigIntsToNumbers } from "$lib/marketplace/coerceBigInt";
 
 export interface PluginArtifact {
   url: string;
@@ -111,7 +112,7 @@ async function parseMarkdownFrontmatter(text: string): Promise<{ frontmatter: Re
     throw new Error("Plugin registry validation error: missing YAML frontmatter");
   }
   const api = await getApi();
-  const frontmatter = await api.parseFrontmatter(text);
+  const frontmatter = coerceBigIntsToNumbers(await api.parseFrontmatter(text));
   if (!isRecord(frontmatter)) {
     throw new Error("Plugin registry validation error: frontmatter must be a YAML mapping");
   }

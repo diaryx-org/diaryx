@@ -28,6 +28,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       wasm: ${{ steps.filter.outputs.wasm }}
       plugins: ${{ steps.filter.outputs.plugins }}
+      publish_plugin: ${{ steps.filter.outputs.publish_plugin }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,6 +61,9 @@ jobs:
               - 'crates/plugins/**'
               - 'crates/diaryx_core/**'
               - 'crates/diaryx_extism/**'
+            publish_plugin:
+              - 'crates/plugins/diaryx_publish_extism/**'
+              - 'crates/plugins/diaryx_plugin_sdk/**'
 
   # ── Rust lint & test (lightweight, no Nix) ───────────────────────────────
 
@@ -184,6 +188,118 @@ jobs:
           name: plugin-wasms
           path: |
             target/wasm32-unknown-unknown/release/diaryx_publish_extism.wasm
+
+  # ── Publish plugin: dev channel ──────────────────────────────────────────
+  # Auto-publishes a dev build of the publish plugin on every push to master
+  # that touches its folder. The dev version is stamped into the crate so the
+  # wasm manifest matches the dev registry entry; the artifact + a single-entry
+  # registry-dev.md are uploaded straight to R2 (no registry-repo round-trip).
+
+  publish-publish-plugin-dev:
+    name: Publish Publish-Plugin Dev Build
+    needs: [changes, build-plugins]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.changes.outputs.publish_plugin == 'true'
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CDN_BASE: https://app.diaryx.org/cdn
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: ./.github/actions/setup-zig
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compute dev version
+        id: ver
+        run: |
+          BASE=$(grep -m1 '^version' crates/plugins/diaryx_publish_extism/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          DEV_VERSION="${BASE}-dev.${{ github.run_number }}"
+          echo "dev_version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Dev version: $DEV_VERSION"
+
+      - name: Stamp dev version into Cargo.toml (ephemeral)
+        run: |
+          sed -i -E "0,/^version = \".*\"/s//version = \"${{ steps.ver.outputs.dev_version }}\"/" \
+            crates/plugins/diaryx_publish_extism/Cargo.toml
+
+      - name: Build dev WASM
+        run: cargo build --target wasm32-unknown-unknown -p diaryx_publish_extism --release
+
+      - name: Upload artifact and assemble registry-dev.md
+        env:
+          DEV_VERSION: ${{ steps.ver.outputs.dev_version }}
+        run: |
+          set -euo pipefail
+          pip install pyyaml
+
+          WASM=target/wasm32-unknown-unknown/release/diaryx_publish_extism.wasm
+          SHA=$(sha256sum "$WASM" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$WASM")
+          S3_KEY="plugins/artifacts/diaryx.publish/${DEV_VERSION}/diaryx_publish_extism.wasm"
+
+          aws s3 cp "$WASM" "s3://${R2_BUCKET}/${S3_KEY}" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --content-type application/wasm \
+            --cache-control "public, max-age=31536000, immutable"
+
+          SHA="$SHA" SIZE="$SIZE" S3_KEY="$S3_KEY" python3 - <<'PY'
+          import os, sys, urllib.request, yaml
+          from datetime import datetime, timezone
+
+          cdn = os.environ["CDN_BASE"].rstrip("/")
+          dev_version = os.environ["DEV_VERSION"]
+          sha = os.environ["SHA"]
+          size = int(os.environ["SIZE"])
+          s3_key = os.environ["S3_KEY"]
+
+          # Reuse the live stable entry's metadata; override only version + artifact.
+          url = f"{cdn}/plugins/registry.md"
+          req = urllib.request.Request(url, headers={"User-Agent": "diaryx-ci/1.0"})
+          with urllib.request.urlopen(req, timeout=60) as resp:
+              text = resp.read().decode("utf-8")
+          meta = yaml.safe_load(text.split("---", 2)[1])
+
+          entry = next((p for p in meta.get("plugins", []) if p.get("id") == "diaryx.publish"), None)
+          if entry is None:
+              sys.exit("diaryx.publish not found in stable registry")
+
+          entry = dict(entry)
+          entry["version"] = dev_version
+          entry["artifact"] = {
+              "url": f"{cdn}/{s3_key}",
+              "sha256": sha,
+              "size": size,
+              "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+          }
+
+          dev_meta = {
+              "schema_version": 2,
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "cdn_base": cdn,
+              "plugins": [entry],
+          }
+          out = (
+              "---\n"
+              + yaml.dump(dev_meta, sort_keys=False, allow_unicode=True)
+              + "---\n\n# Diaryx Plugin Registry (dev)\n"
+          )
+          with open("registry-dev.md", "w", encoding="utf-8") as f:
+              f.write(out)
+          print(f"Wrote registry-dev.md for diaryx.publish {dev_version}")
+          PY
+
+          aws s3 cp registry-dev.md "s3://${R2_BUCKET}/plugins/registry-dev.md" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --content-type text/markdown \
+            --cache-control "public, max-age=300"
 
   # ── WASM & bindings ─────────────────────────────────────────────────────
 

@@ -17,10 +17,17 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Separator } from "$lib/components/ui/separator";
   import { toast } from "svelte-sonner";
+  import { onMount } from "svelte";
   import {
     fetchPluginRegistry,
+    fetchDevRegistry,
     type RegistryPlugin,
   } from "$lib/plugins/pluginRegistry";
+  import {
+    getPluginChannels,
+    getPluginChannel,
+    setPluginChannel,
+  } from "$lib/plugins/pluginChannel.svelte";
   import {
     getBrowserPluginSupport,
     getBrowserPluginSupportError,
@@ -98,10 +105,38 @@
 
   const installedPluginSources = $derived(getInstalledPluginSources());
 
+  // Dev-channel registry (best-effort; empty until a dev build has shipped).
+  let devById = $state<Map<string, RegistryPlugin>>(new Map());
+  onMount(async () => {
+    const dev = await fetchDevRegistry();
+    devById = new Map(dev.plugins.map((p) => [p.id, p]));
+  });
+
+  // Reactive trigger so resolveEntry re-runs when a channel preference changes.
+  const pluginChannels = $derived(getPluginChannels());
+
+  /**
+   * The entry actually shown/installed for a plugin: its dev build when the user
+   * has opted that plugin into the dev channel and a dev build exists, otherwise
+   * the stable entry. Only `version` + `artifact` differ between channels.
+   */
+  function resolveEntry(plugin: RegistryPlugin): RegistryPlugin {
+    void pluginChannels;
+    const dev = devById.get(plugin.id);
+    return dev && getPluginChannel(plugin.id) === "dev" ? dev : plugin;
+  }
+
+  function isOnDevChannel(pluginId: string): boolean {
+    void pluginChannels;
+    return devById.has(pluginId) && getPluginChannel(pluginId) === "dev";
+  }
+
+  const effectivePanelItems = $derived.by(() => panel.items.map(resolveEntry));
+
   const marketplaceClassification = $derived.by(() =>
     classifyMarketplacePlugins(
       pluginStore.allManifests,
-      panel.items,
+      effectivePanelItems,
       installedPluginSources,
     ),
   );
@@ -249,7 +284,9 @@
 
 {#if detailPlugin}
   <!-- Detail drill-down view -->
-  {@const plugin = detailPlugin}
+  {@const plugin = resolveEntry(detailPlugin)}
+  {@const devAvailable = devById.has(plugin.id)}
+  {@const onDev = isOnDevChannel(plugin.id)}
   {@const installed = installedIds.has(plugin.id)}
   {@const installing = installingIds.has(plugin.id)}
   {@const removing = removingIds.has(plugin.id)}
@@ -266,6 +303,9 @@
       <div>
         <div class="flex items-center gap-2 flex-wrap">
           <Badge variant="secondary">v{plugin.version}</Badge>
+          {#if onDev}
+            <Badge variant="outline" class="text-sky-600 dark:text-sky-400 border-sky-500/40">Dev</Badge>
+          {/if}
           {#if detailHasUpdate && detailUpdateInfo}
             <Badge variant="outline" class="text-amber-600 dark:text-amber-400 border-amber-500/40">
               Installed: v{detailUpdateInfo.installed.version}
@@ -331,6 +371,24 @@
         <div class="rounded-md border p-2 text-[11px]">
           <p class="font-medium mb-1">Requested Permissions</p>
           <pre class="whitespace-pre-wrap break-words text-muted-foreground">{JSON.stringify(plugin.requested_permissions, null, 2)}</pre>
+        </div>
+      {/if}
+
+      {#if devAvailable}
+        <div class="flex items-center justify-between gap-2 rounded-md border p-2">
+          <div class="min-w-0">
+            <p class="text-xs font-medium">Dev channel</p>
+            <p class="text-[11px] text-muted-foreground">
+              Use the latest dev build. Updates on every push — may be unstable.
+            </p>
+          </div>
+          <Switch
+            id={`mp-detail-channel-${plugin.id}`}
+            checked={onDev}
+            onCheckedChange={(checked) =>
+              setPluginChannel(plugin.id, checked ? "dev" : "stable")}
+            aria-label="Use dev channel"
+          />
         </div>
       {/if}
 
@@ -400,6 +458,8 @@
         {/if}
         <div class="p-2 space-y-1.5">
           {#each filteredPlugins as plugin}
+            {@const eff = resolveEntry(plugin)}
+            {@const onDev = isOnDevChannel(plugin.id)}
             {@const installed = installedIds.has(plugin.id)}
             {@const installing = installingIds.has(plugin.id)}
             {@const hasUpdate = updatableIds.has(plugin.id)}
@@ -410,7 +470,12 @@
             >
               <div class="flex items-center justify-between gap-2">
                 <h3 class="text-xs font-medium truncate">{plugin.name}</h3>
-                <Badge variant="secondary" class="text-[9px] shrink-0">v{plugin.version}</Badge>
+                <div class="flex items-center gap-1 shrink-0">
+                  {#if onDev}
+                    <Badge variant="outline" class="text-[9px] text-sky-600 dark:text-sky-400 border-sky-500/40">Dev</Badge>
+                  {/if}
+                  <Badge variant="secondary" class="text-[9px]">v{eff.version}</Badge>
+                </div>
               </div>
               <p class="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">{plugin.summary}</p>
               {#if plugin.capabilities.length > 0}
@@ -427,7 +492,7 @@
                 {#if installed && hasUpdate}
                   {@const updateInfo = updatableByPluginId.get(plugin.id)}
                   <span class="text-[11px] text-amber-600 dark:text-amber-400 inline-flex items-center gap-1">
-                    v{updateInfo?.installed.version} &rarr; v{plugin.version}
+                    v{updateInfo?.installed.version} &rarr; v{eff.version}
                   </span>
                 {:else if installed}
                   <span class="text-[11px] text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1">
@@ -441,7 +506,7 @@
                     variant="outline"
                     size="sm"
                     class="h-6 text-[11px] px-2"
-                    onclick={(e) => { e.stopPropagation(); void installFromRegistry(plugin); }}
+                    onclick={(e) => { e.stopPropagation(); void installFromRegistry(eff); }}
                     disabled={installing || !pluginsSupported}
                   >
                     {#if installing}
@@ -456,7 +521,7 @@
                     variant="outline"
                     size="sm"
                     class="h-6 text-[11px] px-2"
-                    onclick={(e) => { e.stopPropagation(); void installFromRegistry(plugin); }}
+                    onclick={(e) => { e.stopPropagation(); void installFromRegistry(eff); }}
                     disabled={installing || installed || !pluginsSupported}
                   >
                     {#if installing}

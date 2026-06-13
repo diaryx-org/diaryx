@@ -57,11 +57,14 @@ import { CDN_BASE_URL } from "$lib/marketplace/cdnBase";
 
 const TRUSTED_REGISTRY_URLS = [
   `${CDN_BASE_URL}/plugins/registry.md`,
+  `${CDN_BASE_URL}/plugins/registry-dev.md`,
 ] as const;
 
 const DEFAULT_REGISTRY_URL = TRUSTED_REGISTRY_URLS[0];
+const DEV_REGISTRY_URL = TRUSTED_REGISTRY_URLS[1];
 
 let cachedRegistry: MarketplaceRegistry | null = null;
+let cachedDevRegistry: MarketplaceRegistry | null = null;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -213,8 +216,40 @@ export async function fetchPluginRegistry(
   return cachedRegistry;
 }
 
+/**
+ * Fetches the dev-channel registry. The dev channel is purely additive — it only
+ * contains plugins that publish dev builds — so any failure (most commonly a 404
+ * before any dev build has shipped, or a parse error) is non-fatal and resolves
+ * to an empty registry rather than breaking the marketplace.
+ */
+export async function fetchDevRegistry(): Promise<MarketplaceRegistry> {
+  if (cachedDevRegistry) return cachedDevRegistry;
+
+  const empty: MarketplaceRegistry = {
+    schema_version: 2,
+    generated_at: "",
+    plugins: [],
+  };
+
+  try {
+    const resp = await proxyFetch(DEV_REGISTRY_URL);
+    if (!resp.ok) {
+      cachedDevRegistry = empty;
+      return cachedDevRegistry;
+    }
+    const text = await resp.text();
+    const { frontmatter } = await parseMarkdownFrontmatter(text);
+    cachedDevRegistry = validateMarketplaceRegistry(frontmatter);
+  } catch (err) {
+    console.warn("Dev plugin registry unavailable; treating as empty:", err);
+    cachedDevRegistry = empty;
+  }
+  return cachedDevRegistry;
+}
+
 export function clearRegistryCache(): void {
   cachedRegistry = null;
+  cachedDevRegistry = null;
 }
 
 export function getTrustedRegistryUrls(): readonly string[] {

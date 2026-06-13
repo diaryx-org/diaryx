@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearRegistryCache,
+  fetchDevRegistry,
   fetchPluginRegistry,
   getTrustedRegistryUrls,
 } from "./pluginRegistry";
@@ -82,5 +83,33 @@ describe("pluginRegistry", () => {
     expect(first.plugins[0]?.artifact.size).toBe(123);
     expect(second).toBe(first);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetchDevRegistry parses the dev registry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: async () => VALID_REGISTRY_MD }),
+    );
+
+    const dev = await fetchDevRegistry();
+    expect(dev.schema_version).toBe(2);
+    expect(dev.plugins[0]?.id).toBe("diaryx.sync");
+  });
+
+  it("fetchDevRegistry resolves to an empty registry on 404", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+
+    const dev = await fetchDevRegistry();
+    expect(dev.plugins).toEqual([]);
+  });
+
+  it("fetchDevRegistry resolves to an empty registry on parse failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: async () => "not a registry" }),
+    );
+
+    const dev = await fetchDevRegistry();
+    expect(dev.plugins).toEqual([]);
   });
 });

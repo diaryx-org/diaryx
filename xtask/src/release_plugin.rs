@@ -14,9 +14,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let mut plugin: Option<String> = None;
     let mut upload = false;
+    // By default the registry update is pushed straight to the registry repo's
+    // default branch (first-party plugins are author == reviewer, so the PR is
+    // pure ceremony). `--pr` opts back into the branch + pull-request flow.
+    let mut pr = false;
     for arg in args {
         match arg.as_str() {
             "--upload" => upload = true,
+            "--pr" => pr = true,
             s if s.starts_with('-') => return Err(format!("unknown flag: {s}")),
             s if plugin.is_some() => {
                 return Err(format!("unexpected positional arg: {s}"));
@@ -25,7 +30,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
     }
     let plugin = plugin.ok_or_else(|| {
-        "Usage: cargo xtask release-plugin <plugin-crate-name> [--upload]".to_string()
+        "Usage: cargo xtask release-plugin <plugin-crate-name> [--upload] [--pr]".to_string()
     })?;
 
     let crate_dir = root.join("crates/plugins").join(&plugin);
@@ -85,6 +90,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             &artifact_name,
             &sha,
             size,
+            pr,
         )?;
     } else {
         println!();
@@ -140,6 +146,7 @@ fn capitalize_ascii(s: &str) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn upload_release(
     root: &Path,
     plugin_id: &str,
@@ -148,6 +155,7 @@ fn upload_release(
     artifact_name: &str,
     sha: &str,
     size: usize,
+    pr: bool,
 ) -> Result<(), String> {
     let tag = format!("{plugin_id}/v{version}");
     let release_name = format!("{plugin_id} v{version}");
@@ -196,17 +204,18 @@ fn upload_release(
         sha,
         size,
         &now,
+        pr,
     );
 
     // Best-effort cleanup, regardless of success.
     let _ = fs::remove_dir_all(&registry_dir);
 
-    let pr_url = result?;
+    let outcome = result?;
 
     println!();
     println!("=== Upload complete ===");
     println!("  GitHub Release: https://github.com/diaryx-org/diaryx/releases/tag/{tag}");
-    println!("  Registry PR:    {pr_url}");
+    println!("  Registry:       {outcome}");
 
     Ok(())
 }
@@ -222,6 +231,7 @@ fn do_registry_update(
     sha: &str,
     size: usize,
     now: &str,
+    pr: bool,
 ) -> Result<String, String> {
     // Shallow clone the plugin-registry repo.
     let mut cmd = Command::new("gh");
@@ -273,10 +283,29 @@ fn do_registry_update(
         update_existing_registry_entry(&plugin_file, version, download_url, sha, size, now)?;
     }
 
-    git_in(registry_dir, &["checkout", "-b", &branch])?;
     let rel = plugin_file
         .strip_prefix(registry_dir)
         .unwrap_or(&plugin_file);
+
+    if !pr {
+        // Direct push to the default branch. The registry's publish workflow
+        // runs on push to master, so this triggers the same assemble + CDN
+        // deploy that merging a PR would.
+        git_in(registry_dir, &["add", &rel.to_string_lossy()])?;
+        git_in(
+            registry_dir,
+            &["commit", "-m", &format!("release: {plugin_id} v{version}")],
+        )?;
+        // Default branch is whatever `gh repo clone` checked out (HEAD).
+        git_in(registry_dir, &["push", "origin", "HEAD"])?;
+        let commit = capture_cmd("git", &["rev-parse", "--short", "HEAD"], Some(registry_dir))?;
+        return Ok(format!(
+            "pushed to default branch (commit {})",
+            commit.trim()
+        ));
+    }
+
+    git_in(registry_dir, &["checkout", "-b", &branch])?;
     git_in(registry_dir, &["add", &rel.to_string_lossy()])?;
     git_in(
         registry_dir,

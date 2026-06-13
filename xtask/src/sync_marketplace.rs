@@ -5,6 +5,7 @@ use std::io::Read;
 
 const REGISTRIES: &[&str] = &[
     "plugins/registry.md",
+    "plugins/registry-dev.md",
     "bundles/registry.md",
     "themes/registry.md",
     "typographies/registry.md",

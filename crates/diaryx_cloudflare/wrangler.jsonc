@@ -4,7 +4,10 @@
 	"compatibility_date": "2025-03-01",
 	"main": "build/index.js",
 	"build": {
-		"command": "cargo install -q worker-build --version '^0.8' && worker-build --release"
+		// Pinned to 0.8.4: 0.8.5 passes --force-enable-abort-handler, which needs
+		// wasm-bindgen >= 0.2.125 (our dep resolves the 0.2.123 CLI). Bump together
+		// when adopting the abort-recovery stack.
+		"command": "cargo install -q worker-build --version '=0.8.4' && worker-build --release"
 	},
 
 	// Secrets (set via `npx wrangler secret put <NAME> --env <ENV>`):

@@ -212,7 +212,14 @@ export type FileSystemEvent =
   | { type: 'FileRenamed'; old_path: string; new_path: string }
   | { type: 'FileMoved'; path: string; old_parent?: string; new_parent?: string }
   | { type: 'MetadataChanged'; path: string; frontmatter: unknown }
-  | { type: 'ContentsChanged'; path: string; body: string };
+  | { type: 'ContentsChanged'; path: string; body: string }
+  | {
+      type: 'PublishProgress';
+      phase: 'start' | 'uploading' | 'finalizing' | 'done';
+      audience?: string;
+      current: number;
+      total: number;
+    };
 
 /**
  * Callback type for filesystem event subscriptions.

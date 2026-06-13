@@ -7,6 +7,7 @@ pub mod body_renderer;
 pub mod content_provider;
 pub mod fs_content_provider;
 pub mod html_format;
+pub mod plan;
 pub mod publish_format;
 pub mod publisher;
 pub mod types;

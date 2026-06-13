@@ -327,6 +327,7 @@ fn publish_plugin_manifest() -> PluginManifest {
                 commands: vec![
                     "PublishWorkspace".into(),
                     "PublishToNamespace".into(),
+                    "PreviewPublish".into(),
                     "GetPublishConfig".into(),
                     "SetPublishConfig".into(),
                     "GetAudiencePublishStates".into(),
@@ -458,6 +459,166 @@ impl<FS: AsyncFileSystem + Clone + 'static> WorkspacePlugin for PublishPlugin<FS
 // ============================================================================
 
 impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
+    /// Render every resolved audience and diff it against what the namespace
+    /// already holds, so the apply step only uploads changed content.
+    ///
+    /// Lists existing objects and server audiences exactly once. Performs no
+    /// mutations, so it backs both `PreviewPublish` and `PublishToNamespace`.
+    async fn compute_publish_plan(
+        &self,
+        namespace_id: &str,
+    ) -> Result<(crate::publish::plan::PublishPlan, AudienceSource), PluginError> {
+        use crate::publish::plan::{self, AudiencePlan};
+        use std::collections::HashMap;
+
+        let workspace_root = self
+            .current_root_index_path()
+            .await
+            .map_err(|e| PluginError::CommandError(e.to_string()))?;
+
+        let config = self.config.read().unwrap().clone();
+        let default_aud = self.default_audience().await;
+        let format = self.format_with_workspace_theme().await;
+
+        // Dual-read: prefer workspace-file `audiences:` declaration; fall back
+        // to the legacy `audience_states` HashMap when absent.
+        let (workspace_audiences, audiences_migrated) = self.read_workspace_audiences().await;
+        let (resolved, audience_source) =
+            resolve_audiences(workspace_audiences.as_deref(), &config);
+
+        // List existing objects ONCE; index by audience → (key → content_hash).
+        let mut existing_by_audience: HashMap<String, HashMap<String, Option<String>>> =
+            HashMap::new();
+        let objects =
+            diaryx_plugin_sdk::host::namespace::list_objects(namespace_id).map_err(|e| {
+                PluginError::CommandError(format!("failed to list namespace objects: {}", e))
+            })?;
+        for obj in objects {
+            if let Some(aud) = obj.audience {
+                existing_by_audience
+                    .entry(aud)
+                    .or_default()
+                    .insert(obj.key, obj.content_hash);
+            }
+        }
+
+        let mut audience_plans: Vec<AudiencePlan> = Vec::new();
+
+        for audience in &resolved {
+            let audience_name = &audience.name;
+            let existing = existing_by_audience
+                .get(audience_name)
+                .cloned()
+                .unwrap_or_default();
+
+            // Legacy `Unpublished`: render nothing, delete every object it has.
+            if !audience.publish {
+                let mut deletes: Vec<String> = existing.keys().cloned().collect();
+                deletes.sort();
+                audience_plans.push(AudiencePlan {
+                    name: audience_name.clone(),
+                    gates: audience.gates.clone(),
+                    uploads: Vec::new(),
+                    unchanged: 0,
+                    deletes,
+                    publish: false,
+                    stale: false,
+                });
+                continue;
+            }
+
+            // Render for this audience.
+            let options = crate::publish::PublishOptions {
+                audience: Some(audience_name.clone()),
+                default_audience: default_aud.clone(),
+                ..Default::default()
+            };
+            let publisher =
+                crate::publish::Publisher::new(self.fs.clone(), &*self.body_renderer, &*format);
+            let (rendered, attachment_paths) = publisher
+                .render_with_attachments(&workspace_root, &options)
+                .await
+                .map_err(|e| PluginError::CommandError(e.to_string()))?;
+
+            // No entries carry this audience tag → stale. Leave its objects
+            // untouched (matching prior behavior); the caller prunes it from
+            // legacy config / strict-sync.
+            if rendered.is_empty() {
+                audience_plans.push(AudiencePlan {
+                    name: audience_name.clone(),
+                    gates: audience.gates.clone(),
+                    uploads: Vec::new(),
+                    unchanged: 0,
+                    deletes: Vec::new(),
+                    publish: true,
+                    stale: true,
+                });
+                continue;
+            }
+
+            // Assemble the planned object set: rendered pages + attachments.
+            let mut planned: Vec<(String, Vec<u8>, String)> =
+                Vec::with_capacity(rendered.len() + attachment_paths.len());
+            for file in rendered {
+                let key = format!("{}/{}", audience_name, file.path);
+                planned.push((key, file.content, file.mime_type));
+            }
+            for (src_path, dest_rel) in &attachment_paths {
+                if !self.fs.try_exists(src_path).await.unwrap_or(false) {
+                    log::warn!(
+                        "Skipping attachment {}: source file does not exist",
+                        src_path.display()
+                    );
+                    continue;
+                }
+                match self.fs.read(src_path).await {
+                    Ok(bytes) => {
+                        let mime = mime_type_from_ext(dest_rel);
+                        let prepared = prepare_published_attachment_bytes(dest_rel, &bytes);
+                        let key = format!("{}/{}", audience_name, dest_rel.display());
+                        planned.push((key, prepared, mime));
+                    }
+                    Err(e) => {
+                        log::warn!("Skipping attachment {}: {}", src_path.display(), e);
+                    }
+                }
+            }
+
+            audience_plans.push(plan::diff_audience(
+                audience_name.clone(),
+                audience.gates.clone(),
+                planned,
+                &existing,
+            ));
+        }
+
+        // Strict-sync: when the file is canonical, any server audience not
+        // declared in the file is slated for deletion. Single list call.
+        let mut audiences_to_delete: Vec<String> = Vec::new();
+        if audience_source == AudienceSource::File && audiences_migrated {
+            match diaryx_plugin_sdk::host::namespace::list_audiences(namespace_id) {
+                Ok(server_audiences) => {
+                    let declared: std::collections::HashSet<&str> =
+                        resolved.iter().map(|a| a.name.as_str()).collect();
+                    for server_aud in server_audiences {
+                        if !declared.contains(server_aud.as_str()) {
+                            audiences_to_delete.push(server_aud);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Strict-sync: failed to list server audiences for cleanup: {}",
+                        e
+                    );
+                }
+            }
+        }
+
+        let plan = plan::PublishPlan::new(audience_plans, audiences_to_delete, audiences_migrated);
+        Ok((plan, audience_source))
+    }
+
     async fn dispatch(&self, cmd: &str, params: JsonValue) -> Result<JsonValue, PluginError> {
         match cmd {
             #[cfg(not(target_arch = "wasm32"))]
@@ -574,223 +735,129 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     .map_err(|e| PluginError::CommandError(e.to_string()))
             }
 
+            "PreviewPublish" => {
+                let namespace_id = params["namespace_id"]
+                    .as_str()
+                    .ok_or_else(|| PluginError::CommandError("missing namespace_id".into()))?
+                    .to_string();
+
+                let (plan, audience_source) = self.compute_publish_plan(&namespace_id).await?;
+                let mut summary = plan.to_summary_json();
+                if let Some(obj) = summary.as_object_mut() {
+                    obj.insert(
+                        "audience_source".into(),
+                        serde_json::json!(match audience_source {
+                            AudienceSource::File => "file",
+                            AudienceSource::LegacyPluginConfig => "legacy_plugin_config",
+                        }),
+                    );
+                }
+                Ok(summary)
+            }
+
             "PublishToNamespace" => {
                 let namespace_id = params["namespace_id"]
                     .as_str()
                     .ok_or_else(|| PluginError::CommandError("missing namespace_id".into()))?
                     .to_string();
 
-                let workspace_root = self
-                    .current_root_index_path()
-                    .await
-                    .map_err(|e| PluginError::CommandError(e.to_string()))?;
+                // Compute the diff once (lists existing objects + server
+                // audiences a single time, and skips unchanged content).
+                let (plan, audience_source) = self.compute_publish_plan(&namespace_id).await?;
+                let total_uploads = plan.totals.uploads;
 
-                let config = self.config.read().unwrap().clone();
-                let default_aud = self.default_audience().await;
-                let format = self.format_with_workspace_theme().await;
+                emit_publish_progress(serde_json::json!({
+                    "type": "PublishProgress",
+                    "phase": "start",
+                    "current": 0,
+                    "total": total_uploads,
+                }));
 
-                // Dual-read: prefer workspace-file `audiences:` declaration;
-                // fall back to legacy `audience_states` HashMap when absent.
-                let (workspace_audiences, audiences_migrated) =
-                    self.read_workspace_audiences().await;
-                let (resolved, audience_source) =
-                    resolve_audiences(workspace_audiences.as_deref(), &config);
-
-                let mut audiences_published: Vec<String> = Vec::new();
-                let mut files_uploaded: usize = 0;
-                let mut files_deleted: usize = 0;
-                let mut stale_audiences: Vec<String> = Vec::new();
-
-                for audience in &resolved {
-                    let audience_name = &audience.name;
-
-                    if !audience.publish {
-                        // Legacy `Unpublished` semantics: delete objects but
-                        // leave the server audience record alone. (File-
-                        // declared audiences always have `publish == true`.)
-                        match diaryx_plugin_sdk::host::namespace::list_objects(&namespace_id) {
-                            Ok(objects) => {
-                                for obj in objects {
-                                    if obj.audience.as_deref() == Some(audience_name.as_str()) {
-                                        let _ = diaryx_plugin_sdk::host::namespace::delete_object(
-                                            &namespace_id,
-                                            &obj.key,
-                                        );
-                                        files_deleted += 1;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to list objects for cleanup: {}", e);
-                            }
+                // --- Phase 1: sync gate stacks for audiences with content. ---
+                for ap in &plan.audiences {
+                    if ap.publish && !ap.stale {
+                        if let Err(e) = diaryx_plugin_sdk::host::namespace::sync_audience(
+                            &namespace_id,
+                            &ap.name,
+                            &ap.gates,
+                        ) {
+                            return Err(PluginError::CommandError(format!(
+                                "failed to sync audience {}: {}",
+                                ap.name, e
+                            )));
                         }
-                        continue;
                     }
+                }
 
-                    // Sync audience gate stack to the server.
-                    if let Err(e) = diaryx_plugin_sdk::host::namespace::sync_audience(
-                        &namespace_id,
-                        audience_name,
-                        &audience.gates,
-                    ) {
-                        return Err(PluginError::CommandError(format!(
-                            "failed to sync audience {}: {}",
-                            audience_name, e
-                        )));
-                    }
-
-                    // Render files for this audience
-                    let options = crate::publish::PublishOptions {
-                        audience: Some(audience_name.clone()),
-                        default_audience: default_aud.clone(),
-                        ..Default::default()
-                    };
-                    let publisher = crate::publish::Publisher::new(
-                        self.fs.clone(),
-                        &*self.body_renderer,
-                        &*format,
-                    );
-                    let (rendered, attachment_paths) = publisher
-                        .render_with_attachments(&workspace_root, &options)
-                        .await
-                        .map_err(|e| PluginError::CommandError(e.to_string()))?;
-
-                    // No entries have this audience tag — remove from config
-                    if rendered.is_empty() {
-                        log::info!(
-                            "Removing stale audience '{}' from publish config: no entries have this tag",
-                            audience_name,
-                        );
-                        stale_audiences.push(audience_name.clone());
-                        continue;
-                    }
-
-                    // Upload each rendered file
-                    let mut uploaded_keys: Vec<String> = Vec::new();
-                    for file in &rendered {
-                        let key = format!("{}/{}", audience_name, file.path);
+                // --- Phase 2: upload everything first. On the first error we
+                // return immediately, having run NO deletes — so a failed
+                // publish never removes content from the live site (worst case
+                // is an additive, partially-updated site). ---
+                let mut uploaded = 0usize;
+                let mut bytes_uploaded: u64 = 0;
+                for ap in &plan.audiences {
+                    for up in &ap.uploads {
                         diaryx_plugin_sdk::host::namespace::put_object(
                             &namespace_id,
-                            &key,
-                            &file.content,
-                            &file.mime_type,
-                            audience_name,
+                            &up.key,
+                            &up.bytes,
+                            &up.mime_type,
+                            &ap.name,
                         )
                         .map_err(|e| {
-                            PluginError::CommandError(format!(
-                                "failed to upload {}: {}",
-                                file.path, e
-                            ))
+                            PluginError::CommandError(format!("failed to upload {}: {}", up.key, e))
                         })?;
-                        uploaded_keys.push(key);
-                        files_uploaded += 1;
+                        uploaded += 1;
+                        bytes_uploaded += up.bytes.len() as u64;
+                        emit_publish_progress(serde_json::json!({
+                            "type": "PublishProgress",
+                            "phase": "uploading",
+                            "audience": ap.name,
+                            "current": uploaded,
+                            "total": total_uploads,
+                        }));
                     }
-
-                    // Upload attachments (images, PDFs, etc.)
-                    for (src_path, dest_rel) in &attachment_paths {
-                        let key = format!("{}/{}", audience_name, dest_rel.display());
-                        if !self.fs.try_exists(src_path).await.unwrap_or(false) {
-                            log::warn!(
-                                "Skipping attachment {}: source file does not exist",
-                                src_path.display()
-                            );
-                            continue;
-                        }
-                        match self.fs.read(src_path).await {
-                            Ok(bytes) => {
-                                let mime = mime_type_from_ext(dest_rel);
-                                let prepared = prepare_published_attachment_bytes(dest_rel, &bytes);
-                                diaryx_plugin_sdk::host::namespace::put_object(
-                                    &namespace_id,
-                                    &key,
-                                    &prepared,
-                                    &mime,
-                                    audience_name,
-                                )
-                                .map_err(|e| {
-                                    PluginError::CommandError(format!(
-                                        "failed to upload attachment {}: {}",
-                                        dest_rel.display(),
-                                        e
-                                    ))
-                                })?;
-                                uploaded_keys.push(key);
-                                files_uploaded += 1;
-                            }
-                            Err(e) => {
-                                log::warn!("Skipping attachment {}: {}", src_path.display(), e);
-                            }
-                        }
-                    }
-
-                    // Delete stale objects for this audience
-                    if let Ok(existing) =
-                        diaryx_plugin_sdk::host::namespace::list_objects(&namespace_id)
-                    {
-                        for obj in existing {
-                            if obj.audience.as_deref() == Some(audience_name.as_str())
-                                && !uploaded_keys.contains(&obj.key)
-                            {
-                                let _ = diaryx_plugin_sdk::host::namespace::delete_object(
-                                    &namespace_id,
-                                    &obj.key,
-                                );
-                                files_deleted += 1;
-                            }
-                        }
-                    }
-
-                    audiences_published.push(audience_name.clone());
                 }
 
-                // Strict-sync deletion pass.
-                //
-                // - Legacy source: only remove audiences from `audience_states`
-                //   that turned out to have no entries this publish run
-                //   (via the `stale_audiences` accumulator). The server-side
-                //   audience record is left alone — that's a user-driven
-                //   removal in the legacy UI.
-                // - File-as-truth source with `audiences_migrated == true`:
-                //   the file is canonical. Any audience present on the server
-                //   that is NOT declared in the file is deleted server-side
-                //   (which also revokes any tokens issued for it).
+                // --- Phase 3: deletes. Only reached when every upload
+                // succeeded. Stale-object deletes come from the planned key set
+                // (computed in the plan), so a file is never removed merely
+                // because its upload was skipped as unchanged. ---
+                emit_publish_progress(serde_json::json!({
+                    "type": "PublishProgress",
+                    "phase": "finalizing",
+                    "current": uploaded,
+                    "total": total_uploads,
+                }));
+
+                let mut deleted = 0usize;
+                for ap in &plan.audiences {
+                    for key in &ap.deletes {
+                        let _ =
+                            diaryx_plugin_sdk::host::namespace::delete_object(&namespace_id, key);
+                        deleted += 1;
+                    }
+                }
+
+                // Strict-sync audience deletion (also revokes their tokens).
                 let mut audiences_deleted: Vec<String> = Vec::new();
-                if audience_source == AudienceSource::File && audiences_migrated {
-                    match diaryx_plugin_sdk::host::namespace::list_audiences(&namespace_id) {
-                        Ok(server_audiences) => {
-                            let declared: std::collections::HashSet<&str> =
-                                resolved.iter().map(|a| a.name.as_str()).collect();
-                            for server_aud in server_audiences {
-                                if !declared.contains(server_aud.as_str()) {
-                                    if let Err(e) =
-                                        diaryx_plugin_sdk::host::namespace::delete_audience(
-                                            &namespace_id,
-                                            &server_aud,
-                                        )
-                                    {
-                                        log::warn!(
-                                            "Strict-sync: failed to delete audience '{}': {}",
-                                            server_aud,
-                                            e
-                                        );
-                                    } else {
-                                        audiences_deleted.push(server_aud);
-                                    }
-                                }
-                            }
-                        }
+                for name in &plan.audiences_to_delete {
+                    match diaryx_plugin_sdk::host::namespace::delete_audience(&namespace_id, name) {
+                        Ok(()) => audiences_deleted.push(name.clone()),
                         Err(e) => {
-                            log::warn!(
-                                "Strict-sync: failed to list server audiences for cleanup: {}",
-                                e
-                            );
+                            log::warn!("Strict-sync: failed to delete audience '{}': {}", name, e)
                         }
                     }
                 }
 
-                // Remove stale audiences from legacy plugin-config and persist
-                // (legacy-source path only; the file path doesn't use this
-                // HashMap as authoritative state).
+                // Legacy plugin-config cleanup: drop audiences that rendered no
+                // entries this run (legacy-source path only).
+                let stale_audiences: Vec<String> = plan
+                    .audiences
+                    .iter()
+                    .filter(|a| a.stale)
+                    .map(|a| a.name.clone())
+                    .collect();
                 if !stale_audiences.is_empty()
                     && audience_source == AudienceSource::LegacyPluginConfig
                 {
@@ -806,16 +873,36 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     }
                 }
 
+                let audiences_published: Vec<String> = plan
+                    .audiences
+                    .iter()
+                    .filter(|a| a.publish && !a.stale)
+                    .map(|a| a.name.clone())
+                    .collect();
+
+                emit_publish_progress(serde_json::json!({
+                    "type": "PublishProgress",
+                    "phase": "done",
+                    "current": uploaded,
+                    "total": total_uploads,
+                }));
+
                 Ok(serde_json::json!({
+                    // Back-compat keys.
                     "audiences_published": audiences_published,
                     "audiences_deleted": audiences_deleted,
                     "audience_source": match audience_source {
                         AudienceSource::File => "file",
                         AudienceSource::LegacyPluginConfig => "legacy_plugin_config",
                     },
-                    "audiences_migrated": audiences_migrated,
-                    "files_uploaded": files_uploaded,
-                    "files_deleted": files_deleted,
+                    "audiences_migrated": plan.audiences_migrated,
+                    "files_uploaded": uploaded,
+                    "files_deleted": deleted,
+                    // Richer receipt.
+                    "uploaded": uploaded,
+                    "skipped_unchanged": plan.totals.unchanged,
+                    "deleted": deleted,
+                    "bytes_uploaded": bytes_uploaded,
                 }))
             }
 
@@ -908,6 +995,19 @@ pub fn resolve_audiences(
         })
         .collect();
     (resolved, AudienceSource::LegacyPluginConfig)
+}
+
+/// Best-effort publish progress emission.
+///
+/// Events whose `type` starts with an uppercase letter are forwarded to the
+/// frontend over the existing `extism-filesystem-event` channel on both the
+/// Tauri and browser backends (see `TauriEventEmitter` / `emitPluginHostEvent`),
+/// where the publish panel subscribes via `backend.onFileSystemEvent`. Emission
+/// failures are non-fatal — progress is advisory.
+fn emit_publish_progress(event: serde_json::Value) {
+    if let Ok(json) = serde_json::to_string(&event) {
+        let _ = diaryx_plugin_sdk::host::events::emit(&json);
+    }
 }
 
 /// Infer MIME type from a file extension. Falls back to `application/octet-stream`.

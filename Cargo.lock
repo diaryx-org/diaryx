@@ -2681,6 +2681,7 @@ dependencies = [
  "pathdiff",
  "serde",
  "serde_json",
+ "sha2",
  "urlencoding",
 ]
 

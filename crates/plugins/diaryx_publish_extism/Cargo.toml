@@ -23,6 +23,7 @@ log = "0.4"
 mrml = { version = "5.1.0", default-features = false, features = ["parse", "render", "print"] }
 urlencoding = "2"
 base64 = "0.22"
+sha2 = "0.10"
 
 [dev-dependencies]
 futures-lite = "2"

@@ -10,7 +10,9 @@
   import ManageAudiencesModal from '$lib/components/ManageAudiencesModal.svelte';
   import {
     AlertCircle,
+    CheckCircle2,
     ChevronRight,
+    Eye,
     Globe,
     Loader2,
     Settings2,
@@ -95,6 +97,57 @@
   let isLoading = $state(false);
   let isPublishing = $state(false);
   let isCreatingNamespace = $state(false);
+  let isPreviewing = $state(false);
+
+  // ---- Preview / progress / receipt ----
+
+  type PreviewAudience = {
+    name: string;
+    publish: boolean;
+    stale: boolean;
+    upload_count: number;
+    upload_bytes: number;
+    unchanged: number;
+    delete_count: number;
+    deletes: string[];
+  };
+  type PreviewSummary = {
+    audiences: PreviewAudience[];
+    audiences_to_delete: string[];
+    totals: { uploads: number; unchanged: number; deletes: number; bytes: number };
+  };
+  type PublishReceipt = {
+    audiences_published: string[];
+    audiences_deleted: string[];
+    uploaded: number;
+    skipped_unchanged: number;
+    deleted: number;
+    bytes_uploaded: number;
+  };
+  type PublishProgress = {
+    phase: 'start' | 'uploading' | 'finalizing' | 'done';
+    audience?: string;
+    current: number;
+    total: number;
+  };
+
+  let previewResult = $state<PreviewSummary | null>(null);
+  let publishResult = $state<PublishReceipt | null>(null);
+  let progress = $state<PublishProgress | null>(null);
+
+  let progressPercent = $derived(
+    progress && progress.total > 0
+      ? Math.min(100, Math.round((progress.current / progress.total) * 100))
+      : progress?.phase === 'finalizing' || progress?.phase === 'done'
+        ? 100
+        : 0,
+  );
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
 
   // Manage audiences modal
   let showManageAudiences = $state(false);
@@ -157,6 +210,30 @@
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     templateContextStore.audiencesVersion;
     if (rootPath) loadAudiences();
+  });
+
+  // Subscribe to live publish progress. Events arrive on the shared
+  // filesystem-event channel (uppercase `type` is forwarded on both backends).
+  $effect(() => {
+    const backend = workspaceStore.backend as
+      | {
+          onFileSystemEvent?: (cb: (e: any) => void) => number;
+          offFileSystemEvent?: (id: number) => void;
+        }
+      | null
+      | undefined;
+    if (!backend?.onFileSystemEvent) return;
+    const id = backend.onFileSystemEvent((event: any) => {
+      if (event?.type === 'PublishProgress') {
+        progress = {
+          phase: event.phase,
+          audience: event.audience,
+          current: event.current ?? 0,
+          total: event.total ?? 0,
+        };
+      }
+    });
+    return () => backend.offFileSystemEvent?.(id);
   });
 
   // ---- Data loading ----
@@ -259,6 +336,24 @@
     await handlePublish();
   }
 
+  async function handlePreview() {
+    if (!api || !namespaceId) return;
+    error = null;
+    isPreviewing = true;
+    previewResult = null;
+    try {
+      const result = await executePublishCommand<PreviewSummary>('PreviewPublish', {
+        namespace_id: namespaceId,
+        server_url: serverUrl,
+      });
+      previewResult = result;
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Preview failed', 'Publishing');
+    } finally {
+      isPreviewing = false;
+    }
+  }
+
   async function handlePublish() {
     error = null;
 
@@ -287,20 +382,25 @@
     }
 
     isPublishing = true;
+    progress = null;
+    publishResult = null;
     try {
-      const result = await executePublishCommand<{
-        audiences_published: string[];
-        files_uploaded: number;
-        files_deleted: number;
-      }>('PublishToNamespace', {
+      const result = await executePublishCommand<PublishReceipt>('PublishToNamespace', {
         namespace_id: namespaceId,
         server_url: serverUrl,
       });
-      showSuccess(`Published ${result.audiences_published.length} audience(s)`);
+      publishResult = result;
+      previewResult = null; // preview is now stale
+
+      const parts = [`${result.uploaded} uploaded`];
+      if (result.skipped_unchanged) parts.push(`${result.skipped_unchanged} unchanged`);
+      if (result.deleted) parts.push(`${result.deleted} deleted`);
+      showSuccess(`Published — ${parts.join(' · ')}`);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Publish failed', 'Publishing');
     } finally {
       isPublishing = false;
+      progress = null;
     }
   }
 
@@ -376,6 +476,110 @@
 
     {#if !hasAnyAudience}
       <p class="text-xs text-muted-foreground text-center">All entries will be published publicly</p>
+    {/if}
+
+    <!-- Live publish progress -->
+    {#if isPublishing && progress}
+      <div class="space-y-1">
+        <div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            class="h-full rounded-full bg-primary transition-all duration-200"
+            style="width: {progressPercent}%"
+          ></div>
+        </div>
+        <p class="text-xs text-muted-foreground">
+          {#if progress.phase === 'uploading'}
+            Uploading {progress.current}/{progress.total}{progress.audience ? ` · ${progress.audience}` : ''}
+          {:else if progress.phase === 'finalizing'}
+            Finalizing…
+          {:else if progress.phase === 'done'}
+            Done
+          {:else}
+            Preparing…
+          {/if}
+        </p>
+      </div>
+    {/if}
+
+    <!-- Preview changes -->
+    {#if isConfigured}
+      <Button
+        variant="outline"
+        size="sm"
+        class="w-full text-xs"
+        onclick={handlePreview}
+        disabled={isPreviewing || isPublishing}
+      >
+        {#if isPreviewing}
+          <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+          Checking…
+        {:else}
+          <Eye class="size-3.5 mr-1.5" />
+          Preview changes
+        {/if}
+      </Button>
+    {/if}
+
+    <!-- Preview result -->
+    {#if previewResult}
+      <div class="rounded-md border border-border p-2.5 space-y-2 text-xs">
+        <div class="flex items-center justify-between">
+          <span class="font-medium">Pending changes</span>
+          <button
+            type="button"
+            class="text-muted-foreground hover:text-foreground"
+            onclick={() => { previewResult = null; }}
+            aria-label="Dismiss preview"
+          >×</button>
+        </div>
+        {#if previewResult.totals.uploads === 0 && previewResult.totals.deletes === 0 && previewResult.audiences_to_delete.length === 0}
+          <p class="text-muted-foreground">Everything is up to date — nothing to publish.</p>
+        {:else}
+          <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
+            <span>{previewResult.totals.uploads} to upload{previewResult.totals.bytes ? ` (${formatBytes(previewResult.totals.bytes)})` : ''}</span>
+            <span>{previewResult.totals.unchanged} unchanged</span>
+            {#if previewResult.totals.deletes > 0}
+              <span class="text-destructive">{previewResult.totals.deletes} to delete</span>
+            {/if}
+          </div>
+          {#if previewResult.audiences_to_delete.length > 0}
+            <p class="text-destructive">
+              Will remove audience(s): {previewResult.audiences_to_delete.join(', ')}
+            </p>
+          {/if}
+          <div class="space-y-0.5">
+            {#each previewResult.audiences.filter(a => a.upload_count > 0 || a.delete_count > 0) as aud (aud.name)}
+              <div class="flex items-center justify-between">
+                <span class="truncate">{aud.name}</span>
+                <span class="text-muted-foreground shrink-0 tabular-nums">
+                  {aud.upload_count > 0 ? `↑${aud.upload_count}` : ''}
+                  {aud.delete_count > 0 ? ` ✕${aud.delete_count}` : ''}
+                </span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Last publish receipt -->
+    {#if publishResult && !isPublishing}
+      <div class="rounded-md border border-border bg-muted/30 p-2.5 space-y-1 text-xs">
+        <div class="flex items-center gap-1.5 font-medium">
+          <CheckCircle2 class="size-3.5 text-primary" />
+          Published
+        </div>
+        <div class="flex flex-wrap gap-x-3 text-muted-foreground">
+          <span>{publishResult.uploaded} uploaded{publishResult.bytes_uploaded ? ` (${formatBytes(publishResult.bytes_uploaded)})` : ''}</span>
+          <span>{publishResult.skipped_unchanged} unchanged</span>
+          {#if publishResult.deleted > 0}
+            <span>{publishResult.deleted} deleted</span>
+          {/if}
+        </div>
+        {#if publishResult.audiences_deleted.length > 0}
+          <p class="text-destructive">Removed audience(s): {publishResult.audiences_deleted.join(', ')}</p>
+        {/if}
+      </div>
     {/if}
 
     <!-- Collapsible settings -->

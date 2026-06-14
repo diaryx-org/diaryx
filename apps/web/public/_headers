@@ -1,3 +1,8 @@
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+
+# Apple Universal Links: the association file has no extension and must be
+# served as application/json over HTTPS with no redirects.
+/.well-known/apple-app-site-association
+  Content-Type: application/json

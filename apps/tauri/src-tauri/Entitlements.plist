@@ -10,5 +10,12 @@
     <true/>
     <key>com.apple.security.files.bookmarks.app-scope</key>
     <true/>
+    <!-- Universal Links: associates app.diaryx.org https:// links with the
+         macOS app. The matching apple-app-site-association file must be served
+         from https://app.diaryx.org/.well-known/apple-app-site-association. -->
+    <key>com.apple.developer.associated-domains</key>
+    <array>
+        <string>applinks:app.diaryx.org</string>
+    </array>
 </dict>
 </plist>

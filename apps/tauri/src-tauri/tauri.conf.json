@@ -71,6 +71,17 @@
     },
     "fs": {
       "requireLiteralLeadingDot": false
+    },
+    "deep-link": {
+      "mobile": [
+        {
+          "host": "app.diaryx.org",
+          "pathPrefix": ["/open", "/new", "/search"]
+        }
+      ],
+      "desktop": {
+        "schemes": ["diaryx"]
+      }
     }
   }
 }

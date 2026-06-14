@@ -1,0 +1,23 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["TEAMID.org.diaryx.desktop"],
+        "components": [
+          {
+            "/": "/open*",
+            "comment": "Open an entry in the Diaryx app"
+          },
+          {
+            "/": "/new*",
+            "comment": "Create a new entry in the Diaryx app"
+          },
+          {
+            "/": "/search*",
+            "comment": "Open search / command palette in the Diaryx app"
+          }
+        ]
+      }
+    ]
+  }
+}

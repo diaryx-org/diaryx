@@ -260,6 +260,10 @@
     handleViewMarkdown,
     handleReorderFootnotes,
   } from "./controllers";
+  import { registerDeepLinks } from "./controllers/deepLinkController";
+
+  // Deep link / universal link subscription cleanup (set in onMount).
+  let unlistenDeepLinks: (() => void) | null = null;
 
   // Dynamically import Editor to avoid SSR issues
   let Editor: typeof import("./lib/Editor.svelte").default | null =
@@ -1002,6 +1006,22 @@
     // Refresh tree when zip import completes (from ImportSettings)
     window.addEventListener("import:complete", handleImportComplete);
 
+    // Universal links / `diaryx://` deep links — Tauri only.
+    if (isTauri()) {
+      unlistenDeepLinks = await registerDeepLinks({
+        openEntry: (path) => openEntry(path),
+        newEntry: ({ title, parent }) => {
+          if (title) {
+            return createNewEntry(title, parent ?? null);
+          }
+          uiStore.openNewEntryModal();
+        },
+        // The command palette is the app's primary "find / do" surface.
+        // Query pre-fill is a future enhancement (no content-search UI yet).
+        search: () => uiStore.openCommandPalette(),
+      });
+    }
+
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const isOauthCallback = window.location.pathname === "/oauth/callback";
@@ -1460,6 +1480,9 @@
 
   onDestroy(() => {
     unregisterE2EBridge();
+    // Cleanup deep link subscription
+    unlistenDeepLinks?.();
+    unlistenDeepLinks = null;
     // Cleanup blob URLs
     revokeBlobUrls();
     // Cleanup filesystem event subscription

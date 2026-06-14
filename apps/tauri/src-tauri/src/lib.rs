@@ -72,6 +72,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // Universal links (iOS/macOS/Android) + `diaryx://` custom scheme
+        // (desktop fallback). Routing is handled in the webview — see
+        // `apps/web/src/controllers/deepLinkController.ts`.
+        .plugin(tauri_plugin_deep_link::init())
         // Native iOS keyboard toolbar for TipTap editor (no-op on desktop)
         .plugin(tauri_plugin_editor_toolbar::init());
 
@@ -127,6 +131,20 @@ pub fn run() {
                 }
             } else {
                 eprintln!("[Diaryx] Failed to resolve app data directory for logging");
+            }
+
+            // Register the `diaryx://` custom scheme at runtime so deep links
+            // work during development on Linux/Windows (where the scheme is not
+            // installed by an app bundle). Universal links on iOS/macOS/Android
+            // are wired up from the bundle config instead, so this is a no-op
+            // there. Errors are non-fatal — the app still runs without deep
+            // linking.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(err) = app.deep_link().register_all() {
+                    log::warn!("Failed to register deep link schemes: {err}");
+                }
             }
 
             #[cfg(target_os = "ios")]

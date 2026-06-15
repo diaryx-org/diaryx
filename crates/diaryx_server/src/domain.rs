@@ -215,6 +215,18 @@ pub struct ObjectMeta {
     pub content_hash: Option<String>,
 }
 
+/// A registered ARK identity: the object key a `(workspace ARK, file ARK)`
+/// pair currently resolves to. One row per file ARK per workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArkIndexEntry {
+    pub workspace_ark: String,
+    pub file_ark: String,
+    pub object_key: String,
+    /// Audience the registered (canonical) rendition belongs to, if any.
+    pub audience: Option<String>,
+    pub updated_at: i64,
+}
+
 /// Aggregated usage totals for a user.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageTotals {

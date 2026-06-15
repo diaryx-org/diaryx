@@ -32,8 +32,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapters::{
-    NativeAuthSessionStore, NativeAuthStore, NativeNamespaceStore, NativeObjectMetaStore,
-    NativeSessionStore, NativeUserStore,
+    NativeArkIndexStore, NativeAuthSessionStore, NativeAuthStore, NativeNamespaceStore,
+    NativeObjectMetaStore, NativeSessionStore, NativeUserStore,
 };
 use crate::auth::{MagicLinkService, PasskeyService};
 use crate::blob_store::{BlobStore, InMemoryBlobStore};
@@ -122,7 +122,8 @@ fn build_e2e_router(
     let auth_store = Arc::new(NativeAuthStore::new(repo.clone()));
     let namespace_store = Arc::new(NativeNamespaceStore::new(ns_repo.clone()));
     let session_store = Arc::new(NativeSessionStore::new(ns_repo.clone()));
-    let object_meta_store = Arc::new(NativeObjectMetaStore::new(ns_repo));
+    let object_meta_store = Arc::new(NativeObjectMetaStore::new(ns_repo.clone()));
+    let ark_index_store = Arc::new(NativeArkIndexStore::new(ns_repo));
     let blob_store: Arc<dyn BlobStore> = Arc::new(InMemoryBlobStore::new("test"));
 
     let auth_extractor =
@@ -147,6 +148,7 @@ fn build_e2e_router(
         namespace_store: namespace_store.clone(),
         object_meta_store,
         blob_store: blob_store.clone(),
+        ark_index_store,
         token_signing_key: config.token_signing_key.clone(),
     };
     let audience_state = AudienceState {

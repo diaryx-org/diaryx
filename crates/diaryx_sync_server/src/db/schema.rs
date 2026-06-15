@@ -114,6 +114,14 @@ fn legacy_migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         [],
     )?;
 
+    // Migrations from version 5 onward are authored idempotently
+    // (CREATE TABLE/INDEX IF NOT EXISTS), so a legacy upgrade applies them
+    // directly instead of re-deriving each by hand — keeping legacy and fresh
+    // installs on an identical schema.
+    for m in MIGRATIONS.iter().filter(|m| m.version >= 5) {
+        conn.execute_batch(m.sql)?;
+    }
+
     Ok(())
 }
 

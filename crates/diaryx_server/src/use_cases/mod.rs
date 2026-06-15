@@ -1,3 +1,4 @@
+pub mod ark;
 pub mod audiences;
 pub mod auth;
 pub mod billing;

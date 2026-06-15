@@ -1,0 +1,14 @@
+[package]
+name = "diaryx_ark"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+description = "Opaque ARK-style identifier minting and validation for Diaryx."
+
+# Intentionally dependency-free: this crate links into WASM (diaryx_core,
+# Extism plugins) and native (server) targets alike, and entropy is supplied
+# by the caller so we never pull in a platform-specific RNG. Keep it tiny.
+[dependencies]

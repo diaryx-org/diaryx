@@ -19,9 +19,14 @@ impl<'a> NamespaceService<'a> {
         id: Option<&str>,
         metadata: Option<&str>,
     ) -> Result<NamespaceInfo, ServerCoreError> {
-        let namespace_id = id
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        // An explicit id is honored as-is (back-compat: existing `local-{uuid}`
+        // workspaces, callers that pre-know their id). Otherwise the server is
+        // the central authority that mints the opaque ARK workspace blade,
+        // which becomes the namespace id.
+        let namespace_id = match id {
+            Some(s) => s.to_string(),
+            None => self.mint_workspace_id().await?,
+        };
 
         self.namespace_store
             .create_namespace(&namespace_id, owner_user_id, metadata)
@@ -32,6 +37,32 @@ impl<'a> NamespaceService<'a> {
             .get_namespace(&namespace_id)
             .await?
             .ok_or_else(|| ServerCoreError::internal("Namespace was missing after creation"))
+    }
+
+    /// Mint a globally-unique opaque ARK workspace blade, rejection-checking
+    /// against existing namespaces. Bounded so a saturated or misbehaving store
+    /// can never spin forever; the 481M-blade space makes exhaustion a
+    /// non-concern in practice.
+    async fn mint_workspace_id(&self) -> Result<String, ServerCoreError> {
+        const MAX_ATTEMPTS: usize = 8;
+        // Entropy from v4 UUIDs (already a dependency, works on native + the
+        // wasm32 worker target); refill a small byte buffer as we consume it.
+        let mut buf: Vec<u8> = Vec::new();
+        let mut rng = || {
+            if buf.is_empty() {
+                buf.extend_from_slice(&Uuid::new_v4().into_bytes());
+            }
+            buf.pop().unwrap()
+        };
+        for _ in 0..MAX_ATTEMPTS {
+            let blade = diaryx_ark::mint_workspace_blade(&mut rng);
+            if self.namespace_store.get_namespace(&blade).await?.is_none() {
+                return Ok(blade);
+            }
+        }
+        Err(ServerCoreError::internal(
+            "Could not mint a unique workspace id",
+        ))
     }
 
     pub async fn update_metadata(
@@ -172,6 +203,10 @@ mod tests {
     struct TestNamespaceStore {
         namespaces: Mutex<HashMap<String, NamespaceInfo>>,
         custom_domains: Mutex<Vec<CustomDomainInfo>>,
+        /// When set, the next `get_namespace` call reports the queried id as
+        /// already taken (then clears itself), simulating a mint collision so
+        /// the retry path is exercised deterministically.
+        force_collision_once: Mutex<bool>,
     }
 
     crate::cfg_async_trait! {
@@ -180,6 +215,18 @@ mod tests {
             &self,
             namespace_id: &str,
         ) -> Result<Option<NamespaceInfo>, ServerCoreError> {
+            {
+                let mut flag = self.force_collision_once.lock().unwrap();
+                if *flag {
+                    *flag = false;
+                    return Ok(Some(NamespaceInfo {
+                        id: namespace_id.to_string(),
+                        owner_user_id: "other-owner".to_string(),
+                        created_at: 1,
+                        metadata: None,
+                    }));
+                }
+            }
             Ok(self.namespaces.lock().unwrap().get(namespace_id).cloned())
         }
 
@@ -313,12 +360,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_generates_uuid_when_no_id() {
+    async fn create_generates_ark_blade_when_no_id() {
         let store = TestNamespaceStore::default();
         let service = NamespaceService::new(&store);
 
         let ns = service.create("user1", None, None).await.unwrap();
-        assert!(!ns.id.is_empty());
+        assert!(
+            diaryx_ark::validate_workspace_blade(&ns.id).is_ok(),
+            "minted namespace id `{}` should be a valid workspace blade",
+            ns.id
+        );
+        assert_eq!(ns.owner_user_id, "user1");
+
+        // A second mint must produce a different blade.
+        let ns2 = service.create("user1", None, None).await.unwrap();
+        assert_ne!(ns.id, ns2.id);
+    }
+
+    #[tokio::test]
+    async fn create_retries_on_blade_collision() {
+        let store = TestNamespaceStore::default();
+        *store.force_collision_once.lock().unwrap() = true;
+        let service = NamespaceService::new(&store);
+
+        // The first minted blade reports as taken; create must retry and still
+        // return a valid, persisted workspace blade.
+        let ns = service.create("user1", None, None).await.unwrap();
+        assert!(diaryx_ark::validate_workspace_blade(&ns.id).is_ok());
         assert_eq!(ns.owner_user_id, "user1");
     }
 

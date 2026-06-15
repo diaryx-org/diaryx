@@ -488,6 +488,37 @@ pub trait JobSink: Send + Sync {
     async fn enqueue(&self, kind: &str, payload: Value) -> Result<(), ServerCoreError>;
 }
 
+/// Storage for the ARK identity index — the `(workspace ARK, file ARK)` →
+/// object key mapping, populated at publish time.
+pub trait ArkIndexStore: Send + Sync {
+    /// Register or update the object key a file ARK resolves to within a
+    /// workspace. Idempotent (upsert on the `(workspace_ark, file_ark)` key).
+    /// Implementations stamp `updated_at` with the current time.
+    async fn upsert_ark(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+        object_key: &str,
+        audience: Option<&str>,
+    ) -> Result<(), ServerCoreError>;
+
+    /// Resolve a file ARK within a workspace to its current index entry.
+    async fn resolve_ark(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+    ) -> Result<Option<crate::domain::ArkIndexEntry>, ServerCoreError>;
+
+    /// Return the object key a file ARK is already registered to within a
+    /// workspace, if any. Used to detect cross-device collisions (the same
+    /// file ARK pointing at a different object).
+    async fn get_ark_owner(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+    ) -> Result<Option<String>, ServerCoreError>;
+}
+
 } // cfg_async_trait!
 
 pub trait TokenSigner: Send + Sync {

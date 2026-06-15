@@ -206,6 +206,54 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             format!("---\ntitle: {}\n---\n\n# {}\n\n", title, title)
         };
 
+        // Mint an opaque, workspace-scoped ARK file id and inject it into the
+        // new file's frontmatter, unless the template already set a valid,
+        // unused one. Only the file blade is stored here; the full ARK is
+        // composed with the workspace blade at publish/resolve time.
+        //
+        // Entropy comes from v4 UUIDs, so minting is active only when the
+        // `uuid` feature is enabled. The build configurations that compile
+        // diaryx_core without it (the dumb server, isolated plugin builds)
+        // never create entries at runtime, so they keep the template `content`
+        // unchanged.
+        #[cfg(feature = "uuid")]
+        let content = {
+            // Existing file blades in this workspace, for rejection-checking.
+            // Empty when there is no workspace context (a loose file).
+            let existing: std::collections::HashSet<String> = match options.root_index_path {
+                Some(ref rip) => {
+                    let root_index = self.resolve_fs_path(rip);
+                    let ws_dir = root_index
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or(root_index);
+                    self.workspace().inner().collect_file_blades(&ws_dir).await
+                }
+                None => std::collections::HashSet::new(),
+            };
+
+            let parsed = frontmatter::parse_or_empty(&content)?;
+            let preset_ok = frontmatter::get_string(&parsed.frontmatter, "id")
+                .map(|id| diaryx_ark::validate_file_blade(id).is_ok() && !existing.contains(id))
+                .unwrap_or(false);
+
+            if preset_ok {
+                content
+            } else {
+                // Entropy from v4 UUIDs (already a dependency); refill a small
+                // byte buffer as the minter consumes it.
+                let mut buf: Vec<u8> = Vec::new();
+                let mut rng = move || {
+                    if buf.is_empty() {
+                        buf.extend_from_slice(&uuid::Uuid::new_v4().into_bytes());
+                    }
+                    buf.pop().unwrap()
+                };
+                let blade = diaryx_ark::mint_file_blade_unique(&mut rng, |b| existing.contains(b));
+                frontmatter::set_property_in_text(&content, "id", &yaml::Value::String(blade))?
+            }
+        };
+
         let resolved_path = self.resolve_fs_path(&path);
         self.fs()
             .create_new(&resolved_path, content.as_bytes())
@@ -412,5 +460,66 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         );
 
         Ok(Response::Ok)
+    }
+}
+
+// Minting only runs with the `uuid` feature (the entropy source), so the tests
+// that assert an `id` is injected are gated on it too.
+#[cfg(all(test, feature = "uuid"))]
+mod tests {
+    use crate::command::CreateEntryOptions;
+    use crate::diaryx::Diaryx;
+    use crate::frontmatter;
+    use crate::fs::{SyncToAsyncFs, block_on_test};
+    use crate::test_utils::MockFileSystem;
+
+    #[test]
+    fn create_entry_injects_valid_file_id() {
+        let fs = MockFileSystem::new();
+        let diaryx = Diaryx::new(SyncToAsyncFs::new(fs.clone()));
+        block_on_test(
+            diaryx.cmd_create_entry("note.md".to_string(), CreateEntryOptions::default()),
+        )
+        .unwrap();
+
+        let content = fs.get_content("note.md").expect("file created");
+        let parsed = frontmatter::parse_or_empty(&content).unwrap();
+        let id = frontmatter::get_string(&parsed.frontmatter, "id").expect("file id present");
+        assert!(
+            diaryx_ark::validate_file_blade(id).is_ok(),
+            "minted id `{id}` should be a valid file blade"
+        );
+    }
+
+    #[test]
+    fn create_entry_in_workspace_avoids_existing_ids() {
+        // Seed a workspace root index plus a file that already owns a blade.
+        let fs = MockFileSystem::new()
+            .with_file("index.md", "---\ntitle: WS\nid: bcdfgr\n---\n")
+            .with_file("existing.md", "---\ntitle: E\nid: ghjkmn\n---\n");
+        let diaryx = Diaryx::new(SyncToAsyncFs::new(fs.clone()));
+
+        // The rejection-check scan sees both seeded ids.
+        let blades = block_on_test(
+            diaryx
+                .workspace()
+                .inner()
+                .collect_file_blades(std::path::Path::new("")),
+        );
+        assert!(blades.contains("bcdfgr"), "should find root index id");
+        assert!(blades.contains("ghjkmn"), "should find sibling file id");
+
+        let opts = CreateEntryOptions {
+            root_index_path: Some("index.md".to_string()),
+            ..Default::default()
+        };
+        block_on_test(diaryx.cmd_create_entry("note.md".to_string(), opts)).unwrap();
+
+        let content = fs.get_content("note.md").expect("file created");
+        let parsed = frontmatter::parse_or_empty(&content).unwrap();
+        let id = frontmatter::get_string(&parsed.frontmatter, "id").expect("file id present");
+        assert!(diaryx_ark::validate_file_blade(id).is_ok());
+        assert_ne!(id, "bcdfgr");
+        assert_ne!(id, "ghjkmn");
     }
 }

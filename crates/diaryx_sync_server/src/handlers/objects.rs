@@ -11,7 +11,10 @@ use axum::{
 };
 use diaryx_server::audience_token::{GateKind, validate_audience_token};
 use diaryx_server::domain::{GateRecord, ObjectMeta, UsageTotals};
-use diaryx_server::ports::{BlobStore, NamespaceStore, ObjectMetaStore, ServerCoreError};
+use diaryx_server::ports::{
+    ArkIndexStore, BlobStore, NamespaceStore, ObjectMetaStore, ServerCoreError,
+};
+use diaryx_server::use_cases::ark::ArkService;
 use diaryx_server::use_cases::objects::ObjectService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -63,6 +66,8 @@ pub struct ObjectState {
     pub object_meta_store: Arc<dyn ObjectMetaStore>,
     /// Single R2 bucket for all namespace objects.
     pub blob_store: Arc<dyn BlobStore>,
+    /// ARK identity index — `(workspace ARK, file ARK)` → object key.
+    pub ark_index_store: Arc<dyn ArkIndexStore>,
     /// HMAC-SHA256 key for validating audience access tokens.
     pub token_signing_key: Vec<u8>,
 }
@@ -214,19 +219,41 @@ async fn put_object(
 
     let audience = headers.get("x-audience").and_then(|v| v.to_str().ok());
 
+    // The publishing client attaches the source file's ARK blade so the server
+    // can register `(workspace ARK, file ARK) -> key` — publish is the only
+    // door to the server now, so it doubles as ARK registration.
+    let file_ark = headers
+        .get("x-diaryx-file-ark")
+        .and_then(|v| v.to_str().ok());
+
     let service = make_service(&state);
 
-    match service
+    let result = match service
         .put(&ns_id, &key, mime_type, &body, audience, &auth.user.id)
         .await
     {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "key": result.key, "size_bytes": result.size_bytes })),
-        )
-            .into_response(),
-        Err(e) => core_error_response(e),
+        Ok(result) => result,
+        Err(e) => return core_error_response(e),
+    };
+
+    // Register the ARK after the object is stored. A cross-device collision
+    // (same provisional file blade, different object) surfaces as 409 so the
+    // client remints and republishes. The object PUT is already owner-gated.
+    if let Some(file_ark) = file_ark {
+        let ark_service = ArkService::new(state.ark_index_store.as_ref());
+        if let Err(e) = ark_service
+            .register(&ns_id, file_ark, &result.key, audience)
+            .await
+        {
+            return core_error_response(e);
+        }
     }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "key": result.key, "size_bytes": result.size_bytes })),
+    )
+        .into_response()
 }
 
 /// GET /namespaces/{ns_id}/objects/{*key} — retrieve bytes by key.

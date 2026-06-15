@@ -1729,3 +1729,86 @@ fn generate_session_code() -> String {
     };
     format!("{}-{}", part(), part())
 }
+
+pub struct D1ArkIndexStore {
+    db: D1Database,
+}
+
+impl D1ArkIndexStore {
+    pub fn new(db: D1Database) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait(?Send)]
+impl ArkIndexStore for D1ArkIndexStore {
+    async fn upsert_ark(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+        object_key: &str,
+        audience: Option<&str>,
+    ) -> Result<(), ServerCoreError> {
+        let now = chrono::Utc::now().timestamp();
+        self.db
+            .prepare(
+                "INSERT INTO ark_index (workspace_ark, file_ark, object_key, audience, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(workspace_ark, file_ark) DO UPDATE SET \
+                   object_key = excluded.object_key, audience = excluded.audience, \
+                   updated_at = excluded.updated_at",
+            )
+            .bind(&[
+                workspace_ark.into(),
+                file_ark.into(),
+                object_key.into(),
+                audience.unwrap_or("").into(),
+                ts(now),
+            ])
+            .map_err(e)?
+            .run()
+            .await
+            .map_err(e)?;
+        Ok(())
+    }
+
+    async fn resolve_ark(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+    ) -> Result<Option<ArkIndexEntry>, ServerCoreError> {
+        let result = self
+            .db
+            .prepare(
+                "SELECT workspace_ark, file_ark, object_key, audience, updated_at \
+                 FROM ark_index WHERE workspace_ark = ?1 AND file_ark = ?2",
+            )
+            .bind(&[workspace_ark.into(), file_ark.into()])
+            .map_err(e)?
+            .first::<serde_json::Value>(None)
+            .await
+            .map_err(e)?;
+
+        Ok(result.map(|row| ArkIndexEntry {
+            workspace_ark: row["workspace_ark"].as_str().unwrap_or_default().to_string(),
+            file_ark: row["file_ark"].as_str().unwrap_or_default().to_string(),
+            object_key: row["object_key"].as_str().unwrap_or_default().to_string(),
+            audience: row["audience"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
+            updated_at: row["updated_at"].as_i64().unwrap_or_default(),
+        }))
+    }
+
+    async fn get_ark_owner(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        Ok(self
+            .resolve_ark(workspace_ark, file_ark)
+            .await?
+            .map(|entry| entry.object_key))
+    }
+}

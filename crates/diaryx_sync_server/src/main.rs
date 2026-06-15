@@ -6,8 +6,8 @@ use axum::{
 };
 use diaryx_sync_server::{
     adapters::{
-        NativeAuthSessionStore, NativeAuthStore, NativeDomainMappingCache, NativeNamespaceStore,
-        NativeObjectMetaStore, NativeSessionStore, NativeUserStore,
+        NativeArkIndexStore, NativeAuthSessionStore, NativeAuthStore, NativeDomainMappingCache,
+        NativeNamespaceStore, NativeObjectMetaStore, NativeSessionStore, NativeUserStore,
     },
     auth::{AuthExtractor, MagicLinkService, PasskeyService},
     blob_store::{BlobStore, build_blob_store},
@@ -178,6 +178,7 @@ async fn main() {
         namespace_store: namespace_store.clone(),
         object_meta_store,
         blob_store: blob_store.clone(),
+        ark_index_store: Arc::new(NativeArkIndexStore::new(ns_repo.clone())),
         token_signing_key: config.token_signing_key.clone(),
     };
     let audience_state = AudienceState {

@@ -38,10 +38,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "audience_gates",
         sql: include_str!("0004_audience_gates.sql"),
     },
+    Migration {
+        version: 5,
+        name: "ark_index",
+        sql: include_str!("0005_ark_index.sql"),
+    },
 ];
 
 /// The version number of the latest migration.
-pub const CURRENT_VERSION: u32 = 4;
+pub const CURRENT_VERSION: u32 = 5;
 
 #[cfg(test)]
 mod tests {
@@ -72,6 +77,7 @@ mod tests {
         }
 
         let expected_tables = [
+            "ark_index",
             "auth_sessions",
             "custom_domains",
             "devices",

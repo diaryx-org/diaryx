@@ -297,6 +297,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx_ark"
+version = "1.6.1"
+
+[[package]]
 name = "diaryx_cloudflare"
 version = "0.1.0"
 dependencies = [
@@ -334,6 +338,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "crossfs",
+ "diaryx_ark",
  "fig",
  "futures-util",
  "indexmap",
@@ -356,6 +361,7 @@ dependencies = [
  "async-trait",
  "base64",
  "chrono",
+ "diaryx_ark",
  "diaryx_core",
  "futures",
  "hex",
@@ -502,7 +508,7 @@ checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 [[package]]
 name = "fig"
 version = "0.0.0"
-source = "git+https://github.com/adammharris/fig.git?rev=e3d0630a99d9a1e63c9ba6702a1096d49ed0809e#e3d0630a99d9a1e63c9ba6702a1096d49ed0809e"
+source = "git+https://github.com/adammharris/fig.git?rev=972c0fae960fef9a839aaa2cc99138c613dfa23a#972c0fae960fef9a839aaa2cc99138c613dfa23a"
 dependencies = [
  "serde",
 ]

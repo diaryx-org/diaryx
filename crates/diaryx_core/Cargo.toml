@@ -12,6 +12,7 @@ categories = ["text-processing"]
 
 [dependencies]
 crossfs.workspace = true
+diaryx_ark.workspace = true
 chrono.workspace = true
 indexmap.workspace = true
 # YAML backend for the `yaml`/`frontmatter` modules. `fig` is a Zig-backed

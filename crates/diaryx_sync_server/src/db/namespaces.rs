@@ -199,6 +199,56 @@ impl NamespaceRepo {
         .map_err(|e| e.to_string())
     }
 
+    /// Register or update the object key a file ARK resolves to within a
+    /// workspace. Idempotent on `(workspace_ark, file_ark)`.
+    pub fn upsert_ark(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+        object_key: &str,
+        audience: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO ark_index (workspace_ark, file_ark, object_key, audience, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(workspace_ark, file_ark) DO UPDATE SET
+               object_key = excluded.object_key,
+               audience = excluded.audience,
+               updated_at = excluded.updated_at",
+            params![workspace_ark, file_ark, object_key, audience, now],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    /// Resolve a file ARK within a workspace to its index row, as
+    /// `(workspace_ark, file_ark, object_key, audience, updated_at)`.
+    pub fn resolve_ark(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+    ) -> Option<(String, String, String, Option<String>, i64)> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT workspace_ark, file_ark, object_key, audience, updated_at
+             FROM ark_index WHERE workspace_ark = ?1 AND file_ark = ?2",
+            params![workspace_ark, file_ark],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .unwrap_or(None)
+    }
+
     pub fn get_object_meta(&self, namespace_id: &str, key: &str) -> Option<NamespaceObjectMeta> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(

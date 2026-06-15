@@ -1804,6 +1804,56 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         Ok(tree)
     }
 
+    /// Walk the workspace under `root_dir` collecting every entry's frontmatter
+    /// `id` (its ARK file blade) into a set, for local mint rejection-checking.
+    ///
+    /// Reads each markdown file's frontmatter, so it is O(files in workspace).
+    /// That is acceptable at current (alpha) workspace sizes; a cached
+    /// per-session blade set is the known performance follow-up. Hidden files,
+    /// temp files, and built-in skip directories are pruned to match the rest
+    /// of the workspace traversal.
+    pub async fn collect_file_blades(&self, root_dir: &Path) -> HashSet<String> {
+        let mut blades = HashSet::new();
+        let mut dirs = vec![root_dir.to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            let Ok(entries) = self.fs.read_dir(&dir).await.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|e| e.path().to_path_buf())
+                    .collect::<Vec<_>>()
+            }) else {
+                continue;
+            };
+            for entry in entries {
+                let file_name = entry
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if file_name.starts_with('.') || crate::fs::is_temp_file(&file_name) {
+                    continue;
+                }
+                let is_dir = self
+                    .fs
+                    .metadata(&entry)
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false);
+                if is_dir {
+                    if !is_workspace_skip_dir(&entry) {
+                        dirs.push(entry);
+                    }
+                } else if entry.extension().and_then(|e| e.to_str()) == Some("md")
+                    && let Ok(content) = self.fs.read_to_string(&entry).await
+                    && let Ok(parsed) = crate::frontmatter::parse_or_empty(&content)
+                    && let Some(id) = crate::frontmatter::get_string(&parsed.frontmatter, "id")
+                {
+                    blades.insert(id.to_string());
+                }
+            }
+        }
+        blades
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn build_filesystem_tree_recursive(
         &self,

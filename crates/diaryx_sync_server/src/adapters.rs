@@ -1,16 +1,18 @@
 use crate::db::{AuthRepo, NamespaceRepo};
 use async_trait::async_trait;
 use diaryx_server::domain::{
-    AudienceInfo as CoreAudienceInfo, AuthSessionInfo as CoreAuthSessionInfo,
-    CustomDomainInfo as CoreCustomDomainInfo, DeviceInfo as CoreDeviceInfo,
-    NamespaceInfo as CoreNamespaceInfo, NamespaceSessionInfo as CoreNamespaceSessionInfo,
-    ObjectMeta as CoreObjectMeta, PasskeyChallengeInfo as CorePasskeyChallengeInfo,
+    ArkIndexEntry as CoreArkIndexEntry, AudienceInfo as CoreAudienceInfo,
+    AuthSessionInfo as CoreAuthSessionInfo, CustomDomainInfo as CoreCustomDomainInfo,
+    DeviceInfo as CoreDeviceInfo, NamespaceInfo as CoreNamespaceInfo,
+    NamespaceSessionInfo as CoreNamespaceSessionInfo, ObjectMeta as CoreObjectMeta,
+    PasskeyChallengeInfo as CorePasskeyChallengeInfo,
     PasskeyCredentialInfo as CorePasskeyCredentialInfo, UsageTotals as CoreUsageTotals,
     UserInfo as CoreUserInfo, UserTier as CoreUserTier,
 };
 use diaryx_server::ports::{
-    AuthSessionStore, AuthStore, BillingStore, DeviceStore, DomainMappingCache, MagicLinkStore,
-    NamespaceStore, ObjectMetaStore, PasskeyStore, ServerCoreError, SessionStore, UserStore,
+    ArkIndexStore, AuthSessionStore, AuthStore, BillingStore, DeviceStore, DomainMappingCache,
+    MagicLinkStore, NamespaceStore, ObjectMetaStore, PasskeyStore, ServerCoreError, SessionStore,
+    UserStore,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -1078,6 +1080,59 @@ impl From<crate::db::CustomDomainInfo> for CoreCustomDomainInfo {
             created_at: value.created_at,
             verified: value.verified,
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeArkIndexStore {
+    repo: Arc<NamespaceRepo>,
+}
+
+impl NativeArkIndexStore {
+    pub fn new(repo: Arc<NamespaceRepo>) -> Self {
+        Self { repo }
+    }
+}
+
+#[async_trait]
+impl ArkIndexStore for NativeArkIndexStore {
+    async fn upsert_ark(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+        object_key: &str,
+        audience: Option<&str>,
+    ) -> Result<(), ServerCoreError> {
+        self.repo
+            .upsert_ark(workspace_ark, file_ark, object_key, audience)
+            .map_err(ServerCoreError::from)
+    }
+
+    async fn resolve_ark(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+    ) -> Result<Option<CoreArkIndexEntry>, ServerCoreError> {
+        Ok(self.repo.resolve_ark(workspace_ark, file_ark).map(
+            |(workspace_ark, file_ark, object_key, audience, updated_at)| CoreArkIndexEntry {
+                workspace_ark,
+                file_ark,
+                object_key,
+                audience,
+                updated_at,
+            },
+        ))
+    }
+
+    async fn get_ark_owner(
+        &self,
+        workspace_ark: &str,
+        file_ark: &str,
+    ) -> Result<Option<String>, ServerCoreError> {
+        Ok(self
+            .repo
+            .resolve_ark(workspace_ark, file_ark)
+            .map(|(_, _, object_key, _, _)| object_key))
     }
 }
 

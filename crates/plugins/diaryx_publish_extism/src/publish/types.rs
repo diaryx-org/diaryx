@@ -104,6 +104,9 @@ pub struct PublishedPage {
     pub hide_from_nav: bool,
     /// Whether to hide this page from RSS/Atom feeds
     pub hide_from_feed: bool,
+    /// Source file's ARK blade (frontmatter `id`), if any. Carried so publish
+    /// can register `(workspace_ark, file_ark) -> key` for the page's object.
+    pub file_ark: Option<String>,
 }
 
 /// A node in the full site navigation tree.

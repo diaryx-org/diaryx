@@ -36,6 +36,9 @@ pub struct PendingUpload {
     pub mime_type: String,
     /// SHA-256 of `bytes` (computed once during the diff).
     pub hash: String,
+    /// Source file's ARK blade, for content pages. Populated by the caller
+    /// after the diff (keyed by object key); `None` for assets/attachments.
+    pub file_ark: Option<String>,
 }
 
 /// The diff for a single audience.
@@ -174,6 +177,7 @@ pub fn diff_audience(
                 bytes,
                 mime_type,
                 hash,
+                file_ark: None,
             });
         }
     }

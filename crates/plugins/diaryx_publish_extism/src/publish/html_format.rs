@@ -1290,6 +1290,7 @@ mod tests {
             nav_order: None,
             hide_from_nav: false,
             hide_from_feed: false,
+            file_ark: None,
         }
     }
 

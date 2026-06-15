@@ -253,6 +253,20 @@ pub fn put_object_with_audience(
     mime_type: &str,
     audience: Option<&str>,
 ) -> Result<(), String> {
+    put_object_with_ark(ns_id, key, bytes, mime_type, audience, None)
+}
+
+/// Upload an object with an optional audience tag and an optional source-file
+/// ARK blade. When `file_ark` is set, the server registers
+/// `(workspace_ark, file_ark) -> key` — publish doubles as ARK registration.
+pub fn put_object_with_ark(
+    ns_id: &str,
+    key: &str,
+    bytes: &[u8],
+    mime_type: &str,
+    audience: Option<&str>,
+    file_ark: Option<&str>,
+) -> Result<(), String> {
     let mut input = serde_json::json!({
         "ns_id": ns_id,
         "key": key,
@@ -261,6 +275,9 @@ pub fn put_object_with_audience(
     });
     if let Some(audience) = audience {
         input["audience"] = serde_json::Value::String(audience.to_string());
+    }
+    if let Some(file_ark) = file_ark {
+        input["file_ark"] = serde_json::Value::String(file_ark.to_string());
     }
     let result = unsafe { host_namespace_put_object(input.to_string()) }
         .map_err(|e| format!("host_namespace_put_object failed: {e}"))?;

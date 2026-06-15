@@ -557,10 +557,17 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
             }
 
             // Assemble the planned object set: rendered pages + attachments.
+            // Track which object key carries which source-file ARK so we can
+            // tag the resulting uploads after the diff (publish = registration).
             let mut planned: Vec<(String, Vec<u8>, String)> =
                 Vec::with_capacity(rendered.len() + attachment_paths.len());
+            let mut key_to_ark: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             for file in rendered {
                 let key = format!("{}/{}", audience_name, file.path);
+                if let Some(ark) = &file.file_ark {
+                    key_to_ark.insert(key.clone(), ark.clone());
+                }
                 planned.push((key, file.content, file.mime_type));
             }
             for (src_path, dest_rel) in &attachment_paths {
@@ -584,12 +591,18 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 }
             }
 
-            audience_plans.push(plan::diff_audience(
+            let mut audience_plan = plan::diff_audience(
                 audience_name.clone(),
                 audience.gates.clone(),
                 planned,
                 &existing,
-            ));
+            );
+            // Tag content-page uploads with their source-file ARK so the server
+            // registers `(workspace_ark, file_ark) -> key` on upload.
+            for up in &mut audience_plan.uploads {
+                up.file_ark = key_to_ark.get(&up.key).cloned();
+            }
+            audience_plans.push(audience_plan);
         }
 
         // Strict-sync: when the file is canonical, any server audience not
@@ -797,12 +810,13 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 let mut bytes_uploaded: u64 = 0;
                 for ap in &plan.audiences {
                     for up in &ap.uploads {
-                        diaryx_plugin_sdk::host::namespace::put_object(
+                        diaryx_plugin_sdk::host::namespace::put_object_with_ark(
                             &namespace_id,
                             &up.key,
                             &up.bytes,
                             &up.mime_type,
-                            &ap.name,
+                            Some(ap.name.as_str()),
+                            up.file_ark.as_deref(),
                         )
                         .map_err(|e| {
                             PluginError::CommandError(format!("failed to upload {}: {}", up.key, e))

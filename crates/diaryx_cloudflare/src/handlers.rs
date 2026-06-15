@@ -23,8 +23,8 @@ use diaryx_server::use_cases::auth::{
 };
 use diaryx_server::use_cases::billing::BillingService;
 use diaryx_server::use_cases::{
-    audiences::AudienceService, domains::DomainService, namespaces::NamespaceService,
-    objects::ObjectService, sessions::SessionService,
+    ark::ArkService, audiences::AudienceService, domains::DomainService,
+    namespaces::NamespaceService, objects::ObjectService, sessions::SessionService,
 };
 use serde::Deserialize;
 use worker::*;
@@ -373,6 +373,9 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
         .get("content-type")?
         .unwrap_or_else(|| "application/octet-stream".to_string());
     let audience = req.headers().get("x-audience")?;
+    // The publishing client attaches the source file's ARK blade so the server
+    // registers `(workspace_ark, file_ark) -> key` — publish is registration.
+    let file_ark = req.headers().get("x-diaryx-file-ark")?;
     let bytes = req.bytes().await?;
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
@@ -380,7 +383,7 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     let blob_store = R2BlobStore::new(bucket(&ctx)?);
     let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
 
-    match service
+    let result = match service
         .put(
             &ns_id,
             &key,
@@ -391,11 +394,25 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
         )
         .await
     {
-        Ok(result) => Response::from_json(
-            &serde_json::json!({ "key": result.key, "size_bytes": result.size_bytes }),
-        ),
-        Err(e) => error_response(e),
+        Ok(result) => result,
+        Err(e) => return error_response(e),
+    };
+
+    // Register the ARK after the object is stored. A cross-device collision
+    // (same provisional file blade, different object) surfaces as 409 so the
+    // client remints. The object PUT above is already owner-authenticated.
+    if let Some(file_ark) = file_ark.as_deref() {
+        let ark_store = D1ArkIndexStore::new(db(&ctx)?);
+        let ark_service = ArkService::new(&ark_store);
+        if let Err(e) = ark_service
+            .register(&ns_id, file_ark, &result.key, audience.as_deref())
+            .await
+        {
+            return error_response(e);
+        }
     }
+
+    Response::from_json(&serde_json::json!({ "key": result.key, "size_bytes": result.size_bytes }))
 }
 
 pub async fn get_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {

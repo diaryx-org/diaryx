@@ -30,6 +30,10 @@ pub struct RenderedFile {
     pub content: Vec<u8>,
     /// MIME type (e.g. `"text/html"`, `"text/css"`).
     pub mime_type: String,
+    /// Source file's ARK blade (frontmatter `id`) when this rendition is a
+    /// content page; `None` for assets (CSS, feeds, nav). Carried so publish
+    /// can register the ARK for the page's canonical object.
+    pub file_ark: Option<String>,
 }
 
 const PUBLISHED_HTML_ATTACHMENT_BRIDGE_MARKER: &str = "data-diaryx-published-html-bridge";
@@ -225,6 +229,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 path: page.dest_filename.clone(),
                 content: rendered.into_bytes(),
                 mime_type: mime_type.to_string(),
+                file_ark: page.file_ark.clone(),
             });
         }
 
@@ -241,6 +246,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 path: filename,
                 content,
                 mime_type: mime_type.to_string(),
+                file_ark: None,
             });
         }
 
@@ -257,6 +263,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 path: filename,
                 content,
                 mime_type: mime_type.to_string(),
+                file_ark: None,
             });
         }
 
@@ -324,6 +331,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 path: page.dest_filename.clone(),
                 content: rendered.into_bytes(),
                 mime_type: mime_type.to_string(),
+                file_ark: page.file_ark.clone(),
             });
         }
 
@@ -339,6 +347,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 path: filename,
                 content,
                 mime_type: mime_type.to_string(),
+                file_ark: None,
             });
         }
 
@@ -354,6 +363,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 path: filename,
                 content,
                 mime_type: mime_type.to_string(),
+                file_ark: None,
             });
         }
 
@@ -708,6 +718,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
             nav_order,
             hide_from_nav,
             hide_from_feed,
+            file_ark: frontmatter::get_string(&parsed.frontmatter, "id").map(String::from),
         }))
     }
 
@@ -1388,6 +1399,7 @@ mod tests {
             nav_order: None,
             hide_from_nav: false,
             hide_from_feed: false,
+            file_ark: None,
         }];
         let paths = Publisher::<diaryx_core::fs::SyncToAsyncFs<diaryx_core::fs::InMemoryFileSystem>>::collect_attachment_paths(&pages, workspace_dir);
         assert_eq!(paths.len(), 1);
@@ -1419,6 +1431,7 @@ mod tests {
             nav_order: None,
             hide_from_nav: false,
             hide_from_feed: false,
+            file_ark: None,
         }];
         let paths = Publisher::<diaryx_core::fs::SyncToAsyncFs<diaryx_core::fs::InMemoryFileSystem>>::collect_attachment_paths(&pages, workspace_dir);
         assert_eq!(paths.len(), 2);
@@ -1619,6 +1632,7 @@ mod tests {
             nav_order: None,
             hide_from_nav: false,
             hide_from_feed: false,
+            file_ark: None,
         }
     }
 

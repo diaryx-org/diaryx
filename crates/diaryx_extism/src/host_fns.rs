@@ -127,6 +127,22 @@ pub trait NamespaceProvider: Send + Sync {
         mime_type: &str,
         audience: Option<&str>,
     ) -> Result<(), String>;
+    /// Like [`put_object`](Self::put_object), but also carries the source
+    /// file's ARK blade so the server can register `(workspace_ark, file_ark)
+    /// -> key` at publish time. The default impl ignores `file_ark` and
+    /// delegates to `put_object`; HTTP-backed providers override it to send
+    /// the `X-Diaryx-File-Ark` header.
+    fn put_object_with_ark(
+        &self,
+        ns_id: &str,
+        key: &str,
+        bytes: &[u8],
+        mime_type: &str,
+        audience: Option<&str>,
+        _file_ark: Option<&str>,
+    ) -> Result<(), String> {
+        self.put_object(ns_id, key, bytes, mime_type, audience)
+    }
     fn get_object(&self, ns_id: &str, key: &str) -> Result<Vec<u8>, String>;
     fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String>;
     fn list_objects(
@@ -2801,6 +2817,8 @@ fn host_namespace_put_object(
         mime_type: String,
         #[serde(default)]
         audience: Option<String>,
+        #[serde(default)]
+        file_ark: Option<String>,
     }
 
     let parsed: Input = serde_json::from_str(&input)
@@ -2814,12 +2832,13 @@ fn host_namespace_put_object(
     let ctx = ctx
         .lock()
         .map_err(|e| ExtismError::msg(format!("host_namespace_put_object: lock: {e}")))?;
-    let result = ctx.namespace_provider.put_object(
+    let result = ctx.namespace_provider.put_object_with_ark(
         &parsed.ns_id,
         &parsed.key,
         &bytes,
         &parsed.mime_type,
         parsed.audience.as_deref(),
+        parsed.file_ark.as_deref(),
     );
 
     let json = match result {

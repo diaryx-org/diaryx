@@ -132,6 +132,7 @@ pub trait NamespaceProvider: Send + Sync {
     /// -> key` at publish time. The default impl ignores `file_ark` and
     /// delegates to `put_object`; HTTP-backed providers override it to send
     /// the `X-Diaryx-File-Ark` header.
+    #[allow(clippy::too_many_arguments)]
     fn put_object_with_ark(
         &self,
         ns_id: &str,
@@ -140,6 +141,8 @@ pub trait NamespaceProvider: Send + Sync {
         mime_type: &str,
         audience: Option<&str>,
         _file_ark: Option<&str>,
+        _source_key: Option<&str>,
+        _is_index: bool,
     ) -> Result<(), String> {
         self.put_object(ns_id, key, bytes, mime_type, audience)
     }
@@ -2819,6 +2822,10 @@ fn host_namespace_put_object(
         audience: Option<String>,
         #[serde(default)]
         file_ark: Option<String>,
+        #[serde(default)]
+        source_key: Option<String>,
+        #[serde(default)]
+        is_index: bool,
     }
 
     let parsed: Input = serde_json::from_str(&input)
@@ -2839,6 +2846,8 @@ fn host_namespace_put_object(
         &parsed.mime_type,
         parsed.audience.as_deref(),
         parsed.file_ark.as_deref(),
+        parsed.source_key.as_deref(),
+        parsed.is_index,
     );
 
     let json = match result {

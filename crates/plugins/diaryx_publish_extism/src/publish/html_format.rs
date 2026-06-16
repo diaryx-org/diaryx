@@ -1291,6 +1291,7 @@ mod tests {
             hide_from_nav: false,
             hide_from_feed: false,
             file_ark: None,
+            source_markdown: String::new(),
         }
     }
 

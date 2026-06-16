@@ -253,12 +253,15 @@ pub fn put_object_with_audience(
     mime_type: &str,
     audience: Option<&str>,
 ) -> Result<(), String> {
-    put_object_with_ark(ns_id, key, bytes, mime_type, audience, None)
+    put_object_with_ark(ns_id, key, bytes, mime_type, audience, None, None, false)
 }
 
-/// Upload an object with an optional audience tag and an optional source-file
-/// ARK blade. When `file_ark` is set, the server registers
-/// `(workspace_ark, file_ark) -> key` — publish doubles as ARK registration.
+/// Upload an object with an optional audience tag and ARK registration data.
+/// When `file_ark` is set, the server registers `(workspace_ark, file_ark) ->
+/// key` (publish doubles as registration); `source_key` links the markdown
+/// source sibling (Layer 2 resolution) and `is_index` marks the workspace
+/// front-page rendition.
+#[allow(clippy::too_many_arguments)]
 pub fn put_object_with_ark(
     ns_id: &str,
     key: &str,
@@ -266,6 +269,8 @@ pub fn put_object_with_ark(
     mime_type: &str,
     audience: Option<&str>,
     file_ark: Option<&str>,
+    source_key: Option<&str>,
+    is_index: bool,
 ) -> Result<(), String> {
     let mut input = serde_json::json!({
         "ns_id": ns_id,
@@ -278,6 +283,12 @@ pub fn put_object_with_ark(
     }
     if let Some(file_ark) = file_ark {
         input["file_ark"] = serde_json::Value::String(file_ark.to_string());
+    }
+    if let Some(source_key) = source_key {
+        input["source_key"] = serde_json::Value::String(source_key.to_string());
+    }
+    if is_index {
+        input["is_index"] = serde_json::Value::Bool(true);
     }
     let result = unsafe { host_namespace_put_object(input.to_string()) }
         .map_err(|e| format!("host_namespace_put_object failed: {e}"))?;

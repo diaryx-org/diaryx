@@ -107,6 +107,9 @@ pub struct PublishedPage {
     /// Source file's ARK blade (frontmatter `id`), if any. Carried so publish
     /// can register `(workspace_ark, file_ark) -> key` for the page's object.
     pub file_ark: Option<String>,
+    /// The audience-scoped markdown source (frontmatter + visibility-filtered
+    /// body) uploaded as a sibling so the server can serve `?content`/`?json`.
+    pub source_markdown: String,
 }
 
 /// A node in the full site navigation tree.

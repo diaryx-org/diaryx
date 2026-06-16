@@ -39,6 +39,10 @@ pub struct PendingUpload {
     /// Source file's ARK blade, for content pages. Populated by the caller
     /// after the diff (keyed by object key); `None` for assets/attachments.
     pub file_ark: Option<String>,
+    /// Object key of the markdown source sibling for this content page, if any.
+    pub source_key: Option<String>,
+    /// `true` when this upload is the workspace front-page (index) rendition.
+    pub is_index: bool,
 }
 
 /// The diff for a single audience.
@@ -178,6 +182,8 @@ pub fn diff_audience(
                 mime_type,
                 hash,
                 file_ark: None,
+                source_key: None,
+                is_index: false,
             });
         }
     }

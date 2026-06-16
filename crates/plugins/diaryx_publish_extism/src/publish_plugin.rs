@@ -556,17 +556,44 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 continue;
             }
 
-            // Assemble the planned object set: rendered pages + attachments.
-            // Track which object key carries which source-file ARK so we can
-            // tag the resulting uploads after the diff (publish = registration).
+            // Assemble the planned object set: rendered pages (+ their markdown
+            // source siblings) + attachments. Track, per HTML object key, the
+            // source-file ARK and the source sibling's key so we can tag the
+            // resulting uploads after the diff (publish = registration). Only a
+            // public audience's root page becomes the workspace front page.
+            let audience_public = audience
+                .gates
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(false);
             let mut planned: Vec<(String, Vec<u8>, String)> =
-                Vec::with_capacity(rendered.len() + attachment_paths.len());
+                Vec::with_capacity(rendered.len() * 2 + attachment_paths.len());
             let mut key_to_ark: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            let mut key_to_source: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            let mut index_key: Option<String> = None;
             for file in rendered {
                 let key = format!("{}/{}", audience_name, file.path);
                 if let Some(ark) = &file.file_ark {
                     key_to_ark.insert(key.clone(), ark.clone());
+                }
+                if let Some(src_md) = &file.source_markdown {
+                    let source_rel = match file.path.strip_suffix(".html") {
+                        Some(stem) => format!("{stem}.md"),
+                        None => format!("{}.md", file.path),
+                    };
+                    let source_key = format!("{}/{}", audience_name, source_rel);
+                    key_to_source.insert(key.clone(), source_key.clone());
+                    // The source sibling is its own audience-tagged object.
+                    planned.push((
+                        source_key,
+                        src_md.clone().into_bytes(),
+                        "text/markdown".to_string(),
+                    ));
+                }
+                if file.is_index && audience_public {
+                    index_key = Some(key.clone());
                 }
                 planned.push((key, file.content, file.mime_type));
             }
@@ -597,10 +624,12 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 planned,
                 &existing,
             );
-            // Tag content-page uploads with their source-file ARK so the server
-            // registers `(workspace_ark, file_ark) -> key` on upload.
+            // Tag content-page uploads with their source-file ARK + source key
+            // (and the index flag) so the server registers + indexes on upload.
             for up in &mut audience_plan.uploads {
                 up.file_ark = key_to_ark.get(&up.key).cloned();
+                up.source_key = key_to_source.get(&up.key).cloned();
+                up.is_index = index_key.as_deref() == Some(up.key.as_str());
             }
             audience_plans.push(audience_plan);
         }
@@ -817,6 +846,8 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                             &up.mime_type,
                             Some(ap.name.as_str()),
                             up.file_ark.as_deref(),
+                            up.source_key.as_deref(),
+                            up.is_index,
                         )
                         .map_err(|e| {
                             PluginError::CommandError(format!("failed to upload {}: {}", up.key, e))

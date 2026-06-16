@@ -167,7 +167,7 @@ impl HttpNamespaceProvider {
         body: Option<Vec<u8>>,
         content_type: Option<&str>,
         audience: Option<&str>,
-        file_ark: Option<&str>,
+        extra_headers: &[(&str, &str)],
     ) -> Result<Option<T>, String> {
         let mut builder = ureq::http::Request::builder().method(method).uri(&url);
         if let Some(token) = &self.auth_token {
@@ -179,8 +179,8 @@ impl HttpNamespaceProvider {
         if let Some(aud) = audience {
             builder = builder.header("X-Audience", aud);
         }
-        if let Some(fa) = file_ark {
-            builder = builder.header("X-Diaryx-File-Ark", fa);
+        for (k, v) in extra_headers {
+            builder = builder.header(*k, *v);
         }
         let response = if let Some(body) = body {
             let request = builder
@@ -236,7 +236,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
             Some(body),
             Some("application/json"),
             None,
-            None,
+            &[],
         )?
         .ok_or_else(|| "Namespace create returned an empty response".to_string())
     }
@@ -249,7 +249,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
         mime_type: &str,
         audience: Option<&str>,
     ) -> Result<(), String> {
-        self.put_object_with_ark(ns_id, key, bytes, mime_type, audience, None)
+        self.put_object_with_ark(ns_id, key, bytes, mime_type, audience, None, None, false)
     }
 
     fn put_object_with_ark(
@@ -260,6 +260,8 @@ impl NamespaceProvider for HttpNamespaceProvider {
         mime_type: &str,
         audience: Option<&str>,
         file_ark: Option<&str>,
+        source_key: Option<&str>,
+        is_index: bool,
     ) -> Result<(), String> {
         let url = format!(
             "{}/namespaces/{}/objects/{}",
@@ -267,13 +269,23 @@ impl NamespaceProvider for HttpNamespaceProvider {
             Self::encode_component(ns_id),
             Self::encode_key(key)
         );
+        let mut headers: Vec<(&str, &str)> = Vec::new();
+        if let Some(fa) = file_ark {
+            headers.push(("X-Diaryx-File-Ark", fa));
+        }
+        if let Some(sk) = source_key {
+            headers.push(("X-Diaryx-Source-Key", sk));
+        }
+        if is_index {
+            headers.push(("X-Diaryx-Is-Index", "true"));
+        }
         self.request_json::<serde_json::Value>(
             "PUT",
             url,
             Some(bytes.to_vec()),
             Some(mime_type),
             audience,
-            file_ark,
+            &headers,
         )?;
         Ok(())
     }
@@ -295,7 +307,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
             Self::encode_component(ns_id),
             Self::encode_key(key)
         );
-        self.request_json::<serde_json::Value>("DELETE", url, None, None, None, None)?;
+        self.request_json::<serde_json::Value>("DELETE", url, None, None, None, &[])?;
         Ok(())
     }
 
@@ -326,7 +338,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
             url.push_str(&query.join("&"));
         }
         Ok(self
-            .request_json::<Vec<NamespaceObjectMeta>>("GET", url, None, None, None, None)?
+            .request_json::<Vec<NamespaceObjectMeta>>("GET", url, None, None, None, &[])?
             .unwrap_or_default())
     }
 
@@ -350,7 +362,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
             Some(body),
             Some("application/json"),
             None,
-            None,
+            &[],
         )?;
         Ok(())
     }
@@ -366,7 +378,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
             name: String,
         }
         let items: Vec<AudienceItem> = self
-            .request_json::<Vec<AudienceItem>>("GET", url, None, None, None, None)?
+            .request_json::<Vec<AudienceItem>>("GET", url, None, None, None, &[])?
             .unwrap_or_default();
         Ok(items.into_iter().map(|a| a.name).collect())
     }
@@ -378,7 +390,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
             Self::encode_component(ns_id),
             Self::encode_component(audience)
         );
-        self.request_json::<serde_json::Value>("DELETE", url, None, None, None, None)?;
+        self.request_json::<serde_json::Value>("DELETE", url, None, None, None, &[])?;
         Ok(())
     }
 
@@ -405,14 +417,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
             Self::encode_component(ns_id),
         );
         let resp: serde_json::Value = self
-            .request_json(
-                "POST",
-                url,
-                Some(body),
-                Some("application/json"),
-                None,
-                None,
-            )?
+            .request_json("POST", url, Some(body), Some("application/json"), None, &[])?
             .ok_or_else(|| "Batch get returned an empty response".to_string())?;
 
         let mut result = BatchGetResult::default();
@@ -457,7 +462,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
     fn list_namespaces(&self) -> Result<Vec<NamespaceEntry>, String> {
         let url = format!("{}/namespaces", self.base_url);
         Ok(self
-            .request_json::<Vec<NamespaceEntry>>("GET", url, None, None, None, None)?
+            .request_json::<Vec<NamespaceEntry>>("GET", url, None, None, None, &[])?
             .unwrap_or_default())
     }
 }

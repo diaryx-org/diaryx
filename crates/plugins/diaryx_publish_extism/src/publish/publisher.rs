@@ -34,6 +34,11 @@ pub struct RenderedFile {
     /// content page; `None` for assets (CSS, feeds, nav). Carried so publish
     /// can register the ARK for the page's canonical object.
     pub file_ark: Option<String>,
+    /// The page's audience-scoped markdown source, for content pages. Uploaded
+    /// as a sibling object so the server can resolve `?content`/`?json`.
+    pub source_markdown: Option<String>,
+    /// `true` when this rendition is the workspace root index page.
+    pub is_index: bool,
 }
 
 const PUBLISHED_HTML_ATTACHMENT_BRIDGE_MARKER: &str = "data-diaryx-published-html-bridge";
@@ -230,6 +235,8 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 content: rendered.into_bytes(),
                 mime_type: mime_type.to_string(),
                 file_ark: page.file_ark.clone(),
+                source_markdown: Some(page.source_markdown.clone()),
+                is_index: page.is_root,
             });
         }
 
@@ -247,6 +254,8 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 content,
                 mime_type: mime_type.to_string(),
                 file_ark: None,
+                source_markdown: None,
+                is_index: false,
             });
         }
 
@@ -264,6 +273,8 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 content,
                 mime_type: mime_type.to_string(),
                 file_ark: None,
+                source_markdown: None,
+                is_index: false,
             });
         }
 
@@ -332,6 +343,8 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 content: rendered.into_bytes(),
                 mime_type: mime_type.to_string(),
                 file_ark: page.file_ark.clone(),
+                source_markdown: Some(page.source_markdown.clone()),
+                is_index: page.is_root,
             });
         }
 
@@ -348,6 +361,8 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 content,
                 mime_type: mime_type.to_string(),
                 file_ark: None,
+                source_markdown: None,
+                is_index: false,
             });
         }
 
@@ -364,6 +379,8 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 content,
                 mime_type: mime_type.to_string(),
                 file_ark: None,
+                source_markdown: None,
+                is_index: false,
             });
         }
 
@@ -649,6 +666,13 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
             None => visibility::strip_visibility_directives(&parsed.body),
         };
 
+        // The audience-scoped markdown source the server stores for Layer 2
+        // resolution (?content/?json/?info). Frontmatter is passed through;
+        // the body has had this audience's visibility filtering applied.
+        let source_markdown =
+            frontmatter::serialize(&parsed.frontmatter, &visibility_filtered_body)
+                .unwrap_or_else(|_| visibility_filtered_body.clone());
+
         // Render body templates (if any) before markdown-to-HTML conversion
         let rendered_body = if self.body_renderer.has_templates(&visibility_filtered_body) {
             self.body_renderer
@@ -719,6 +743,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
             hide_from_nav,
             hide_from_feed,
             file_ark: frontmatter::get_string(&parsed.frontmatter, "id").map(String::from),
+            source_markdown,
         }))
     }
 
@@ -1400,6 +1425,7 @@ mod tests {
             hide_from_nav: false,
             hide_from_feed: false,
             file_ark: None,
+            source_markdown: String::new(),
         }];
         let paths = Publisher::<diaryx_core::fs::SyncToAsyncFs<diaryx_core::fs::InMemoryFileSystem>>::collect_attachment_paths(&pages, workspace_dir);
         assert_eq!(paths.len(), 1);
@@ -1432,6 +1458,7 @@ mod tests {
             hide_from_nav: false,
             hide_from_feed: false,
             file_ark: None,
+            source_markdown: String::new(),
         }];
         let paths = Publisher::<diaryx_core::fs::SyncToAsyncFs<diaryx_core::fs::InMemoryFileSystem>>::collect_attachment_paths(&pages, workspace_dir);
         assert_eq!(paths.len(), 2);
@@ -1633,6 +1660,7 @@ mod tests {
             hide_from_nav: false,
             hide_from_feed: false,
             file_ark: None,
+            source_markdown: String::new(),
         }
     }
 

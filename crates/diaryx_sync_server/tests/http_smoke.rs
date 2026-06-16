@@ -149,6 +149,23 @@ async fn ark_resolution_serves_html_content_and_info() {
     assert_eq!(status, StatusCode::OK, "info: {body}");
     assert_eq!(body["title"], "Hello");
 
+    // Sensitive internal frontmatter keys must never surface via resolution.
+    // The publisher strips these before uploading the source sibling; assert
+    // that contract holds end-to-end so a regression here can't leak publish
+    // config (audiences, plugin settings) to anyone who can resolve the ARK.
+    assert!(
+        body.get("plugins").is_none(),
+        "?info leaked `plugins`: {body}"
+    );
+    assert!(
+        body.get("audiences").is_none(),
+        "?info leaked `audiences`: {body}"
+    );
+    assert!(
+        body.get("audiences_migrated").is_none(),
+        "?info leaked `audiences_migrated`: {body}"
+    );
+
     // ?meta=title → single field.
     let resp = app.get(&format!("/ark/{ns}/{file_ark}?meta=title")).await;
     let (status, body) = read_status_and_json(resp).await;

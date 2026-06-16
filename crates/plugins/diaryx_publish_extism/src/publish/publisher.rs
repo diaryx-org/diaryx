@@ -41,6 +41,27 @@ pub struct RenderedFile {
     pub is_index: bool,
 }
 
+/// Top-level frontmatter keys stripped from the markdown source sibling before
+/// it is uploaded for ARK Layer 2 resolution (`?content`/`?json`/`?info`). The
+/// source is served publicly to anyone who can resolve the ARK, so internal
+/// publishing config must not leak — notably `plugins` (which carries
+/// `plugins.diaryx.publish` audience/access settings) and the audience
+/// definitions. Author-facing metadata (title, description, author, dates,
+/// `id`, etc.) is preserved.
+const SOURCE_SIBLING_FRONTMATTER_DENYLIST: &[&str] =
+    &["plugins", "audiences", "audiences_migrated"];
+
+/// Strip the [`SOURCE_SIBLING_FRONTMATTER_DENYLIST`] keys from a frontmatter map.
+fn strip_sensitive_frontmatter(
+    frontmatter: &indexmap::IndexMap<String, diaryx_core::yaml::Value>,
+) -> indexmap::IndexMap<String, diaryx_core::yaml::Value> {
+    let mut filtered = frontmatter.clone();
+    for key in SOURCE_SIBLING_FRONTMATTER_DENYLIST {
+        filtered.shift_remove(*key);
+    }
+    filtered
+}
+
 const PUBLISHED_HTML_ATTACHMENT_BRIDGE_MARKER: &str = "data-diaryx-published-html-bridge";
 const PUBLISHED_HTML_ATTACHMENT_BRIDGE: &str = r#"<script data-diaryx-published-html-bridge>
 (() => {
@@ -667,10 +688,13 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
         };
 
         // The audience-scoped markdown source the server stores for Layer 2
-        // resolution (?content/?json/?info). Frontmatter is passed through;
-        // the body has had this audience's visibility filtering applied.
+        // resolution (?content/?json/?info). This is served publicly, so the
+        // frontmatter has sensitive internal keys (publishing config, audience
+        // definitions) stripped first; the body has had this audience's
+        // visibility filtering applied.
+        let source_frontmatter = strip_sensitive_frontmatter(&parsed.frontmatter);
         let source_markdown =
-            frontmatter::serialize(&parsed.frontmatter, &visibility_filtered_body)
+            frontmatter::serialize(&source_frontmatter, &visibility_filtered_body)
                 .unwrap_or_else(|_| visibility_filtered_body.clone());
 
         // Render body templates (if any) before markdown-to-HTML conversion
@@ -1295,6 +1319,94 @@ mod tests {
         assert_eq!(percent_decode("hello%"), "hello%");
         // Invalid hex chars left as-is
         assert_eq!(percent_decode("hello%ZZ"), "hello%ZZ");
+    }
+
+    #[test]
+    fn test_strip_sensitive_frontmatter_removes_denylisted_keys() {
+        use diaryx_core::yaml::Value;
+
+        let mut fm = indexmap::IndexMap::new();
+        fm.insert("title".to_string(), Value::String("Hello".into()));
+        fm.insert("id".to_string(), Value::String("bcdfgr".into()));
+        fm.insert("plugins".to_string(), Value::String("secret-config".into()));
+        fm.insert(
+            "audiences".to_string(),
+            Value::String("family,public".into()),
+        );
+        fm.insert("audiences_migrated".to_string(), Value::Bool(true));
+
+        let stripped = strip_sensitive_frontmatter(&fm);
+
+        // Author-facing keys survive.
+        assert!(stripped.contains_key("title"));
+        assert!(stripped.contains_key("id"));
+        // Sensitive keys are gone.
+        assert!(!stripped.contains_key("plugins"));
+        assert!(!stripped.contains_key("audiences"));
+        assert!(!stripped.contains_key("audiences_migrated"));
+    }
+
+    #[test]
+    fn test_source_markdown_strips_sensitive_frontmatter() {
+        use super::super::html_format::HtmlFormat;
+        use diaryx_core::fs::FileSystem;
+
+        let fs = diaryx_core::fs::InMemoryFileSystem::new();
+        let workspace_dir = Path::new("/workspace");
+        let workspace_root = workspace_dir.join("README.md");
+        fs.create_dir_all(workspace_dir).unwrap();
+        fs.write(
+            &workspace_root,
+            concat!(
+                "---\n",
+                "title: My Journal\n",
+                "id: bcdfgr\n",
+                "author: Adam\n",
+                "audiences:\n",
+                "  public: []\n",
+                "audiences_migrated: true\n",
+                "plugins:\n",
+                "  diaryx:\n",
+                "    publish:\n",
+                "      audience: family\n",
+                "      access: private\n",
+                "contents: []\n",
+                "---\n\n",
+                "Hello world\n",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+
+        let async_fs = diaryx_core::fs::SyncToAsyncFs::new(fs);
+        let renderer = super::super::body_renderer::NoopBodyRenderer;
+        let format = HtmlFormat::new();
+        let publisher = Publisher::new(async_fs, &renderer, &format);
+
+        let pages = futures_lite::future::block_on(
+            publisher.collect_pages(&workspace_root, &PublishOptions::default()),
+        )
+        .unwrap();
+
+        let source = &pages[0].source_markdown;
+        // Sensitive internal keys must not appear in the served source sibling.
+        assert!(
+            !source.contains("plugins"),
+            "source leaked `plugins`: {source}"
+        );
+        assert!(
+            !source.contains("audiences"),
+            "source leaked `audiences`/`audiences_migrated`: {source}"
+        );
+        assert!(
+            !source.contains("access"),
+            "source leaked publish access config: {source}"
+        );
+        // Author-facing metadata and body are preserved.
+        assert!(source.contains("title: My Journal"));
+        assert!(source.contains("id: bcdfgr"));
+        assert!(source.contains("author: Adam"));
+        assert!(source.contains("Hello world"));
     }
 
     #[test]

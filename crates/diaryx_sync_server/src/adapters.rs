@@ -1102,9 +1102,10 @@ impl ArkIndexStore for NativeArkIndexStore {
         file_ark: &str,
         object_key: &str,
         audience: Option<&str>,
+        source_key: Option<&str>,
     ) -> Result<(), ServerCoreError> {
         self.repo
-            .upsert_ark(workspace_ark, file_ark, object_key, audience)
+            .upsert_ark(workspace_ark, file_ark, object_key, audience, source_key)
             .map_err(ServerCoreError::from)
     }
 
@@ -1114,12 +1115,15 @@ impl ArkIndexStore for NativeArkIndexStore {
         file_ark: &str,
     ) -> Result<Option<CoreArkIndexEntry>, ServerCoreError> {
         Ok(self.repo.resolve_ark(workspace_ark, file_ark).map(
-            |(workspace_ark, file_ark, object_key, audience, updated_at)| CoreArkIndexEntry {
-                workspace_ark,
-                file_ark,
-                object_key,
-                audience,
-                updated_at,
+            |(workspace_ark, file_ark, object_key, audience, source_key, updated_at)| {
+                CoreArkIndexEntry {
+                    workspace_ark,
+                    file_ark,
+                    object_key,
+                    audience,
+                    source_key,
+                    updated_at,
+                }
             },
         ))
     }
@@ -1132,7 +1136,7 @@ impl ArkIndexStore for NativeArkIndexStore {
         Ok(self
             .repo
             .resolve_ark(workspace_ark, file_ark)
-            .map(|(_, _, object_key, _, _)| object_key))
+            .map(|(_, _, object_key, _, _, _)| object_key))
     }
 }
 

@@ -17,7 +17,7 @@ use diaryx_sync_server::{
     email::EmailService,
     handlers::{
         AudienceState, DomainState, NamespaceState, NsSessionState, ObjectState, ProxyState,
-        ai_routes, audience_routes, auth_routes, domain_auth_route, domain_routes,
+        ai_routes, ark_routes, audience_routes, auth_routes, domain_auth_route, domain_routes,
         namespace_routes, ns_session_routes, object_routes, proxy_routes, public_object_routes,
         site_routes, usage_routes,
     },
@@ -325,7 +325,9 @@ async fn main() {
         // Server capabilities (unauthenticated)
         .route("/api/capabilities", get(capabilities))
         // Published site serving (outside /api, no auth)
-        .merge(site_routes(object_state))
+        .merge(site_routes(object_state.clone()))
+        // ARK resolution (outside /api, no auth)
+        .merge(ark_routes(object_state))
         // All API routes under /api
         .nest("/api", api);
 

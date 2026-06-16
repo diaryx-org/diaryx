@@ -27,15 +27,21 @@ use rusqlite::Connection;
 use tower::ServiceExt;
 
 use diaryx_sync_server::adapters::{
-    NativeAuthSessionStore, NativeAuthStore, NativeNamespaceStore, NativeUserStore,
+    NativeArkIndexStore, NativeAuthSessionStore, NativeAuthStore, NativeNamespaceStore,
+    NativeObjectMetaStore, NativeUserStore,
 };
 use diaryx_sync_server::auth::{AuthExtractor, MagicLinkService, PasskeyService};
+use diaryx_sync_server::blob_store::InMemoryBlobStore;
 use diaryx_sync_server::config::{
     AppleIapConfig, Config, EmailConfig, ManagedAiConfig, R2Config, StripeConfig,
 };
 use diaryx_sync_server::db::{AuthRepo, NamespaceRepo, init_database};
 use diaryx_sync_server::email::EmailService;
 use diaryx_sync_server::handlers::auth::{AuthState, auth_routes};
+use diaryx_sync_server::handlers::{
+    AudienceState, NamespaceState, ObjectState, ark_routes, audience_routes, namespace_routes,
+    object_routes,
+};
 
 // ---------------------------------------------------------------------------
 // Config construction
@@ -172,14 +178,17 @@ pub fn build_test_router() -> TestApp {
     let auth_session_store = Arc::new(NativeAuthSessionStore::new(repo.clone()));
     let user_store = Arc::new(NativeUserStore::new(repo.clone()));
     let auth_store = Arc::new(NativeAuthStore::new(repo.clone()));
-    let namespace_store = Arc::new(NativeNamespaceStore::new(ns_repo));
+    let namespace_store = Arc::new(NativeNamespaceStore::new(ns_repo.clone()));
+    let object_meta_store = Arc::new(NativeObjectMetaStore::new(ns_repo.clone()));
+    let ark_index_store = Arc::new(NativeArkIndexStore::new(ns_repo.clone()));
+    let blob_store = Arc::new(InMemoryBlobStore::new("test"));
     let auth_extractor = AuthExtractor::new(auth_store.clone(), auth_session_store.clone());
 
     let auth_state = AuthState {
         magic_link_service,
         email_service,
         auth_store,
-        namespace_store,
+        namespace_store: namespace_store.clone(),
         session_store: auth_session_store,
         user_store,
         passkey_service,
@@ -187,12 +196,33 @@ pub fn build_test_router() -> TestApp {
         secure_cookies: config.secure_cookies,
     };
 
+    let object_state = ObjectState {
+        namespace_store: namespace_store.clone(),
+        object_meta_store,
+        blob_store: blob_store.clone(),
+        ark_index_store,
+        token_signing_key: config.token_signing_key.clone(),
+    };
+    let namespace_state = NamespaceState {
+        namespace_store: namespace_store.clone(),
+        domain_mapping_cache: None,
+    };
+    let audience_state = AudienceState {
+        namespace_store: namespace_store.clone(),
+        token_signing_key: config.token_signing_key.clone(),
+        blob_store: blob_store.clone(),
+    };
+
     let api = Router::new()
         .route("/health", get(|| async { "OK" }))
-        .nest("/auth", auth_routes(auth_state));
+        .nest("/auth", auth_routes(auth_state))
+        .nest("/namespaces", namespace_routes(namespace_state))
+        .nest("/namespaces/{ns_id}", object_routes(object_state.clone()))
+        .nest("/namespaces/{ns_id}", audience_routes(audience_state));
 
     let router = Router::new()
         .nest("/api", api)
+        .merge(ark_routes(object_state))
         .layer(Extension(auth_extractor));
 
     TestApp {

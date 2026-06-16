@@ -493,13 +493,15 @@ pub trait JobSink: Send + Sync {
 pub trait ArkIndexStore: Send + Sync {
     /// Register or update the object key a file ARK resolves to within a
     /// workspace. Idempotent (upsert on the `(workspace_ark, file_ark)` key).
-    /// Implementations stamp `updated_at` with the current time.
+    /// Implementations stamp `updated_at` with the current time. `source_key`
+    /// is the markdown source sibling, if any (Layer 2).
     async fn upsert_ark(
         &self,
         workspace_ark: &str,
         file_ark: &str,
         object_key: &str,
         audience: Option<&str>,
+        source_key: Option<&str>,
     ) -> Result<(), ServerCoreError>;
 
     /// Resolve a file ARK within a workspace to its current index entry.

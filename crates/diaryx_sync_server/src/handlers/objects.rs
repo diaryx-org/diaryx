@@ -14,9 +14,10 @@ use diaryx_server::domain::{GateRecord, ObjectMeta, UsageTotals};
 use diaryx_server::ports::{
     ArkIndexStore, BlobStore, NamespaceStore, ObjectMetaStore, ServerCoreError,
 };
-use diaryx_server::use_cases::ark::ArkService;
+use diaryx_server::use_cases::ark::{ARK_WORKSPACE_INDEX, ArkService, Inflection, inflection_json};
 use diaryx_server::use_cases::objects::ObjectService;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Evaluate whether a request satisfies any gate in the audience's gate set.
@@ -221,10 +222,19 @@ async fn put_object(
 
     // The publishing client attaches the source file's ARK blade so the server
     // can register `(workspace ARK, file ARK) -> key` — publish is the only
-    // door to the server now, so it doubles as ARK registration.
+    // door to the server now, so it doubles as ARK registration. The source
+    // sibling key (Layer 2) and an is-index flag ride along on the same PUT.
     let file_ark = headers
         .get("x-diaryx-file-ark")
         .and_then(|v| v.to_str().ok());
+    let source_key = headers
+        .get("x-diaryx-source-key")
+        .and_then(|v| v.to_str().ok());
+    let is_index = headers
+        .get("x-diaryx-is-index")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
 
     let service = make_service(&state);
 
@@ -242,8 +252,16 @@ async fn put_object(
     if let Some(file_ark) = file_ark {
         let ark_service = ArkService::new(state.ark_index_store.as_ref());
         if let Err(e) = ark_service
-            .register(&ns_id, file_ark, &result.key, audience)
+            .register(&ns_id, file_ark, &result.key, audience, source_key)
             .await
+        {
+            return core_error_response(e);
+        }
+        // The workspace front-page pointer (last-publish-wins, no collision).
+        if is_index
+            && let Err(e) = ark_service
+                .register_index(&ns_id, &result.key, audience, source_key)
+                .await
         {
             return core_error_response(e);
         }
@@ -501,6 +519,138 @@ pub fn public_object_routes(state: ObjectState) -> Router {
     Router::new()
         .route("/public/{ns_id}/objects/{*key}", get(get_public_object))
         .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// ARK resolution (Layer 2): GET /ark/{ws}/{file} and GET /ark/{ws}
+// ---------------------------------------------------------------------------
+
+pub fn ark_routes(state: ObjectState) -> Router {
+    Router::new()
+        .route("/ark/{ws}/{file}", get(resolve_ark))
+        .route("/ark/{ws}", get(resolve_ark_index))
+        .with_state(state)
+}
+
+fn inflection_from_params(params: &HashMap<String, String>) -> Inflection {
+    if params.contains_key("content") {
+        Inflection::Content
+    } else if params.contains_key("json") {
+        Inflection::Json
+    } else if params.contains_key("info") {
+        Inflection::Info
+    } else if let Some(k) = params.get("meta") {
+        Inflection::Meta(k.clone())
+    } else if let Some(k) = params.keys().find(|k| k.starts_with('.')) {
+        Inflection::Meta(k[1..].to_string())
+    } else {
+        Inflection::Default
+    }
+}
+
+fn serve_blob(mime: &str, bytes: Vec<u8>) -> Response {
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            mime.parse::<axum::http::HeaderValue>()
+                .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
+        )],
+        bytes,
+    )
+        .into_response()
+}
+
+async fn resolve_ark(
+    State(state): State<ObjectState>,
+    Path((ws, file)): Path<(String, String)>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    do_resolve(&state, &ws, &file, &params).await
+}
+
+async fn resolve_ark_index(
+    State(state): State<ObjectState>,
+    Path(ws): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    do_resolve(&state, &ws, ARK_WORKSPACE_INDEX, &params).await
+}
+
+/// Resolve an ARK to content, honoring the query inflection and audience gates.
+/// `?content`/`?json`/`?info`/`?meta=` read the markdown source sibling; the
+/// default serves the rendered HTML. Gating is enforced on the canonical
+/// rendition (the source shares its audience).
+async fn do_resolve(
+    state: &ObjectState,
+    ws: &str,
+    file: &str,
+    params: &HashMap<String, String>,
+) -> Response {
+    let inflection = inflection_from_params(params);
+    let token = params.get("audience_token").map(|s| s.as_str());
+
+    let ark = ArkService::new(state.ark_index_store.as_ref());
+    let entry = match ark.resolve(ws, file).await {
+        Ok(e) => e,
+        Err(e) => return core_error_response(e),
+    };
+
+    let service = make_service(state);
+
+    let access = match service.resolve_public_access(ws, &entry.object_key).await {
+        Ok(a) => a,
+        Err(e) => return core_error_response(e),
+    };
+    if !gate_check_passes(
+        &access.gates,
+        &access.audience_name,
+        ws,
+        &state.token_signing_key,
+        token,
+    ) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    if inflection == Inflection::Default {
+        return match service
+            .fetch_blob(ws, &entry.object_key, access.meta.blob_key.as_deref())
+            .await
+        {
+            Ok(obj) => serve_blob(&obj.mime_type, obj.bytes),
+            Err(e) => core_error_response(e),
+        };
+    }
+
+    // Source-backed inflections need the markdown sibling.
+    let Some(source_key) = entry.source_key.as_deref() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no source for this ARK" })),
+        )
+            .into_response();
+    };
+    let src_access = match service.resolve_public_access(ws, source_key).await {
+        Ok(a) => a,
+        Err(e) => return core_error_response(e),
+    };
+    let obj = match service
+        .fetch_blob(ws, source_key, src_access.meta.blob_key.as_deref())
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return core_error_response(e),
+    };
+
+    if inflection == Inflection::Content {
+        return serve_blob("text/markdown; charset=utf-8", obj.bytes);
+    }
+
+    let src = String::from_utf8_lossy(&obj.bytes);
+    match inflection_json(&src, &inflection) {
+        Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+        Err(e) => core_error_response(e),
+    }
 }
 
 /// GET /public/{ns_id}/objects/{*key} — retrieve an object via audience access control.

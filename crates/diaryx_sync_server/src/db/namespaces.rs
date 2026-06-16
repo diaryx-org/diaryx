@@ -207,32 +207,34 @@ impl NamespaceRepo {
         file_ark: &str,
         object_key: &str,
         audience: Option<&str>,
+        source_key: Option<&str>,
     ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().timestamp();
         conn.execute(
-            "INSERT INTO ark_index (workspace_ark, file_ark, object_key, audience, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO ark_index (workspace_ark, file_ark, object_key, audience, source_key, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(workspace_ark, file_ark) DO UPDATE SET
                object_key = excluded.object_key,
                audience = excluded.audience,
+               source_key = excluded.source_key,
                updated_at = excluded.updated_at",
-            params![workspace_ark, file_ark, object_key, audience, now],
+            params![workspace_ark, file_ark, object_key, audience, source_key, now],
         )
         .map(|_| ())
         .map_err(|e| e.to_string())
     }
 
     /// Resolve a file ARK within a workspace to its index row, as
-    /// `(workspace_ark, file_ark, object_key, audience, updated_at)`.
+    /// `(workspace_ark, file_ark, object_key, audience, source_key, updated_at)`.
     pub fn resolve_ark(
         &self,
         workspace_ark: &str,
         file_ark: &str,
-    ) -> Option<(String, String, String, Option<String>, i64)> {
+    ) -> Option<(String, String, String, Option<String>, Option<String>, i64)> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT workspace_ark, file_ark, object_key, audience, updated_at
+            "SELECT workspace_ark, file_ark, object_key, audience, source_key, updated_at
              FROM ark_index WHERE workspace_ark = ?1 AND file_ark = ?2",
             params![workspace_ark, file_ark],
             |row| {
@@ -242,6 +244,7 @@ impl NamespaceRepo {
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
+                    row.get(5)?,
                 ))
             },
         )

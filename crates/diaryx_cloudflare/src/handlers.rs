@@ -23,8 +23,12 @@ use diaryx_server::use_cases::auth::{
 };
 use diaryx_server::use_cases::billing::BillingService;
 use diaryx_server::use_cases::{
-    ark::ArkService, audiences::AudienceService, domains::DomainService,
-    namespaces::NamespaceService, objects::ObjectService, sessions::SessionService,
+    ark::{ARK_WORKSPACE_INDEX, ArkService, Inflection, inflection_json},
+    audiences::AudienceService,
+    domains::DomainService,
+    namespaces::NamespaceService,
+    objects::ObjectService,
+    sessions::SessionService,
 };
 use serde::Deserialize;
 use worker::*;
@@ -375,7 +379,14 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     let audience = req.headers().get("x-audience")?;
     // The publishing client attaches the source file's ARK blade so the server
     // registers `(workspace_ark, file_ark) -> key` — publish is registration.
+    // The source sibling key (Layer 2) and is-index flag ride the same PUT.
     let file_ark = req.headers().get("x-diaryx-file-ark")?;
+    let source_key = req.headers().get("x-diaryx-source-key")?;
+    let is_index = req
+        .headers()
+        .get("x-diaryx-is-index")?
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
     let bytes = req.bytes().await?;
 
     let ns_store = D1NamespaceStore::new(db(&ctx)?);
@@ -405,8 +416,22 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
         let ark_store = D1ArkIndexStore::new(db(&ctx)?);
         let ark_service = ArkService::new(&ark_store);
         if let Err(e) = ark_service
-            .register(&ns_id, file_ark, &result.key, audience.as_deref())
+            .register(
+                &ns_id,
+                file_ark,
+                &result.key,
+                audience.as_deref(),
+                source_key.as_deref(),
+            )
             .await
+        {
+            return error_response(e);
+        }
+        // Workspace front-page pointer (last-publish-wins, no collision check).
+        if is_index
+            && let Err(e) = ark_service
+                .register_index(&ns_id, &result.key, audience.as_deref(), source_key.as_deref())
+                .await
         {
             return error_response(e);
         }
@@ -661,6 +686,139 @@ pub async fn get_public_object(req: Request, ctx: RouteContext<()>) -> Result<Re
             resp.headers_mut().set("content-type", &result.mime_type)?;
             Ok(resp)
         }
+        Err(e) => error_response(e),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ARK resolution (Layer 2): GET /ark/:ws/:file and GET /ark/:ws
+// ---------------------------------------------------------------------------
+
+fn ark_inflection_from_url(url: &worker::Url) -> (Inflection, Option<String>) {
+    let mut inflection = Inflection::Default;
+    let mut token = None;
+    for (k, v) in url.query_pairs() {
+        match k.as_ref() {
+            "audience_token" => token = Some(v.to_string()),
+            "content" => inflection = Inflection::Content,
+            "json" => inflection = Inflection::Json,
+            "info" => inflection = Inflection::Info,
+            "meta" => inflection = Inflection::Meta(v.to_string()),
+            other if other.starts_with('.') => {
+                inflection = Inflection::Meta(other[1..].to_string());
+            }
+            _ => {}
+        }
+    }
+    (inflection, token)
+}
+
+fn ark_gate_granted(
+    access: &diaryx_server::domain::PublicObjectAccess,
+    ns_id: &str,
+    token: Option<&str>,
+    key_bytes: &[u8],
+) -> bool {
+    if access.gates.is_empty() {
+        return true;
+    }
+    let claims = token.and_then(|t| validate_audience_token(key_bytes, t));
+    access.gates.iter().any(|gate| match gate {
+        diaryx_server::GateRecord::Link => claims.as_ref().is_some_and(|c| {
+            matches!(c.gate, diaryx_server::audience_token::GateKind::Link)
+                && c.slug == ns_id
+                && c.audience == access.audience_name
+        }),
+        diaryx_server::GateRecord::Password { version, .. } => claims.as_ref().is_some_and(|c| {
+            matches!(c.gate, diaryx_server::audience_token::GateKind::Unlock)
+                && c.slug == ns_id
+                && c.audience == access.audience_name
+                && c.password_version == Some(*version)
+        }),
+    })
+}
+
+pub async fn resolve_ark(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let ws = require_decoded_param(&ctx, "ws")?;
+    let file = require_decoded_param(&ctx, "file")?;
+    do_resolve_ark(&ws, &file, &req, &ctx).await
+}
+
+pub async fn resolve_ark_index(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let ws = require_decoded_param(&ctx, "ws")?;
+    do_resolve_ark(&ws, ARK_WORKSPACE_INDEX, &req, &ctx).await
+}
+
+async fn do_resolve_ark(
+    ws: &str,
+    file: &str,
+    req: &Request,
+    ctx: &RouteContext<()>,
+) -> Result<Response> {
+    let url = req.url()?;
+    let (inflection, token) = ark_inflection_from_url(&url);
+    let key_bytes = signing_key(ctx);
+
+    let ark_store = D1ArkIndexStore::new(db(ctx)?);
+    let ark_service = ArkService::new(&ark_store);
+    let entry = match ark_service.resolve(ws, file).await {
+        Ok(e) => e,
+        Err(e) => return error_response(e),
+    };
+
+    let ns_store = D1NamespaceStore::new(db(ctx)?);
+    let obj_store = D1ObjectMetaStore::new(db(ctx)?);
+    let blob_store = R2BlobStore::new(bucket(ctx)?);
+    let service = ObjectService::new(&ns_store, &obj_store, &blob_store);
+
+    // Gate on the canonical (HTML) rendition; the source shares its audience.
+    let access = match service.resolve_public_access(ws, &entry.object_key).await {
+        Ok(a) => a,
+        Err(e) => return error_response(e),
+    };
+    if !ark_gate_granted(&access, ws, token.as_deref(), &key_bytes) {
+        return Response::empty().map(|r| r.with_status(403));
+    }
+
+    if inflection == Inflection::Default {
+        return match service
+            .fetch_blob(ws, &entry.object_key, access.meta.blob_key.as_deref())
+            .await
+        {
+            Ok(result) => {
+                let mut resp = Response::from_bytes(result.bytes)?;
+                resp.headers_mut().set("content-type", &result.mime_type)?;
+                Ok(resp)
+            }
+            Err(e) => error_response(e),
+        };
+    }
+
+    let Some(source_key) = entry.source_key.as_deref() else {
+        return Response::error("no source for this ARK", 404);
+    };
+    let src_access = match service.resolve_public_access(ws, source_key).await {
+        Ok(a) => a,
+        Err(e) => return error_response(e),
+    };
+    let obj = match service
+        .fetch_blob(ws, source_key, src_access.meta.blob_key.as_deref())
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return error_response(e),
+    };
+
+    if inflection == Inflection::Content {
+        let mut resp = Response::from_bytes(obj.bytes)?;
+        resp.headers_mut()
+            .set("content-type", "text/markdown; charset=utf-8")?;
+        return Ok(resp);
+    }
+
+    let src = String::from_utf8_lossy(&obj.bytes);
+    match inflection_json(&src, &inflection) {
+        Ok(json) => Response::from_json(&json),
         Err(e) => error_response(e),
     }
 }

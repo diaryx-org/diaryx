@@ -47,6 +47,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "/api/public/:ns_id/objects/*key",
             handlers::get_public_object,
         )
+        // ARK resolution
+        .get_async("/ark/:ws/:file", handlers::resolve_ark)
+        .get_async("/ark/:ws", handlers::resolve_ark_index)
         // Audiences
         .put_async(
             "/api/namespaces/:ns_id/audiences/:name",

@@ -43,10 +43,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "ark_index",
         sql: include_str!("0005_ark_index.sql"),
     },
+    Migration {
+        version: 6,
+        name: "ark_source_key",
+        sql: include_str!("0006_ark_source_key.sql"),
+    },
 ];
 
 /// The version number of the latest migration.
-pub const CURRENT_VERSION: u32 = 5;
+pub const CURRENT_VERSION: u32 = 6;
 
 #[cfg(test)]
 mod tests {

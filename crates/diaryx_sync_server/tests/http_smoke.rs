@@ -7,10 +7,28 @@
 
 mod support;
 
-use axum::http::{Method, StatusCode};
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
 use serde_json::json;
 
-use support::{TestApp, build_test_router, read_json, read_status_and_json};
+use support::{TestApp, build_test_router, read_body, read_json, read_status_and_json};
+
+async fn authed_put(
+    app: &TestApp,
+    token: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &'static str,
+) -> axum::http::Response<Body> {
+    let mut builder = Request::builder()
+        .method(Method::PUT)
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"));
+    for (k, v) in headers {
+        builder = builder.header(*k, *v);
+    }
+    app.request(builder.body(Body::from(body)).unwrap()).await
+}
 
 async fn sign_in(app: &TestApp, email: &str) -> String {
     let response = app
@@ -43,6 +61,99 @@ async fn sign_in(app: &TestApp, email: &str) -> String {
         .and_then(|v| v.as_str())
         .expect("verify response should include a token")
         .to_string()
+}
+
+/// End-to-end ARK Layer 2: publish a source sibling + HTML rendition, then
+/// resolve the ARK with each inflection.
+#[tokio::test]
+async fn ark_resolution_serves_html_content_and_info() {
+    let app = build_test_router();
+    let token = sign_in(&app, "ark@example.com").await;
+
+    // Server mints an ARK workspace blade as the namespace id.
+    let resp = app
+        .request(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/namespaces")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({})).unwrap()))
+                .unwrap(),
+        )
+        .await;
+    let (status, body) = read_status_and_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED, "create namespace: {body}");
+    let ns = body["id"].as_str().expect("namespace id").to_string();
+
+    // Public audience (empty gates = public).
+    let resp = app
+        .request(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/api/namespaces/{ns}/audiences/public"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "gates": [] })).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let file_ark = "bcdfgr"; // a valid file blade
+    let source_md = "---\ntitle: Hello\nid: bcdfgr\n---\n\nBody text\n";
+
+    // Upload the markdown source sibling (audience-tagged).
+    let resp = authed_put(
+        &app,
+        &token,
+        &format!("/api/namespaces/{ns}/objects/public/note.md"),
+        &[("x-audience", "public"), ("content-type", "text/markdown")],
+        source_md,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Upload the HTML rendition, registering the ARK + source key.
+    let resp = authed_put(
+        &app,
+        &token,
+        &format!("/api/namespaces/{ns}/objects/public/note.html"),
+        &[
+            ("x-audience", "public"),
+            ("x-diaryx-file-ark", file_ark),
+            ("x-diaryx-source-key", "public/note.md"),
+            ("content-type", "text/html"),
+        ],
+        "<h1>Hello</h1>",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Default inflection → HTML.
+    let resp = app.get(&format!("/ark/{ns}/{file_ark}")).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(read_body(resp).await, b"<h1>Hello</h1>");
+
+    // ?content → markdown source.
+    let resp = app.get(&format!("/ark/{ns}/{file_ark}?content")).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = read_body(resp).await;
+    assert!(String::from_utf8_lossy(&body).contains("Body text"));
+
+    // ?info → frontmatter JSON.
+    let resp = app.get(&format!("/ark/{ns}/{file_ark}?info")).await;
+    let (status, body) = read_status_and_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "info: {body}");
+    assert_eq!(body["title"], "Hello");
+
+    // ?meta=title → single field.
+    let resp = app.get(&format!("/ark/{ns}/{file_ark}?meta=title")).await;
+    let (status, body) = read_status_and_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "meta: {body}");
+    assert_eq!(body, json!("Hello"));
 }
 
 #[tokio::test]

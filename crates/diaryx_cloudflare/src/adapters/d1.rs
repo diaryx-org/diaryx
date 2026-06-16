@@ -1748,21 +1748,23 @@ impl ArkIndexStore for D1ArkIndexStore {
         file_ark: &str,
         object_key: &str,
         audience: Option<&str>,
+        source_key: Option<&str>,
     ) -> Result<(), ServerCoreError> {
         let now = chrono::Utc::now().timestamp();
         self.db
             .prepare(
-                "INSERT INTO ark_index (workspace_ark, file_ark, object_key, audience, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                "INSERT INTO ark_index (workspace_ark, file_ark, object_key, audience, source_key, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
                  ON CONFLICT(workspace_ark, file_ark) DO UPDATE SET \
                    object_key = excluded.object_key, audience = excluded.audience, \
-                   updated_at = excluded.updated_at",
+                   source_key = excluded.source_key, updated_at = excluded.updated_at",
             )
             .bind(&[
                 workspace_ark.into(),
                 file_ark.into(),
                 object_key.into(),
                 audience.unwrap_or("").into(),
+                source_key.unwrap_or("").into(),
                 ts(now),
             ])
             .map_err(e)?
@@ -1780,7 +1782,7 @@ impl ArkIndexStore for D1ArkIndexStore {
         let result = self
             .db
             .prepare(
-                "SELECT workspace_ark, file_ark, object_key, audience, updated_at \
+                "SELECT workspace_ark, file_ark, object_key, audience, source_key, updated_at \
                  FROM ark_index WHERE workspace_ark = ?1 AND file_ark = ?2",
             )
             .bind(&[workspace_ark.into(), file_ark.into()])
@@ -1794,6 +1796,10 @@ impl ArkIndexStore for D1ArkIndexStore {
             file_ark: row["file_ark"].as_str().unwrap_or_default().to_string(),
             object_key: row["object_key"].as_str().unwrap_or_default().to_string(),
             audience: row["audience"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
+            source_key: row["source_key"]
                 .as_str()
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),

@@ -224,6 +224,9 @@ pub struct ArkIndexEntry {
     pub object_key: String,
     /// Audience the registered (canonical) rendition belongs to, if any.
     pub audience: Option<String>,
+    /// Object key of the markdown source sibling, if uploaded (Layer 2).
+    /// `None` for HTML-only rows; `?content`/`?json`/`?info` need this.
+    pub source_key: Option<String>,
     pub updated_at: i64,
 }
 

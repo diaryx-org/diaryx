@@ -191,6 +191,65 @@ pub trait Plugin: 'static {
     }
 }
 
+/// Data a plugin hands back to the host from [`WorkspacePlugin::set_config`].
+///
+/// The guest supplies values; the **host decides where each part lands**, which
+/// is what keeps this non-exploitable — a plugin can never name another
+/// plugin's entry, an arbitrary file, or escalate itself:
+///
+/// - `config`: the plugin's own declarative settings, persisted by the host to
+///   `plugins.<id>.config` (host-chosen, plugin-owned namespace). Used for
+///   normal saves and to migrate config out of `host::storage` into the
+///   workspace settings file. **Auto-applied** — a plugin can only ever write
+///   its own config.
+/// - `permission_request`: a *request* to change `plugins.<id>.permissions`.
+///   The host clamps it to the plugin's manifest-declared ceiling and
+///   **surfaces it for user approval** — never applied silently.
+/// - `migrations`: *requests* to adopt legacy keys from the workspace root
+///   index (user-owned content), each **surfaced for user approval**.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConfigReconcile {
+    /// Declarative config to persist to `plugins.<id>.config`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    /// A request to re-scope this plugin's granted permissions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_request: Option<PermissionRequest>,
+    /// Requests to adopt legacy root-index frontmatter keys into config.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<LegacyMigration>,
+}
+
+/// A plugin's request to change its own granted permissions. Surfaced to the
+/// user and clamped to the manifest-declared ceiling before being applied.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PermissionRequest {
+    /// Requested permission rules (same shape as manifest requested defaults).
+    #[serde(default)]
+    pub permissions: serde_json::Value,
+    /// Per-category human-readable rationale shown in the approval prompt.
+    #[serde(default)]
+    pub reasons: std::collections::HashMap<String, String>,
+}
+
+/// A bounded, user-surfaced request to adopt a legacy frontmatter key from the
+/// workspace root index into this plugin's config.
+///
+/// The guest only *names* the key and target field — the host reads the value,
+/// writes `plugins.<id>.config.<config_field>`, and strips the key from the
+/// root index, all on user approval. The guest never supplies the value or
+/// touches the file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LegacyMigration {
+    /// Frontmatter key in the workspace root index to adopt (e.g. `daily_entry_folder`).
+    pub legacy_key: String,
+    /// Field under `plugins.<id>.config` to move the value into (e.g. `entry_folder`).
+    pub config_field: String,
+    /// Human-readable description shown in the migration prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 /// Workspace lifecycle plugin.
 ///
 /// Receives events when workspaces are opened, closed, or modified.
@@ -239,8 +298,18 @@ pub trait WorkspacePlugin: Plugin {
     }
 
     /// Update this plugin's configuration.
-    async fn set_config(&self, _config: serde_json::Value) -> std::result::Result<(), PluginError> {
-        Ok(())
+    ///
+    /// `config` is the declarative config the host is pushing in (from
+    /// `plugins.<id>.config`, or `null` when none is stored yet). The plugin
+    /// updates its in-memory state and may hand data back via [`ConfigReconcile`]
+    /// for the host to act on (persist config, surface a permission request,
+    /// surface a migration). Persistence is the host's responsibility — guests
+    /// must not write declarative config to `host::storage`.
+    async fn set_config(
+        &self,
+        _config: serde_json::Value,
+    ) -> std::result::Result<ConfigReconcile, PluginError> {
+        Ok(ConfigReconcile::default())
     }
 }
 

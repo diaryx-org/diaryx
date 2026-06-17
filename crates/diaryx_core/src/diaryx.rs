@@ -121,8 +121,23 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
         };
         for wp in self.plugin_registry.workspace_plugins() {
             let id = wp.id().0;
-            if let Ok(Some(config)) = inner.get_workspace_plugin_config(&root_index, &id).await {
-                let _ = wp.set_config(config).await;
+            // Only push to plugins that already have stored config — plugins
+            // that still self-manage config in `host::storage` must not be
+            // seeded with an empty config (it would clobber their state).
+            // Migration of such plugins to `plugins.<id>.config` lands their
+            // config here first, after which this seeds them normally.
+            if let Ok(Some(config)) = inner.get_workspace_plugin_config(&root_index, &id).await
+                && let Ok(reconcile) = wp.set_config(config.clone()).await
+            {
+                // Tier 1: persist any config the guest normalized or migrated.
+                if let Some(updated) = reconcile.config
+                    && updated != config
+                {
+                    let _ = inner
+                        .set_workspace_plugin_config(&root_index, &id, updated)
+                        .await;
+                }
+                // TODO(reconcile surfacing): permission_request / migrations.
             }
         }
     }

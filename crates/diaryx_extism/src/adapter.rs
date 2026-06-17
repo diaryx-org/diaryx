@@ -11,10 +11,10 @@ use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
 use diaryx_core::plugin::{
-    FileCreatedEvent, FileDeletedEvent, FileMovedEvent, FilePlugin, FileSavedEvent, Plugin,
-    PluginCapability, PluginContext, PluginError, PluginId, PluginManifest, UiContribution,
-    WorkspaceChangedEvent, WorkspaceClosedEvent, WorkspaceCommittedEvent, WorkspaceOpenedEvent,
-    WorkspacePlugin,
+    ConfigReconcile, FileCreatedEvent, FileDeletedEvent, FileMovedEvent, FilePlugin,
+    FileSavedEvent, Plugin, PluginCapability, PluginContext, PluginError, PluginId, PluginManifest,
+    UiContribution, WorkspaceChangedEvent, WorkspaceClosedEvent, WorkspaceCommittedEvent,
+    WorkspaceOpenedEvent, WorkspacePlugin,
 };
 
 use crate::protocol::{CommandRequest, CommandResponse, GuestEvent, GuestManifest};
@@ -117,6 +117,19 @@ impl ExtismPluginAdapter {
             .map_err(|e| PluginError::Other(format!("Failed to write config file: {e}")))?;
         Ok(())
     }
+}
+
+/// Parse a guest `set_config` return value into a [`ConfigReconcile`].
+///
+/// Tolerant by design: legacy guests return an empty string (no reconcile),
+/// and a malformed payload degrades to an empty reconcile rather than failing
+/// the config push.
+fn parse_config_reconcile(output: &str) -> ConfigReconcile {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return ConfigReconcile::default();
+    }
+    serde_json::from_str::<ConfigReconcile>(trimmed).unwrap_or_default()
 }
 
 #[cfg(feature = "ws-transport")]
@@ -277,7 +290,7 @@ impl WorkspacePlugin for ExtismPluginAdapter {
         }
     }
 
-    async fn set_config(&self, config: JsonValue) -> Result<(), PluginError> {
+    async fn set_config(&self, config: JsonValue) -> Result<ConfigReconcile, PluginError> {
         {
             let mut current = self
                 .config
@@ -287,10 +300,19 @@ impl WorkspacePlugin for ExtismPluginAdapter {
         }
         self.persist_config()?;
 
-        // Notify the guest of the config change.
+        // Push the config to the guest. The guest updates its in-memory state
+        // and hands back a `ConfigReconcile` (config to persist, permission
+        // request, migrations) for the host to act on. Legacy guests that
+        // return an empty string yield an empty reconcile.
         let input = serde_json::to_string(&config).unwrap_or_default();
-        let _ = self.call_guest("set_config", &input);
-        Ok(())
+        let reconcile = match self.call_guest("set_config", &input) {
+            Ok(output) => parse_config_reconcile(&output),
+            Err(e) => {
+                log::warn!("Extism plugin {}: set_config failed: {e}", self.manifest.id);
+                ConfigReconcile::default()
+            }
+        };
+        Ok(reconcile)
     }
 }
 

@@ -66,19 +66,35 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         // Persist declarative config to Config.md (the source of truth). Plugin
         // *state/blobs* stay in `host::storage`; only user-editable settings
         // live here, so they are human-editable, git-diffable, and synced.
-        if let Some(root_index) = self.current_root_index().await {
+        let root_index = self.current_root_index().await;
+        if let Some(ref root_index) = root_index {
             self.workspace()
                 .inner()
-                .set_workspace_plugin_config(&root_index, &plugin, config.clone())
+                .set_workspace_plugin_config(root_index, &plugin, config.clone())
                 .await?;
         }
 
         // Notify the guest (updates in-memory config + pushes to the guest's
         // `set_config` export). Persistence is the host's job now — the guest
         // no longer writes declarative config to `host::storage`.
-        wp.set_config(config)
+        let reconcile = wp
+            .set_config(config)
             .await
             .map_err(|e| DiaryxError::Plugin(e.to_string()))?;
+
+        // Tier 1: the guest may hand back a normalized/updated config to
+        // persist (host-chosen location: this plugin's own `config` subkey).
+        if let Some(ref root_index) = root_index
+            && let Some(updated) = reconcile.config
+        {
+            self.workspace()
+                .inner()
+                .set_workspace_plugin_config(root_index, &plugin, updated)
+                .await?;
+        }
+        // TODO(reconcile surfacing): `reconcile.permission_request` and
+        // `reconcile.migrations` are surfaced for user approval in the frontend
+        // phase; not yet applied here.
         Ok(Response::Ok)
     }
 

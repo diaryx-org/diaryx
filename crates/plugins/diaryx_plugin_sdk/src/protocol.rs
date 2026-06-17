@@ -34,6 +34,62 @@ pub struct GuestRequestedPermissions {
 }
 
 // ---------------------------------------------------------------------------
+// Config reconciliation
+// ---------------------------------------------------------------------------
+
+/// Returned by a plugin's `set_config` export. The guest supplies values; the
+/// **host decides where each part lands**, which keeps it non-exploitable —
+/// `config` can only ever be persisted to this plugin's own
+/// `plugins.<id>.config`, while permission and migration requests are surfaced
+/// to the user for approval rather than applied directly.
+///
+/// Mirrors `diaryx_core::plugin::ConfigReconcile`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConfigReconcile {
+    /// Declarative config for the host to persist to `plugins.<id>.config`.
+    /// Use this to hand back normalized config or to migrate config out of
+    /// `host::storage` into the workspace settings file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    /// A request to re-scope this plugin's granted permissions (surfaced to the
+    /// user, clamped to the manifest-declared ceiling).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_request: Option<PermissionRequest>,
+    /// Requests to adopt legacy root-index frontmatter keys into config
+    /// (surfaced to the user).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<LegacyMigration>,
+}
+
+/// A request to change this plugin's granted permissions. Surfaced to the user
+/// and clamped to the manifest-declared ceiling before being applied.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PermissionRequest {
+    /// Requested permission rules (same shape as manifest requested defaults).
+    #[serde(default)]
+    pub permissions: serde_json::Value,
+    /// Per-category human-readable rationale shown in the approval prompt.
+    #[serde(default)]
+    pub reasons: HashMap<String, String>,
+}
+
+/// A bounded, user-surfaced request to adopt a legacy frontmatter key from the
+/// workspace root index into this plugin's config. The guest only names the
+/// key and target field — the host reads the value, writes it to
+/// `plugins.<id>.config.<config_field>`, and strips the key from the root
+/// index, all on user approval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LegacyMigration {
+    /// Frontmatter key in the workspace root index to adopt.
+    pub legacy_key: String,
+    /// Field under `plugins.<id>.config` to move the value into.
+    pub config_field: String,
+    /// Human-readable description shown in the migration prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Manifest
 // ---------------------------------------------------------------------------
 

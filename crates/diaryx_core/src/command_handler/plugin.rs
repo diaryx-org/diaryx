@@ -64,19 +64,33 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         root_index_path: String,
         plugin: String,
     ) -> Result<Response> {
-        let frontmatter = self.entry().get_frontmatter(&root_index_path).await?;
+        // `plugins` and `disabled_plugins` are workspace config fields, so they
+        // live in the linked settings file once a workspace has been migrated.
+        // Resolve where they actually live — the linked file if the root index
+        // points to one, else the root index itself for un-migrated workspaces —
+        // and edit that file.
+        let (_, config_path) = self
+            .workspace()
+            .inner()
+            .resolve_config_source(std::path::Path::new(&root_index_path))
+            .await?;
+        let target = config_path
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root_index_path.clone());
+
+        let frontmatter = self.entry().get_frontmatter(&target).await?;
 
         if let Some(plugins_value) = frontmatter.get("plugins").cloned()
             && let Some(next_plugins) = remove_plugin_from_mapping(plugins_value, &plugin)
         {
             if next_plugins.is_empty() {
                 self.entry()
-                    .remove_frontmatter_property(&root_index_path, "plugins")
+                    .remove_frontmatter_property(&target, "plugins")
                     .await?;
             } else {
                 self.entry()
                     .set_frontmatter_property(
-                        &root_index_path,
+                        &target,
                         "plugins",
                         yaml::Value::Mapping(next_plugins),
                     )
@@ -89,12 +103,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         {
             if next_disabled.is_empty() {
                 self.entry()
-                    .remove_frontmatter_property(&root_index_path, "disabled_plugins")
+                    .remove_frontmatter_property(&target, "disabled_plugins")
                     .await?;
             } else {
                 self.entry()
                     .set_frontmatter_property(
-                        &root_index_path,
+                        &target,
                         "disabled_plugins",
                         yaml::Value::Sequence(next_disabled),
                     )

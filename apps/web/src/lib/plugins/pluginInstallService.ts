@@ -342,9 +342,9 @@ async function persistDefaultPermissions(
 ): Promise<void> {
   const { api, rootIndexPath } = await getWorkspaceRootIndexContext();
   if (!rootIndexPath) return;
-  const fm = await api.getFrontmatter(rootIndexPath);
+  const wsConfig = await api.getWorkspaceConfig(rootIndexPath);
   const existingPlugins =
-    (fm.plugins as Record<string, PluginConfig> | undefined) ?? {};
+    (wsConfig.plugins as Record<string, PluginConfig> | undefined) ?? {};
   const existingPluginConfig = existingPlugins[pluginId] ?? { permissions: {} };
   const mergedPermissions: PluginPermissions = {
     ...(existingPluginConfig.permissions ?? {}),
@@ -368,11 +368,10 @@ async function persistDefaultPermissions(
     },
   };
 
-  await api.setFrontmatterProperty(
+  await api.setWorkspaceConfig(
     rootIndexPath,
     "plugins",
-    nextPlugins as any,
-    rootIndexPath,
+    JSON.stringify(nextPlugins),
   );
 }
 
@@ -395,8 +394,10 @@ async function hasPersistedPermissions(pluginId: string): Promise<boolean> {
   if (!rootIndexPath) return false;
 
   try {
-    const fm = await api.getFrontmatter(rootIndexPath);
-    const pluginsConfig = fm.plugins as Record<string, PluginConfig> | undefined;
+    const wsConfig = await api.getWorkspaceConfig(rootIndexPath);
+    const pluginsConfig = wsConfig.plugins as
+      | Record<string, PluginConfig>
+      | undefined;
     return hasConfiguredPermissions(pluginsConfig?.[pluginId]);
   } catch {
     return false;

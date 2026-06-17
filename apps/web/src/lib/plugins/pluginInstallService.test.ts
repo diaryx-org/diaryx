@@ -69,6 +69,10 @@ async function loadPluginInstallService(options?: {
     getFrontmatter: vi.fn().mockResolvedValue({
       plugins: options?.frontmatterPlugins ?? {},
     }),
+    getWorkspaceConfig: vi.fn().mockResolvedValue({
+      plugins: options?.frontmatterPlugins ?? {},
+    }),
+    setWorkspaceConfig: vi.fn().mockResolvedValue(undefined),
     setFrontmatterProperty: vi.fn().mockResolvedValue(null),
     removeFrontmatterProperty: vi.fn().mockResolvedValue(undefined),
     removeWorkspacePluginData: vi.fn().mockResolvedValue(undefined),
@@ -184,6 +188,10 @@ async function loadBrowserPluginInstallService(options?: {
     getFrontmatter: vi.fn().mockResolvedValue({
       plugins: options?.frontmatterPlugins ?? {},
     }),
+    getWorkspaceConfig: vi.fn().mockResolvedValue({
+      plugins: options?.frontmatterPlugins ?? {},
+    }),
+    setWorkspaceConfig: vi.fn().mockResolvedValue(undefined),
     removeFrontmatterProperty: vi.fn().mockResolvedValue(undefined),
     removeWorkspacePluginData: vi.fn().mockResolvedValue(undefined),
     executePluginCommand: vi.fn().mockResolvedValue({ success: true }),
@@ -402,7 +410,7 @@ describe("pluginInstallService", () => {
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(getBackend).toHaveBeenCalled();
     expect(createApi).toHaveBeenCalled();
-    expect(api.getFrontmatter).toHaveBeenCalledWith("index.md");
+    expect(api.getWorkspaceConfig).toHaveBeenCalledWith("index.md");
     expect(installPlugin).toHaveBeenCalledTimes(1);
   });
 
@@ -418,12 +426,13 @@ describe("pluginInstallService", () => {
     await service.installLocalPlugin(new ArrayBuffer(4), "Spoiler");
 
     expect(api.resolveWorkspaceRootIndexPath).toHaveBeenCalledWith(workspaceDir);
-    expect(api.getFrontmatter.mock.calls.every(([path]) => path === rootIndexPath)).toBe(true);
-    expect(api.setFrontmatterProperty).toHaveBeenCalledWith(
+    expect(
+      api.getWorkspaceConfig.mock.calls.every(([path]) => path === rootIndexPath),
+    ).toBe(true);
+    expect(api.setWorkspaceConfig).toHaveBeenCalledWith(
       rootIndexPath,
       "plugins",
-      expect.any(Object),
-      rootIndexPath,
+      expect.any(String),
     );
   });
 

@@ -164,20 +164,19 @@ export async function runPluginUpdateConfigFlow(args: {
     return
   }
 
-  const frontmatter = await api.getFrontmatter(workspacePath)
+  const wsConfig = await api.getWorkspaceConfig(workspacePath)
   const existingPlugins =
-    frontmatter.plugins && typeof frontmatter.plugins === "object" && !Array.isArray(frontmatter.plugins)
-      ? (frontmatter.plugins as Record<string, Record<string, unknown>>)
+    wsConfig.plugins && typeof wsConfig.plugins === "object" && !Array.isArray(wsConfig.plugins)
+      ? (wsConfig.plugins as Record<string, Record<string, unknown>>)
       : {}
   const nextPlugins = applyPluginPermissionsPatch(existingPlugins, pluginId, patch)
   if (!nextPlugins) {
     return
   }
 
-  await api.setFrontmatterProperty(
+  await api.setWorkspaceConfig(
     workspacePath,
     "plugins",
-    nextPlugins as unknown as JsonValue,
-    workspacePath,
+    JSON.stringify(nextPlugins),
   )
 }

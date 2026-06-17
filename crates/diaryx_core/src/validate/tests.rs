@@ -1309,6 +1309,45 @@ fn test_attachment_notes_excluded_from_contents_part_of_validation() {
 }
 
 #[test]
+fn test_workspace_config_file_not_reported_as_orphan() {
+    // The settings file linked from the root index via `workspace_config` is
+    // configuration, not content, and is intentionally kept out of the
+    // contents hierarchy. It must not be flagged as an orphan.
+    let fs = make_test_fs();
+    fs.write(
+        Path::new("README.md"),
+        "---\ntitle: Root\ncontents:\n  - note.md\nworkspace_config: \"[Config](Meta/Config.md)\"\n---\n".as_bytes(),
+    )
+    .unwrap();
+    fs.write(
+        Path::new("note.md"),
+        "---\ntitle: Note\npart_of: README.md\n---\n".as_bytes(),
+    )
+    .unwrap();
+    fs.write(
+        Path::new("Meta/Config.md"),
+        "---\ntitle: Workspace Settings\ntheme_mode: dark\n---\n".as_bytes(),
+    )
+    .unwrap();
+
+    let async_fs: TestFs = SyncToAsyncFs::new(fs);
+    let validator = Validator::new(async_fs);
+    let result = block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+    let orphan_warnings: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| matches!(w, ValidationWarning::OrphanFile { .. }))
+        .collect();
+    assert_eq!(
+        orphan_warnings.len(),
+        0,
+        "Settings file should not be flagged as orphan, got: {:?}",
+        orphan_warnings
+    );
+}
+
+#[test]
 fn test_attachment_binary_not_reported_as_orphan() {
     // A binary file wrapped in an attachment note (referenced via the note's
     // `attachment:` property) should not be flagged as OrphanBinaryFile.

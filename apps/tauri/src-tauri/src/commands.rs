@@ -25,7 +25,6 @@ use diaryx_core::{
     config::Config,
     diaryx::Diaryx,
     error::{DiaryxError, SerializableError},
-    frontmatter,
     fs::{FileSystemEvent, InMemoryFileSystem, SyncToAsyncFs},
     plugin::permissions::{PermissionRule, PermissionType, PluginConfig, PluginPermissions},
     workspace::Workspace,
@@ -1035,36 +1034,24 @@ fn persist_requested_permission_defaults(
         return Ok(());
     };
 
-    let content = std::fs::read_to_string(&root_index_path).map_err(|e| SerializableError {
-        kind: "IoError".to_string(),
-        message: format!(
-            "Failed to read root index '{}': {e}",
-            root_index_path.display()
-        ),
-        path: Some(root_index_path.clone()),
-    })?;
+    // `plugins` is a workspace config field stored in the linked settings file
+    // (with root-index fallback). Read and write it through the workspace config
+    // layer so it stays out of the human-edited root index.
+    let config = futures_lite::future::block_on(workspace.get_workspace_config(&root_index_path))
+        .map_err(|e: diaryx_core::error::DiaryxError| e.to_serializable())?;
 
-    let parsed = frontmatter::parse_or_empty(&content).map_err(|e| SerializableError {
-        kind: "ValidationError".to_string(),
-        message: format!(
-            "Failed to parse root frontmatter for '{}': {e}",
-            root_index_path.display()
-        ),
-        path: Some(root_index_path.clone()),
-    })?;
-
-    let mut plugins_config = match parsed.frontmatter.get("plugins") {
-        Some(value) => serde_json::from_value::<HashMap<String, PluginConfig>>(
-            serde_json::Value::from(value.clone()),
-        )
-        .map_err(|e| SerializableError {
-            kind: "ValidationError".to_string(),
-            message: format!(
-                "Invalid plugin permissions in '{}': {e}",
-                root_index_path.display()
-            ),
-            path: Some(root_index_path.clone()),
-        })?,
+    let mut plugins_config = match config.plugins {
+        Some(value) => {
+            serde_json::from_value::<HashMap<String, PluginConfig>>(serde_json::Value::from(value))
+                .map_err(|e| SerializableError {
+                    kind: "ValidationError".to_string(),
+                    message: format!(
+                        "Invalid plugin permissions for '{}': {e}",
+                        root_index_path.display()
+                    ),
+                    path: Some(root_index_path.clone()),
+                })?
+        }
         None => HashMap::new(),
     };
 
@@ -1081,19 +1068,16 @@ fn persist_requested_permission_defaults(
         return Ok(());
     }
 
-    let plugins_value = {
-        let json_val = serde_json::to_value(&plugins_config).map_err(|e| SerializableError {
-            kind: "SerializationError".to_string(),
-            message: format!("Failed to serialize plugin permissions: {e}"),
-            path: Some(root_index_path.clone()),
-        })?;
-        diaryx_core::yaml::Value::from(json_val)
-    };
+    let plugins_json = serde_json::to_string(&plugins_config).map_err(|e| SerializableError {
+        kind: "SerializationError".to_string(),
+        message: format!("Failed to serialize plugin permissions: {e}"),
+        path: Some(root_index_path.clone()),
+    })?;
 
-    futures_lite::future::block_on(workspace.set_frontmatter_property(
+    futures_lite::future::block_on(workspace.set_workspace_config_field(
         &root_index_path,
         "plugins",
-        plugins_value,
+        &plugins_json,
     ))
     .map_err(|e: diaryx_core::error::DiaryxError| e.to_serializable())
 }
@@ -3737,8 +3721,8 @@ async fn read_workspace_display_name(workspace_root: &Path) -> Option<String> {
         .ok()
         .flatten()?;
     let content = std::fs::read_to_string(&root_index).ok()?;
-    let parsed = frontmatter::parse_or_empty(&content).ok()?;
-    frontmatter::get_string(&parsed.frontmatter, "title")
+    let parsed = diaryx_core::frontmatter::parse_or_empty(&content).ok()?;
+    diaryx_core::frontmatter::get_string(&parsed.frontmatter, "title")
         .map(str::trim)
         .filter(|title| !title.is_empty())
         .map(str::to_string)

@@ -774,8 +774,10 @@
     }
 
     try {
-      const fm = await api.getFrontmatter(rootIndexPath);
-      const raw = fm.plugins as unknown;
+      // Per-plugin config lives in the workspace config (linked settings file),
+      // not the root index frontmatter. getWorkspaceConfig resolves the link.
+      const wsConfig = await api.getWorkspaceConfig(rootIndexPath);
+      const raw = wsConfig.plugins as unknown;
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
         pluginPermissionsConfig = {};
         return;
@@ -797,11 +799,10 @@
     if (!rootIndexPath) {
       throw new Error("Workspace root is not available");
     }
-    await api.setFrontmatterProperty(
+    await api.setWorkspaceConfig(
       rootIndexPath,
       "plugins",
-      nextConfig as unknown as JsonValue,
-      rootIndexPath,
+      JSON.stringify(nextConfig),
     );
     pluginPermissionsRootPath = rootIndexPath;
     pluginPermissionsConfig = nextConfig;
@@ -1306,6 +1307,14 @@
       if (workspaceRootIndexPath) {
         try {
           await startupTracer.measure("hydrate workspace config", async () => {
+            // Migrate legacy in-root settings into the linked Meta/Config.md
+            // file (idempotent; no-op once migrated). Run before reading config
+            // so we read from the post-migration location.
+            try {
+              await apiInstance.migrateWorkspaceConfig(workspaceRootIndexPath);
+            } catch (e) {
+              console.warn('[App] Workspace config migration skipped:', e);
+            }
             const wsConfig = await apiInstance.getWorkspaceConfig(workspaceRootIndexPath);
             workspaceStore.hydrateDisplaySettings(wsConfig, async (field, value) => {
               try {
@@ -1541,6 +1550,13 @@
     );
     if (workspaceRootIndexPath) {
       try {
+        // Migrate legacy in-root settings into the linked Meta/Config.md file
+        // (idempotent; no-op once migrated) before reading config.
+        try {
+          await nextApi.migrateWorkspaceConfig(workspaceRootIndexPath);
+        } catch (e) {
+          console.warn('[App] Workspace config migration skipped:', e);
+        }
         const wsConfig = await nextApi.getWorkspaceConfig(workspaceRootIndexPath);
         workspaceStore.hydrateDisplaySettings(wsConfig, async (field, value) => {
           try {

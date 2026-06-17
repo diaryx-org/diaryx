@@ -87,6 +87,18 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         Ok(Response::Ok)
     }
 
+    pub(crate) async fn cmd_migrate_workspace_config(
+        &self,
+        root_index_path: String,
+    ) -> Result<Response> {
+        let ws = self.workspace().inner();
+        let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
+        let migrated = ws
+            .migrate_workspace_config_to_file(&resolved_root_index_path)
+            .await?;
+        Ok(Response::Bool(migrated))
+    }
+
     pub(crate) async fn cmd_convert_links(
         &self,
         root_index_path: String,

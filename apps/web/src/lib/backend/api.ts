@@ -604,6 +604,23 @@ export function createApi(backend: Backend) {
       await mirrorWorkspaceMutation();
     },
 
+    /**
+     * Migrate workspace settings out of the root index into a linked
+     * `Meta/Config.md` settings file. Idempotent and safe to call on every
+     * workspace open. Resolves to `true` if a migration was performed.
+     */
+    async migrateWorkspaceConfig(rootIndexPath: string): Promise<boolean> {
+      const response = await backend.execute({
+        type: 'MigrateWorkspaceConfig',
+        params: { root_index_path: rootIndexPath },
+      } as any);
+      const migrated = expectResponse(response, 'Bool').data;
+      if (migrated) {
+        await mirrorWorkspaceMutation();
+      }
+      return migrated;
+    },
+
     // =========================================================================
     // Frontmatter Operations
     // =========================================================================

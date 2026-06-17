@@ -228,6 +228,16 @@ pub struct WorkspaceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_plugins: Option<Vec<String>>,
 
+    /// Per-plugin workspace configuration keyed by plugin ID — install records
+    /// and granted permissions (`plugins.<id>.permissions`). Stored as a raw
+    /// value (the same nested shape consumers already type as
+    /// `Record<string, PluginConfig>`) so the workspace config layer stays
+    /// agnostic to the permission schema, which lives in
+    /// `crate::plugin::permissions`.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<yaml::Value>,
+
     /// Declared audiences for selective sharing. When present, this is the
     /// authoritative list — the publish plugin syncs it to the server on
     /// publish (creating, updating, or removing audience records to match).
@@ -1186,6 +1196,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         "theme_accent_hue",
         "audience_colors",
         "disabled_plugins",
+        "plugins",
+        "audiences",
+        "audiences_migrated",
     ];
 
     /// Resolve the `workspace_config` value from the root index.
@@ -1198,7 +1211,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     ///    frontmatter extra as the config source.
     /// 2. If `workspace_config` is a mapping → use it inline (nested section).
     /// 3. Otherwise → use the root index's own extra (flat/legacy format).
-    async fn resolve_config_source(
+    pub(crate) async fn resolve_config_source(
         &self,
         root_index_path: &Path,
     ) -> Result<(
@@ -1211,7 +1224,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         match extra.get("workspace_config") {
             // File link: workspace_config points to an external file
             Some(yaml::Value::String(link_str)) => {
-                let config_path = index.resolve_path(link_str);
+                let config_path = self.resolve_root_index_link(&index, link_str);
                 let config_index = self.parse_index(&config_path).await?;
                 Ok((config_index.frontmatter.extra, Some(config_path)))
             }
@@ -1324,6 +1337,14 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     .collect()
             });
 
+        // Per-plugin config (install records + granted permissions). Kept as a
+        // raw mapping; only present when at least one plugin has an entry. The
+        // `get` helper already falls back from the linked config file to the
+        // root index, so this reads correctly across migration states.
+        let plugins = get("plugins")
+            .filter(|v| matches!(v, yaml::Value::Mapping(_)))
+            .cloned();
+
         // Parse `audiences:` via serde, round-tripping through JSON because
         // the project's custom `yaml::Value` doesn't expose a direct
         // `from_value` shim. A malformed top-level shape (or a single bad
@@ -1353,6 +1374,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             theme_accent_hue,
             audience_colors,
             disabled_plugins,
+            plugins,
             audiences,
             audiences_migrated,
         })
@@ -1377,37 +1399,158 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         }
     }
 
-    /// Set a workspace configuration field.
-    ///
-    /// The config destination is determined by `workspace_config` in the root
-    /// index frontmatter:
-    /// - **String (file link):** resolves to a file; writes the field there.
-    /// - **Mapping (inline):** writes into the nested `workspace_config` section.
-    /// - **Absent:** creates an inline `workspace_config` section and writes there.
-    ///
-    /// On the first inline write, any known config fields found at the top level
-    /// are migrated into the nested section (opportunistic migration).
-    pub async fn set_workspace_config_field(
-        &self,
-        root_index_path: &Path,
-        field: &str,
-        value: &str,
-    ) -> Result<()> {
-        let yaml_value = Self::parse_config_value(value);
+    /// Default workspace-relative location for the settings file. Used only
+    /// when establishing a new settings file; an existing `workspace_config`
+    /// link is always followed instead, so the file is not required to live
+    /// here.
+    const DEFAULT_CONFIG_LINK_REL: &'static str = "Meta/Config.md";
 
-        // Check if workspace_config is a file link
-        let index = self.parse_index(root_index_path).await?;
-        if let Some(yaml::Value::String(link_str)) = index.frontmatter.extra.get("workspace_config")
-        {
-            // Resolve the link to a file path and write the field there
-            let config_path = index.resolve_path(link_str);
-            return self
-                .set_frontmatter_property(&config_path, field, yaml_value)
-                .await;
+    /// Default scaffold written when the settings file is first created.
+    const DEFAULT_CONFIG_FILE: &'static str = "---\n\
+title: Workspace Settings\n\
+description: Diaryx settings for this workspace. Linked from the root index; not part of your content and not published.\n\
+---\n\
+\n\
+# Workspace Settings\n\
+\n\
+Diaryx stores this workspace's settings here. Edit them from the Diaryx settings UI \
+rather than by hand. This file is referenced by the root index via `workspace_config` \
+and is intentionally kept out of the content hierarchy.\n";
+
+    /// Resolve a link stored in the root index to an absolute filesystem path,
+    /// honoring every link format. The root index lives at the workspace root,
+    /// so its directory *is* the workspace root — which means root-relative
+    /// (`/Meta/...`), explicit-relative, and plain links all resolve correctly
+    /// by joining the parsed path onto the index's directory. (This is what
+    /// [`crate::workspace::types::IndexFile::resolve_path`] gets wrong for
+    /// workspace-root links, which it leaves un-joined.)
+    pub(crate) fn resolve_root_index_link(&self, index: &IndexFile, link: &str) -> PathBuf {
+        let parsed = link_parser::parse_link(link);
+        let dir = index.directory().unwrap_or_else(|| Path::new(""));
+        crate::path_utils::normalize_path(&dir.join(&parsed.path))
+    }
+
+    /// Default absolute path of the settings file for a given root index, used
+    /// when no `workspace_config` link exists yet.
+    fn default_config_file_path(&self, root_index_path: &Path) -> PathBuf {
+        root_index_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(Self::DEFAULT_CONFIG_LINK_REL)
+    }
+
+    /// The `workspace_config` link string the root index uses to point at the
+    /// settings file, formatted with the workspace's `link_format`.
+    fn config_link_string(&self, root_index_path: &Path, link_format: LinkFormat) -> String {
+        let from = root_index_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "README.md".to_string());
+        link_parser::format_link_with_format(
+            Self::DEFAULT_CONFIG_LINK_REL,
+            "Config",
+            link_format,
+            &from,
+        )
+    }
+
+    /// Gather config values stored inline in the root index — from the flat
+    /// top-level fields and/or a nested `workspace_config` mapping. The nested
+    /// section wins over flat (matching read precedence) and contributes any
+    /// keys not in the canonical field list.
+    fn collect_inline_config(
+        extra: &std::collections::HashMap<String, yaml::Value>,
+    ) -> indexmap::IndexMap<String, yaml::Value> {
+        let mut collected = indexmap::IndexMap::new();
+        // Flat top-level config fields, in canonical order for determinism.
+        for field in Self::WORKSPACE_CONFIG_FIELDS {
+            if let Some(v) = extra.get(*field) {
+                collected.insert((*field).to_string(), v.clone());
+            }
+        }
+        // A nested mapping overrides flat values and contributes extra keys.
+        if let Some(yaml::Value::Mapping(map)) = extra.get("workspace_config") {
+            for (k, v) in map {
+                collected.insert(k.clone(), v.clone());
+            }
+        }
+        collected
+    }
+
+    /// Write `collected` into the settings file, creating it from the default
+    /// scaffold when missing and merging without clobbering existing keys
+    /// (values already in the file win, so re-running is safe).
+    ///
+    /// The frontmatter is parsed, merged, and re-serialized as a whole rather
+    /// than spliced key-by-key: the config values include nested block
+    /// sequences (`audiences`), and incremental text splicing can misplace a
+    /// scalar written after a block. The settings file is machine-managed, so
+    /// a structural rewrite (which doesn't preserve hand-written comments) is
+    /// an acceptable trade for correctness here — unlike the root index, which
+    /// stays comment-preserving.
+    async fn write_config_file(
+        &self,
+        config_path: &Path,
+        collected: &indexmap::IndexMap<String, yaml::Value>,
+    ) -> Result<()> {
+        if let Some(parent) = config_path.parent() {
+            self.fs.create_dir_all(parent).await?;
         }
 
-        // Inline mode: write into the nested workspace_config section
-        let content =
+        let content = match self.fs.read_to_string(config_path).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Self::DEFAULT_CONFIG_FILE.to_string()
+            }
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: config_path.to_path_buf(),
+                    source: e,
+                });
+            }
+        };
+
+        let parsed = crate::frontmatter::parse_or_empty(&content)?;
+        let mut frontmatter = parsed.frontmatter;
+
+        // Emit nested block sequences (e.g. `audiences`) LAST. The `fig` YAML
+        // backend serializes block-sequence items at parent indentation, and
+        // its parser then silently drops a top-level key that *follows* such a
+        // block. Keeping nested sequences at the end means nothing follows them,
+        // so the round-trip is lossless. Existing keys win (merge-not-clobber).
+        let is_nested_seq = |v: &yaml::Value| {
+            matches!(v, yaml::Value::Sequence(items)
+                if items.iter().any(|e| matches!(e, yaml::Value::Mapping(_) | yaml::Value::Sequence(_))))
+        };
+        for (key, val) in collected.iter().filter(|(_, v)| !is_nested_seq(v)) {
+            frontmatter
+                .entry(key.clone())
+                .or_insert_with(|| val.clone());
+        }
+        for (key, val) in collected.iter().filter(|(_, v)| is_nested_seq(v)) {
+            frontmatter
+                .entry(key.clone())
+                .or_insert_with(|| val.clone());
+        }
+
+        let new_content = crate::frontmatter::serialize(&frontmatter, &parsed.body)?;
+        self.fs
+            .write(config_path, new_content.as_bytes())
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: config_path.to_path_buf(),
+                source: e,
+            })
+    }
+
+    /// Remove any flat top-level config fields from the root index, leaving the
+    /// `workspace_config` link (and everything else) intact. Comment-preserving.
+    ///
+    /// Used to sweep fields that linger inline in an already-linked workspace —
+    /// e.g. a field newly added to [`Self::WORKSPACE_CONFIG_FIELDS`] after the
+    /// workspace was first migrated.
+    async fn strip_inline_config_from_root(&self, root_index_path: &Path) -> Result<()> {
+        let mut content =
             self.fs
                 .read_to_string(root_index_path)
                 .await
@@ -1416,57 +1559,143 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     source: e,
                 })?;
 
-        let parsed = crate::frontmatter::parse_or_empty(&content)?;
-        let mut frontmatter = parsed.frontmatter;
-        let body = parsed.body;
-
-        // Opportunistic migration: collect top-level config fields and their
-        // values so we can move them into the nested workspace_config section.
-        let migrated: Vec<(String, yaml::Value)> = frontmatter
-            .iter()
-            .filter(|(k, _)| {
-                *k != "workspace_config" && Self::WORKSPACE_CONFIG_FIELDS.contains(&k.as_str())
-            })
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        // Remove migrated keys from top level
-        for (key, _) in &migrated {
-            frontmatter.shift_remove(key);
+        for field in Self::WORKSPACE_CONFIG_FIELDS {
+            content = crate::frontmatter::remove_property_in_text(&content, field)?;
         }
-
-        // Get or create the workspace_config sub-map
-        let config_section = frontmatter
-            .entry("workspace_config".to_string())
-            .or_insert_with(|| yaml::Value::Mapping(indexmap::IndexMap::new()));
-
-        let config_map = match config_section {
-            yaml::Value::Mapping(m) => m,
-            _ => {
-                *config_section = yaml::Value::Mapping(indexmap::IndexMap::new());
-                config_section.as_mapping_mut().unwrap()
-            }
-        };
-
-        // Insert migrated values (only if not already present in nested section)
-        for (key, val) in migrated {
-            if !config_map.contains_key(&key) {
-                config_map.insert(key, val);
-            }
-        }
-
-        // Set the new field value
-        config_map.insert(field.to_string(), yaml_value);
-
-        let new_content = crate::frontmatter::serialize(&frontmatter, &body)?;
 
         self.fs
-            .write(root_index_path, new_content.as_bytes())
+            .write(root_index_path, content.as_bytes())
             .await
             .map_err(|e| DiaryxError::FileWrite {
                 path: root_index_path.to_path_buf(),
                 source: e,
             })
+    }
+
+    /// Strip inline config from the root index and replace it with a single
+    /// `workspace_config` link to the settings file, formatted with the
+    /// workspace's `link_format`. Comment-preserving.
+    async fn rewrite_root_config_link(
+        &self,
+        root_index_path: &Path,
+        link_format: LinkFormat,
+    ) -> Result<()> {
+        let mut content =
+            self.fs
+                .read_to_string(root_index_path)
+                .await
+                .map_err(|e| DiaryxError::FileRead {
+                    path: root_index_path.to_path_buf(),
+                    source: e,
+                })?;
+
+        // Remove any flat config fields and the nested mapping (no-op if absent).
+        for field in Self::WORKSPACE_CONFIG_FIELDS {
+            content = crate::frontmatter::remove_property_in_text(&content, field)?;
+        }
+        content = crate::frontmatter::remove_property_in_text(&content, "workspace_config")?;
+
+        // Insert the link to the settings file.
+        let link = yaml::Value::String(self.config_link_string(root_index_path, link_format));
+        content = crate::frontmatter::set_property_in_text(&content, "workspace_config", &link)?;
+
+        self.fs
+            .write(root_index_path, content.as_bytes())
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: root_index_path.to_path_buf(),
+                source: e,
+            })
+    }
+
+    /// Migrate a workspace's settings out of the root index and into a linked
+    /// `Meta/Config.md` settings file.
+    ///
+    /// Handles both legacy storage modes — flat top-level fields and the nested
+    /// `workspace_config` mapping — moving them into the settings file and
+    /// replacing them with a single link. Idempotent: returns `Ok(false)`
+    /// (without touching any files) when the root index already links to a
+    /// settings file, or when there is no inline config to move. Returns
+    /// `Ok(true)` when a migration was performed.
+    pub async fn migrate_workspace_config_to_file(&self, root_index_path: &Path) -> Result<bool> {
+        let index = self.parse_index(root_index_path).await?;
+        let wc = index.frontmatter.extra.get("workspace_config");
+
+        // Already linked: the bulk of config already lives in the settings file,
+        // but a field added to WORKSPACE_CONFIG_FIELDS *after* this workspace was
+        // first migrated (e.g. `plugins`) can still linger inline in the root
+        // index. Sweep any such lingering fields into the linked file and strip
+        // them from the root, leaving the existing link untouched. No lingering
+        // fields → genuinely nothing to do.
+        if let Some(yaml::Value::String(link_str)) = wc {
+            let lingering = Self::collect_inline_config(&index.frontmatter.extra);
+            if lingering.is_empty() {
+                return Ok(false);
+            }
+            let config_path = self.resolve_root_index_link(&index, link_str);
+            self.write_config_file(&config_path, &lingering).await?;
+            self.strip_inline_config_from_root(root_index_path).await?;
+            return Ok(true);
+        }
+
+        let collected = Self::collect_inline_config(&index.frontmatter.extra);
+        let has_nested = matches!(wc, Some(yaml::Value::Mapping(_)));
+
+        // A clean workspace with no inline config is left untouched, so we don't
+        // litter brand-new workspaces with an empty settings file.
+        if collected.is_empty() && !has_nested {
+            return Ok(false);
+        }
+
+        // Read the workspace's link format from its current (inline) location so
+        // the new `workspace_config` link is written in the same style.
+        let link_format = self.get_link_format(root_index_path).await?;
+
+        let config_path = self.default_config_file_path(root_index_path);
+        self.write_config_file(&config_path, &collected).await?;
+        self.rewrite_root_config_link(root_index_path, link_format)
+            .await?;
+        Ok(true)
+    }
+
+    /// Set a workspace configuration field.
+    ///
+    /// Settings live in a linked settings file (defaulting to `Meta/Config.md`):
+    /// - If the root index already links to one, the field is written to
+    ///   whatever file the `workspace_config` link points at.
+    /// - Otherwise the settings file is established (migrating any inline
+    ///   config first), the root index is repointed to it, and the field is
+    ///   written to the settings file.
+    pub async fn set_workspace_config_field(
+        &self,
+        root_index_path: &Path,
+        field: &str,
+        value: &str,
+    ) -> Result<()> {
+        let yaml_value = Self::parse_config_value(value);
+
+        let index = self.parse_index(root_index_path).await?;
+        if let Some(yaml::Value::String(link_str)) = index.frontmatter.extra.get("workspace_config")
+        {
+            // Already linked: write straight to the settings file the link
+            // points at (any link format).
+            let config_path = self.resolve_root_index_link(&index, link_str);
+            return self
+                .set_frontmatter_property(&config_path, field, yaml_value)
+                .await;
+        }
+
+        // Establish the linked settings file (migrating any inline config), then
+        // write the field there. An empty workspace gets the scaffold + link on
+        // its first config write. The link follows the workspace's link format.
+        let link_format = self.get_link_format(root_index_path).await?;
+        let collected = Self::collect_inline_config(&index.frontmatter.extra);
+        let config_path = self.default_config_file_path(root_index_path);
+        self.write_config_file(&config_path, &collected).await?;
+        self.rewrite_root_config_link(root_index_path, link_format)
+            .await?;
+        self.set_frontmatter_property(&config_path, field, yaml_value)
+            .await
     }
 
     /// Get the link format configuration from a workspace root index.
@@ -4283,7 +4512,6 @@ mod tests {
             attachment: None,
             attachment_of: None,
             exclude: None,
-            plugins: None,
             extra: std::collections::HashMap::new(),
         };
         assert!(root_fm.is_root());
@@ -4302,7 +4530,6 @@ mod tests {
             attachment: None,
             attachment_of: None,
             exclude: None,
-            plugins: None,
             extra: std::collections::HashMap::new(),
         };
         assert!(!non_root_fm.is_root());
@@ -5624,5 +5851,409 @@ audiences_migrated: true
             "expected node_modules to be pruned, got {:?}",
             child_paths
         );
+    }
+
+    #[test]
+    fn test_migrate_flat_config_to_file() {
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ndescription: D\ncontents: []\nfilename_style: kebab_case\ndefault_audience: family\n---\n\n# Root\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        let migrated =
+            block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+        assert!(migrated, "expected a migration to happen");
+
+        // Settings file created with the migrated fields.
+        let cfg = block_on_test(ws.fs.read_to_string(Path::new("Meta/Config.md"))).unwrap();
+        assert!(cfg.contains("filename_style: kebab_case"), "cfg: {cfg}");
+        assert!(cfg.contains("default_audience: family"), "cfg: {cfg}");
+
+        // Root index now links to the settings file and dropped the flat fields,
+        // while its content body is preserved.
+        let root = block_on_test(ws.fs.read_to_string(Path::new("README.md"))).unwrap();
+        assert!(root.contains("workspace_config:"), "root: {root}");
+        assert!(root.contains("Meta/Config.md"), "root: {root}");
+        assert!(!root.contains("filename_style"), "root: {root}");
+        assert!(!root.contains("default_audience"), "root: {root}");
+        assert!(root.contains("# Root"), "body lost: {root}");
+
+        // Effective config is unchanged after migration.
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(config.filename_style, FilenameStyle::KebabCase);
+        assert_eq!(config.default_audience.as_deref(), Some("family"));
+
+        // Idempotent: a second run is a no-op.
+        let again =
+            block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+        assert!(!again, "second migration should be a no-op");
+    }
+
+    #[test]
+    fn test_migrate_nested_config_to_file() {
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nworkspace_config:\n  theme_mode: dark\n  theme_preset: nord\n---\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        let migrated =
+            block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+        assert!(migrated);
+
+        let cfg = block_on_test(ws.fs.read_to_string(Path::new("Meta/Config.md"))).unwrap();
+        assert!(cfg.contains("theme_mode: dark"), "cfg: {cfg}");
+        assert!(cfg.contains("theme_preset: nord"), "cfg: {cfg}");
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(config.theme_mode.as_deref(), Some("dark"));
+        assert_eq!(config.theme_preset.as_deref(), Some("nord"));
+    }
+
+    #[test]
+    fn test_migrate_already_linked_is_noop() {
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nworkspace_config: \"[Config](Meta/Config.md)\"\n---\n"
+                .as_bytes(),
+        )
+        .unwrap();
+        fs.write(
+            Path::new("Meta/Config.md"),
+            "---\ntitle: Workspace Settings\ntheme_mode: light\n---\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        let migrated =
+            block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+        assert!(!migrated, "already-linked workspace should not migrate");
+    }
+
+    #[test]
+    fn test_migrate_empty_workspace_is_noop() {
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ndescription: D\ncontents: []\n---\n\n# Root\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        let migrated =
+            block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+        assert!(!migrated, "a workspace with no config should not migrate");
+
+        // No stray settings file should be created.
+        assert!(
+            block_on_test(ws.fs.read_to_string(Path::new("Meta/Config.md"))).is_err(),
+            "no settings file should be created for an empty workspace"
+        );
+    }
+
+    #[test]
+    fn test_migrate_merges_into_existing_config_file() {
+        // A pre-existing settings file must not be clobbered: existing keys win,
+        // and migrated keys only fill gaps.
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\ntheme_mode: dark\ndefault_audience: family\n---\n"
+                .as_bytes(),
+        )
+        .unwrap();
+        fs.write(
+            Path::new("Meta/Config.md"),
+            "---\ntitle: Workspace Settings\ntheme_mode: light\n---\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        let migrated =
+            block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+        assert!(migrated);
+
+        let cfg = block_on_test(ws.fs.read_to_string(Path::new("Meta/Config.md"))).unwrap();
+        // Existing value preserved (not overwritten by the migrated dark).
+        assert!(cfg.contains("theme_mode: light"), "cfg: {cfg}");
+        assert!(!cfg.contains("theme_mode: dark"), "cfg: {cfg}");
+        // New key filled in from the root index.
+        assert!(cfg.contains("default_audience: family"), "cfg: {cfg}");
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(config.theme_mode.as_deref(), Some("light"));
+        assert_eq!(config.default_audience.as_deref(), Some("family"));
+    }
+
+    #[test]
+    fn test_set_workspace_config_establishes_file_on_empty_workspace() {
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        block_on_test(ws.set_workspace_config_field(Path::new("README.md"), "theme_mode", "dark"))
+            .unwrap();
+
+        // Field landed in the linked settings file, not the root index.
+        let root = block_on_test(ws.fs.read_to_string(Path::new("README.md"))).unwrap();
+        assert!(root.contains("workspace_config:"), "root: {root}");
+        assert!(!root.contains("theme_mode"), "root: {root}");
+        let cfg = block_on_test(ws.fs.read_to_string(Path::new("Meta/Config.md"))).unwrap();
+        assert!(cfg.contains("theme_mode: dark"), "cfg: {cfg}");
+
+        // A subsequent write follows the existing link rather than creating a new file.
+        block_on_test(ws.set_workspace_config_field(
+            Path::new("README.md"),
+            "theme_preset",
+            "nord",
+        ))
+        .unwrap();
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(config.theme_mode.as_deref(), Some("dark"));
+        assert_eq!(config.theme_preset.as_deref(), Some("nord"));
+    }
+
+    #[test]
+    fn test_migrate_moves_audiences_to_file() {
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            r#"---
+title: Root
+contents: []
+audiences:
+  - name: Public
+    share_actions:
+      - kind: copy_link
+        label: "Share anywhere"
+  - name: Family
+    gates:
+      - kind: link
+audiences_migrated: true
+---
+
+# Root
+"#
+            .as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        let migrated =
+            block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+        assert!(migrated);
+
+        // Audiences live in the settings file now, not the root index.
+        let cfg = block_on_test(ws.fs.read_to_string(Path::new("Meta/Config.md"))).unwrap();
+        assert!(cfg.contains("audiences:"), "cfg: {cfg}");
+        assert!(
+            cfg.contains("Public") && cfg.contains("Family"),
+            "cfg: {cfg}"
+        );
+        let root = block_on_test(ws.fs.read_to_string(Path::new("README.md"))).unwrap();
+        assert!(
+            !root.contains("audiences"),
+            "root still has audiences: {root}"
+        );
+
+        // The full audiences shape still parses through get_workspace_config.
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        let audiences = config.audiences.expect("audiences parsed after migration");
+        assert_eq!(audiences.len(), 2);
+        assert_eq!(audiences[0].name, "Public");
+        assert_eq!(audiences[1].name, "Family");
+        assert_eq!(config.audiences_migrated, Some(true));
+    }
+
+    #[test]
+    fn test_migrate_honors_markdown_root_link_format() {
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nlink_format: markdown_root\ndefault_audience: family\n---\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+
+        // The link is written in the workspace's markdown_root format (the
+        // leading slash distinguishes it from a relative link)...
+        let root = block_on_test(ws.fs.read_to_string(Path::new("README.md"))).unwrap();
+        assert!(
+            root.contains("[Config](/Meta/Config.md)"),
+            "root link not in markdown_root format: {root}"
+        );
+
+        // ...and a root-relative link still round-trips through config resolution.
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(config.link_format, LinkFormat::MarkdownRoot);
+        assert_eq!(config.default_audience.as_deref(), Some("family"));
+    }
+
+    #[test]
+    fn test_set_workspace_config_follows_existing_nondefault_link() {
+        // When the root index links to a settings file at a non-default path,
+        // writes follow the link rather than the hardcoded default.
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nworkspace_config: \"[Settings](Config/ws-settings.md)\"\n---\n".as_bytes(),
+        )
+        .unwrap();
+        fs.write(
+            Path::new("Config/ws-settings.md"),
+            "---\ntitle: Settings\n---\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        block_on_test(ws.set_workspace_config_field(Path::new("README.md"), "theme_mode", "dark"))
+            .unwrap();
+
+        // The field landed in the linked file, and no default Meta/Config.md was created.
+        let settings =
+            block_on_test(ws.fs.read_to_string(Path::new("Config/ws-settings.md"))).unwrap();
+        assert!(
+            settings.contains("theme_mode: dark"),
+            "settings: {settings}"
+        );
+        assert!(
+            block_on_test(ws.fs.read_to_string(Path::new("Meta/Config.md"))).is_err(),
+            "default settings file should not have been created"
+        );
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(config.theme_mode.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn test_plugins_config_round_trips_through_settings_file() {
+        // The per-plugin `plugins` config is a deeply nested mapping with
+        // internal scalar sequences (permission include/exclude lists). It must
+        // survive the comment-preserving write path into the settings file and
+        // read back intact via get_workspace_config — and crucially must not
+        // drop a top-level key written after it (the fig block-sequence hazard).
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        let plugins_json = r#"{"diaryx.daily":{"permissions":{"read_files":{"include":["Daily","README.md"],"exclude":["Daily/secret.md"]},"edit_files":{"include":["Daily"],"exclude":[]}}},"diaryx.sync":{"permissions":{"http_requests":{"include":["*"],"exclude":[]}}}}"#;
+        block_on_test(ws.set_workspace_config_field(
+            Path::new("README.md"),
+            "plugins",
+            plugins_json,
+        ))
+        .unwrap();
+        // A top-level scalar written AFTER the nested plugins mapping — must not
+        // be swallowed when plugins' internal sequences are serialized.
+        block_on_test(ws.set_workspace_config_field(Path::new("README.md"), "theme_mode", "dark"))
+            .unwrap();
+
+        // plugins lives in the settings file, not the root index README.
+        let root = block_on_test(ws.fs.read_to_string(Path::new("README.md"))).unwrap();
+        assert!(
+            !root.contains("diaryx.daily"),
+            "plugins leaked to root: {root}"
+        );
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(
+            config.theme_mode.as_deref(),
+            Some("dark"),
+            "top-level key after plugins was dropped"
+        );
+
+        let plugins = config.plugins.expect("plugins parsed after write");
+        let daily = plugins
+            .get("diaryx.daily")
+            .and_then(|p| p.get("permissions"))
+            .expect("diaryx.daily.permissions present");
+        let read_include = daily
+            .get("read_files")
+            .and_then(|r| r.get("include"))
+            .and_then(|i| i.as_sequence())
+            .expect("read_files.include present");
+        let read_include: Vec<&str> = read_include.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(read_include, vec!["Daily", "README.md"]);
+
+        let read_exclude = daily
+            .get("read_files")
+            .and_then(|r| r.get("exclude"))
+            .and_then(|i| i.as_sequence())
+            .expect("read_files.exclude present");
+        let read_exclude: Vec<&str> = read_exclude.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(read_exclude, vec!["Daily/secret.md"]);
+
+        // The nested key that FOLLOWS the include/exclude sequences must survive.
+        assert!(
+            daily.get("edit_files").is_some(),
+            "nested key after a sequence was dropped: {plugins:?}"
+        );
+        assert!(
+            plugins.get("diaryx.sync").is_some(),
+            "second plugin entry was dropped: {plugins:?}"
+        );
+    }
+
+    #[test]
+    fn test_migrate_sweeps_lingering_plugins_from_already_linked_root() {
+        // A workspace migrated before `plugins` joined WORKSPACE_CONFIG_FIELDS:
+        // it already links to a settings file, but `plugins` still lingers in the
+        // root index. Re-running migration must sweep it into the linked file and
+        // strip it from the root.
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nworkspace_config: \"[Config](Meta/Config.md)\"\nplugins:\n  diaryx.daily:\n    permissions:\n      read_files:\n        include:\n          - Daily\n        exclude: []\n---\n\n# Root\n".as_bytes(),
+        )
+        .unwrap();
+        fs.write(
+            Path::new("Meta/Config.md"),
+            "---\ntitle: Workspace Settings\ntheme_mode: dark\n---\n".as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        let migrated =
+            block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+        assert!(
+            migrated,
+            "lingering plugins should trigger a sweep migration"
+        );
+
+        let root = block_on_test(ws.fs.read_to_string(Path::new("README.md"))).unwrap();
+        assert!(
+            !root.contains("diaryx.daily"),
+            "plugins not stripped from root: {root}"
+        );
+        assert!(root.contains("workspace_config:"), "link removed: {root}");
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert!(config.plugins.is_some(), "plugins lost during sweep");
+        assert_eq!(
+            config.theme_mode.as_deref(),
+            Some("dark"),
+            "existing config clobbered"
+        );
+
+        // Sweep is idempotent once there is nothing left inline.
+        let again =
+            block_on_test(ws.migrate_workspace_config_to_file(Path::new("README.md"))).unwrap();
+        assert!(!again, "second sweep should be a no-op");
     }
 }

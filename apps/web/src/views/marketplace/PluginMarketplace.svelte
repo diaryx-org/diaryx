@@ -284,8 +284,8 @@
     );
     if (!rootIndexPath) return;
 
-    const fm = await api.getFrontmatter(rootIndexPath);
-    const existingPlugins = (fm.plugins as Record<string, PluginConfig> | undefined) ?? {};
+    const wsConfig = await api.getWorkspaceConfig(rootIndexPath);
+    const existingPlugins = (wsConfig.plugins as Record<string, PluginConfig> | undefined) ?? {};
     const existingPluginConfig = existingPlugins[pluginId] ?? { permissions: {} };
     const mergedPermissions: PluginPermissions = {
       ...(existingPluginConfig.permissions ?? {}),
@@ -309,7 +309,7 @@
       },
     };
 
-    await api.setFrontmatterProperty(rootIndexPath, "plugins", nextPlugins as any, rootIndexPath);
+    await api.setWorkspaceConfig(rootIndexPath, "plugins", JSON.stringify(nextPlugins));
   }
 
   async function reviewAndInstall(

@@ -575,6 +575,14 @@ pub enum Command {
         value: String,
     },
 
+    /// Migrate workspace settings out of the root index and into a linked
+    /// `Meta/Config.md` settings file. Idempotent and safe to call on every
+    /// workspace open. Returns `Bool(true)` if a migration was performed.
+    MigrateWorkspaceConfig {
+        /// Path to the workspace root index file.
+        root_index_path: String,
+    },
+
     /// Convert all links in workspace files to a target format.
     ///
     /// This scans files and rewrites `part_of`, `contents`, and `attachments`
@@ -926,6 +934,9 @@ enum CommandWire {
         field: String,
         value: String,
     },
+    MigrateWorkspaceConfig {
+        root_index_path: String,
+    },
     ConvertLinks {
         root_index_path: String,
         format: String,
@@ -1199,6 +1210,9 @@ impl From<CommandWire> for Command {
                 field,
                 value,
             },
+            CommandWire::MigrateWorkspaceConfig { root_index_path } => {
+                Command::MigrateWorkspaceConfig { root_index_path }
+            }
             CommandWire::ConvertLinks {
                 root_index_path,
                 format,
@@ -1513,6 +1527,9 @@ fn assert_command_wire_in_sync(c: Command) -> CommandWire {
             field,
             value,
         },
+        Command::MigrateWorkspaceConfig { root_index_path } => {
+            CommandWire::MigrateWorkspaceConfig { root_index_path }
+        }
         Command::ConvertLinks {
             root_index_path,
             format,
@@ -1754,7 +1771,8 @@ impl Command {
             | Command::GetWorkspaceConfig { root_index_path }
             | Command::SetWorkspaceConfig {
                 root_index_path, ..
-            } => {
+            }
+            | Command::MigrateWorkspaceConfig { root_index_path } => {
                 *root_index_path = normalizer(root_index_path);
             }
 

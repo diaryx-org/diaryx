@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use diaryx_core::frontmatter;
 use diaryx_core::fs::SyncToAsyncFs;
 use diaryx_core::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
 use diaryx_core::plugin::permissions::{
@@ -51,7 +50,8 @@ impl PermissionChecker for DenyAllPermissionChecker {
     }
 }
 
-/// Loads plugin permissions from root frontmatter `plugins` on each check.
+/// Loads plugin permissions from the workspace config `plugins` field on each
+/// check (resolved through the linked settings file, with root-index fallback).
 pub struct FrontmatterPermissionChecker {
     root_index_path: Option<PathBuf>,
 }
@@ -68,20 +68,26 @@ impl FrontmatterPermissionChecker {
             "Workspace root index not available for permission checks".to_string()
         })?;
 
-        let content = std::fs::read_to_string(root_path)
-            .map_err(|e| format!("Failed to read root index '{}': {e}", root_path.display()))?;
-        let parsed = frontmatter::parse_or_empty(&content)
-            .map_err(|e| format!("Failed to parse root frontmatter: {e}"))?;
+        // `plugins` is a workspace config field, so it lives in the linked
+        // settings file once a workspace has been migrated (falling back to the
+        // root index for un-migrated workspaces). Resolve it through the same
+        // config layer the rest of the app uses rather than reading the root
+        // index frontmatter directly — otherwise permission checks would read a
+        // stale/empty `plugins` and deny everything post-migration.
+        let fs = SyncToAsyncFs::new(RealFileSystem);
+        let workspace = Workspace::new(fs);
+        let config = futures_lite::future::block_on(workspace.get_workspace_config(root_path))
+            .map_err(|e| format!("Failed to read workspace config: {e}"))?;
 
-        let plugins_value = match parsed.frontmatter.get("plugins") {
-            Some(v) => v.clone(),
+        let plugins_value = match config.plugins {
+            Some(v) => v,
             None => return Ok(HashMap::new()),
         };
 
         serde_json::from_value::<HashMap<String, PluginConfig>>(serde_json::Value::from(
             plugins_value,
         ))
-        .map_err(|e| format!("Invalid root frontmatter plugins config: {e}"))
+        .map_err(|e| format!("Invalid workspace plugins config: {e}"))
     }
 
     fn normalize_target(&self, permission_type: PermissionType, target: &str) -> String {

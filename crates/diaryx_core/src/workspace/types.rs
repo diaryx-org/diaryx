@@ -13,7 +13,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::yaml;
 
 use crate::link_parser::{self, LinkFormat};
-use crate::plugin::permissions::PluginConfig;
 
 /// Normalize a path by resolving `.` and `..` components without filesystem access.
 /// This is necessary for web/WASM where the virtual filesystem doesn't handle `..` in paths.
@@ -205,11 +204,12 @@ pub struct IndexFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
 
-    /// Per-plugin configuration with permissions.
-    /// Only meaningful on root index files; ignored on non-root entries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugins: Option<HashMap<String, PluginConfig>>,
-
+    // NOTE: `plugins` is intentionally NOT a typed field here. It is a workspace
+    // config field (see `Workspace::WORKSPACE_CONFIG_FIELDS`) that lives in the
+    // linked settings file, and it flows through `extra` like every other config
+    // field so the config machinery (collect/migrate/get_workspace_config) can
+    // treat it uniformly. The permission layer deserializes it into
+    // `HashMap<String, PluginConfig>` where it actually needs the typed shape.
     /// Additional frontmatter properties
     #[serde(flatten)]
     pub extra: HashMap<String, yaml::Value>,

@@ -149,6 +149,7 @@ impl CommandDomain {
             | Command::GetWorkspaceConfig { .. }
             | Command::GenerateFilename { .. }
             | Command::SetWorkspaceConfig { .. }
+            | Command::MigrateWorkspaceConfig { .. }
             | Command::ConvertLinks { .. } => CommandDomain::Config,
 
             // Plugin operations
@@ -868,6 +869,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 } => {
                     self.cmd_set_workspace_config(root_index_path, field, value)
                         .await
+                }
+                Command::MigrateWorkspaceConfig { root_index_path } => {
+                    self.cmd_migrate_workspace_config(root_index_path).await
                 }
                 Command::ConvertLinks {
                     root_index_path,

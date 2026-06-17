@@ -184,6 +184,18 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         self.validate_recursive(root_path, &mut ctx, None, None)
             .await?;
 
+        // The settings file (linked from the root index via `workspace_config`)
+        // is configuration, not content — it's intentionally kept out of the
+        // contents hierarchy, so mark it visited to keep it off the orphan list.
+        if let Ok(index) = self.ws.parse_index(root_path).await
+            && let Some(crate::yaml::Value::String(link)) =
+                index.frontmatter.extra.get("workspace_config")
+        {
+            visited.insert(normalize_path(
+                &self.ws.resolve_root_index_link(&index, link),
+            ));
+        }
+
         // Find unlinked entries: files/dirs in workspace not visited during traversal
         // Scan with depth limit to match tree view behavior and improve performance
         let workspace_root = root_path.parent().unwrap_or(Path::new("."));

@@ -29,6 +29,13 @@ pub struct PluginConfig {
     /// Permission rules for this plugin.
     #[serde(default)]
     pub permissions: PluginPermissions,
+
+    /// Declarative, user-editable plugin configuration. Lives here in the
+    /// workspace settings file (Config.md) so it is human-editable,
+    /// git-diffable, and synced with the workspace — distinct from
+    /// `host::storage`, which holds opaque per-plugin state/blobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
 }
 
 /// All permission categories for a plugin.

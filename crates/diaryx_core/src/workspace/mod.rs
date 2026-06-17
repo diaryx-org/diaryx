@@ -1673,7 +1673,23 @@ and is intentionally kept out of the content hierarchy.\n";
         value: &str,
     ) -> Result<()> {
         let yaml_value = Self::parse_config_value(value);
+        self.set_workspace_config_field_value(root_index_path, field, yaml_value)
+            .await
+    }
 
+    /// Set a workspace configuration field to an already-built YAML value.
+    ///
+    /// Like [`Self::set_workspace_config_field`] but takes a `yaml::Value`
+    /// directly, for callers that build structured (non-scalar) values such
+    /// as the nested `plugins` mapping. Settings live in a linked settings
+    /// file (defaulting to `Meta/Config.md`), establishing and migrating it on
+    /// first write as needed.
+    pub async fn set_workspace_config_field_value(
+        &self,
+        root_index_path: &Path,
+        field: &str,
+        yaml_value: yaml::Value,
+    ) -> Result<()> {
         let index = self.parse_index(root_index_path).await?;
         if let Some(yaml::Value::String(link_str)) = index.frontmatter.extra.get("workspace_config")
         {
@@ -1696,6 +1712,56 @@ and is intentionally kept out of the content hierarchy.\n";
             .await?;
         self.set_frontmatter_property(&config_path, field, yaml_value)
             .await
+    }
+
+    /// Read a single plugin's declarative config (`plugins.<id>.config`) from
+    /// the workspace settings file. Returns `None` if the plugin has no
+    /// `config` entry.
+    pub async fn get_workspace_plugin_config(
+        &self,
+        root_index_path: &Path,
+        plugin_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        let (source, _) = self.resolve_config_source(root_index_path).await?;
+        let config = source
+            .get("plugins")
+            .and_then(|plugins| plugins.get(plugin_id))
+            .and_then(|entry| entry.get("config"))
+            .cloned()
+            .map(serde_json::Value::from);
+        Ok(config)
+    }
+
+    /// Set a single plugin's declarative config under `plugins.<id>.config` in
+    /// the workspace settings file.
+    ///
+    /// Read-modify-writes the whole `plugins` mapping, preserving every other
+    /// plugin's entry and this plugin's sibling subkeys (`download`,
+    /// `permissions`). Plugin *state/blobs* stay in `host::storage`; only
+    /// declarative, user-editable settings belong here.
+    pub async fn set_workspace_plugin_config(
+        &self,
+        root_index_path: &Path,
+        plugin_id: &str,
+        config: serde_json::Value,
+    ) -> Result<()> {
+        let (source, _) = self.resolve_config_source(root_index_path).await?;
+        let mut plugins = match source.get("plugins") {
+            Some(yaml::Value::Mapping(m)) => m.clone(),
+            _ => yaml::Mapping::new(),
+        };
+        let mut entry = match plugins.get(plugin_id) {
+            Some(yaml::Value::Mapping(m)) => m.clone(),
+            _ => yaml::Mapping::new(),
+        };
+        entry.insert("config".to_string(), yaml::Value::from(config));
+        plugins.insert(plugin_id.to_string(), yaml::Value::Mapping(entry));
+        self.set_workspace_config_field_value(
+            root_index_path,
+            "plugins",
+            yaml::Value::Mapping(plugins),
+        )
+        .await
     }
 
     /// Get the link format configuration from a workspace root index.

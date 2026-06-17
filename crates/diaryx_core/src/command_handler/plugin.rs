@@ -32,15 +32,26 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     pub(crate) async fn cmd_get_plugin_config(&self, plugin: String) -> Result<Response> {
-        for wp in self.plugin_registry().workspace_plugins() {
-            if wp.id().0 == plugin {
-                let config = wp.get_config().await;
-                return Ok(Response::PluginResult(
-                    config.unwrap_or(serde_json::Value::Null),
-                ));
-            }
+        let Some(wp) = self.find_workspace_plugin(&plugin) else {
+            return Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")));
+        };
+
+        // The workspace settings file (`plugins.<id>.config` in Config.md) is
+        // the source of truth for declarative config. Fall back to the
+        // plugin's in-memory config when the workspace has none stored yet
+        // (or when no workspace is open, e.g. the settings dialog at startup).
+        if let Some(root_index) = self.current_root_index().await
+            && let Some(config) = self
+                .workspace()
+                .inner()
+                .get_workspace_plugin_config(&root_index, &plugin)
+                .await?
+        {
+            return Ok(Response::PluginResult(config));
         }
-        Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")))
+
+        let config = wp.get_config().await.unwrap_or(serde_json::Value::Null);
+        Ok(Response::PluginResult(config))
     }
 
     pub(crate) async fn cmd_set_plugin_config(
@@ -48,15 +59,53 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         plugin: String,
         config: serde_json::Value,
     ) -> Result<Response> {
-        for wp in self.plugin_registry().workspace_plugins() {
-            if wp.id().0 == plugin {
-                wp.set_config(config)
-                    .await
-                    .map_err(|e| DiaryxError::Plugin(e.to_string()))?;
-                return Ok(Response::Ok);
-            }
+        let Some(wp) = self.find_workspace_plugin(&plugin) else {
+            return Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")));
+        };
+
+        // Persist declarative config to Config.md (the source of truth). Plugin
+        // *state/blobs* stay in `host::storage`; only user-editable settings
+        // live here, so they are human-editable, git-diffable, and synced.
+        if let Some(root_index) = self.current_root_index().await {
+            self.workspace()
+                .inner()
+                .set_workspace_plugin_config(&root_index, &plugin, config.clone())
+                .await?;
         }
-        Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")))
+
+        // Notify the guest (updates in-memory config + pushes to the guest's
+        // `set_config` export). Persistence is the host's job now — the guest
+        // no longer writes declarative config to `host::storage`.
+        wp.set_config(config)
+            .await
+            .map_err(|e| DiaryxError::Plugin(e.to_string()))?;
+        Ok(Response::Ok)
+    }
+
+    /// Find a registered workspace plugin by id, cloning the `Arc` so the
+    /// registry borrow isn't held across later workspace operations.
+    fn find_workspace_plugin(
+        &self,
+        plugin: &str,
+    ) -> Option<std::sync::Arc<dyn crate::plugin::WorkspacePlugin>> {
+        self.plugin_registry()
+            .workspace_plugins()
+            .iter()
+            .find(|wp| wp.id().0 == plugin)
+            .cloned()
+    }
+
+    /// Resolve the current workspace's root index path, if a workspace is open
+    /// and its root index can be located. Used to read/write plugin config in
+    /// the linked settings file without threading the path through commands.
+    async fn current_root_index(&self) -> Option<std::path::PathBuf> {
+        let root = self.workspace_root()?;
+        self.workspace()
+            .inner()
+            .find_root_index_in_dir(&root)
+            .await
+            .ok()
+            .flatten()
     }
 
     pub(crate) async fn cmd_remove_workspace_plugin_data(

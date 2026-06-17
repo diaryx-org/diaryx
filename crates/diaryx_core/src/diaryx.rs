@@ -98,7 +98,33 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
     /// all failures (empty means all plugins initialized successfully).
     pub async fn init_plugins(&self) -> Vec<(crate::plugin::PluginId, crate::plugin::PluginError)> {
         let ctx = crate::plugin::PluginContext::new(self.workspace_root(), self.link_format);
-        self.plugin_registry.init_all(&ctx).await
+        let failures = self.plugin_registry.init_all(&ctx).await;
+        self.seed_plugin_configs().await;
+        failures
+    }
+
+    /// Push each workspace plugin's declarative config from the workspace
+    /// settings file (`plugins.<id>.config` in Config.md) into the plugin via
+    /// `set_config`, so guests start with the workspace's stored configuration.
+    ///
+    /// Called after plugin init. Plugins with no stored config keep their
+    /// defaults. No-op when no workspace is open or the root index can't be
+    /// located. Read/seed failures are non-fatal and skipped per-plugin.
+    pub async fn seed_plugin_configs(&self) {
+        let Some(root) = self.workspace_root() else {
+            return;
+        };
+        let ws = self.workspace();
+        let inner = ws.inner();
+        let Some(root_index) = inner.find_root_index_in_dir(&root).await.ok().flatten() else {
+            return;
+        };
+        for wp in self.plugin_registry.workspace_plugins() {
+            let id = wp.id().0;
+            if let Ok(Some(config)) = inner.get_workspace_plugin_config(&root_index, &id).await {
+                let _ = wp.set_config(config).await;
+            }
+        }
     }
 
     /// Like [`init_plugins`](Self::init_plugins), but invokes `on_progress`
@@ -115,9 +141,12 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
         F: FnMut(&crate::plugin::PluginId, std::result::Result<(), &crate::plugin::PluginError>),
     {
         let ctx = crate::plugin::PluginContext::new(self.workspace_root(), self.link_format);
-        self.plugin_registry
+        let failures = self
+            .plugin_registry
             .init_all_with_progress(&ctx, on_progress)
-            .await
+            .await;
+        self.seed_plugin_configs().await;
+        failures
     }
 
     /// Get entry operations accessor.

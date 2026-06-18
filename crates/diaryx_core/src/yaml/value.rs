@@ -261,6 +261,18 @@ impl Value {
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.as_mapping().and_then(|m| m.get(key))
     }
+
+    /// Serialize to compact JSON without `serde_json`, via `fig`.
+    ///
+    /// fig's compact serializer appends a trailing newline; `serde_json::to_string`
+    /// does not, so it is trimmed to keep the wire bytes identical. This is the
+    /// serde_json-free replacement for `serde_json::Value::to_string()` /
+    /// `serde_json::to_string(&value)`.
+    pub fn to_json(&self) -> Result<String, fig::Error> {
+        let json = fig::Value::from(self)
+            .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())?;
+        Ok(json.trim_end().to_string())
+    }
 }
 
 impl std::fmt::Display for Value {

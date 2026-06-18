@@ -47,6 +47,16 @@ pub fn parse_value(s: &str) -> Result<Value, Error> {
     Ok(doc.to_value()?.into())
 }
 
+/// Parse a JSON string into the dynamic [`Value`] without serde_json.
+///
+/// The serde_json-free read path: parses with `fig`'s JSON parser and converts
+/// the resulting tree. Use it where JSON text (HTTP bodies, JS-supplied params,
+/// stored config) was previously read via `serde_json::from_str::<Value>`.
+pub fn parse_json(s: &str) -> Result<Value, Error> {
+    let doc = fig::Document::parse(s.as_bytes(), fig::Format::Json)?;
+    Ok(doc.to_value()?.into())
+}
+
 /// Parse a YAML mapping — the shape of frontmatter — into an ordered map,
 /// serde-free. An empty document yields an empty map; a non-mapping top level is
 /// a parse error (frontmatter must be a mapping). The serde-free replacement for

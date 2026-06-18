@@ -4,7 +4,7 @@
 //! `---` fences and a YAML body in between. For format-only parsing (no
 //! delimiter handling), see [`crate::yaml`].
 
-use fig::{Frontmatter, Segment};
+use fig::{Embed, Segment};
 use indexmap::IndexMap;
 use thiserror::Error;
 
@@ -268,7 +268,7 @@ pub fn set_property_in_text(content: &str, key: &str, value: &Value) -> Result<S
         return Ok(out);
     }
 
-    match Frontmatter::open(content.as_bytes()) {
+    match Embed::frontmatter(content.as_bytes()) {
         Ok(mut fm) => {
             // Replace in place if the key exists, otherwise insert it. Both edit
             // only the targeted node's bytes, so comments and formatting
@@ -276,9 +276,9 @@ pub fn set_property_in_text(content: &str, key: &str, value: &Value) -> Result<S
             // is surfaced rather than papered over with a comment-dropping
             // reserialize — the old reserialize fallback would have failed on
             // the same input anyway.
-            match fm.replace(&[Segment::Key(key)], value) {
+            match fm.replace_value(&[Segment::Key(key)], &value.into()) {
                 Ok(()) => {}
-                Err(fig::Error::NotFound) => fm.insert(&[], key, value)?,
+                Err(fig::Error::NotFound) => fm.insert_value(&[], key, &value.into())?,
                 Err(e) => return Err(e.into()),
             }
             Ok(fm.render()?.to_string())
@@ -417,7 +417,7 @@ fn try_seq_item_edit(content: &str, key: &str, new_seq: &[Value]) -> Option<Stri
     }
 
     // Apply on a fresh editor; any fig error → decline and fall back.
-    let mut fm = Frontmatter::open(content.as_bytes()).ok()?;
+    let mut fm = Embed::frontmatter(content.as_bytes()).ok()?;
     // Remove high indices first so lower indices stay valid.
     let mut removals_desc: Vec<usize> = removed.into_iter().collect();
     removals_desc.sort_unstable_by(|a, b| b.cmp(a));
@@ -425,7 +425,8 @@ fn try_seq_item_edit(content: &str, key: &str, new_seq: &[Value]) -> Option<Stri
         fm.remove_item(&[Segment::Key(key)], idx).ok()?;
     }
     for &j in &additions {
-        fm.append(&[Segment::Key(key)], &new_seq[j]).ok()?;
+        fm.append_value(&[Segment::Key(key)], &(&new_seq[j]).into())
+            .ok()?;
     }
     if order.iter().enumerate().any(|(i, &o)| i != o) {
         fm.reorder_items(&[Segment::Key(key)], &order).ok()?;
@@ -435,7 +436,7 @@ fn try_seq_item_edit(content: &str, key: &str, new_seq: &[Value]) -> Option<Stri
 
 /// Create a frontmatter block for a document that has none, with `key: value`
 /// as its sole property, preserving the original body. Used only when
-/// [`Frontmatter::open`] reports no frontmatter — so there is nothing to
+/// [`Embed::frontmatter`] reports no frontmatter — so there is nothing to
 /// preserve and the serialize is lossless. (For a document that already has
 /// frontmatter, [`set_property_in_text`] edits it in place via fig instead.)
 fn create_frontmatter_block(content: &str, key: &str, value: &Value) -> Result<String> {
@@ -448,7 +449,7 @@ fn create_frontmatter_block(content: &str, key: &str, value: &Value) -> Result<S
 /// Remove a top-level frontmatter property. Returns the text unchanged when the
 /// document has no frontmatter or the key is absent.
 pub fn remove_property_in_text(content: &str, key: &str) -> Result<String> {
-    match Frontmatter::open(content.as_bytes()) {
+    match Embed::frontmatter(content.as_bytes()) {
         Ok(mut fm) => match fm.delete(&[Segment::Key(key)]) {
             Ok(()) => Ok(fm.render()?.to_string()),
             Err(fig::Error::NotFound) => Ok(content.to_string()),
@@ -466,7 +467,7 @@ pub fn rename_property_in_text(
     old_key: &str,
     new_key: &str,
 ) -> Result<Option<String>> {
-    match Frontmatter::open(content.as_bytes()) {
+    match Embed::frontmatter(content.as_bytes()) {
         Ok(mut fm) => match fm.replace_key(&[Segment::Key(old_key)], new_key) {
             Ok(()) => Ok(Some(fm.render()?.to_string())),
             Err(fig::Error::NotFound) => Ok(None),
@@ -483,7 +484,7 @@ pub fn rename_property_in_text(
 /// that the frontmatter does not contain are ignored. Returns the text unchanged
 /// when the document has no frontmatter.
 pub fn reorder_keys_in_text(content: &str, keys: &[String]) -> Result<String> {
-    match Frontmatter::open(content.as_bytes()) {
+    match Embed::frontmatter(content.as_bytes()) {
         Ok(mut fm) => {
             fm.reorder_keys(&[] as &[Segment], keys)?;
             Ok(fm.render()?.to_string())

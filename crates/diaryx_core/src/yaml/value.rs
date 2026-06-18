@@ -290,6 +290,29 @@ impl std::fmt::Display for Value {
 // Conversions
 // ============================================================================
 
+/// Convert into `fig`'s native value tree, used by the comment-preserving
+/// frontmatter editor ([`crate::frontmatter`]). This is the serde-free path: the
+/// editor builds a [`fig::Value`] directly rather than routing through fig's
+/// `Serialize`-based convenience methods. A YAML mapping becomes a `fig::Map`
+/// with string keys (the only key shape this value type can hold).
+impl From<&Value> for fig::Value {
+    fn from(value: &Value) -> Self {
+        match value {
+            Value::Null => fig::Value::Null,
+            Value::Bool(b) => fig::Value::Bool(*b),
+            Value::Int(i) => fig::Value::Int(*i),
+            Value::Float(f) => fig::Value::Float(*f),
+            Value::String(s) => fig::Value::Str(s.clone()),
+            Value::Sequence(seq) => fig::Value::Seq(seq.iter().map(fig::Value::from).collect()),
+            Value::Mapping(map) => fig::Value::Map(
+                map.iter()
+                    .map(|(k, v)| (fig::Value::Str(k.clone()), fig::Value::from(v)))
+                    .collect(),
+            ),
+        }
+    }
+}
+
 impl From<serde_json::Value> for Value {
     fn from(json: serde_json::Value) -> Self {
         match json {

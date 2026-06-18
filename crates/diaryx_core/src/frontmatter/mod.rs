@@ -52,7 +52,7 @@ pub fn parse(content: &str) -> Result<ParsedFile> {
     let frontmatter_str = &rest[..end_idx];
     let body = &rest[end_idx + 5..]; // Skip "\n---\n"
 
-    let frontmatter: IndexMap<String, Value> = yaml::from_str(frontmatter_str)?;
+    let frontmatter = yaml::parse_mapping(frontmatter_str)?;
 
     Ok(ParsedFile {
         frontmatter,
@@ -80,7 +80,7 @@ pub fn parse_or_empty(content: &str) -> Result<ParsedFile> {
             let frontmatter_str = &rest[..idx];
             let body = &rest[idx + 5..]; // Skip "\n---\n"
 
-            let frontmatter: IndexMap<String, Value> = yaml::from_str(frontmatter_str)?;
+            let frontmatter = yaml::parse_mapping(frontmatter_str)?;
 
             Ok(ParsedFile {
                 frontmatter,
@@ -99,7 +99,7 @@ pub fn parse_or_empty(content: &str) -> Result<ParsedFile> {
 
 /// Serialize frontmatter and body back to markdown content.
 pub fn serialize(frontmatter: &IndexMap<String, Value>, body: &str) -> Result<String> {
-    let yaml_str = yaml::to_string(frontmatter)?;
+    let yaml_str = yaml::serialize_mapping(frontmatter)?;
     Ok(format!("---\n{}---\n{}", yaml_str, body))
 }
 

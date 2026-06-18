@@ -333,6 +333,11 @@ impl From<fig::Value> for Value {
             }
             fig::Value::Float(f) => Value::Float(f),
             fig::Value::Str(s) => Value::String(s),
+            // Format-specific scalars (TOML datetimes, ZON literals) are only
+            // produced when reading those formats; diaryx parses YAML/JSON, so
+            // this arm is effectively unreachable. Mirror fig's serde path,
+            // which surfaces extended scalars as their verbatim text.
+            fig::Value::Extended { text, .. } => Value::String(text),
             fig::Value::Seq(items) => Value::Sequence(items.into_iter().map(Value::from).collect()),
             fig::Value::Map(entries) => {
                 let mut map = IndexMap::with_capacity(entries.len());
@@ -342,6 +347,24 @@ impl From<fig::Value> for Value {
                 Value::Mapping(map)
             }
         }
+    }
+}
+
+/// Bridge this YAML value into fig's `derive` traits, so a `#[derive(FromValue,
+/// ToValue)]` struct can carry a `yaml::Value` field (e.g. an open-ended `extra`
+/// catch-all) and have it round-trip as fig's native — already ordered — tree.
+/// Both directions reuse the `From` conversions above, so there is a single
+/// source of truth for the mapping. `FromValue` is infallible here: every
+/// `fig::Value` has a `yaml::Value` image.
+impl fig::ToValue for Value {
+    fn to_value(&self) -> fig::Value {
+        fig::Value::from(self)
+    }
+}
+
+impl fig::FromValue for Value {
+    fn from_value(value: &fig::Value) -> std::result::Result<Self, fig::Error> {
+        Ok(Value::from(value.clone()))
     }
 }
 
@@ -356,6 +379,7 @@ fn fig_key_to_string(key: fig::Value) -> String {
         fig::Value::Int(i) => i.to_string(),
         fig::Value::Uint(u) => u.to_string(),
         fig::Value::Null => "null".to_string(),
+        fig::Value::Extended { text, .. } => text,
         fig::Value::Float(_) | fig::Value::Seq(_) | fig::Value::Map(_) => String::new(),
     }
 }

@@ -4,6 +4,7 @@
 //! decorator when filesystem operations occur. These events can be used to trigger
 //! UI updates, sync broadcasts, or other side effects.
 
+use crate::yaml;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -22,7 +23,7 @@ pub enum FileSystemEvent {
         path: PathBuf,
         /// Frontmatter from the file, if any.
         #[serde(default)]
-        frontmatter: Option<serde_json::Value>,
+        frontmatter: Option<yaml::Value>,
         /// Path of the parent index file, if known.
         #[serde(default)]
         parent_path: Option<PathBuf>,
@@ -62,7 +63,7 @@ pub enum FileSystemEvent {
         /// Path of the file.
         path: PathBuf,
         /// New frontmatter values.
-        frontmatter: serde_json::Value,
+        frontmatter: yaml::Value,
     },
 
     /// File body content was changed.
@@ -87,7 +88,7 @@ impl FileSystemEvent {
     /// Create a FileCreated event with frontmatter.
     pub fn file_created_with_metadata(
         path: PathBuf,
-        frontmatter: Option<serde_json::Value>,
+        frontmatter: Option<yaml::Value>,
         parent_path: Option<PathBuf>,
     ) -> Self {
         Self::FileCreated {
@@ -129,7 +130,7 @@ impl FileSystemEvent {
     }
 
     /// Create a MetadataChanged event.
-    pub fn metadata_changed(path: PathBuf, frontmatter: serde_json::Value) -> Self {
+    pub fn metadata_changed(path: PathBuf, frontmatter: yaml::Value) -> Self {
         Self::MetadataChanged { path, frontmatter }
     }
 
@@ -194,7 +195,7 @@ mod tests {
     fn test_event_serialization() {
         let event = FileSystemEvent::file_created_with_metadata(
             PathBuf::from("test.md"),
-            Some(serde_json::json!({"title": "Test"})),
+            Some(serde_json::json!({"title": "Test"}).into()),
             Some(PathBuf::from("index.md")),
         );
 

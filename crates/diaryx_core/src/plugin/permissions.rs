@@ -35,7 +35,7 @@ pub struct PluginConfig {
     /// git-diffable, and synced with the workspace — distinct from
     /// `host::storage`, which holds opaque per-plugin state/blobs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config: Option<serde_json::Value>,
+    pub config: Option<crate::yaml::Value>,
 }
 
 /// All permission categories for a plugin.

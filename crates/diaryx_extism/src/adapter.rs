@@ -233,8 +233,9 @@ impl WorkspacePlugin for ExtismPluginAdapter {
     async fn handle_command(
         &self,
         cmd: &str,
-        params: JsonValue,
-    ) -> Option<Result<JsonValue, PluginError>> {
+        params: diaryx_core::yaml::Value,
+    ) -> Option<Result<diaryx_core::yaml::Value, PluginError>> {
+        let params: JsonValue = params.into();
         // Only handle commands this plugin declared.
         let declared = self
             .manifest
@@ -262,7 +263,7 @@ impl WorkspacePlugin for ExtismPluginAdapter {
             Ok(output) => match serde_json::from_str::<CommandResponse>(&output) {
                 Ok(resp) => {
                     if resp.success {
-                        Some(Ok(resp.data.unwrap_or(JsonValue::Null)))
+                        Some(Ok(resp.data.unwrap_or(JsonValue::Null).into()))
                     } else {
                         let msg = resp.error.unwrap_or_else(|| "Unknown error".into());
                         let err = match resp.error_code.as_deref() {
@@ -281,16 +282,20 @@ impl WorkspacePlugin for ExtismPluginAdapter {
         }
     }
 
-    async fn get_config(&self) -> Option<JsonValue> {
+    async fn get_config(&self) -> Option<diaryx_core::yaml::Value> {
         let config = self.config.lock().ok()?;
         if config.is_null() || config.as_object().is_some_and(|m| m.is_empty()) {
             None
         } else {
-            Some(config.clone())
+            Some(config.clone().into())
         }
     }
 
-    async fn set_config(&self, config: JsonValue) -> Result<ConfigReconcile, PluginError> {
+    async fn set_config(
+        &self,
+        config: diaryx_core::yaml::Value,
+    ) -> Result<ConfigReconcile, PluginError> {
+        let config: JsonValue = config.into();
         {
             let mut current = self
                 .config

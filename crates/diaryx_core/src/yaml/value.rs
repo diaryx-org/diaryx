@@ -44,6 +44,14 @@ pub enum Value {
 /// Type alias for YAML mappings (preserves key ordering).
 pub type Mapping = IndexMap<String, Value>;
 
+/// The default value is [`Value::Null`], mirroring `serde_json::Value`'s
+/// `Default` so `#[derive(Default)]` works on structs holding a `Value`.
+impl Default for Value {
+    fn default() -> Self {
+        Value::Null
+    }
+}
+
 // ============================================================================
 // Serialize
 // ============================================================================
@@ -396,6 +404,12 @@ fn fig_key_to_string(key: fig::Value) -> String {
     }
 }
 
+// Core JSON handling is serde_json-free (via `fig`: `yaml::parse_json` /
+// `Value::to_json`). These `serde_json::Value` conversions are gated behind the
+// optional `serde-json` feature (on by default, off in the WASM build) purely as
+// an interop convenience for native consumers — plugins, CLI, the extism host —
+// that still pass `serde_json::Value` across the (now `yaml::Value`) plugin API.
+#[cfg(feature = "serde-json")]
 impl From<serde_json::Value> for Value {
     fn from(json: serde_json::Value) -> Self {
         match json {
@@ -423,6 +437,7 @@ impl From<serde_json::Value> for Value {
     }
 }
 
+#[cfg(feature = "serde-json")]
 impl From<Value> for serde_json::Value {
     fn from(yaml: Value) -> Self {
         match yaml {

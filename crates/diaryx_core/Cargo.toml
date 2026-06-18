@@ -21,13 +21,16 @@ indexmap.workspace = true
 fig.workspace = true
 log = "0.4"
 pathdiff = "0.2"
-# ryu is already a transitive dep via serde_json. Depending on it directly
-# lets us format f64 values for user-visible display (yaml::Value::Display)
-# without pulling in `core::num::flt2dec` — Rust's stdlib Dragon4/Grisu
-# float formatter is ~15 KB of WASM code, which we avoid this way.
+# Format f64 values for user-visible display (yaml::Value::Display) without
+# pulling in `core::num::flt2dec` — Rust's stdlib Dragon4/Grisu float formatter
+# is ~15 KB of WASM code, which we avoid this way.
 ryu = "1"
 serde.workspace = true
-serde_json.workspace = true
+# Optional: only enables the `serde_json::Value <-> yaml::Value` bridge impls
+# (the `serde-json` feature). Core logic is serde_json-free — JSON is handled
+# via `fig`. The WASM build (`diaryx_wasm`, `default-features = false`) excludes
+# this, keeping serde_json out of the binary; native consumers get it by default.
+serde_json = { workspace = true, optional = true }
 sha2 = "0.10"
 thiserror.workspace = true
 async-trait = "0.1"
@@ -49,13 +52,18 @@ typescript = ["dep:ts-rs"]
 # UUID generation for workspace registry IDs
 uuid = ["dep:uuid"]
 
+# `serde_json::Value <-> yaml::Value` `From` bridges, for native consumers that
+# interop with serde_json (plugins, CLI, extism host). Excluded from the WASM
+# build so serde_json stays out of the binary.
+serde-json = ["dep:serde_json"]
+
 # Browser WASM support (uuid/js for browser crypto)
 browser-js = ["uuid", "uuid/js"]
 
 # Default features — enabled for native builds (CLI, Tauri, Apple, Extism guests).
 # diaryx_wasm uses default-features = false to exclude these from the WASM binary.
 # The `typescript` feature is opt-in (enabled by diaryx_wasm for binding generation).
-default = ["uuid"]
+default = ["uuid", "serde-json"]
 
 [package.metadata.release]
 # This crate should be published to crates.io

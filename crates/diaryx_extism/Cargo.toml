@@ -18,7 +18,7 @@ wasi-runner = ["dep:wasi-common", "dep:tempfile"]
 ws-transport = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:url"]
 
 [dependencies]
-diaryx_core = { workspace = true, default-features = false }
+diaryx_core = { workspace = true, default-features = false, features = ["serde-json"] }
 diaryx_native = { workspace = true }
 chrono.workspace = true
 extism = "1.30"

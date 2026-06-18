@@ -186,11 +186,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .and_then(|s| s.to_str())
                     .unwrap_or("untitled");
 
-                let params = serde_json::json!({
-                    "template": template_name.as_deref().unwrap_or("note"),
-                    "title": title,
-                    "filename": filename,
-                });
+                let params = yaml::Value::Mapping(indexmap::IndexMap::from([
+                    (
+                        "template".to_string(),
+                        yaml::Value::String(template_name.as_deref().unwrap_or("note").to_string()),
+                    ),
+                    ("title".to_string(), yaml::Value::String(title.clone())),
+                    (
+                        "filename".to_string(),
+                        yaml::Value::String(filename.to_string()),
+                    ),
+                ]));
 
                 if let Some(Ok(result)) = self
                     .plugin_registry()

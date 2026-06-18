@@ -33,7 +33,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
                     widget_id: "namespace.guard".into(),
                     sign_in_action: Some(HostAction {
                         action_type: "open-settings".into(),
-                        payload: Some(serde_json::json!({ "tab": "account" })),
+                        payload: Some(serde_json::json!({ "tab": "account" }).into()),
                     }),
                 },
                 SettingsField::HostWidget {
@@ -246,12 +246,12 @@ pub fn handle_command(input: String) -> FnResult<String> {
                 poll_future(diaryx_core::plugin::WorkspacePlugin::handle_command(
                     &s.publish_plugin,
                     &req.command,
-                    req.params,
+                    req.params.into(),
                 ))
             });
 
             match result {
-                Ok(Some(Ok(data))) => CommandResponse::ok(data),
+                Ok(Some(Ok(data))) => CommandResponse::ok(data.into()),
                 Ok(Some(Err(e))) => CommandResponse::err(e.to_string()),
                 Ok(None) => CommandResponse::err(format!("Unknown command: {}", req.command)),
                 Err(e) => CommandResponse::err(e),
@@ -306,7 +306,7 @@ pub fn set_config(input: String) -> FnResult<String> {
     let _ = state::with_state(|s| {
         let _ = poll_future(diaryx_core::plugin::WorkspacePlugin::set_config(
             &s.publish_plugin,
-            config,
+            config.into(),
         ));
     });
     Ok(String::new())
@@ -336,13 +336,14 @@ pub fn execute_typed_command(input: String) -> FnResult<String> {
         poll_future(diaryx_core::plugin::WorkspacePlugin::handle_command(
             &s.publish_plugin,
             cmd_type,
-            params,
+            params.into(),
         ))
     })
     .map_err(|e| extism_pdk::Error::msg(e))?;
 
     match result {
         Some(Ok(value)) => {
+            let value: serde_json::Value = value.into();
             let response = serde_json::json!({ "type": "PluginResult", "data": value });
             let json = serde_json::to_string(&response)
                 .map_err(|e| extism_pdk::Error::msg(format!("Serialize error: {e}")))?;
@@ -360,11 +361,12 @@ fn delegate_command(command: &str, params: JsonValue) -> Result<JsonValue, Strin
         poll_future(diaryx_core::plugin::WorkspacePlugin::handle_command(
             &s.publish_plugin,
             command,
-            params,
+            params.into(),
         ))
     })
     .map_err(|e| e.to_string())?
     .ok_or_else(|| format!("Command {command} not handled"))?
+    .map(Into::into)
     .map_err(|e| e.to_string())
 }
 

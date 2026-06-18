@@ -20,7 +20,6 @@ use std::path::PathBuf;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 
 use crate::link_parser::LinkFormat;
 use crate::search::SearchResults;
@@ -45,7 +44,7 @@ use crate::yaml;
 /// ~127 KB of WASM and forced a hand-written `CommandWire` twin). `Serialize` +
 /// the `#[serde(tag/content)]` attribute still define the public contract and
 /// drive the ts-rs export; `#[fig(tag/content)]` mirrors it for the read path.
-#[derive(Debug, Clone, Serialize, fig::FromValue)]
+#[derive(Debug, Clone, Serialize, Deserialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type", content = "params")]
@@ -1042,7 +1041,7 @@ pub enum Response {
     LinkParserResult(LinkParserResult),
 
     /// Result from a plugin command.
-    PluginResult(JsonValue),
+    PluginResult(yaml::Value),
 
     /// Plugin manifests response.
     PluginManifests(Vec<crate::plugin::PluginManifest>),

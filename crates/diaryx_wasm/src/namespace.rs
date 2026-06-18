@@ -283,7 +283,7 @@ impl NamespaceClient {
 /// This avoids pulling in `serde-wasm-bindgen` just to decode a value that
 /// the caller will re-encode immediately inside `create_namespace` /
 /// `update_namespace_metadata`.
-fn js_to_optional_json(value: &JsValue) -> Result<Option<serde_json::Value>, JsValue> {
+fn js_to_optional_json(value: &JsValue) -> Result<Option<diaryx_core::yaml::Value>, JsValue> {
     if value.is_null() || value.is_undefined() {
         return Ok(None);
     }
@@ -292,7 +292,7 @@ fn js_to_optional_json(value: &JsValue) -> Result<Option<serde_json::Value>, JsV
     let as_rust_string = stringified
         .as_string()
         .ok_or_else(|| JsValue::from_str("JSON.stringify did not return a string"))?;
-    let parsed: serde_json::Value = serde_json::from_str(&as_rust_string)
+    let parsed = diaryx_core::yaml::parse_json(&as_rust_string)
         .map_err(|e| JsValue::from_str(&format!("invalid metadata JSON: {e}")))?;
     if parsed.is_null() {
         Ok(None)

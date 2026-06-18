@@ -1,6 +1,7 @@
 //! Platform-agnostic auth service.
 
 use super::types::*;
+use crate::yaml;
 
 /// Parse a non-success [`HttpResponse`] into an [`AuthError`].
 ///
@@ -9,7 +10,7 @@ use super::types::*;
 /// are best-effort — a malformed body just yields an error with the fallback
 /// message and no device list.
 fn parse_error_response(resp: &HttpResponse, fallback_msg: &str) -> AuthError {
-    let value = resp.json::<serde_json::Value>().ok();
+    let value = resp.json::<yaml::Value>().ok();
     let msg = value
         .as_ref()
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
@@ -18,7 +19,8 @@ fn parse_error_response(resp: &HttpResponse, fallback_msg: &str) -> AuthError {
     let mut err = AuthError::new(msg, resp.status);
     if resp.status == 403
         && let Some(devices_val) = value.as_ref().and_then(|v| v.get("devices"))
-        && let Ok(devices) = serde_json::from_value::<Vec<Device>>(devices_val.clone())
+        && let Ok(json) = devices_val.to_json()
+        && let Ok(devices) = fig::from_slice::<Vec<Device>>(json.as_bytes(), fig::Format::Json)
     {
         err.devices = Some(devices);
     }
@@ -69,7 +71,12 @@ impl<C: AuthenticatedClient> AuthService<C> {
     /// Sends a POST to `/auth/magic-link` and stores the email in metadata
     /// for later convenience.
     pub async fn request_magic_link(&self, email: &str) -> Result<MagicLinkResponse, AuthError> {
-        let body = serde_json::json!({ "email": email }).to_string();
+        let body = yaml::Value::Mapping(indexmap::IndexMap::from([(
+            "email".to_string(),
+            yaml::Value::String(email.to_string()),
+        )]))
+        .to_json()
+        .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
         let resp = self
             .client
             .post_unauth("/auth/magic-link", Some(&body))
@@ -77,7 +84,7 @@ impl<C: AuthenticatedClient> AuthService<C> {
 
         if !resp.is_success() {
             let msg = resp
-                .json::<serde_json::Value>()
+                .json::<yaml::Value>()
                 .ok()
                 .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
                 .unwrap_or_else(|| format!("Failed to request magic link: HTTP {}", resp.status));
@@ -126,7 +133,7 @@ impl<C: AuthenticatedClient> AuthService<C> {
             ));
         }
 
-        let json: serde_json::Value = resp.json()?;
+        let json: yaml::Value = resp.json()?;
         let session_token = json
             .get("token")
             .or_else(|| json.get("session_token"))
@@ -189,13 +196,23 @@ impl<C: AuthenticatedClient> AuthService<C> {
         device_name: Option<&str>,
         replace_device_id: Option<&str>,
     ) -> Result<VerifyResponse, AuthError> {
-        let body = serde_json::json!({
-            "code": code,
-            "email": email,
-            "device_name": device_name.unwrap_or("Diaryx"),
-            "replace_device_id": replace_device_id,
-        })
-        .to_string();
+        let body = yaml::Value::Mapping(indexmap::IndexMap::from([
+            ("code".to_string(), yaml::Value::String(code.to_string())),
+            ("email".to_string(), yaml::Value::String(email.to_string())),
+            (
+                "device_name".to_string(),
+                yaml::Value::String(device_name.unwrap_or("Diaryx").to_string()),
+            ),
+            (
+                "replace_device_id".to_string(),
+                match replace_device_id {
+                    Some(id) => yaml::Value::String(id.to_string()),
+                    None => yaml::Value::Null,
+                },
+            ),
+        ]))
+        .to_json()
+        .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
 
         let resp = self
             .client
@@ -274,7 +291,12 @@ impl<C: AuthenticatedClient> AuthService<C> {
     /// Rename a device.
     pub async fn rename_device(&self, device_id: &str, new_name: &str) -> Result<(), AuthError> {
         let path = format!("/auth/devices/{}", device_id);
-        let body = serde_json::json!({ "name": new_name }).to_string();
+        let body = yaml::Value::Mapping(indexmap::IndexMap::from([(
+            "name".to_string(),
+            yaml::Value::String(new_name.to_string()),
+        )]))
+        .to_json()
+        .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
 
         let resp = self.client.patch(&path, Some(&body)).await?;
         if !resp.is_success() {

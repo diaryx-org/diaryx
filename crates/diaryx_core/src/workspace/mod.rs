@@ -1351,9 +1351,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         // entry) drops the whole list to `None` rather than silently
         // accepting partial garbage.
         let audiences = get("audiences").and_then(|v| {
-            serde_json::to_value(v)
+            fig::from_slice::<Vec<AudienceDecl>>(v.to_json().ok()?.as_bytes(), fig::Format::Json)
                 .ok()
-                .and_then(|j| serde_json::from_value::<Vec<AudienceDecl>>(j).ok())
         });
 
         let audiences_migrated = get("audiences_migrated").and_then(|v| v.as_bool());
@@ -1387,10 +1386,10 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             "false" => yaml::Value::Bool(false),
             _ => {
                 // Try parsing as JSON for scalars and complex types.
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(value) {
+                if let Ok(json) = crate::yaml::parse_json(value) {
                     match &json {
-                        serde_json::Value::String(_) => yaml::Value::String(value.to_string()),
-                        _ => yaml::Value::from(json),
+                        yaml::Value::String(_) => yaml::Value::String(value.to_string()),
+                        _ => json,
                     }
                 } else {
                     yaml::Value::String(value.to_string())
@@ -1721,14 +1720,13 @@ and is intentionally kept out of the content hierarchy.\n";
         &self,
         root_index_path: &Path,
         plugin_id: &str,
-    ) -> Result<Option<serde_json::Value>> {
+    ) -> Result<Option<yaml::Value>> {
         let (source, _) = self.resolve_config_source(root_index_path).await?;
         let config = source
             .get("plugins")
             .and_then(|plugins| plugins.get(plugin_id))
             .and_then(|entry| entry.get("config"))
-            .cloned()
-            .map(serde_json::Value::from);
+            .cloned();
         Ok(config)
     }
 
@@ -1743,7 +1741,7 @@ and is intentionally kept out of the content hierarchy.\n";
         &self,
         root_index_path: &Path,
         plugin_id: &str,
-        config: serde_json::Value,
+        config: yaml::Value,
     ) -> Result<()> {
         let (source, _) = self.resolve_config_source(root_index_path).await?;
         let mut plugins = match source.get("plugins") {
@@ -1754,7 +1752,7 @@ and is intentionally kept out of the content hierarchy.\n";
             Some(yaml::Value::Mapping(m)) => m.clone(),
             _ => yaml::Mapping::new(),
         };
-        entry.insert("config".to_string(), yaml::Value::from(config));
+        entry.insert("config".to_string(), config);
         plugins.insert(plugin_id.to_string(), yaml::Value::Mapping(entry));
         self.set_workspace_config_field_value(
             root_index_path,

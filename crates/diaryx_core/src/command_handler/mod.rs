@@ -832,17 +832,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     metadata,
                     body,
                 } => {
-                    self.cmd_write_file_with_metadata(path, metadata.into(), body)
+                    self.cmd_write_file_with_metadata(path, metadata, body)
                         .await
                 }
                 Command::UpdateFileMetadata {
                     path,
                     metadata,
                     body,
-                } => {
-                    self.cmd_update_file_metadata(path, metadata.into(), body)
-                        .await
-                }
+                } => self.cmd_update_file_metadata(path, metadata, body).await,
                 _ => unreachable!("non-filesystem command routed to execute_filesystem_command"),
             }
         })
@@ -897,14 +894,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     plugin,
                     command,
                     params,
-                } => {
-                    self.cmd_plugin_command(plugin, command, params.into())
-                        .await
-                }
+                } => self.cmd_plugin_command(plugin, command, params).await,
                 Command::GetPluginManifests => self.cmd_get_plugin_manifests(),
                 Command::GetPluginConfig { plugin } => self.cmd_get_plugin_config(plugin).await,
                 Command::SetPluginConfig { plugin, config } => {
-                    self.cmd_set_plugin_config(plugin, config.into()).await
+                    self.cmd_set_plugin_config(plugin, config).await
                 }
                 Command::RemoveWorkspacePluginData {
                     root_index_path,

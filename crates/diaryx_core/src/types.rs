@@ -13,13 +13,14 @@ where
     D: Deserializer<'de>,
 {
     use serde::de::Error;
-    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    let value: Option<crate::yaml::Value> = Option::deserialize(deserializer)?;
     match value {
         None => Ok(None),
-        Some(serde_json::Value::String(s)) => Ok(Some(s)),
-        Some(serde_json::Value::Number(n)) => Ok(Some(n.to_string())),
-        Some(serde_json::Value::Bool(b)) => Ok(Some(b.to_string())),
-        Some(serde_json::Value::Null) => Ok(None),
+        Some(crate::yaml::Value::String(s)) => Ok(Some(s)),
+        Some(crate::yaml::Value::Int(i)) => Ok(Some(i.to_string())),
+        Some(crate::yaml::Value::Float(f)) => Ok(Some(f.to_string())),
+        Some(crate::yaml::Value::Bool(b)) => Ok(Some(b.to_string())),
+        Some(crate::yaml::Value::Null) => Ok(None),
         Some(other) => Err(D::Error::custom(format!(
             "expected string or number, got {:?}",
             other
@@ -121,7 +122,7 @@ pub struct FileMetadata {
 
     /// Additional frontmatter properties not covered by other fields
     #[serde(default)]
-    pub extra: HashMap<String, serde_json::Value>,
+    pub extra: HashMap<String, crate::yaml::Value>,
 
     /// Unix timestamp of last modification (milliseconds)
     #[serde(default)]
@@ -173,8 +174,10 @@ impl FileMetadata {
         ];
 
         // Fast path: convert via JSON for automatic field mapping
-        if let Ok(json_value) = serde_json::to_value(fm)
-            && let Ok(mut metadata) = serde_json::from_value::<FileMetadata>(json_value)
+        if let Ok(fig_value) = fig::to_value(fm)
+            && let Ok(json) = crate::yaml::Value::from(fig_value).to_json()
+            && let Ok(mut metadata) =
+                fig::from_slice::<FileMetadata>(json.as_bytes(), fig::Format::Json)
         {
             if let Some(updated) = fm.get("updated").and_then(parse_updated_value) {
                 metadata.modified_at = updated;
@@ -185,11 +188,8 @@ impl FileMetadata {
 
             // Preserve unknown frontmatter fields in extra
             for (key, value) in fm {
-                if !known_fields.contains(&key.as_str())
-                    && !metadata.extra.contains_key(key)
-                    && let Ok(json_value) = serde_json::to_value(value)
-                {
-                    metadata.extra.insert(key.clone(), json_value);
+                if !known_fields.contains(&key.as_str()) && !metadata.extra.contains_key(key) {
+                    metadata.extra.insert(key.clone(), value.clone());
                 }
             }
 
@@ -310,10 +310,8 @@ impl FileMetadata {
 
         // Store remaining fields in extra
         for (key, value) in fm {
-            if !known_fields.contains(&key.as_str())
-                && let Ok(json_value) = serde_json::to_value(value)
-            {
-                metadata.extra.insert(key.clone(), json_value);
+            if !known_fields.contains(&key.as_str()) {
+                metadata.extra.insert(key.clone(), value.clone());
             }
         }
 

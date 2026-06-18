@@ -346,7 +346,7 @@ fn publish_plugin_manifest() -> PluginManifest {
                         widget_id: "namespace.guard".into(),
                         sign_in_action: Some(diaryx_core::plugin::HostAction {
                             action_type: "open-settings".into(),
-                            payload: Some(serde_json::json!({ "tab": "account" })),
+                            payload: Some(serde_json::json!({ "tab": "account" }).into()),
                         }),
                     },
                     diaryx_core::plugin::SettingsField::HostWidget {
@@ -431,9 +431,9 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> WorkspacePlugin for Pu
     async fn handle_command(
         &self,
         cmd: &str,
-        params: JsonValue,
-    ) -> Option<Result<JsonValue, PluginError>> {
-        Some(self.dispatch(cmd, params).await)
+        params: diaryx_core::yaml::Value,
+    ) -> Option<Result<diaryx_core::yaml::Value, PluginError>> {
+        Some(self.dispatch(cmd, params.into()).await.map(Into::into))
     }
 }
 
@@ -448,9 +448,9 @@ impl<FS: AsyncFileSystem + Clone + 'static> WorkspacePlugin for PublishPlugin<FS
     async fn handle_command(
         &self,
         cmd: &str,
-        params: JsonValue,
-    ) -> Option<Result<JsonValue, PluginError>> {
-        Some(self.dispatch(cmd, params).await)
+        params: diaryx_core::yaml::Value,
+    ) -> Option<Result<diaryx_core::yaml::Value, PluginError>> {
+        Some(self.dispatch(cmd, params.into()).await.map(Into::into))
     }
 }
 

@@ -252,6 +252,7 @@ mod tests {
                     read_files: Some(rule(&["Daily", "README.md"])),
                     ..PluginPermissions::default()
                 },
+                config: None,
             },
         );
 

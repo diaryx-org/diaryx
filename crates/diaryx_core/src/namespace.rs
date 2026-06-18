@@ -16,6 +16,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::auth::{AuthError, AuthenticatedClient};
+use crate::yaml;
 
 // ============================================================================
 // Wire types
@@ -36,7 +37,7 @@ pub struct NamespaceMetadata {
     pub created_at: i64,
     /// Arbitrary metadata attached by the creator (e.g. `{ "name": "..." }`).
     #[serde(default)]
-    pub metadata: Option<serde_json::Value>,
+    pub metadata: Option<yaml::Value>,
 }
 
 impl NamespaceMetadata {
@@ -187,7 +188,7 @@ fn subscribers_import_path(id: &str, audience: &str) -> String {
 /// Extract the server's `error` string from a JSON body (falling back to
 /// `fallback`) and wrap into an [`AuthError`] tagged with the HTTP status.
 fn err_from(body: &str, status: u16, fallback: &str) -> AuthError {
-    let msg = serde_json::from_str::<serde_json::Value>(body)
+    let msg = yaml::parse_json(body)
         .ok()
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
         .unwrap_or_else(|| fallback.to_string());
@@ -247,16 +248,18 @@ pub async fn delete_namespace<C: AuthenticatedClient>(
 pub async fn create_namespace<C: AuthenticatedClient>(
     client: &C,
     id: Option<&str>,
-    metadata: Option<&serde_json::Value>,
+    metadata: Option<&yaml::Value>,
 ) -> Result<NamespaceMetadata, AuthError> {
-    let mut body = serde_json::Map::new();
+    let mut body = indexmap::IndexMap::new();
     if let Some(id) = id {
-        body.insert("id".to_string(), serde_json::Value::String(id.to_string()));
+        body.insert("id".to_string(), yaml::Value::String(id.to_string()));
     }
     if let Some(metadata) = metadata {
         body.insert("metadata".to_string(), metadata.clone());
     }
-    let body_str = serde_json::Value::Object(body).to_string();
+    let body_str = yaml::Value::Mapping(body)
+        .to_json()
+        .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
 
     let resp = client.post("/namespaces", Some(&body_str)).await?;
     if !resp.is_success() {
@@ -274,12 +277,14 @@ pub async fn create_namespace<C: AuthenticatedClient>(
 pub async fn update_namespace_metadata<C: AuthenticatedClient>(
     client: &C,
     id: &str,
-    metadata: Option<&serde_json::Value>,
+    metadata: Option<&yaml::Value>,
 ) -> Result<NamespaceMetadata, AuthError> {
-    let body = serde_json::json!({
-        "metadata": metadata,
-    })
-    .to_string();
+    let body = yaml::Value::Mapping(indexmap::IndexMap::from([(
+        "metadata".to_string(),
+        metadata.cloned().unwrap_or(yaml::Value::Null),
+    )]))
+    .to_json()
+    .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
 
     let resp = client.patch(&namespace_path(id), Some(&body)).await?;
     if !resp.is_success() {
@@ -322,9 +327,14 @@ pub async fn set_audience_gates<C: AuthenticatedClient>(
     client: &C,
     id: &str,
     name: &str,
-    gates: &serde_json::Value,
+    gates: &yaml::Value,
 ) -> Result<(), AuthError> {
-    let body = serde_json::json!({ "gates": gates }).to_string();
+    let body = yaml::Value::Mapping(indexmap::IndexMap::from([(
+        "gates".to_string(),
+        gates.clone(),
+    )]))
+    .to_json()
+    .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
     let resp = client.put(&audience_path(id, name), Some(&body)).await?;
     if !resp.is_success() {
         return Err(err_from(
@@ -346,11 +356,14 @@ pub async fn set_audience<C: AuthenticatedClient>(
     access: &str,
 ) -> Result<(), AuthError> {
     let gates = match access {
-        "public" => serde_json::json!([]),
-        "token" => serde_json::json!([{ "kind": "link" }]),
+        "public" => yaml::Value::Sequence(vec![]),
+        "token" => yaml::Value::Sequence(vec![yaml::Value::Mapping(indexmap::IndexMap::from([(
+            "kind".to_string(),
+            yaml::Value::String("link".to_string()),
+        )]))]),
         // Anything else (legacy `private`, unrecognized) translates to no
         // gates so the server doesn't reject the request outright.
-        _ => serde_json::json!([]),
+        _ => yaml::Value::Sequence(vec![]),
     };
     set_audience_gates(client, id, name, &gates).await
 }
@@ -383,7 +396,12 @@ pub async fn rotate_audience_password<C: AuthenticatedClient>(
     name: &str,
     password: &str,
 ) -> Result<RotatePasswordResult, AuthError> {
-    let body = serde_json::json!({ "password": password }).to_string();
+    let body = yaml::Value::Mapping(indexmap::IndexMap::from([(
+        "password".to_string(),
+        yaml::Value::String(password.to_string()),
+    )]))
+    .to_json()
+    .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
     let resp = client
         .post(&audience_rotate_password_path(id, name), Some(&body))
         .await?;
@@ -410,18 +428,20 @@ pub async fn claim_subdomain<C: AuthenticatedClient>(
     subdomain: &str,
     default_audience: Option<&str>,
 ) -> Result<SubdomainInfo, AuthError> {
-    let mut body = serde_json::Map::new();
+    let mut body = indexmap::IndexMap::new();
     body.insert(
         "subdomain".to_string(),
-        serde_json::Value::String(subdomain.to_string()),
+        yaml::Value::String(subdomain.to_string()),
     );
     if let Some(audience) = default_audience {
         body.insert(
             "default_audience".to_string(),
-            serde_json::Value::String(audience.to_string()),
+            yaml::Value::String(audience.to_string()),
         );
     }
-    let body_str = serde_json::Value::Object(body).to_string();
+    let body_str = yaml::Value::Mapping(body)
+        .to_json()
+        .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
 
     let resp = client.put(&subdomain_path(id), Some(&body_str)).await?;
     if !resp.is_success() {
@@ -477,7 +497,12 @@ pub async fn register_domain<C: AuthenticatedClient>(
     domain: &str,
     audience_name: &str,
 ) -> Result<DomainInfo, AuthError> {
-    let body = serde_json::json!({ "audience_name": audience_name }).to_string();
+    let body = yaml::Value::Mapping(indexmap::IndexMap::from([(
+        "audience_name".to_string(),
+        yaml::Value::String(audience_name.to_string()),
+    )]))
+    .to_json()
+    .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
     let resp = client.put(&domain_path(id, domain), Some(&body)).await?;
     if !resp.is_success() {
         return Err(err_from(
@@ -534,7 +559,12 @@ pub async fn add_subscriber<C: AuthenticatedClient>(
     audience: &str,
     email: &str,
 ) -> Result<SubscriberInfo, AuthError> {
-    let body = serde_json::json!({ "email": email }).to_string();
+    let body = yaml::Value::Mapping(indexmap::IndexMap::from([(
+        "email".to_string(),
+        yaml::Value::String(email.to_string()),
+    )]))
+    .to_json()
+    .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
     let resp = client
         .post(&subscribers_path(id, audience), Some(&body))
         .await?;
@@ -578,7 +608,17 @@ pub async fn bulk_import_subscribers<C: AuthenticatedClient>(
     audience: &str,
     emails: &[String],
 ) -> Result<BulkImportResult, AuthError> {
-    let body = serde_json::json!({ "emails": emails }).to_string();
+    let body = yaml::Value::Mapping(indexmap::IndexMap::from([(
+        "emails".to_string(),
+        yaml::Value::Sequence(
+            emails
+                .iter()
+                .map(|e| yaml::Value::String(e.clone()))
+                .collect(),
+        ),
+    )]))
+    .to_json()
+    .map_err(|e| AuthError::new(format!("Failed to encode request body: {e}"), 0))?;
     let resp = client
         .post(&subscribers_import_path(id, audience), Some(&body))
         .await?;
@@ -784,7 +824,7 @@ mod tests {
             status: 200,
             body: r#"{"id":"ns-1","owner_user_id":"u-1","created_at":1}"#.to_string(),
         }]);
-        let metadata = serde_json::json!({ "name": "My Journal" });
+        let metadata: crate::yaml::Value = serde_json::json!({ "name": "My Journal" }).into();
         let ns = block_on(create_namespace(&client, Some("ns-1"), Some(&metadata))).unwrap();
         assert_eq!(ns.id, "ns-1");
 
@@ -831,7 +871,7 @@ mod tests {
             body: r#"{"id":"ns-1","owner_user_id":"u-1","created_at":1,"metadata":{"name":"New"}}"#
                 .to_string(),
         }]);
-        let metadata = serde_json::json!({ "name": "New" });
+        let metadata: crate::yaml::Value = serde_json::json!({ "name": "New" }).into();
         let ns = block_on(update_namespace_metadata(&client, "ns-1", Some(&metadata))).unwrap();
         assert_eq!(ns.display_name(), Some("New"));
 
@@ -872,14 +912,17 @@ mod tests {
             status: 204,
             body: String::new(),
         }]);
-        let gates = serde_json::json!([{ "kind": "link" }]);
+        let gates: crate::yaml::Value = serde_json::json!([{ "kind": "link" }]).into();
         block_on(set_audience_gates(&client, "ns-1", "friends", &gates)).unwrap();
 
         let call = client.last_call().unwrap();
         assert_eq!(call.method, "PUT");
         assert_eq!(call.path, "/namespaces/ns-1/audiences/friends");
         let body: serde_json::Value = serde_json::from_str(&call.body.unwrap()).unwrap();
-        assert_eq!(body.get("gates"), Some(&gates));
+        assert_eq!(
+            body.get("gates"),
+            Some(&serde_json::json!([{ "kind": "link" }]))
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         &self,
         plugin: String,
         command: String,
-        params: serde_json::Value,
+        params: yaml::Value,
     ) -> Result<Response> {
         let result = self
             .plugin_registry()
@@ -50,14 +50,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             return Ok(Response::PluginResult(config));
         }
 
-        let config = wp.get_config().await.unwrap_or(serde_json::Value::Null);
+        let config = wp.get_config().await.unwrap_or(yaml::Value::Null);
         Ok(Response::PluginResult(config))
     }
 
     pub(crate) async fn cmd_set_plugin_config(
         &self,
         plugin: String,
-        config: serde_json::Value,
+        config: yaml::Value,
     ) -> Result<Response> {
         let Some(wp) = self.find_workspace_plugin(&plugin) else {
             return Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")));
@@ -108,10 +108,18 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         // approval. The host does not apply permission or migration changes
         // itself — it returns them so the UI can prompt, then writes only what
         // the user approves. Non-declarative plugins yield an empty reconcile.
-        Ok(Response::PluginResult(serde_json::json!({
-            "permission_request": reconcile.permission_request,
-            "migrations": reconcile.migrations,
-        })))
+        Ok(Response::PluginResult(yaml::Value::Mapping(
+            indexmap::IndexMap::from([
+                (
+                    "permission_request".to_string(),
+                    yaml::Value::from(fig::to_value(&reconcile.permission_request)?),
+                ),
+                (
+                    "migrations".to_string(),
+                    yaml::Value::from(fig::to_value(&reconcile.migrations)?),
+                ),
+            ]),
+        )))
     }
 
     /// Find a registered workspace plugin by id, cloning the `Arc` so the

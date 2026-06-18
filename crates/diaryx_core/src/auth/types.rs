@@ -171,7 +171,7 @@ impl HttpResponse {
 
     /// Parse the response body as JSON.
     pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T, AuthError> {
-        serde_json::from_str(&self.body)
+        fig::from_slice::<T>(self.body.as_bytes(), fig::Format::Json)
             .map_err(|e| AuthError::new(format!("Failed to parse response: {}", e), self.status))
     }
 }

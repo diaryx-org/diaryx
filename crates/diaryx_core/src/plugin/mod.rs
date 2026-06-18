@@ -24,9 +24,9 @@ pub mod registry;
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::yaml::Value as YamlValue;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::link_parser::LinkFormat;
@@ -211,7 +211,7 @@ pub trait Plugin: 'static {
 pub struct ConfigReconcile {
     /// Declarative config to persist to `plugins.<id>.config`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config: Option<serde_json::Value>,
+    pub config: Option<YamlValue>,
     /// A request to re-scope this plugin's granted permissions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_request: Option<PermissionRequest>,
@@ -226,7 +226,7 @@ pub struct ConfigReconcile {
 pub struct PermissionRequest {
     /// Requested permission rules (same shape as manifest requested defaults).
     #[serde(default)]
-    pub permissions: serde_json::Value,
+    pub permissions: YamlValue,
     /// Per-category human-readable rationale shown in the approval prompt.
     #[serde(default)]
     pub reasons: std::collections::HashMap<String, String>,
@@ -295,8 +295,8 @@ pub trait WorkspacePlugin: Plugin {
     async fn handle_command(
         &self,
         cmd: &str,
-        params: JsonValue,
-    ) -> Option<Result<JsonValue, PluginError>> {
+        params: YamlValue,
+    ) -> Option<Result<YamlValue, PluginError>> {
         let _ = (cmd, params);
         None
     }
@@ -306,7 +306,7 @@ pub trait WorkspacePlugin: Plugin {
     // ====================================================================
 
     /// Get this plugin's configuration (if any).
-    async fn get_config(&self) -> Option<serde_json::Value> {
+    async fn get_config(&self) -> Option<YamlValue> {
         None
     }
 
@@ -320,7 +320,7 @@ pub trait WorkspacePlugin: Plugin {
     /// must not write declarative config to `host::storage`.
     async fn set_config(
         &self,
-        _config: serde_json::Value,
+        _config: YamlValue,
     ) -> std::result::Result<ConfigReconcile, PluginError> {
         Ok(ConfigReconcile::default())
     }

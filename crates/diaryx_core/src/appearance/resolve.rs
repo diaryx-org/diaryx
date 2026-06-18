@@ -39,12 +39,13 @@ pub async fn resolve_theme_colors<FS: AsyncFileSystem>(
 ) -> Option<ThemeAppearance> {
     let settings_path = workspace_dir.join(THEMES_SETTINGS_PATH);
     let settings_str = fs.read_to_string(&settings_path).await.ok()?;
-    let settings: serde_json::Value = serde_json::from_str(&settings_str).ok()?;
+    let settings = crate::yaml::parse_json(&settings_str).ok()?;
     let preset_id = settings.get("presetId")?.as_str()?;
 
     let library_path = workspace_dir.join(THEMES_LIBRARY_PATH);
     let library_str = fs.read_to_string(&library_path).await.ok()?;
-    let library: Vec<serde_json::Value> = serde_json::from_str(&library_str).ok()?;
+    let library = crate::yaml::parse_json(&library_str).ok()?;
+    let library = library.as_sequence()?;
 
     let theme_def = library.iter().find_map(|entry| {
         let theme = entry.get("theme")?;
@@ -68,7 +69,7 @@ pub async fn resolve_typography<FS: AsyncFileSystem>(
 ) -> Option<TypographySettings> {
     let settings_path = workspace_dir.join(TYPOGRAPHIES_SETTINGS_PATH);
     let settings_str = fs.read_to_string(&settings_path).await.ok()?;
-    let settings: serde_json::Value = serde_json::from_str(&settings_str).ok()?;
+    let settings = crate::yaml::parse_json(&settings_str).ok()?;
     let preset_id = settings.get("typographyPresetId")?.as_str()?;
 
     // Start with builtin defaults
@@ -80,7 +81,11 @@ pub async fn resolve_typography<FS: AsyncFileSystem>(
         .read_to_string(&library_path)
         .await
         .ok()
-        .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+        .and_then(|s| crate::yaml::parse_json(&s).ok())
+        .and_then(|library| match library {
+            crate::yaml::Value::Sequence(seq) => Some(seq),
+            _ => None,
+        })
         .and_then(|library| {
             library.into_iter().find_map(|entry| {
                 let typo = entry.get("typography")?;
@@ -173,9 +178,9 @@ pub async fn resolve_favicon<FS: AsyncFileSystem>(
 }
 
 /// Convert a JSON object of color keys to a HashMap.
-fn json_to_color_map(palette: &serde_json::Value) -> HashMap<String, String> {
+fn json_to_color_map(palette: &crate::yaml::Value) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    if let Some(obj) = palette.as_object() {
+    if let Some(obj) = palette.as_mapping() {
         for (key, value) in obj {
             if let Some(v) = value.as_str() {
                 map.insert(key.clone(), v.to_string());

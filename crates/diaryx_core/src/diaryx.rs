@@ -143,7 +143,7 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
                     // Non-opted plugins are left untouched — their config may
                     // contain secrets that must not land in a git-diffable file.
                     if let Some(config) = wp.get_config().await
-                        && !(config.is_null() || config.as_object().is_some_and(|m| m.is_empty()))
+                        && !(config.is_null() || config.as_mapping().is_some_and(|m| m.is_empty()))
                     {
                         let _ = inner
                             .set_workspace_plugin_config(&root_index, &id, config.clone())

@@ -85,7 +85,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     pub(crate) async fn cmd_write_file_with_metadata(
         &self,
         path: String,
-        metadata: serde_json::Value,
+        metadata: crate::yaml::Value,
         body: String,
     ) -> Result<Response> {
         let resolved_path = self.resolve_fs_path(&path);
@@ -102,7 +102,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     pub(crate) async fn cmd_update_file_metadata(
         &self,
         path: String,
-        metadata: serde_json::Value,
+        metadata: crate::yaml::Value,
         body: Option<String>,
     ) -> Result<Response> {
         let resolved_path = self.resolve_fs_path(&path);

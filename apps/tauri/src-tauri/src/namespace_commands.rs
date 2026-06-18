@@ -38,6 +38,7 @@ pub async fn namespace_create(
     metadata: Option<serde_json::Value>,
 ) -> Result<NamespaceMetadata, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
+    let metadata = metadata.map(diaryx_core::yaml::Value::from);
     namespace::create_namespace(service.client(), id.as_deref(), metadata.as_ref())
         .await
         .map_err(Into::into)
@@ -51,6 +52,7 @@ pub async fn namespace_update_metadata(
     metadata: Option<serde_json::Value>,
 ) -> Result<NamespaceMetadata, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
+    let metadata = metadata.map(diaryx_core::yaml::Value::from);
     namespace::update_namespace_metadata(service.client(), &id, metadata.as_ref())
         .await
         .map_err(Into::into)

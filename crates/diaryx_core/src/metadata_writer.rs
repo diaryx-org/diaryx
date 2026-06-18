@@ -25,6 +25,7 @@ use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
+use crate::yaml;
 
 /// Metadata structure for file frontmatter.
 /// This mirrors `FileMetadata` but with simpler types for serialization.
@@ -54,7 +55,7 @@ pub struct FrontmatterMetadata {
     /// Last modification timestamp (milliseconds since Unix epoch)
     pub updated: Option<i64>,
     /// Additional frontmatter properties (excluding internal keys like _body)
-    pub extra: HashMap<String, serde_json::Value>,
+    pub extra: HashMap<String, yaml::Value>,
 }
 
 impl FrontmatterMetadata {
@@ -62,7 +63,7 @@ impl FrontmatterMetadata {
     ///
     /// Note: This basic version doesn't convert paths. For writing files to disk
     /// with proper markdown links, use `from_json_with_markdown_links`.
-    pub fn from_json(value: &serde_json::Value) -> Self {
+    pub fn from_json(value: &yaml::Value) -> Self {
         Self::from_json_with_file_path(value, None)
     }
 
@@ -75,7 +76,7 @@ impl FrontmatterMetadata {
     /// * `value` - The JSON value containing FileMetadata
     /// * `canonical_file_path` - The canonical path of the file being written (e.g., "folder/index.md")
     pub fn from_json_with_file_path(
-        value: &serde_json::Value,
+        value: &yaml::Value,
         _canonical_file_path: Option<&str>,
     ) -> Self {
         // Use the markdown links version with a path_to_title fallback for titles
@@ -98,11 +99,11 @@ impl FrontmatterMetadata {
     ///     |path| path_to_title(path),
     /// );
     /// ```
-    pub fn from_json_with_markdown_links<F>(value: &serde_json::Value, title_resolver: F) -> Self
+    pub fn from_json_with_markdown_links<F>(value: &yaml::Value, title_resolver: F) -> Self
     where
         F: Fn(&str) -> String,
     {
-        let obj = value.as_object();
+        let obj = value.as_mapping();
 
         let title = obj
             .and_then(|o| o.get("title"))
@@ -124,7 +125,7 @@ impl FrontmatterMetadata {
 
         let links = obj
             .and_then(|o| o.get("links"))
-            .and_then(|v| v.as_array())
+            .and_then(|v| v.as_sequence())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.as_str())
@@ -142,7 +143,7 @@ impl FrontmatterMetadata {
 
         let link_of = obj
             .and_then(|o| o.get("link_of"))
-            .and_then(|v| v.as_array())
+            .and_then(|v| v.as_sequence())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.as_str())
@@ -176,7 +177,7 @@ impl FrontmatterMetadata {
 
         let contents = obj
             .and_then(|o| o.get("contents"))
-            .and_then(|v| v.as_array())
+            .and_then(|v| v.as_sequence())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.as_str())
@@ -197,14 +198,14 @@ impl FrontmatterMetadata {
 
         let attachments = obj
             .and_then(|o| o.get("attachments"))
-            .and_then(|v| v.as_array())
+            .and_then(|v| v.as_sequence())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| {
                         // Handle both string and object (BinaryRef) formats
                         if let Some(s) = v.as_str() {
                             Some(s.to_string())
-                        } else if let Some(obj) = v.as_object() {
+                        } else if let Some(obj) = v.as_mapping() {
                             obj.get("path").and_then(|p| p.as_str()).map(String::from)
                         } else {
                             None
@@ -228,7 +229,7 @@ impl FrontmatterMetadata {
 
         let audience = obj
             .and_then(|o| o.get("audience"))
-            .and_then(|v| v.as_array())
+            .and_then(|v| v.as_sequence())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.as_str().map(String::from))
@@ -246,7 +247,10 @@ impl FrontmatterMetadata {
 
         // Extract extra properties, excluding internal keys
         let mut extra = HashMap::new();
-        if let Some(extra_obj) = obj.and_then(|o| o.get("extra")).and_then(|v| v.as_object()) {
+        if let Some(extra_obj) = obj
+            .and_then(|o| o.get("extra"))
+            .and_then(|v| v.as_mapping())
+        {
             for (key, value) in extra_obj {
                 // Skip internal keys (starting with _)
                 if !key.starts_with('_') {
@@ -405,19 +409,23 @@ fn is_yaml_keyword(s: &str) -> bool {
 }
 
 /// Format a JSON value for YAML.
-fn yaml_value(value: &serde_json::Value) -> String {
+fn yaml_value(value: &yaml::Value) -> String {
     match value {
-        serde_json::Value::Null => "null".to_string(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => yaml_string(s),
-        serde_json::Value::Array(arr) => {
+        yaml::Value::Null => "null".to_string(),
+        yaml::Value::Bool(b) => b.to_string(),
+        yaml::Value::Int(i) => i.to_string(),
+        yaml::Value::Float(f) => {
+            let mut buf = ryu::Buffer::new();
+            buf.format(*f).to_string()
+        }
+        yaml::Value::String(s) => yaml_string(s),
+        yaml::Value::Sequence(arr) => {
             let items: Vec<String> = arr.iter().map(yaml_value).collect();
             format!("[{}]", items.join(", "))
         }
-        serde_json::Value::Object(_) => {
+        yaml::Value::Mapping(_) => {
             // For objects, use JSON format as YAML flow style
-            serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
+            value.to_json().unwrap_or_else(|_| "{}".to_string())
         }
     }
 }
@@ -429,7 +437,7 @@ fn yaml_value(value: &serde_json::Value) -> String {
 pub async fn write_file_with_metadata<FS: AsyncFileSystem>(
     fs: &FS,
     path: &Path,
-    metadata: &serde_json::Value,
+    metadata: &yaml::Value,
     body: &str,
 ) -> Result<()> {
     write_file_with_metadata_and_canonical_path(fs, path, metadata, body, None).await
@@ -449,7 +457,7 @@ pub async fn write_file_with_metadata<FS: AsyncFileSystem>(
 pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
     fs: &FS,
     path: &Path,
-    metadata: &serde_json::Value,
+    metadata: &yaml::Value,
     body: &str,
     canonical_path: Option<&str>,
 ) -> Result<()> {
@@ -566,7 +574,7 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
 pub async fn update_file_metadata<FS: AsyncFileSystem>(
     fs: &FS,
     path: &Path,
-    metadata: &serde_json::Value,
+    metadata: &yaml::Value,
     new_body: Option<&str>,
 ) -> Result<()> {
     // Determine the body content
@@ -588,7 +596,7 @@ pub async fn update_file_metadata<FS: AsyncFileSystem>(
 
     // Preserve existing frontmatter fields when the incoming metadata omits them.
     let mut merged_metadata = metadata.clone();
-    if let Some(obj) = merged_metadata.as_object_mut()
+    if let Some(obj) = merged_metadata.as_mapping_mut()
         && let Ok(existing_content) = fs.read_to_string(path).await
         && let Ok(parsed) = frontmatter::parse_or_empty(&existing_content)
     {
@@ -596,18 +604,18 @@ pub async fn update_file_metadata<FS: AsyncFileSystem>(
 
         let missing_contents = obj.get("contents").map(|v| v.is_null()).unwrap_or(true);
         if missing_contents && let Some(seq) = fm.get("contents").and_then(|v| v.as_sequence()) {
-            let preserved: Vec<serde_json::Value> = seq
+            let preserved: Vec<yaml::Value> = seq
                 .iter()
-                .filter_map(|v| v.as_str().map(|s| serde_json::Value::String(s.to_string())))
+                .filter_map(|v| v.as_str().map(|s| yaml::Value::String(s.to_string())))
                 .collect();
-            obj.insert("contents".to_string(), serde_json::Value::Array(preserved));
+            obj.insert("contents".to_string(), yaml::Value::Sequence(preserved));
         }
 
         let missing_part_of = obj.get("part_of").map(|v| v.is_null()).unwrap_or(true);
         if missing_part_of && let Some(parent) = fm.get("part_of").and_then(|v| v.as_str()) {
             obj.insert(
                 "part_of".to_string(),
-                serde_json::Value::String(parent.to_string()),
+                yaml::Value::String(parent.to_string()),
             );
         }
     }
@@ -813,7 +821,8 @@ mod tests {
                 "custom_key": "custom_value",
                 "_body": "should be excluded"
             }
-        });
+        })
+        .into();
 
         let fm = FrontmatterMetadata::from_json(&json);
         assert_eq!(fm.title, Some("Test Title".to_string()));
@@ -945,7 +954,8 @@ mod tests {
         let json = serde_json::json!({
             "title": "Child File",
             "part_of": "folder/parent.md",
-        });
+        })
+        .into();
 
         let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/child.md"));
         // Now formatted as markdown link with workspace-root path
@@ -957,7 +967,8 @@ mod tests {
         let json = serde_json::json!({
             "title": "Parent Index",
             "contents": ["folder/child1.md", "folder/sub/child2.md"],
-        });
+        })
+        .into();
 
         let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/index.md"));
         // Contents formatted as markdown links with workspace-root paths
@@ -975,7 +986,8 @@ mod tests {
         let json = serde_json::json!({
             "title": "Entry",
             "attachments": ["folder/_attachments/image.png", "folder/_attachments/report.pdf"],
-        });
+        })
+        .into();
 
         let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/entry.md"));
         assert_eq!(
@@ -994,7 +1006,8 @@ mod tests {
             "attachments": [
                 { "path": "folder/_attachments/photo.jpg", "hash": "abc" }
             ],
-        });
+        })
+        .into();
 
         let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/entry.md"));
         assert_eq!(
@@ -1011,7 +1024,8 @@ mod tests {
             "title": "Index",
             "part_of": "root/parent.md",
             "contents": ["root/child.md"],
-        });
+        })
+        .into();
 
         // Use a custom title resolver that returns a fixed title
         let fm = FrontmatterMetadata::from_json_with_markdown_links(&json, |path| {
@@ -1075,7 +1089,8 @@ mod tests {
                 "[Child A](/folder/child_a.md)",
                 "[Child B](/folder/child_b.md)",
             ],
-        });
+        })
+        .into();
 
         let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/child.md"));
 
@@ -1102,7 +1117,8 @@ mod tests {
                 "folder/plain_path.md",
                 "[Already Formatted](/folder/formatted.md)",
             ],
-        });
+        })
+        .into();
 
         let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/index.md"));
 
@@ -1122,7 +1138,7 @@ mod tests {
 
         block_on_test(fs.write(path, "original".as_bytes())).unwrap();
 
-        let metadata = serde_json::json!({ "title": "My Journal" });
+        let metadata = serde_json::json!({ "title": "My Journal" }).into();
         block_on_test(write_file_with_metadata(
             &fs,
             path,
@@ -1141,7 +1157,7 @@ mod tests {
         let path = Path::new("README.md");
 
         block_on_test(fs.write(path, "original".as_bytes())).unwrap();
-        let metadata = serde_json::json!({ "title": "My Journal" });
+        let metadata = serde_json::json!({ "title": "My Journal" }).into();
 
         block_on_test(write_file_with_metadata(&fs, path, &metadata, "# edit one")).unwrap();
         block_on_test(write_file_with_metadata(&fs, path, &metadata, "# edit two")).unwrap();

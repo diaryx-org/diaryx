@@ -299,8 +299,9 @@ pub(crate) fn auth_error_to_js(err: AuthError) -> JsValue {
         &JsValue::from_f64(err.status_code as f64),
     );
     if let Some(devices) = &err.devices
-        && let Ok(devices_str) = serde_json::to_string(devices)
-        && let Ok(parsed) = js_sys::JSON::parse(&devices_str)
+        && let Ok(devices_str) = fig::to_value(devices)
+            .and_then(|v| v.serialize_with(fig::Format::Json, fig::SerializeOptions::compact()))
+        && let Ok(parsed) = js_sys::JSON::parse(devices_str.trim_end())
     {
         let _ = Reflect::set(&error, &JsValue::from_str("devices"), &parsed);
     }
@@ -308,8 +309,9 @@ pub(crate) fn auth_error_to_js(err: AuthError) -> JsValue {
 }
 
 pub(crate) fn to_js_ok<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
-    serde_json::to_string(value)
-        .map(|s| JsValue::from_str(&s))
+    fig::to_value(value)
+        .and_then(|v| v.serialize_with(fig::Format::Json, fig::SerializeOptions::compact()))
+        .map(|s| JsValue::from_str(s.trim_end()))
         .map_err(|e| JsValue::from_str(&format!("serialize error: {e}")))
 }
 

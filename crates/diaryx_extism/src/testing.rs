@@ -374,7 +374,10 @@ impl PluginTestHarness {
         cmd: &str,
         params: JsonValue,
     ) -> Option<Result<JsonValue, PluginError>> {
-        self.adapter.handle_command(cmd, params).await
+        self.adapter
+            .handle_command(cmd, params.into())
+            .await
+            .map(|r| r.map(Into::into))
     }
 
     /// Send a workspace-opened event.
@@ -423,12 +426,12 @@ impl PluginTestHarness {
 
     /// Get plugin config.
     pub async fn get_config(&self) -> Option<JsonValue> {
-        self.adapter.get_config().await
+        self.adapter.get_config().await.map(Into::into)
     }
 
     /// Set plugin config.
     pub async fn set_config(&self, config: JsonValue) -> Result<(), PluginError> {
-        self.adapter.set_config(config).await
+        self.adapter.set_config(config.into()).await.map(|_| ())
     }
 
     /// Call a raw guest export (for non-standard exports like `render_content`).

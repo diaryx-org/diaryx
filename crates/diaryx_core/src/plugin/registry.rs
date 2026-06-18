@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use serde_json::Value as JsonValue;
+use crate::yaml::Value as YamlValue;
 
 use super::events::*;
 use super::manifest::{PluginManifest, UiContribution};
@@ -340,8 +340,8 @@ impl PluginRegistry {
         &self,
         plugin_id: &str,
         cmd: &str,
-        params: JsonValue,
-    ) -> Option<Result<JsonValue, PluginError>> {
+        params: YamlValue,
+    ) -> Option<Result<YamlValue, PluginError>> {
         for plugin in &self.workspace_plugins {
             if plugin.id().0 == plugin_id {
                 if !self.is_plugin_healthy(&plugin.id()) {

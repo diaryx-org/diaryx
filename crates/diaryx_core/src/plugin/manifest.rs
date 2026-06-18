@@ -605,7 +605,7 @@ pub struct HostAction {
     pub action_type: String,
     /// Optional payload passed to the host action handler.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload: Option<serde_json::Value>,
+    pub payload: Option<crate::yaml::Value>,
 }
 
 /// A select dropdown option.
@@ -763,9 +763,9 @@ pub struct MarketplaceEntry {
     /// Screenshot URLs.
     #[serde(default)]
     pub screenshots: Vec<String>,
-    /// Requested default permissions (opaque JSON).
+    /// Requested default permissions (opaque value).
     #[serde(default)]
-    pub requested_permissions: Option<serde_json::Value>,
+    pub requested_permissions: Option<crate::yaml::Value>,
     /// Protocol version this plugin was built against.
     #[serde(default)]
     pub protocol_version: Option<u32>,
@@ -816,15 +816,15 @@ pub struct PluginWorkspaceMetadata {
     pub capabilities: Vec<String>,
     /// WASM artifact reference.
     pub artifact: PluginArtifact,
-    /// UI contributions (opaque JSON, preserved from frontmatter).
+    /// UI contributions (opaque value, preserved from frontmatter).
     #[serde(default)]
-    pub ui: Option<serde_json::Value>,
-    /// CLI commands (opaque JSON, preserved from frontmatter).
+    pub ui: Option<crate::yaml::Value>,
+    /// CLI commands (opaque value, preserved from frontmatter).
     #[serde(default)]
-    pub cli: Option<serde_json::Value>,
-    /// Requested permissions (opaque JSON).
+    pub cli: Option<crate::yaml::Value>,
+    /// Requested permissions (opaque value).
     #[serde(default)]
-    pub requested_permissions: Option<serde_json::Value>,
+    pub requested_permissions: Option<crate::yaml::Value>,
     /// Protocol version this plugin was built against.
     #[serde(default)]
     pub protocol_version: Option<u32>,
@@ -833,9 +833,14 @@ pub struct PluginWorkspaceMetadata {
     pub body: String,
 }
 
-/// Convert a `yaml::Value` to a `serde_json::Value`.
-fn yaml_to_json(yaml: &crate::yaml::Value) -> Result<serde_json::Value, DiaryxError> {
-    Ok(serde_json::Value::from(yaml.clone()))
+/// Deserialize a typed value from a dynamic `yaml::Value` tree.
+///
+/// Routes through JSON text (the value's `to_json`) into `fig`'s JSON
+/// deserializer, keeping `serde_json` out of the parse path.
+fn yaml_value_to_typed<T: serde::de::DeserializeOwned>(
+    yaml: &crate::yaml::Value,
+) -> Result<T, crate::yaml::Error> {
+    fig::from_slice::<T>(yaml.to_json()?.as_bytes(), fig::Format::Json)
 }
 
 impl MarketplaceRegistry {
@@ -871,8 +876,7 @@ impl MarketplaceRegistry {
             .get("plugins")
             .ok_or_else(|| DiaryxError::Validation("Registry missing plugins array".to_string()))?;
 
-        let plugins_json = yaml_to_json(plugins_yaml)?;
-        let plugins: Vec<MarketplaceEntry> = serde_json::from_value(plugins_json)
+        let plugins: Vec<MarketplaceEntry> = yaml_value_to_typed(plugins_yaml)
             .map_err(|e| DiaryxError::Validation(format!("Failed to parse plugins: {e}")))?;
 
         for plugin in &plugins {
@@ -940,16 +944,13 @@ impl PluginWorkspaceMetadata {
         let artifact_yaml = fm.get("artifact").ok_or_else(|| {
             DiaryxError::Validation("Plugin workspace missing 'artifact'".to_string())
         })?;
-        let artifact_json = yaml_to_json(artifact_yaml)?;
-        let artifact: PluginArtifact = serde_json::from_value(artifact_json)
+        let artifact: PluginArtifact = yaml_value_to_typed(artifact_yaml)
             .map_err(|e| DiaryxError::Validation(format!("Failed to parse artifact: {e}")))?;
 
-        let ui = fm.get("ui").map(yaml_to_json).transpose()?;
-        let cli = fm.get("cli").map(yaml_to_json).transpose()?;
-        let requested_permissions = fm
-            .get("requested_permissions")
-            .map(yaml_to_json)
-            .transpose()?;
+        // Opaque values are preserved verbatim as `yaml::Value`.
+        let ui = fm.get("ui").cloned();
+        let cli = fm.get("cli").cloned();
+        let requested_permissions = fm.get("requested_permissions").cloned();
 
         let protocol_version = fm
             .get("protocol_version")

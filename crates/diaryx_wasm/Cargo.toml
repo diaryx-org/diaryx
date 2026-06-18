@@ -26,7 +26,10 @@ panic-hook = ["dep:console_error_panic_hook"]
 diaryx_core = { workspace = true, default-features = false, features = ["browser-js", "typescript"] }
 wasm-bindgen = "0.2"
 serde.workspace = true
-serde_json.workspace = true
+# JSON codec at the JS boundary — fig, not serde_json (keeps serde_json out of
+# the WASM binary). `to_value` + `serialize_with(Json, compact)` for output;
+# `from_slice(.., Json)` for input.
+fig.workspace = true
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 # The workspace `.cargo/config.toml` forces `getrandom_backend="custom"` for all

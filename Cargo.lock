@@ -3633,7 +3633,7 @@ dependencies = [
 [[package]]
 name = "fig"
 version = "0.0.0"
-source = "git+https://github.com/adammharris/fig.git?rev=d25597eb26a9a502ae06a67dccb64fabceae65ce#d25597eb26a9a502ae06a67dccb64fabceae65ce"
+source = "git+https://github.com/adammharris/fig.git?rev=45589c9bf710b894818f2a89fcb86855a7e15e4a#45589c9bf710b894818f2a89fcb86855a7e15e4a"
 dependencies = [
  "fig-macros",
  "serde",
@@ -3642,7 +3642,7 @@ dependencies = [
 [[package]]
 name = "fig-macros"
 version = "0.0.0"
-source = "git+https://github.com/adammharris/fig.git?rev=d25597eb26a9a502ae06a67dccb64fabceae65ce#d25597eb26a9a502ae06a67dccb64fabceae65ce"
+source = "git+https://github.com/adammharris/fig.git?rev=45589c9bf710b894818f2a89fcb86855a7e15e4a#45589c9bf710b894818f2a89fcb86855a7e15e4a"
 dependencies = [
  "proc-macro2",
  "quote",

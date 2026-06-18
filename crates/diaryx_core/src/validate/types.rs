@@ -11,10 +11,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// A validation error indicating a broken reference.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type")]
+#[fig(tag = "type")]
 pub enum ValidationError {
     /// A file's `part_of` points to a non-existent file.
     BrokenPartOf {
@@ -47,10 +48,11 @@ pub enum ValidationError {
 }
 
 /// A validation warning indicating a potential issue.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type")]
+#[fig(tag = "type")]
 pub enum ValidationWarning {
     /// A file exists but is not referenced by any index's contents.
     OrphanFile {
@@ -218,10 +220,11 @@ pub enum ValidationWarning {
 /// Only [`InvalidAttachmentRefKind::LegacyBinary`] is auto-fixable: it carries
 /// the absolute path of the binary so the fixer can wrap it in a markdown
 /// attachment note and replace the stale entry in the source index.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type")]
+#[fig(tag = "type")]
 pub enum InvalidAttachmentRefKind {
     /// The entry points directly at a binary asset (legacy flat format).
     /// Auto-fixable: wrap the binary in a markdown attachment note.
@@ -390,7 +393,7 @@ impl ValidationError {
 }
 
 /// Result of validating a workspace.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ValidationResult {

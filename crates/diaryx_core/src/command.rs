@@ -39,13 +39,17 @@ use crate::yaml;
 ///
 /// Commands are serializable for cross-runtime usage (WASM, IPC, etc.).
 ///
-/// `Deserialize` is hand-written (see `CommandWire` below) rather than derived,
-/// to keep the WASM binary small; `Serialize` + the `#[serde(tag/content)]`
-/// attribute still define the public `{ type, params }` contract and ts-rs export.
-#[derive(Debug, Clone, Serialize)]
+/// Deserialization is serde-free: `#[derive(fig::FromValue)]` walks `fig`'s
+/// value tree directly, so the adjacently-tagged `{ type, params }` envelope is
+/// decoded without serde's `Content`-buffering machinery (which previously cost
+/// ~127 KB of WASM and forced a hand-written `CommandWire` twin). `Serialize` +
+/// the `#[serde(tag/content)]` attribute still define the public contract and
+/// drive the ts-rs export; `#[fig(tag/content)]` mirrors it for the read path.
+#[derive(Debug, Clone, Serialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type", content = "params")]
+#[fig(tag = "type", content = "params")]
 pub enum Command {
     // === Entry Operations ===
     /// Get an entry's content and metadata.
@@ -68,6 +72,7 @@ pub enum Command {
         /// frontmatter title and filename. Used for manual save / editor blur
         /// (not auto-save) to avoid mid-typing renames.
         #[serde(default)]
+        #[fig(default)]
         detect_h1_title: bool,
     },
 
@@ -77,6 +82,7 @@ pub enum Command {
         path: String,
         /// Optional creation options.
         #[serde(default)]
+        #[fig(default)]
         options: CreateEntryOptions,
     },
 
@@ -87,6 +93,7 @@ pub enum Command {
         /// If true, perform a hard delete (remove from filesystem).
         /// If false (default), perform a soft delete (mark as deleted).
         #[serde(default)]
+        #[fig(default)]
         hard_delete: bool,
     },
 
@@ -275,6 +282,7 @@ pub enum Command {
         path: Option<String>,
         /// Whether to include hidden files.
         #[serde(default)]
+        #[fig(default)]
         show_hidden: bool,
         /// Optional maximum depth to traverse.
         depth: Option<u32>,
@@ -342,6 +350,7 @@ pub enum Command {
         target_path: String,
         /// Create the target file if it doesn't exist.
         #[serde(default)]
+        #[fig(default)]
         create_if_missing: bool,
     },
 
@@ -352,6 +361,7 @@ pub enum Command {
         pattern: String,
         /// Search options.
         #[serde(default)]
+        #[fig(default)]
         options: SearchOptions,
     },
 
@@ -507,7 +517,7 @@ pub enum Command {
         /// Path to the file to write.
         path: String,
         /// File metadata to write as frontmatter.
-        metadata: serde_json::Value,
+        metadata: yaml::Value,
         /// Body content (markdown after frontmatter).
         body: String,
     },
@@ -518,7 +528,7 @@ pub enum Command {
         /// Path to the file to update.
         path: String,
         /// File metadata to write as frontmatter.
-        metadata: serde_json::Value,
+        metadata: yaml::Value,
         /// Optional new body content. If not provided, existing body is preserved.
         body: Option<String>,
     },
@@ -597,6 +607,7 @@ pub enum Command {
         path: Option<String>,
         /// If true, only report what would be changed without modifying files.
         #[serde(default)]
+        #[fig(default)]
         dry_run: bool,
     },
 
@@ -650,7 +661,7 @@ pub enum Command {
         /// Command name within the plugin.
         command: String,
         /// Command parameters as JSON.
-        params: JsonValue,
+        params: yaml::Value,
     },
 
     /// Get manifests for all registered plugins.
@@ -667,7 +678,7 @@ pub enum Command {
         /// Plugin identifier.
         plugin: String,
         /// New configuration value.
-        config: JsonValue,
+        config: yaml::Value,
     },
 
     /// Remove workspace-level plugin metadata from the root index frontmatter.
@@ -677,904 +688,6 @@ pub enum Command {
         /// Plugin identifier to remove.
         plugin: String,
     },
-}
-
-// ============================================================================
-// Cheap deserialization mirror for `Command`.
-//
-// serde's derived `Deserialize` for an adjacently-tagged enum (`tag`+`content`)
-// buffers the payload into `serde::__private::Content` and re-deserializes it
-// per variant. With ~70 variants that monomorphizes into a ~127 KB function
-// (and pulls in the whole `Content` machinery) — a large fraction of the WASM
-// binary. `Command` therefore derives only `Serialize` (which, with the
-// `#[serde(tag/content)]` attribute, also drives the ts-rs TS export and keeps
-// the public `{ type, params }` JSON contract). Deserialization is hand-rolled
-// below: it reads the `{ type, params }` envelope and delegates to
-// `CommandWire`, an *externally*-tagged twin whose derived deserializer is tiny
-// (~2 KB) because it deserializes each variant's payload directly with no
-// `Content` round-trip.
-//
-// `CommandWire` mirrors `Command`'s variants verbatim. `assert_command_wire_in_sync`
-// below is an exhaustive match over `Command` that fails to compile if a variant
-// is added/removed without updating `CommandWire`, so the twin cannot drift.
-// ============================================================================
-
-#[derive(Deserialize)]
-enum CommandWire {
-    GetEntry {
-        path: String,
-    },
-    SaveEntry {
-        path: String,
-        content: String,
-        #[serde(default)]
-        root_index_path: Option<String>,
-        #[serde(default)]
-        detect_h1_title: bool,
-    },
-    CreateEntry {
-        path: String,
-        #[serde(default)]
-        options: CreateEntryOptions,
-    },
-    DeleteEntry {
-        path: String,
-        #[serde(default)]
-        hard_delete: bool,
-    },
-    MoveEntry {
-        from: String,
-        to: String,
-    },
-    SyncMoveMetadata {
-        old_path: String,
-        new_path: String,
-    },
-    SyncCreateMetadata {
-        path: String,
-    },
-    SyncDeleteMetadata {
-        path: String,
-    },
-    RenameEntry {
-        path: String,
-        new_filename: String,
-    },
-    DuplicateEntry {
-        path: String,
-    },
-    ConvertToIndex {
-        path: String,
-    },
-    ConvertToLeaf {
-        path: String,
-    },
-    CreateChildEntry {
-        parent_path: String,
-    },
-    AttachEntryToParent {
-        entry_path: String,
-        parent_path: String,
-    },
-    AddLink {
-        source_path: String,
-        target_path: String,
-        #[serde(default)]
-        content: Option<String>,
-    },
-    RemoveLink {
-        source_path: String,
-        target_path: String,
-        #[serde(default)]
-        content: Option<String>,
-    },
-    FindRootIndex {
-        directory: String,
-    },
-    GetAvailableAudiences {
-        path: String,
-    },
-    GetEffectiveAudience {
-        path: String,
-    },
-    GetWorkspaceTree {
-        path: Option<String>,
-        depth: Option<u32>,
-        audience: Option<Vec<String>>,
-    },
-    GetWorkspaceFileSet {
-        path: String,
-    },
-    PrepareMultiDelete {
-        paths: Vec<String>,
-        #[serde(default)]
-        tree_path: Option<String>,
-    },
-    CheckDeleteIncludesDescendants {
-        paths: Vec<String>,
-        #[serde(default)]
-        tree_path: Option<String>,
-    },
-    GetFilesystemTree {
-        path: Option<String>,
-        #[serde(default)]
-        show_hidden: bool,
-        depth: Option<u32>,
-    },
-    CreateWorkspace {
-        path: Option<String>,
-        name: Option<String>,
-    },
-    GetFrontmatter {
-        path: String,
-    },
-    ParseFrontmatter {
-        content: String,
-    },
-    SetFrontmatterProperty {
-        path: String,
-        key: String,
-        value: yaml::Value,
-        #[serde(default)]
-        root_index_path: Option<String>,
-    },
-    RemoveFrontmatterProperty {
-        path: String,
-        key: String,
-    },
-    ReorderFrontmatterKeys {
-        path: String,
-        keys: Vec<String>,
-    },
-    MoveFrontmatterSectionToFile {
-        source_path: String,
-        section_key: String,
-        target_path: String,
-        #[serde(default)]
-        create_if_missing: bool,
-    },
-    SearchWorkspace {
-        pattern: String,
-        #[serde(default)]
-        options: SearchOptions,
-    },
-    ValidateWorkspace {
-        path: Option<String>,
-    },
-    ValidateFile {
-        path: String,
-    },
-    FixAll {
-        validation_result: ValidationResult,
-    },
-    FixValidationWarning {
-        warning: ValidationWarning,
-    },
-    FixValidationError {
-        error: ValidationError,
-    },
-    GetAvailableParentIndexes {
-        file_path: String,
-        workspace_root: String,
-    },
-    GetAttachments {
-        path: String,
-    },
-    RegisterAttachment {
-        entry_path: String,
-        filename: String,
-    },
-    DeleteAttachment {
-        entry_path: String,
-        attachment_path: String,
-    },
-    GetAttachmentData {
-        entry_path: String,
-        attachment_path: String,
-    },
-    ResolveAttachmentPath {
-        entry_path: String,
-        attachment_path: String,
-    },
-    MoveAttachment {
-        source_entry_path: String,
-        target_entry_path: String,
-        attachment_path: String,
-        new_filename: Option<String>,
-    },
-    GetAncestorAttachments {
-        path: String,
-    },
-    FileExists {
-        path: String,
-    },
-    ReadFile {
-        path: String,
-    },
-    GetFileInfo {
-        path: String,
-    },
-    WriteFile {
-        path: String,
-        content: String,
-    },
-    DeleteFile {
-        path: String,
-    },
-    ClearDirectory {
-        path: String,
-    },
-    WriteFileWithMetadata {
-        path: String,
-        metadata: serde_json::Value,
-        body: String,
-    },
-    UpdateFileMetadata {
-        path: String,
-        metadata: serde_json::Value,
-        body: Option<String>,
-    },
-    GetStorageUsage,
-    GetLinkFormat {
-        root_index_path: String,
-    },
-    SetLinkFormat {
-        root_index_path: String,
-        format: String,
-    },
-    GetWorkspaceConfig {
-        root_index_path: String,
-    },
-    GenerateFilename {
-        title: String,
-        root_index_path: Option<String>,
-    },
-    SetWorkspaceConfig {
-        root_index_path: String,
-        field: String,
-        value: String,
-    },
-    MigrateWorkspaceConfig {
-        root_index_path: String,
-    },
-    ConvertLinks {
-        root_index_path: String,
-        format: String,
-        path: Option<String>,
-        #[serde(default)]
-        dry_run: bool,
-    },
-    LinkParser {
-        operation: LinkParserOperation,
-    },
-    ValidateWorkspaceName {
-        name: String,
-        existing_local_names: Vec<String>,
-        #[serde(default)]
-        existing_server_names: Option<Vec<String>>,
-    },
-    ValidatePublishingSlug {
-        slug: String,
-    },
-    NormalizeServerUrl {
-        url: String,
-    },
-    PluginCommand {
-        plugin: String,
-        command: String,
-        params: JsonValue,
-    },
-    GetPluginManifests,
-    GetPluginConfig {
-        plugin: String,
-    },
-    SetPluginConfig {
-        plugin: String,
-        config: JsonValue,
-    },
-    RemoveWorkspacePluginData {
-        root_index_path: String,
-        plugin: String,
-    },
-}
-
-impl From<CommandWire> for Command {
-    fn from(w: CommandWire) -> Command {
-        match w {
-            CommandWire::GetEntry { path } => Command::GetEntry { path },
-            CommandWire::SaveEntry {
-                path,
-                content,
-                root_index_path,
-                detect_h1_title,
-            } => Command::SaveEntry {
-                path,
-                content,
-                root_index_path,
-                detect_h1_title,
-            },
-            CommandWire::CreateEntry { path, options } => Command::CreateEntry { path, options },
-            CommandWire::DeleteEntry { path, hard_delete } => {
-                Command::DeleteEntry { path, hard_delete }
-            }
-            CommandWire::MoveEntry { from, to } => Command::MoveEntry { from, to },
-            CommandWire::SyncMoveMetadata { old_path, new_path } => {
-                Command::SyncMoveMetadata { old_path, new_path }
-            }
-            CommandWire::SyncCreateMetadata { path } => Command::SyncCreateMetadata { path },
-            CommandWire::SyncDeleteMetadata { path } => Command::SyncDeleteMetadata { path },
-            CommandWire::RenameEntry { path, new_filename } => {
-                Command::RenameEntry { path, new_filename }
-            }
-            CommandWire::DuplicateEntry { path } => Command::DuplicateEntry { path },
-            CommandWire::ConvertToIndex { path } => Command::ConvertToIndex { path },
-            CommandWire::ConvertToLeaf { path } => Command::ConvertToLeaf { path },
-            CommandWire::CreateChildEntry { parent_path } => {
-                Command::CreateChildEntry { parent_path }
-            }
-            CommandWire::AttachEntryToParent {
-                entry_path,
-                parent_path,
-            } => Command::AttachEntryToParent {
-                entry_path,
-                parent_path,
-            },
-            CommandWire::AddLink {
-                source_path,
-                target_path,
-                content,
-            } => Command::AddLink {
-                source_path,
-                target_path,
-                content,
-            },
-            CommandWire::RemoveLink {
-                source_path,
-                target_path,
-                content,
-            } => Command::RemoveLink {
-                source_path,
-                target_path,
-                content,
-            },
-            CommandWire::FindRootIndex { directory } => Command::FindRootIndex { directory },
-            CommandWire::GetAvailableAudiences { path } => Command::GetAvailableAudiences { path },
-            CommandWire::GetEffectiveAudience { path } => Command::GetEffectiveAudience { path },
-            CommandWire::GetWorkspaceTree {
-                path,
-                depth,
-                audience,
-            } => Command::GetWorkspaceTree {
-                path,
-                depth,
-                audience,
-            },
-            CommandWire::GetWorkspaceFileSet { path } => Command::GetWorkspaceFileSet { path },
-            CommandWire::PrepareMultiDelete { paths, tree_path } => {
-                Command::PrepareMultiDelete { paths, tree_path }
-            }
-            CommandWire::CheckDeleteIncludesDescendants { paths, tree_path } => {
-                Command::CheckDeleteIncludesDescendants { paths, tree_path }
-            }
-            CommandWire::GetFilesystemTree {
-                path,
-                show_hidden,
-                depth,
-            } => Command::GetFilesystemTree {
-                path,
-                show_hidden,
-                depth,
-            },
-            CommandWire::CreateWorkspace { path, name } => Command::CreateWorkspace { path, name },
-            CommandWire::GetFrontmatter { path } => Command::GetFrontmatter { path },
-            CommandWire::ParseFrontmatter { content } => Command::ParseFrontmatter { content },
-            CommandWire::SetFrontmatterProperty {
-                path,
-                key,
-                value,
-                root_index_path,
-            } => Command::SetFrontmatterProperty {
-                path,
-                key,
-                value,
-                root_index_path,
-            },
-            CommandWire::RemoveFrontmatterProperty { path, key } => {
-                Command::RemoveFrontmatterProperty { path, key }
-            }
-            CommandWire::ReorderFrontmatterKeys { path, keys } => {
-                Command::ReorderFrontmatterKeys { path, keys }
-            }
-            CommandWire::MoveFrontmatterSectionToFile {
-                source_path,
-                section_key,
-                target_path,
-                create_if_missing,
-            } => Command::MoveFrontmatterSectionToFile {
-                source_path,
-                section_key,
-                target_path,
-                create_if_missing,
-            },
-            CommandWire::SearchWorkspace { pattern, options } => {
-                Command::SearchWorkspace { pattern, options }
-            }
-            CommandWire::ValidateWorkspace { path } => Command::ValidateWorkspace { path },
-            CommandWire::ValidateFile { path } => Command::ValidateFile { path },
-            CommandWire::FixAll { validation_result } => Command::FixAll { validation_result },
-            CommandWire::FixValidationWarning { warning } => {
-                Command::FixValidationWarning { warning }
-            }
-            CommandWire::FixValidationError { error } => Command::FixValidationError { error },
-            CommandWire::GetAvailableParentIndexes {
-                file_path,
-                workspace_root,
-            } => Command::GetAvailableParentIndexes {
-                file_path,
-                workspace_root,
-            },
-            CommandWire::GetAttachments { path } => Command::GetAttachments { path },
-            CommandWire::RegisterAttachment {
-                entry_path,
-                filename,
-            } => Command::RegisterAttachment {
-                entry_path,
-                filename,
-            },
-            CommandWire::DeleteAttachment {
-                entry_path,
-                attachment_path,
-            } => Command::DeleteAttachment {
-                entry_path,
-                attachment_path,
-            },
-            CommandWire::GetAttachmentData {
-                entry_path,
-                attachment_path,
-            } => Command::GetAttachmentData {
-                entry_path,
-                attachment_path,
-            },
-            CommandWire::ResolveAttachmentPath {
-                entry_path,
-                attachment_path,
-            } => Command::ResolveAttachmentPath {
-                entry_path,
-                attachment_path,
-            },
-            CommandWire::MoveAttachment {
-                source_entry_path,
-                target_entry_path,
-                attachment_path,
-                new_filename,
-            } => Command::MoveAttachment {
-                source_entry_path,
-                target_entry_path,
-                attachment_path,
-                new_filename,
-            },
-            CommandWire::GetAncestorAttachments { path } => {
-                Command::GetAncestorAttachments { path }
-            }
-            CommandWire::FileExists { path } => Command::FileExists { path },
-            CommandWire::ReadFile { path } => Command::ReadFile { path },
-            CommandWire::GetFileInfo { path } => Command::GetFileInfo { path },
-            CommandWire::WriteFile { path, content } => Command::WriteFile { path, content },
-            CommandWire::DeleteFile { path } => Command::DeleteFile { path },
-            CommandWire::ClearDirectory { path } => Command::ClearDirectory { path },
-            CommandWire::WriteFileWithMetadata {
-                path,
-                metadata,
-                body,
-            } => Command::WriteFileWithMetadata {
-                path,
-                metadata,
-                body,
-            },
-            CommandWire::UpdateFileMetadata {
-                path,
-                metadata,
-                body,
-            } => Command::UpdateFileMetadata {
-                path,
-                metadata,
-                body,
-            },
-            CommandWire::GetStorageUsage => Command::GetStorageUsage,
-            CommandWire::GetLinkFormat { root_index_path } => {
-                Command::GetLinkFormat { root_index_path }
-            }
-            CommandWire::SetLinkFormat {
-                root_index_path,
-                format,
-            } => Command::SetLinkFormat {
-                root_index_path,
-                format,
-            },
-            CommandWire::GetWorkspaceConfig { root_index_path } => {
-                Command::GetWorkspaceConfig { root_index_path }
-            }
-            CommandWire::GenerateFilename {
-                title,
-                root_index_path,
-            } => Command::GenerateFilename {
-                title,
-                root_index_path,
-            },
-            CommandWire::SetWorkspaceConfig {
-                root_index_path,
-                field,
-                value,
-            } => Command::SetWorkspaceConfig {
-                root_index_path,
-                field,
-                value,
-            },
-            CommandWire::MigrateWorkspaceConfig { root_index_path } => {
-                Command::MigrateWorkspaceConfig { root_index_path }
-            }
-            CommandWire::ConvertLinks {
-                root_index_path,
-                format,
-                path,
-                dry_run,
-            } => Command::ConvertLinks {
-                root_index_path,
-                format,
-                path,
-                dry_run,
-            },
-            CommandWire::LinkParser { operation } => Command::LinkParser { operation },
-            CommandWire::ValidateWorkspaceName {
-                name,
-                existing_local_names,
-                existing_server_names,
-            } => Command::ValidateWorkspaceName {
-                name,
-                existing_local_names,
-                existing_server_names,
-            },
-            CommandWire::ValidatePublishingSlug { slug } => {
-                Command::ValidatePublishingSlug { slug }
-            }
-            CommandWire::NormalizeServerUrl { url } => Command::NormalizeServerUrl { url },
-            CommandWire::PluginCommand {
-                plugin,
-                command,
-                params,
-            } => Command::PluginCommand {
-                plugin,
-                command,
-                params,
-            },
-            CommandWire::GetPluginManifests => Command::GetPluginManifests,
-            CommandWire::GetPluginConfig { plugin } => Command::GetPluginConfig { plugin },
-            CommandWire::SetPluginConfig { plugin, config } => {
-                Command::SetPluginConfig { plugin, config }
-            }
-            CommandWire::RemoveWorkspacePluginData {
-                root_index_path,
-                plugin,
-            } => Command::RemoveWorkspacePluginData {
-                root_index_path,
-                plugin,
-            },
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for Command {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // The public wire/TS contract is the adjacently-tagged `{ type, params }`.
-        // Read that envelope, then re-shape it into the externally-tagged form
-        // (`{ <type>: <params> }`, or a bare `"<type>"` string for unit variants)
-        // that `CommandWire`'s cheap derived deserializer expects.
-        #[derive(Deserialize)]
-        struct Envelope {
-            #[serde(rename = "type")]
-            ty: String,
-            #[serde(default)]
-            params: Option<serde_json::Value>,
-        }
-
-        let Envelope { ty, params } = Envelope::deserialize(deserializer)?;
-        let wire_value = match params {
-            Some(p) => {
-                let mut map = serde_json::Map::with_capacity(1);
-                map.insert(ty, p);
-                serde_json::Value::Object(map)
-            }
-            // No `params` => unit variant; canonical externally-tagged form is the
-            // bare variant-name string. (Every fielded variant carries at least one
-            // required field, so a struct variant never arrives without `params`.)
-            None => serde_json::Value::String(ty),
-        };
-
-        serde_json::from_value::<CommandWire>(wire_value)
-            .map(Command::from)
-            .map_err(serde::de::Error::custom)
-    }
-}
-
-/// Compile-time guard: exhaustive over `Command`, so adding or removing a
-/// variant without mirroring it in `CommandWire` breaks the build.
-#[allow(dead_code)]
-fn assert_command_wire_in_sync(c: Command) -> CommandWire {
-    match c {
-        Command::GetEntry { path } => CommandWire::GetEntry { path },
-        Command::SaveEntry {
-            path,
-            content,
-            root_index_path,
-            detect_h1_title,
-        } => CommandWire::SaveEntry {
-            path,
-            content,
-            root_index_path,
-            detect_h1_title,
-        },
-        Command::CreateEntry { path, options } => CommandWire::CreateEntry { path, options },
-        Command::DeleteEntry { path, hard_delete } => {
-            CommandWire::DeleteEntry { path, hard_delete }
-        }
-        Command::MoveEntry { from, to } => CommandWire::MoveEntry { from, to },
-        Command::SyncMoveMetadata { old_path, new_path } => {
-            CommandWire::SyncMoveMetadata { old_path, new_path }
-        }
-        Command::SyncCreateMetadata { path } => CommandWire::SyncCreateMetadata { path },
-        Command::SyncDeleteMetadata { path } => CommandWire::SyncDeleteMetadata { path },
-        Command::RenameEntry { path, new_filename } => {
-            CommandWire::RenameEntry { path, new_filename }
-        }
-        Command::DuplicateEntry { path } => CommandWire::DuplicateEntry { path },
-        Command::ConvertToIndex { path } => CommandWire::ConvertToIndex { path },
-        Command::ConvertToLeaf { path } => CommandWire::ConvertToLeaf { path },
-        Command::CreateChildEntry { parent_path } => CommandWire::CreateChildEntry { parent_path },
-        Command::AttachEntryToParent {
-            entry_path,
-            parent_path,
-        } => CommandWire::AttachEntryToParent {
-            entry_path,
-            parent_path,
-        },
-        Command::AddLink {
-            source_path,
-            target_path,
-            content,
-        } => CommandWire::AddLink {
-            source_path,
-            target_path,
-            content,
-        },
-        Command::RemoveLink {
-            source_path,
-            target_path,
-            content,
-        } => CommandWire::RemoveLink {
-            source_path,
-            target_path,
-            content,
-        },
-        Command::FindRootIndex { directory } => CommandWire::FindRootIndex { directory },
-        Command::GetAvailableAudiences { path } => CommandWire::GetAvailableAudiences { path },
-        Command::GetEffectiveAudience { path } => CommandWire::GetEffectiveAudience { path },
-        Command::GetWorkspaceTree {
-            path,
-            depth,
-            audience,
-        } => CommandWire::GetWorkspaceTree {
-            path,
-            depth,
-            audience,
-        },
-        Command::GetWorkspaceFileSet { path } => CommandWire::GetWorkspaceFileSet { path },
-        Command::PrepareMultiDelete { paths, tree_path } => {
-            CommandWire::PrepareMultiDelete { paths, tree_path }
-        }
-        Command::CheckDeleteIncludesDescendants { paths, tree_path } => {
-            CommandWire::CheckDeleteIncludesDescendants { paths, tree_path }
-        }
-        Command::GetFilesystemTree {
-            path,
-            show_hidden,
-            depth,
-        } => CommandWire::GetFilesystemTree {
-            path,
-            show_hidden,
-            depth,
-        },
-        Command::CreateWorkspace { path, name } => CommandWire::CreateWorkspace { path, name },
-        Command::GetFrontmatter { path } => CommandWire::GetFrontmatter { path },
-        Command::ParseFrontmatter { content } => CommandWire::ParseFrontmatter { content },
-        Command::SetFrontmatterProperty {
-            path,
-            key,
-            value,
-            root_index_path,
-        } => CommandWire::SetFrontmatterProperty {
-            path,
-            key,
-            value,
-            root_index_path,
-        },
-        Command::RemoveFrontmatterProperty { path, key } => {
-            CommandWire::RemoveFrontmatterProperty { path, key }
-        }
-        Command::ReorderFrontmatterKeys { path, keys } => {
-            CommandWire::ReorderFrontmatterKeys { path, keys }
-        }
-        Command::MoveFrontmatterSectionToFile {
-            source_path,
-            section_key,
-            target_path,
-            create_if_missing,
-        } => CommandWire::MoveFrontmatterSectionToFile {
-            source_path,
-            section_key,
-            target_path,
-            create_if_missing,
-        },
-        Command::SearchWorkspace { pattern, options } => {
-            CommandWire::SearchWorkspace { pattern, options }
-        }
-        Command::ValidateWorkspace { path } => CommandWire::ValidateWorkspace { path },
-        Command::ValidateFile { path } => CommandWire::ValidateFile { path },
-        Command::FixAll { validation_result } => CommandWire::FixAll { validation_result },
-        Command::FixValidationWarning { warning } => CommandWire::FixValidationWarning { warning },
-        Command::FixValidationError { error } => CommandWire::FixValidationError { error },
-        Command::GetAvailableParentIndexes {
-            file_path,
-            workspace_root,
-        } => CommandWire::GetAvailableParentIndexes {
-            file_path,
-            workspace_root,
-        },
-        Command::GetAttachments { path } => CommandWire::GetAttachments { path },
-        Command::RegisterAttachment {
-            entry_path,
-            filename,
-        } => CommandWire::RegisterAttachment {
-            entry_path,
-            filename,
-        },
-        Command::DeleteAttachment {
-            entry_path,
-            attachment_path,
-        } => CommandWire::DeleteAttachment {
-            entry_path,
-            attachment_path,
-        },
-        Command::GetAttachmentData {
-            entry_path,
-            attachment_path,
-        } => CommandWire::GetAttachmentData {
-            entry_path,
-            attachment_path,
-        },
-        Command::ResolveAttachmentPath {
-            entry_path,
-            attachment_path,
-        } => CommandWire::ResolveAttachmentPath {
-            entry_path,
-            attachment_path,
-        },
-        Command::MoveAttachment {
-            source_entry_path,
-            target_entry_path,
-            attachment_path,
-            new_filename,
-        } => CommandWire::MoveAttachment {
-            source_entry_path,
-            target_entry_path,
-            attachment_path,
-            new_filename,
-        },
-        Command::GetAncestorAttachments { path } => CommandWire::GetAncestorAttachments { path },
-        Command::FileExists { path } => CommandWire::FileExists { path },
-        Command::ReadFile { path } => CommandWire::ReadFile { path },
-        Command::GetFileInfo { path } => CommandWire::GetFileInfo { path },
-        Command::WriteFile { path, content } => CommandWire::WriteFile { path, content },
-        Command::DeleteFile { path } => CommandWire::DeleteFile { path },
-        Command::ClearDirectory { path } => CommandWire::ClearDirectory { path },
-        Command::WriteFileWithMetadata {
-            path,
-            metadata,
-            body,
-        } => CommandWire::WriteFileWithMetadata {
-            path,
-            metadata,
-            body,
-        },
-        Command::UpdateFileMetadata {
-            path,
-            metadata,
-            body,
-        } => CommandWire::UpdateFileMetadata {
-            path,
-            metadata,
-            body,
-        },
-        Command::GetStorageUsage => CommandWire::GetStorageUsage,
-        Command::GetLinkFormat { root_index_path } => {
-            CommandWire::GetLinkFormat { root_index_path }
-        }
-        Command::SetLinkFormat {
-            root_index_path,
-            format,
-        } => CommandWire::SetLinkFormat {
-            root_index_path,
-            format,
-        },
-        Command::GetWorkspaceConfig { root_index_path } => {
-            CommandWire::GetWorkspaceConfig { root_index_path }
-        }
-        Command::GenerateFilename {
-            title,
-            root_index_path,
-        } => CommandWire::GenerateFilename {
-            title,
-            root_index_path,
-        },
-        Command::SetWorkspaceConfig {
-            root_index_path,
-            field,
-            value,
-        } => CommandWire::SetWorkspaceConfig {
-            root_index_path,
-            field,
-            value,
-        },
-        Command::MigrateWorkspaceConfig { root_index_path } => {
-            CommandWire::MigrateWorkspaceConfig { root_index_path }
-        }
-        Command::ConvertLinks {
-            root_index_path,
-            format,
-            path,
-            dry_run,
-        } => CommandWire::ConvertLinks {
-            root_index_path,
-            format,
-            path,
-            dry_run,
-        },
-        Command::LinkParser { operation } => CommandWire::LinkParser { operation },
-        Command::ValidateWorkspaceName {
-            name,
-            existing_local_names,
-            existing_server_names,
-        } => CommandWire::ValidateWorkspaceName {
-            name,
-            existing_local_names,
-            existing_server_names,
-        },
-        Command::ValidatePublishingSlug { slug } => CommandWire::ValidatePublishingSlug { slug },
-        Command::NormalizeServerUrl { url } => CommandWire::NormalizeServerUrl { url },
-        Command::PluginCommand {
-            plugin,
-            command,
-            params,
-        } => CommandWire::PluginCommand {
-            plugin,
-            command,
-            params,
-        },
-        Command::GetPluginManifests => CommandWire::GetPluginManifests,
-        Command::GetPluginConfig { plugin } => CommandWire::GetPluginConfig { plugin },
-        Command::SetPluginConfig { plugin, config } => {
-            CommandWire::SetPluginConfig { plugin, config }
-        }
-        Command::RemoveWorkspacePluginData {
-            root_index_path,
-            plugin,
-        } => CommandWire::RemoveWorkspacePluginData {
-            root_index_path,
-            plugin,
-        },
-    }
 }
 
 impl Command {
@@ -1936,6 +1049,35 @@ pub enum Response {
 }
 
 // ============================================================================
+// JSON codec (serde_json-free)
+//
+// The command/response wire protocol is JSON, but the codec is `fig`, not
+// `serde_json`. Reading uses the serde-free `#[derive(fig::FromValue)]` on
+// `Command` (no `Content`-buffering bloat); writing uses fig's serde adapter to
+// build a `Value` from `Response`'s `Serialize` impl, then emits compact JSON.
+// ============================================================================
+
+impl Command {
+    /// Parse a `Command` from its `{ type, params }` JSON envelope, serde-free.
+    pub fn from_json(json: &str) -> Result<Self, fig::Error> {
+        let value = fig::Document::parse(json.as_bytes(), fig::Format::Json)?.to_value()?;
+        <Command as fig::FromValue>::from_value(&value)
+    }
+}
+
+impl Response {
+    /// Serialize a `Response` to compact JSON via fig's serde adapter.
+    ///
+    /// fig's compact serializer appends a trailing newline; `serde_json::to_string`
+    /// does not, so we trim it to keep the wire bytes identical.
+    pub fn to_json(&self) -> Result<String, fig::Error> {
+        let json = fig::to_value(self)?
+            .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())?;
+        Ok(json.trim_end().to_string())
+    }
+}
+
+// ============================================================================
 // Helper Types
 // ============================================================================
 
@@ -1955,7 +1097,7 @@ pub struct EntryData {
 }
 
 /// Options for creating a new entry.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct CreateEntryOptions {
@@ -1972,7 +1114,7 @@ pub struct CreateEntryOptions {
 }
 
 /// Options for searching entries.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct SearchOptions {
@@ -1980,11 +1122,13 @@ pub struct SearchOptions {
     pub workspace_path: Option<String>,
     /// Whether to search frontmatter.
     #[serde(default)]
+    #[fig(default)]
     pub search_frontmatter: bool,
     /// Specific property to search.
     pub property: Option<String>,
     /// Case sensitive search.
     #[serde(default)]
+    #[fig(default)]
     pub case_sensitive: bool,
 }
 
@@ -2124,17 +1268,20 @@ pub struct ConvertLinksResult {
 }
 
 /// Link parser operation selector.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type", content = "params", rename_all = "snake_case")]
+#[fig(tag = "type", content = "params")]
 pub enum LinkParserOperation {
     /// Parse a link string into title/path/path type.
+    #[fig(rename = "parse")]
     Parse {
         /// Link string to parse.
         link: String,
     },
     /// Resolve a link string to canonical (workspace-relative) path.
+    #[fig(rename = "to_canonical")]
     ToCanonical {
         /// Link string to resolve.
         link: String,
@@ -2145,6 +1292,7 @@ pub enum LinkParserOperation {
         link_format_hint: Option<LinkFormat>,
     },
     /// Format a canonical path as a link string.
+    #[fig(rename = "format")]
     Format {
         /// Canonical target path.
         canonical_path: String,
@@ -2156,6 +1304,7 @@ pub enum LinkParserOperation {
         from_canonical_path: String,
     },
     /// Convert an input link string to another format.
+    #[fig(rename = "convert")]
     Convert {
         /// Original link string.
         link: String,
@@ -2225,8 +1374,8 @@ mod tests {
         assert!(json.contains("GetEntry"));
         assert!(json.contains("notes/hello.md"));
 
-        // Deserialize back
-        let cmd2: Command = serde_json::from_str(&json).unwrap();
+        // Deserialize back (serde-free: fig FromValue)
+        let cmd2: Command = Command::from_json(&json).unwrap();
         if let Command::GetEntry { path } = cmd2 {
             assert_eq!(path, "notes/hello.md");
         } else {
@@ -2239,7 +1388,7 @@ mod tests {
         // Exact wire envelope `{ type, params }` for a multi-field variant,
         // with optional `#[serde(default)]` fields omitted.
         let cmd: Command =
-            serde_json::from_str(r#"{"type":"SaveEntry","params":{"path":"a.md","content":"x"}}"#)
+            Command::from_json(r#"{"type":"SaveEntry","params":{"path":"a.md","content":"x"}}"#)
                 .unwrap();
         match cmd {
             Command::SaveEntry {
@@ -2260,18 +1409,18 @@ mod tests {
         let json = serde_json::to_string(&Command::GetStorageUsage).unwrap();
         assert_eq!(json, r#"{"type":"GetStorageUsage"}"#);
         assert!(matches!(
-            serde_json::from_str::<Command>(&json).unwrap(),
+            Command::from_json(&json).unwrap(),
             Command::GetStorageUsage
         ));
 
-        // Full round-trip for a second unit variant via the manual deserializer.
+        // Full round-trip for a second unit variant via the fig deserializer.
         assert!(matches!(
-            serde_json::from_str::<Command>(r#"{"type":"GetPluginManifests"}"#).unwrap(),
+            Command::from_json(r#"{"type":"GetPluginManifests"}"#).unwrap(),
             Command::GetPluginManifests
         ));
 
         // Unknown command type is rejected (not silently dropped).
-        assert!(serde_json::from_str::<Command>(r#"{"type":"NoSuchCommand"}"#).is_err());
+        assert!(Command::from_json(r#"{"type":"NoSuchCommand"}"#).is_err());
     }
 
     #[test]

@@ -40,7 +40,7 @@ use std::path::Path;
 /// The format to use when writing links to frontmatter.
 ///
 /// This controls how frontmatter link paths are serialized.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(rename_all = "snake_case")]
@@ -52,21 +52,25 @@ pub enum LinkFormat {
     /// - Unambiguous (always relative to workspace root)
     /// - Self-documenting with human-readable titles
     #[default]
+    #[fig(rename = "markdown_root")]
     MarkdownRoot,
 
     /// Markdown link with relative path: `[Title](../relative/path.md)`
     ///
     /// Useful for compatibility with tools that don't understand root paths.
+    #[fig(rename = "markdown_relative")]
     MarkdownRelative,
 
     /// Plain relative path without markdown link syntax: `../relative/path.md`
     ///
     /// Legacy format for backwards compatibility.
+    #[fig(rename = "plain_relative")]
     PlainRelative,
 
     /// Plain canonical path (workspace-relative): `path/to/file.md`
     ///
     /// Simple format without markdown link syntax or leading slash.
+    #[fig(rename = "plain_canonical")]
     PlainCanonical,
 }
 

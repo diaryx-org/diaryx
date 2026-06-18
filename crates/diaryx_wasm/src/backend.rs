@@ -365,8 +365,8 @@ impl DiaryxBackend {
     pub async fn execute(&self, command_json: &str) -> std::result::Result<String, JsValue> {
         use diaryx_core::Command;
 
-        // Parse the command from JSON
-        let cmd: Command = serde_json::from_str(command_json)
+        // Parse the command from JSON (serde-free: fig FromValue)
+        let cmd: Command = Command::from_json(command_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid command JSON: {}", e)))?;
 
         // Execute the command using the shared Diaryx instance
@@ -377,8 +377,9 @@ impl DiaryxBackend {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        // Serialize the response to JSON
-        serde_json::to_string(&result)
+        // Serialize the response to compact JSON (via fig, not serde_json)
+        result
+            .to_json()
             .map_err(|e| JsValue::from_str(&format!("Failed to serialize response: {}", e)))
     }
 

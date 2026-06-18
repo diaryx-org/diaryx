@@ -29,6 +29,10 @@ serde.workspace = true
 serde_json.workspace = true
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
+# The workspace `.cargo/config.toml` forces `getrandom_backend="custom"` for all
+# wasm32-unknown-unknown builds, so this module must define
+# `__getrandom_v03_custom` (see `getrandom_shim`). uuid 1.x pulls getrandom 0.3.
+getrandom_03 = { package = "getrandom", version = "0.3" }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "wasmbind"] }
 pathdiff = "0.2"
 log = "0.4"

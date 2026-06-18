@@ -313,6 +313,53 @@ impl From<&Value> for fig::Value {
     }
 }
 
+/// Convert from `fig`'s native value tree into this YAML value type — the
+/// read-side mirror of `From<&Value> for fig::Value`, used by the serde-free
+/// parse path ([`crate::yaml::parse_value`]). A `fig::Value::Uint` widens to
+/// `Int` when it fits in `i64`, else `Float` (matching the old serde
+/// `visit_u64`). Mapping keys are stringified (frontmatter keys are strings).
+impl From<fig::Value> for Value {
+    fn from(value: fig::Value) -> Self {
+        match value {
+            fig::Value::Null => Value::Null,
+            fig::Value::Bool(b) => Value::Bool(b),
+            fig::Value::Int(i) => Value::Int(i),
+            fig::Value::Uint(u) => {
+                if u <= i64::MAX as u64 {
+                    Value::Int(u as i64)
+                } else {
+                    Value::Float(u as f64)
+                }
+            }
+            fig::Value::Float(f) => Value::Float(f),
+            fig::Value::Str(s) => Value::String(s),
+            fig::Value::Seq(items) => Value::Sequence(items.into_iter().map(Value::from).collect()),
+            fig::Value::Map(entries) => {
+                let mut map = IndexMap::with_capacity(entries.len());
+                for (k, v) in entries {
+                    map.insert(fig_key_to_string(k), Value::from(v));
+                }
+                Value::Mapping(map)
+            }
+        }
+    }
+}
+
+/// Stringify a `fig` mapping key. YAML/JSON frontmatter keys are virtually
+/// always strings; other scalars render to their text form (integers via the
+/// `Display` integer path — no float formatter), and the invalid-for-a-key
+/// shapes (float/sequence/mapping) collapse to an empty string.
+fn fig_key_to_string(key: fig::Value) -> String {
+    match key {
+        fig::Value::Str(s) => s,
+        fig::Value::Bool(b) => b.to_string(),
+        fig::Value::Int(i) => i.to_string(),
+        fig::Value::Uint(u) => u.to_string(),
+        fig::Value::Null => "null".to_string(),
+        fig::Value::Float(_) | fig::Value::Seq(_) | fig::Value::Map(_) => String::new(),
+    }
+}
+
 impl From<serde_json::Value> for Value {
     fn from(json: serde_json::Value) -> Self {
         match json {

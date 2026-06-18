@@ -820,7 +820,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
             Some((yaml, _body)) => yaml,
             None => return Ok(None),
         };
-        let frontmatter: IndexFrontmatter = match crate::yaml::from_str(frontmatter_str) {
+        let frontmatter: IndexFrontmatter = match IndexFrontmatter::from_yaml_str(frontmatter_str) {
             Ok(fm) => fm,
             Err(_) => return Ok(None),
         };

@@ -2885,6 +2885,7 @@ dependencies = [
  "console_log",
  "diaryx_core",
  "futures",
+ "getrandom 0.3.4",
  "indexed-db",
  "js-sys",
  "log",

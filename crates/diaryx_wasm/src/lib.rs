@@ -34,6 +34,7 @@ mod backend;
 mod error;
 #[cfg(feature = "browser")]
 mod fsa_fs;
+mod getrandom_shim;
 #[cfg(feature = "browser")]
 mod indexeddb_fs;
 mod js_async_fs;

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::yaml;
 
@@ -44,127 +44,108 @@ fn normalize_path(path: &Path) -> PathBuf {
     normalized.iter().collect()
 }
 
-/// Deserializes a value that should be a string, tolerating a single-element
-/// string array.
+/// Pull the string-shaped elements out of a YAML sequence, coercing integers
+/// via `i64::to_string` (the integer `Display` path, which — unlike float/bool
+/// `to_string` — does not pull the Dragon4 float formatter into WASM). Floats,
+/// bools, and nested shapes are dropped.
+fn seq_strings(seq: Vec<yaml::Value>) -> Vec<String> {
+    seq.into_iter()
+        .filter_map(|v| match v {
+            yaml::Value::String(s) => Some(s),
+            yaml::Value::Int(n) => Some(n.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Coerce a value that should be a string, tolerating a single-element string
+/// array. The serde-free port of the former `deserialize_string_lenient`:
 ///
 /// - String: returned as-is
-/// - Array: takes the first string element (skipping non-string entries)
-/// - Null/None: returns None
+/// - Array: takes the first string-shaped element (skipping the rest)
 /// - Integer: coerced via `i64::to_string` (no `f64` formatting pulled in)
-/// - Anything else (float, bool, mapping): treated as absent (`None`)
+/// - Anything else (null, float, bool, mapping): treated as absent (`None`)
 ///
-/// Non-string scalars were previously stringified via `to_string()`, which
-/// in the float/bool arms pulled in `core::fmt::float` + the Dragon4
-/// formatter (~11 KB of WASM). Frontmatter titles/descriptions/etc. are
-/// always written as strings by our own code, so permissive float/bool
-/// coercion is not worth the binary-size cost. Integer coercion is kept
-/// for users who hand-write `title: 2025` — `i64::Display` uses the
-/// integer path and does not pull in the float formatter.
-fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<yaml::Value> = Option::deserialize(deserializer)?;
+/// Non-string scalars were previously stringified via `to_string()`, which in
+/// the float/bool arms pulled in `core::fmt::float` + the Dragon4 formatter
+/// (~11 KB of WASM). Frontmatter titles/descriptions/etc. are always written as
+/// strings by our own code, so permissive float/bool coercion is not worth the
+/// binary-size cost.
+fn coerce_string_lenient(value: yaml::Value) -> Option<String> {
     match value {
-        None | Some(yaml::Value::Null) => Ok(None),
-        Some(yaml::Value::String(s)) => Ok(Some(s)),
-        Some(yaml::Value::Int(n)) => Ok(Some(n.to_string())),
-        Some(yaml::Value::Sequence(seq)) => {
-            // Take the first string-shaped element from the array
-            for item in seq {
-                match item {
-                    yaml::Value::String(s) => return Ok(Some(s)),
-                    yaml::Value::Int(n) => return Ok(Some(n.to_string())),
-                    _ => continue,
-                }
-            }
-            Ok(None)
-        }
-        // Float / Bool / Mapping: treat as absent to avoid pulling in the
-        // float formatter / extra stringification code paths into WASM.
-        _ => Ok(None),
+        yaml::Value::String(s) => Some(s),
+        yaml::Value::Int(n) => Some(n.to_string()),
+        yaml::Value::Sequence(seq) => seq.into_iter().find_map(|item| match item {
+            yaml::Value::String(s) => Some(s),
+            yaml::Value::Int(n) => Some(n.to_string()),
+            _ => None,
+        }),
+        _ => None,
     }
 }
 
-/// Deserializes a value that should be a `Vec<String>`, tolerating a bare
-/// string.
+/// Coerce a value that should be a `Vec<String>`, tolerating a bare string or
+/// integer. The serde-free port of the former `deserialize_vec_string_lenient`:
 ///
 /// - Array of strings (with optional integer elements): returned as-is
 /// - Bare string: wrapped in a single-element vec
 /// - Bare integer: wrapped as `[stringified]`
-/// - Null/None: returns None
-/// - Anything else (float, bool, mapping, tagged): treated as absent
-///
-/// As with `deserialize_string_lenient`, we deliberately do not coerce
-/// float/bool values to avoid pulling the float formatter into WASM.
-fn deserialize_vec_string_lenient<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<yaml::Value> = Option::deserialize(deserializer)?;
+/// - Anything else (null, float, bool, mapping): treated as absent
+fn coerce_vec_string_lenient(value: yaml::Value) -> Option<Vec<String>> {
     match value {
-        None | Some(yaml::Value::Null) => Ok(None),
-        Some(yaml::Value::String(s)) => Ok(Some(vec![s])),
-        Some(yaml::Value::Int(n)) => Ok(Some(vec![n.to_string()])),
-        Some(yaml::Value::Sequence(seq)) => {
-            let strings = seq
-                .into_iter()
-                .filter_map(|v| match v {
-                    yaml::Value::String(s) => Some(s),
-                    yaml::Value::Int(n) => Some(n.to_string()),
-                    // Floats / bools / nested shapes are silently dropped
-                    // (see module-level note).
-                    _ => None,
-                })
-                .collect();
-            Ok(Some(strings))
-        }
-        _ => Ok(None),
+        yaml::Value::String(s) => Some(vec![s]),
+        yaml::Value::Int(n) => Some(vec![n.to_string()]),
+        yaml::Value::Sequence(seq) => Some(seq_strings(seq)),
+        _ => None,
     }
 }
 
-/// Represents an index file's frontmatter
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Coerce a value that should be a list (`contents` / `attachments` /
+/// `exclude`). Only a sequence yields `Some` — unlike [`coerce_vec_string_lenient`],
+/// a bare scalar is *not* promoted to a one-element list, matching how these
+/// structural fields parsed when they were plain `Option<Vec<String>>`. The
+/// presence of an (even empty) list is what marks a file as an index, so the
+/// distinction is load-bearing.
+fn coerce_string_seq(value: yaml::Value) -> Option<Vec<String>> {
+    match value {
+        yaml::Value::Sequence(seq) => Some(seq_strings(seq)),
+        _ => None,
+    }
+}
+
+/// Represents an index file's frontmatter.
+///
+/// Parsing is serde-free: build with [`IndexFrontmatter::from_yaml_str`], which
+/// walks `fig`'s native value tree rather than deriving `Deserialize`. The
+/// `Serialize` derive is retained because [`IndexFile`] serializes (e.g. for the
+/// CLI/JSON tree output); `skip_serializing_if` mirrors the previous output.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct IndexFrontmatter {
     /// Display name for this index
-    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub title: Option<String>,
 
     /// Canonical self-link for this file.
     /// When present, this should resolve back to the file itself.
-    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub link: Option<String>,
 
     /// Description of this area
-    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub description: Option<String>,
 
     /// List of paths to child index files (relative to this file)
     /// None means the key was absent; Some(vec) means it was present (even if empty)
-    /// List of paths to child index files (relative to this file)
-    /// None means the key was absent; Some(vec) means it was present (even if empty)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub contents: Option<Vec<String>>,
 
     /// Explicit outbound links declared by this file.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_vec_string_lenient"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub links: Option<Vec<String>>,
 
     /// Explicit backlinks from files whose `links` reference this file.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_vec_string_lenient"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_of: Option<Vec<String>>,
 
     /// Path to parent index file (relative to this file)
     /// If absent, this is a root index (workspace root)
-    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub part_of: Option<String>,
 
     /// Audience groups that can see this file and its contents.
@@ -172,36 +153,27 @@ pub struct IndexFrontmatter {
     /// `default_audience` in workspace config, the entry is private (excluded
     /// from exports). When `default_audience` is set, unconstrained entries
     /// are treated as belonging to that audience tag.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_vec_string_lenient"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub audience: Option<Vec<String>>,
 
     /// List of paths to attachment files (images, documents, etc.) relative to this file.
     /// Attachments declared here are available to this entry and all children.
     /// These values point to attachment notes (markdown files), whose singular
     /// `attachment` property points to the actual binary asset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<String>>,
 
     /// Singular link to the binary asset represented by this attachment note.
-    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub attachment: Option<String>,
 
     /// Reverse links from entries whose `attachments` reference this note.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_vec_string_lenient"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment_of: Option<Vec<String>>,
 
     /// Glob patterns for files to exclude from orphan validation.
     /// Files matching these patterns won't trigger OrphanBinaryFile warnings.
     /// Example: `["*.lock", "*.toml", "build/*"]`
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
 
     // NOTE: `plugins` is intentionally NOT a typed field here. It is a workspace
@@ -216,6 +188,57 @@ pub struct IndexFrontmatter {
 }
 
 impl IndexFrontmatter {
+    /// Parse index frontmatter from a YAML string without serde.
+    ///
+    /// The serde-free replacement for `yaml::from_str::<IndexFrontmatter>`: it
+    /// parses via `fig`'s native parser ([`yaml::parse_value`]) and walks the
+    /// resulting [`yaml::Value`] tree, applying the same lenient scalar/array
+    /// coercions the old `deserialize_with` hooks did. Keys not matched by a
+    /// named field land in `extra`, exactly like `#[serde(flatten)]`.
+    pub fn from_yaml_str(s: &str) -> std::result::Result<Self, yaml::Error> {
+        Ok(Self::from_value(yaml::parse_value(s)?))
+    }
+
+    /// Build from an already-parsed YAML value. A non-mapping top level yields
+    /// the default (empty) frontmatter — matching serde, for which no named
+    /// fields would be present.
+    fn from_value(value: yaml::Value) -> Self {
+        let mut map = match value {
+            yaml::Value::Mapping(m) => m,
+            _ => return Self::default(),
+        };
+
+        // Each named field is removed from the map so whatever is left flows
+        // into `extra`, the way `#[serde(flatten)]` collected unknown keys.
+        IndexFrontmatter {
+            title: map.shift_remove("title").and_then(coerce_string_lenient),
+            link: map.shift_remove("link").and_then(coerce_string_lenient),
+            description: map
+                .shift_remove("description")
+                .and_then(coerce_string_lenient),
+            contents: map.shift_remove("contents").and_then(coerce_string_seq),
+            links: map
+                .shift_remove("links")
+                .and_then(coerce_vec_string_lenient),
+            link_of: map
+                .shift_remove("link_of")
+                .and_then(coerce_vec_string_lenient),
+            part_of: map.shift_remove("part_of").and_then(coerce_string_lenient),
+            audience: map
+                .shift_remove("audience")
+                .and_then(coerce_vec_string_lenient),
+            attachments: map.shift_remove("attachments").and_then(coerce_string_seq),
+            attachment: map
+                .shift_remove("attachment")
+                .and_then(coerce_string_lenient),
+            attachment_of: map
+                .shift_remove("attachment_of")
+                .and_then(coerce_vec_string_lenient),
+            exclude: map.shift_remove("exclude").and_then(coerce_string_seq),
+            extra: map.into_iter().collect(),
+        }
+    }
+
     /// Returns true if this is a root index (has contents property but no part_of)
     pub fn is_root(&self) -> bool {
         self.contents.is_some() && self.part_of.is_none()
@@ -554,18 +577,88 @@ mod tests {
     fn test_audience_bare_string_deserialized_as_vec() {
         // audience: private (bare string) should become vec!["private"]
         let yaml = "audience: private\n";
-        let fm: IndexFrontmatter = crate::yaml::from_str(yaml).unwrap();
+        let fm = IndexFrontmatter::from_yaml_str(yaml).unwrap();
         assert_eq!(fm.audience, Some(vec!["private".to_string()]));
     }
 
     #[test]
     fn test_audience_array_deserialized_normally() {
         let yaml = "audience:\n  - family\n  - private\n";
-        let fm: IndexFrontmatter = crate::yaml::from_str(yaml).unwrap();
+        let fm = IndexFrontmatter::from_yaml_str(yaml).unwrap();
         assert_eq!(
             fm.audience,
             Some(vec!["family".to_string(), "private".to_string()])
         );
+    }
+
+    #[test]
+    fn from_yaml_str_collects_unknown_keys_into_extra() {
+        // Named fields are typed; everything else flows into `extra`, exactly
+        // like the old `#[serde(flatten)]`.
+        let yaml = "title: Home\ncustom_key: hello\ncount: 3\n";
+        let fm = IndexFrontmatter::from_yaml_str(yaml).unwrap();
+        assert_eq!(fm.title.as_deref(), Some("Home"));
+        assert_eq!(
+            fm.extra.get("custom_key"),
+            Some(&yaml::Value::String("hello".into()))
+        );
+        assert_eq!(fm.extra.get("count"), Some(&yaml::Value::Int(3)));
+        // A typed field never leaks into `extra`.
+        assert!(!fm.extra.contains_key("title"));
+    }
+
+    #[test]
+    fn from_yaml_str_non_mapping_is_default() {
+        // A scalar / sequence top level has no named fields — empty frontmatter.
+        assert!(
+            IndexFrontmatter::from_yaml_str("just a string\n")
+                .unwrap()
+                .extra
+                .is_empty()
+        );
+        assert!(
+            IndexFrontmatter::from_yaml_str("- a\n- b\n")
+                .unwrap()
+                .title
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn from_yaml_str_empty_contents_marks_index() {
+        // An explicit empty list is `Some(vec![])` (file is an index); an absent
+        // key is `None`. A bare scalar is NOT promoted to a one-item list.
+        assert_eq!(
+            IndexFrontmatter::from_yaml_str("contents: []\n")
+                .unwrap()
+                .contents,
+            Some(vec![])
+        );
+        assert!(
+            IndexFrontmatter::from_yaml_str("contents: []\n")
+                .unwrap()
+                .is_index()
+        );
+        assert_eq!(
+            IndexFrontmatter::from_yaml_str("title: x\n")
+                .unwrap()
+                .contents,
+            None
+        );
+        assert_eq!(
+            IndexFrontmatter::from_yaml_str("contents: oops\n")
+                .unwrap()
+                .contents,
+            None
+        );
+    }
+
+    #[test]
+    fn from_yaml_str_coerces_integer_title() {
+        // `title: 2025` (a hand-written int) coerces to a string via the integer
+        // Display path, without pulling the float formatter.
+        let fm = IndexFrontmatter::from_yaml_str("title: 2025\n").unwrap();
+        assert_eq!(fm.title.as_deref(), Some("2025"));
     }
 
     #[test]

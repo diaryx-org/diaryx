@@ -514,8 +514,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let (frontmatter_str, body) = crate::frontmatter::split(&content)
             .ok_or_else(|| DiaryxError::NoFrontmatter(path.to_path_buf()))?;
 
-        let frontmatter: IndexFrontmatter =
-            crate::yaml::from_str(frontmatter_str).map_err(|e| DiaryxError::YamlParse {
+        let frontmatter: IndexFrontmatter = IndexFrontmatter::from_yaml_str(frontmatter_str)
+            .map_err(|e| DiaryxError::YamlParse {
                 path: path.to_path_buf(),
                 message: e.to_string(),
             })?;
@@ -4545,7 +4545,7 @@ fn is_root_index_sync(fs: &dyn crate::fs::FileSystem, path: &Path) -> bool {
         Some((yaml_value, _)) => yaml_value,
         None => return false,
     };
-    match crate::yaml::from_str::<IndexFrontmatter>(frontmatter_str) {
+    match IndexFrontmatter::from_yaml_str(frontmatter_str) {
         Ok(fm) => fm.is_root(),
         Err(_) => false,
     }

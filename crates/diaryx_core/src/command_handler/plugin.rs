@@ -63,10 +63,21 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             return Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")));
         };
 
+        // Only plugins that opt into host-managed declarative config get their
+        // config written to Config.md. Other plugins keep their config in the
+        // guest's own store via `set_config` — critically, this avoids routing
+        // config that may contain secrets (e.g. an API key) into a
+        // git-diffable file.
+        let declarative = crate::plugin::uses_declarative_config(wp.as_ref());
+        let root_index = if declarative {
+            self.current_root_index().await
+        } else {
+            None
+        };
+
         // Persist declarative config to Config.md (the source of truth). Plugin
         // *state/blobs* stay in `host::storage`; only user-editable settings
         // live here, so they are human-editable, git-diffable, and synced.
-        let root_index = self.current_root_index().await;
         if let Some(ref root_index) = root_index {
             self.workspace()
                 .inner()
@@ -92,10 +103,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 .set_workspace_plugin_config(root_index, &plugin, updated)
                 .await?;
         }
-        // TODO(reconcile surfacing): `reconcile.permission_request` and
-        // `reconcile.migrations` are surfaced for user approval in the frontend
-        // phase; not yet applied here.
-        Ok(Response::Ok)
+
+        // Surface tier-2 / tier-3 back to the caller (frontend) for user
+        // approval. The host does not apply permission or migration changes
+        // itself — it returns them so the UI can prompt, then writes only what
+        // the user approves. Non-declarative plugins yield an empty reconcile.
+        Ok(Response::PluginResult(serde_json::json!({
+            "permission_request": reconcile.permission_request,
+            "migrations": reconcile.migrations,
+        })))
     }
 
     /// Find a registered workspace plugin by id, cloning the `Arc` so the

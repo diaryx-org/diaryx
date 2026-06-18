@@ -1290,12 +1290,20 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'PluginResult').data;
     },
 
-    /** Set a plugin's configuration. */
-    async setPluginConfig(plugin: string, config: JsonValue): Promise<void> {
-      await backend.execute({
+    /**
+     * Set a plugin's configuration.
+     *
+     * Returns the host's pending reconcile — `{ permission_request, migrations }`
+     * — that the caller surfaces for user approval. The host persists the
+     * config itself but never applies permission/migration changes without
+     * explicit consent. Callers that don't need approval can ignore the result.
+     */
+    async setPluginConfig(plugin: string, config: JsonValue): Promise<JsonValue> {
+      const response = await backend.execute({
         type: 'SetPluginConfig',
         params: { plugin, config },
       });
+      return expectResponse(response, 'PluginResult').data;
     },
 
     /** Remove workspace-level plugin data from the root index frontmatter. */

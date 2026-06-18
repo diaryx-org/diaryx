@@ -374,6 +374,7 @@ fn convert_guest_manifest(guest: &GuestManifest) -> PluginManifest {
             "media_transcoder" => Some(PluginCapability::MediaTranscoder {
                 conversions: guest.conversions.clone(),
             }),
+            "declarative_config" => Some(PluginCapability::DeclarativeConfig),
             other => {
                 log::warn!("Unknown capability: {other}");
                 None

@@ -96,8 +96,8 @@ pub mod state;
 pub mod prelude {
     pub use crate::host;
     pub use crate::protocol::{
-        CURRENT_PROTOCOL_VERSION, CommandRequest, CommandResponse, GuestEvent, GuestManifest,
-        GuestRequestedPermissions,
+        CURRENT_PROTOCOL_VERSION, CommandRequest, CommandResponse, ConfigReconcile, GuestEvent,
+        GuestManifest, GuestRequestedPermissions, LegacyMigration, PermissionRequest,
     };
     pub use crate::state::PluginState;
 }

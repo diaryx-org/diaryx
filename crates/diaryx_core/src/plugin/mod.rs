@@ -250,6 +250,19 @@ pub struct LegacyMigration {
     pub reason: Option<String>,
 }
 
+/// Whether a plugin opts into host-managed declarative config — its
+/// user-editable settings live in `plugins.<id>.config` in the workspace
+/// settings file rather than in `host::storage`. Gates both the migration of
+/// existing config and writing config to the (git-diffable) settings file, so
+/// plugins holding secrets in their config are never auto-persisted there.
+pub fn uses_declarative_config(plugin: &dyn WorkspacePlugin) -> bool {
+    plugin
+        .manifest()
+        .capabilities
+        .iter()
+        .any(|c| matches!(c, PluginCapability::DeclarativeConfig))
+}
+
 /// Workspace lifecycle plugin.
 ///
 /// Receives events when workspaces are opened, closed, or modified.

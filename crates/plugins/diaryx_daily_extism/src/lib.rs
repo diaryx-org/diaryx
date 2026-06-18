@@ -31,9 +31,8 @@ use serde_json::Value as JsonValue;
 
 use commands::{all_commands, dispatch_command, get_component_html_by_id};
 use daily_logic::DailyPluginConfig;
-use permissions::build_requested_permissions;
+use permissions::{build_permission_request, build_requested_permissions};
 use state::{InitParams, current_state, update_workspace_root, with_state_mut};
-use storage::save_workspace_config;
 
 #[plugin_fn]
 pub fn manifest(_input: String) -> FnResult<String> {
@@ -42,7 +41,11 @@ pub fn manifest(_input: String) -> FnResult<String> {
         "Daily",
         env!("CARGO_PKG_VERSION"),
         "Daily entry plugin with date hierarchy, navigation, and CLI surface",
-        vec!["workspace_events".into(), "custom_commands".into()],
+        vec![
+            "workspace_events".into(),
+            "custom_commands".into(),
+            "declarative_config".into(),
+        ],
     )
     .ui(vec![
         serde_json::json!({
@@ -153,12 +156,12 @@ pub fn execute_typed_command(input: String) -> FnResult<String> {
 #[plugin_fn]
 pub fn get_config(_input: String) -> FnResult<String> {
     let state = current_state().map_err(extism_pdk::Error::msg)?;
-    Ok(serde_json::to_string(&state.config)?)
+    Ok(state.config.to_public_value().to_string())
 }
 
 #[plugin_fn]
 pub fn set_config(input: String) -> FnResult<String> {
-    with_state_mut(|state| {
+    let reconcile = with_state_mut(|state| {
         let mut config: DailyPluginConfig = serde_json::from_str(&input).unwrap_or_default();
 
         if let Some(folder) = config.entry_folder.as_deref() {
@@ -171,11 +174,23 @@ pub fn set_config(input: String) -> FnResult<String> {
             state.config.migrated_legacy_config = true;
         }
 
-        save_workspace_config(state)?;
-        Ok(())
+        // No `host::storage` write: the host persists declarative config to
+        // `plugins.diaryx.daily.config` in the workspace settings file. Hand
+        // back the normalized config (so the settings file stays clean) plus
+        // the folder-scoped permission request the host surfaces for approval.
+        let folder = state.config.effective_entry_folder();
+        let root_index = state
+            .workspace_root
+            .as_deref()
+            .filter(|value| value.ends_with(".md"));
+        Ok(ConfigReconcile {
+            config: Some(state.config.to_public_value()),
+            permission_request: Some(build_permission_request(&folder, root_index)),
+            migrations: vec![],
+        })
     })
     .map_err(extism_pdk::Error::msg)?;
-    Ok(String::new())
+    Ok(serde_json::to_string(&reconcile)?)
 }
 
 #[plugin_fn]

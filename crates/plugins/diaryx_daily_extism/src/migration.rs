@@ -6,7 +6,6 @@ use diaryx_plugin_sdk::prelude::*;
 use crate::markdown_io::{parse_markdown, write_markdown};
 use crate::paths::find_root_index_candidates;
 use crate::state::DailyState;
-use crate::storage::save_workspace_config;
 
 pub fn migrate_legacy_config(state_value: &mut DailyState) -> Result<(), String> {
     if state_value.config.migrated_legacy_config {
@@ -65,6 +64,5 @@ pub fn migrate_legacy_config(state_value: &mut DailyState) -> Result<(), String>
     }
 
     state_value.config.migrated_legacy_config = true;
-    save_workspace_config(state_value)?;
     Ok(())
 }

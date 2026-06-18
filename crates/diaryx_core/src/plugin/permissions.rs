@@ -586,6 +586,7 @@ mod tests {
             PluginConfig {
                 download: None,
                 permissions: PluginPermissions::default(),
+                config: None,
             },
         );
         assert_eq!(
@@ -619,6 +620,7 @@ mod tests {
                     }),
                     ..Default::default()
                 },
+                config: None,
             },
         );
 
@@ -734,6 +736,7 @@ mod tests {
                 }),
                 ..Default::default()
             },
+            config: None,
         };
 
         let yaml = crate::yaml::to_string(&config).unwrap();

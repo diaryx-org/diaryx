@@ -7,7 +7,11 @@
 import { getBackend } from "../backend";
 import { createApi } from "../backend/api";
 import type { WorkspaceConfig } from "../backend/generated/WorkspaceConfig";
-import { runPluginUpdateConfigFlow } from "$lib/plugins/configUpdateFlow";
+import {
+  runPluginUpdateConfigFlow,
+  savePluginDeclarativeConfig,
+} from "$lib/plugins/configUpdateFlow";
+import type { JsonValue } from "../backend/generated/serde_json/JsonValue";
 
 /**
  * Creates reactive workspace config state with backend persistence.
@@ -74,6 +78,35 @@ export function createWorkspaceConfigStore() {
     }
   }
 
+  /**
+   * Save a plugin's declarative config to `plugins.<id>.config` (for plugins
+   * that opt into host-managed config, e.g. the daily plugin). Surfaces any
+   * permission request for approval, then re-reads the full workspace config.
+   */
+  async function savePluginConfig(pluginId: string, pluginConfig: JsonValue) {
+    if (!rootIndexPath) {
+      error = "No workspace root index loaded";
+      return;
+    }
+
+    error = null;
+
+    try {
+      const backend = await getBackend();
+      const api = createApi(backend);
+      await savePluginDeclarativeConfig({
+        pluginId,
+        config: pluginConfig,
+        api,
+        workspacePath: rootIndexPath,
+      });
+      config = await api.getWorkspaceConfig(rootIndexPath);
+    } catch (e) {
+      console.error("[WorkspaceConfigStore] Failed to set plugin config:", e);
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   return {
     get config() {
       return config;
@@ -89,6 +122,7 @@ export function createWorkspaceConfigStore() {
     },
     load,
     setField,
+    savePluginConfig,
   };
 }
 
@@ -115,6 +149,7 @@ export function getWorkspaceConfigStore() {
       },
       load: async () => {},
       setField: async () => {},
+      savePluginConfig: async () => {},
     };
   }
 

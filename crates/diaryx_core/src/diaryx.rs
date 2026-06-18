@@ -121,24 +121,41 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
         };
         for wp in self.plugin_registry.workspace_plugins() {
             let id = wp.id().0;
-            // Only push to plugins that already have stored config — plugins
-            // that still self-manage config in `host::storage` must not be
-            // seeded with an empty config (it would clobber their state).
-            // Migration of such plugins to `plugins.<id>.config` lands their
-            // config here first, after which this seeds them normally.
-            if let Ok(Some(config)) = inner.get_workspace_plugin_config(&root_index, &id).await
-                && let Ok(reconcile) = wp.set_config(config.clone()).await
-            {
-                // Tier 1: persist any config the guest normalized or migrated.
-                if let Some(updated) = reconcile.config
-                    && updated != config
-                {
-                    let _ = inner
-                        .set_workspace_plugin_config(&root_index, &id, updated)
-                        .await;
+            let declarative = crate::plugin::uses_declarative_config(wp.as_ref());
+            match inner.get_workspace_plugin_config(&root_index, &id).await {
+                Ok(Some(config)) => {
+                    // Steady state: push stored config into the guest. The
+                    // guest may hand back a normalized config to persist.
+                    if let Ok(reconcile) = wp.set_config(config.clone()).await
+                        && let Some(updated) = reconcile.config
+                        && updated != config
+                    {
+                        let _ = inner
+                            .set_workspace_plugin_config(&root_index, &id, updated)
+                            .await;
+                    }
                 }
-                // TODO(reconcile surfacing): permission_request / migrations.
+                Ok(None) if declarative => {
+                    // One-time migration for plugins that opted into
+                    // host-managed declarative config: adopt the config they
+                    // still hold (e.g. in `host::storage`) into the workspace
+                    // settings file, then push it back so guest and host agree.
+                    // Non-opted plugins are left untouched — their config may
+                    // contain secrets that must not land in a git-diffable file.
+                    if let Some(config) = wp.get_config().await
+                        && !(config.is_null() || config.as_object().is_some_and(|m| m.is_empty()))
+                    {
+                        let _ = inner
+                            .set_workspace_plugin_config(&root_index, &id, config.clone())
+                            .await;
+                        let _ = wp.set_config(config).await;
+                    }
+                }
+                _ => {}
             }
+            // TODO(reconcile surfacing): permission_request / migrations from
+            // the set_config reconcile are surfaced for approval in the
+            // frontend phase.
         }
     }
 

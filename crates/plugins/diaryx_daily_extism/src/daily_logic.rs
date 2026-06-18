@@ -31,6 +31,26 @@ pub struct DailyPluginConfig {
 }
 
 impl DailyPluginConfig {
+    /// The user-facing declarative config persisted to `plugins.<id>.config`
+    /// in the workspace settings file. Omits internal bookkeeping (the legacy
+    /// migration flag) and null fields so the settings file stays clean.
+    pub fn to_public_value(&self) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        if let Some(folder) = &self.entry_folder {
+            map.insert(
+                "entry_folder".to_string(),
+                serde_json::Value::String(folder.clone()),
+            );
+        }
+        if let Some(template) = &self.entry_template {
+            map.insert(
+                "entry_template".to_string(),
+                serde_json::Value::String(template.clone()),
+            );
+        }
+        serde_json::Value::Object(map)
+    }
+
     /// Effective folder for daily entries.
     pub fn effective_entry_folder(&self) -> String {
         let normalized = normalize_folder(self.entry_folder.as_deref());

@@ -6,7 +6,6 @@ use std::hash::{Hash, Hasher};
 use diaryx_plugin_sdk::prelude::*;
 
 use crate::daily_logic::DailyPluginConfig;
-use crate::state::DailyState;
 
 pub fn storage_key_for_workspace(workspace_root: Option<&str>) -> String {
     let token = workspace_root.unwrap_or("__default__");
@@ -15,17 +14,13 @@ pub fn storage_key_for_workspace(workspace_root: Option<&str>) -> String {
     format!("daily.config.{:x}", hasher.finish())
 }
 
+/// Read the config the plugin may still hold in `host::storage` (the legacy
+/// store). Read-only: this is the migration source. Declarative config is now
+/// persisted by the host to `plugins.diaryx.daily.config`, not here.
 pub fn load_workspace_config(workspace_root: Option<&str>) -> DailyPluginConfig {
     let key = storage_key_for_workspace(workspace_root);
     match host::storage::get(&key) {
         Ok(Some(bytes)) => serde_json::from_slice::<DailyPluginConfig>(&bytes).unwrap_or_default(),
         _ => DailyPluginConfig::default(),
     }
-}
-
-pub fn save_workspace_config(state: &DailyState) -> Result<(), String> {
-    let key = storage_key_for_workspace(state.workspace_root.as_deref());
-    let bytes = serde_json::to_vec(&state.config).map_err(|e| format!("serialize config: {e}"))?;
-    host::storage::set(&key, &bytes)?;
-    Ok(())
 }

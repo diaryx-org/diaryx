@@ -9,7 +9,7 @@ use diaryx_plugin_sdk::prelude::*;
 use crate::daily_logic::DailyPluginConfig;
 use crate::links::read_link_format;
 use crate::migration::migrate_legacy_config;
-use crate::storage::{load_workspace_config, save_workspace_config};
+use crate::storage::load_workspace_config;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct InitParams {
@@ -58,8 +58,11 @@ pub fn current_local_date() -> Result<NaiveDate, String> {
 }
 
 pub fn update_workspace_root(workspace_root: Option<String>) -> Result<(), String> {
-    // Step 1: Always persist the workspace root and loaded config,
-    // even if migration later fails.
+    // Step 1: Set the workspace root and load any config the plugin still
+    // holds in `host::storage` (legacy store). This is the migration *source*:
+    // the host adopts it into `plugins.diaryx.daily.config` on first open and
+    // thereafter seeds the guest from there via `set_config`. We no longer
+    // write config back to `host::storage`.
     with_state_mut(|state| {
         state.workspace_root = workspace_root;
         state.config = load_workspace_config(state.workspace_root.as_deref());
@@ -76,11 +79,12 @@ pub fn update_workspace_root(workspace_root: Option<String>) -> Result<(), Strin
         Ok(())
     })?;
 
-    // Step 3: Attempt migration (reads/writes files). Non-fatal —
-    // if this fails, the workspace root is still set from step 1.
+    // Step 3: Attempt legacy-key migration (adopts old root-index frontmatter
+    // keys into in-memory config). Non-fatal — if this fails, the workspace
+    // root is still set from step 1. The adopted config reaches the settings
+    // file via the host's seed migration, not `host::storage`.
     let migration_result = with_state_mut(|state| {
         migrate_legacy_config(state)?;
-        save_workspace_config(state)?;
         Ok(())
     });
     if let Err(e) = migration_result {

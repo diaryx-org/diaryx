@@ -58,6 +58,16 @@ pub enum PluginCapability {
         /// Supported conversion pairs as `"source:target"` strings.
         conversions: Vec<String>,
     },
+    /// Opts into host-managed declarative configuration.
+    ///
+    /// The plugin's user-editable settings live in the workspace settings file
+    /// under `plugins.<id>.config` (human-editable, git-diffable, synced) rather
+    /// than in opaque `host::storage`. The host seeds the guest from there via
+    /// `set_config` and, on first open, migrates any config the guest still
+    /// holds in `host::storage` into the settings file. Plugins that keep
+    /// secrets in their config (and would leak them into a git-diffable file)
+    /// must NOT declare this until those secrets are moved to `host::secrets`.
+    DeclarativeConfig,
 }
 
 /// A UI extension point contributed by a plugin.

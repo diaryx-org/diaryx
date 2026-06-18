@@ -15,7 +15,6 @@ use crate::indices::{
 };
 use crate::markdown_io::read_title_from_file;
 use crate::paths::{to_fs_path, to_workspace_rel};
-use crate::permissions::handle_update_config;
 use crate::state::{current_local_date, current_local_datetime, current_state};
 
 pub fn all_commands() -> Vec<String> {
@@ -27,7 +26,6 @@ pub fn all_commands() -> Vec<String> {
         "ListDailyEntryDates".to_string(),
         "OpenToday".to_string(),
         "OpenYesterday".to_string(),
-        "UpdateConfig".to_string(),
         "CliDaily".to_string(),
         "get_component_html".to_string(),
     ]
@@ -216,7 +214,6 @@ pub fn dispatch_command(command: &str, params: JsonValue) -> Result<JsonValue, S
                 "created": created,
             }))
         }
-        "UpdateConfig" => handle_update_config(params),
         "CliDaily" => {
             let now = current_local_datetime()?;
             let date = parse_date_input(params.get("date").and_then(|v| v.as_str()), now)

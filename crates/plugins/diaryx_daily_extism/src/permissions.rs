@@ -5,10 +5,7 @@ use std::collections::HashMap;
 use diaryx_plugin_sdk::prelude::*;
 use serde_json::Value as JsonValue;
 
-use crate::daily_logic::normalize_folder;
 use crate::paths::{normalize_rel_path, root_index_scope};
-use crate::state::with_state_mut;
-use crate::storage::save_workspace_config;
 
 pub fn unique_scopes(scopes: Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
@@ -58,65 +55,25 @@ pub fn build_requested_permissions(
     GuestRequestedPermissions { defaults, reasons }
 }
 
-pub fn build_permissions_patch(folder: &str, root_index_path: Option<&str>) -> JsonValue {
-    let defaults = requested_permissions_for(folder, root_index_path)
-        .get("defaults")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-
-    serde_json::json!({
-        "plugin_permissions_patch": {
-            "plugin_id": "diaryx.daily",
-            "mode": "replace",
-            "permissions": defaults
-        }
-    })
-}
-
-fn extract_entry_folder_update(params: &JsonValue) -> Option<Option<String>> {
-    if params.get("source").and_then(|value| value.as_str()) == Some("workspace_config") {
-        if params.get("field").and_then(|value| value.as_str()) != Some("daily_entry_folder") {
-            return None;
-        }
-
-        let raw_value = params
-            .get("value")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        let normalized = normalize_folder(Some(raw_value));
-        return Some((!normalized.is_empty()).then_some(normalized));
+/// Build the permission request the host surfaces (and clamps to the manifest
+/// ceiling) when the daily folder changes. The folder-scoped read/edit/create
+/// rules are derived from the effective folder + workspace root index.
+pub fn build_permission_request(folder: &str, root_index_path: Option<&str>) -> PermissionRequest {
+    let perms = requested_permissions_for(folder, root_index_path);
+    let permissions = perms.get("defaults").cloned().unwrap_or(JsonValue::Null);
+    let reasons = perms
+        .get("reasons")
+        .and_then(|value| value.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect::<HashMap<String, String>>()
+        })
+        .unwrap_or_default();
+    PermissionRequest {
+        permissions,
+        reasons,
     }
-
-    let config = params.get("config")?.as_object()?;
-    let value = config.get("entry_folder")?;
-    if value.is_null() {
-        return Some(None);
-    }
-
-    let normalized = normalize_folder(value.as_str());
-    Some((!normalized.is_empty()).then_some(normalized))
-}
-
-pub fn handle_update_config(params: JsonValue) -> Result<JsonValue, String> {
-    with_state_mut(|state| {
-        if let Some(next_entry_folder) = extract_entry_folder_update(&params) {
-            state.config.entry_folder = next_entry_folder;
-            save_workspace_config(state)?;
-        }
-
-        let folder = state.config.effective_entry_folder();
-        let root_index_path = params
-            .get("root_index_path")
-            .and_then(|value| value.as_str())
-            .or_else(|| {
-                state
-                    .workspace_root
-                    .as_deref()
-                    .filter(|value| value.ends_with(".md"))
-            })
-            .map(|s| s.to_string());
-        Ok(build_permissions_patch(&folder, root_index_path.as_deref()))
-    })
 }
 
 #[cfg(test)]
@@ -140,20 +97,14 @@ mod tests {
     }
 
     #[test]
-    fn permissions_patch_replaces_daily_file_rules() {
-        let patch = build_permissions_patch("Journal/Daily", Some("/README.md"));
+    fn permission_request_carries_folder_scope_and_reasons() {
+        let request = build_permission_request("Journal/Daily", Some("/README.md"));
 
-        assert_eq!(
-            patch["plugin_permissions_patch"]["mode"].as_str(),
-            Some("replace")
-        );
-        assert_eq!(
-            patch["plugin_permissions_patch"]["permissions"]["edit_files"]["include"][0].as_str(),
-            Some("Journal/Daily")
-        );
-        assert_eq!(
-            patch["plugin_permissions_patch"]["permissions"]["edit_files"]["include"][1].as_str(),
-            Some("README.md")
-        );
+        let edit_include = request.permissions["edit_files"]["include"]
+            .as_array()
+            .expect("edit include array");
+        assert_eq!(edit_include[0].as_str(), Some("Journal/Daily"));
+        assert_eq!(edit_include[1].as_str(), Some("README.md"));
+        assert!(request.reasons.contains_key("read_files"));
     }
 }

@@ -24,11 +24,24 @@
     }
   });
 
+  // Read the daily plugin's entry folder from its declarative config
+  // (`plugins.diaryx.daily.config.entry_folder`), falling back to the legacy
+  // top-level `daily_entry_folder` field for not-yet-migrated workspaces.
+  function readDailyEntryFolder(): string {
+    const plugins = configStore.config?.plugins as
+      | Record<string, { config?: { entry_folder?: unknown } }>
+      | null
+      | undefined;
+    const fromPlugin = plugins?.["diaryx.daily"]?.config?.entry_folder;
+    if (typeof fromPlugin === "string") return fromPlugin;
+    return configStore.config?.daily_entry_folder ?? "";
+  }
+
   // Sync default audience input from config
   $effect(() => {
     if (configStore.config) {
       defaultAudience = configStore.config.default_audience ?? "";
-      dailyEntryFolder = configStore.config.daily_entry_folder ?? "";
+      dailyEntryFolder = readDailyEntryFolder();
     }
   });
 
@@ -37,7 +50,12 @@
   }
 
   function saveDailyEntryFolder() {
-    configStore.setField("daily_entry_folder", dailyEntryFolder.trim());
+    // Daily opts into host-managed declarative config: persist to
+    // `plugins.diaryx.daily.config` (the host re-scopes permissions via an
+    // approval prompt) rather than the legacy top-level field.
+    configStore.savePluginConfig("diaryx.daily", {
+      entry_folder: dailyEntryFolder.trim(),
+    });
   }
 
   const LINK_FORMAT_OPTIONS = [

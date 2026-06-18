@@ -143,6 +143,129 @@ function isMissingUpdateConfigError(pluginId: string, error?: string): boolean {
   ].some((message) => error.includes(message))
 }
 
+/** A plugin's request to re-scope its granted permissions, surfaced for approval. */
+export type PluginPermissionRequest = {
+  permissions: Record<string, PermissionRulePatch>
+  reasons?: Record<string, string>
+}
+
+/** The host's pending reconcile returned from `setPluginConfig`. */
+export type PendingPluginReconcile = {
+  permission_request?: PluginPermissionRequest | null
+  migrations?: unknown[]
+}
+
+function readPendingReconcile(data: unknown): PendingPluginReconcile | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null
+  return data as PendingPluginReconcile
+}
+
+/** Format a human-readable consent prompt for a permission request. */
+function formatPermissionConsent(
+  pluginId: string,
+  permissions: Record<string, PermissionRulePatch>,
+  reasons?: Record<string, string>,
+): string {
+  const lines = [`The "${pluginId}" plugin needs these file-access changes:`, ""]
+  for (const [category, rule] of Object.entries(permissions)) {
+    const include = asStringArray(rule?.include)
+    lines.push(`• ${category}: ${include.length ? include.join(", ") : "(none)"}`)
+    const reason = reasons?.[category]
+    if (reason) lines.push(`    ${reason}`)
+  }
+  lines.push("", "Approve these permissions?")
+  return lines.join("\n")
+}
+
+/**
+ * Surface a plugin's permission request for explicit user approval, then apply
+ * it to `plugins.<id>.permissions`.
+ *
+ * Security: the request is clamped to the permission categories the plugin was
+ * already granted (its install-approved ceiling) — a request introducing a new
+ * category is dropped, not silently granted. The change is then shown in a
+ * blocking confirm and only written on approval. Returns whether it was applied.
+ */
+export async function applyPermissionRequestWithConsent(args: {
+  pluginId: string
+  request: PluginPermissionRequest
+  api: Api
+  workspacePath: string
+}): Promise<boolean> {
+  const { pluginId, request, api, workspacePath } = args
+  const requested = request?.permissions
+  if (!requested || Object.keys(requested).length === 0) return false
+
+  const wsConfig = await api.getWorkspaceConfig(workspacePath)
+  const existingPlugins =
+    wsConfig.plugins && typeof wsConfig.plugins === "object" && !Array.isArray(wsConfig.plugins)
+      ? (wsConfig.plugins as Record<string, Record<string, unknown>>)
+      : {}
+
+  // Ceiling clamp: only categories the plugin already has granted may change.
+  // When the plugin has no granted permissions yet (e.g. first run), allow the
+  // request — the confirm below is still the gate.
+  const granted = existingPlugins[pluginId]?.permissions
+  const grantedCategories =
+    granted && typeof granted === "object" && !Array.isArray(granted)
+      ? new Set(Object.keys(granted as Record<string, unknown>))
+      : null
+
+  const clamped: Record<string, PermissionRulePatch> = {}
+  for (const [category, rule] of Object.entries(requested)) {
+    if (!grantedCategories || grantedCategories.has(category)) {
+      clamped[category] = rule
+    } else {
+      console.warn(
+        `[configUpdateFlow] dropping permission category '${category}' for ${pluginId}: not previously granted`,
+      )
+    }
+  }
+  if (Object.keys(clamped).length === 0) return false
+
+  // Compute the resulting mapping; bail if nothing actually changes (avoids a
+  // pointless prompt when the granted scope already matches).
+  const nextPlugins = applyPluginPermissionsPatch(existingPlugins, pluginId, {
+    plugin_id: pluginId,
+    mode: "replace",
+    permissions: clamped,
+  })
+  if (!nextPlugins) return false
+
+  const approved =
+    typeof window !== "undefined" &&
+    window.confirm(formatPermissionConsent(pluginId, clamped, request.reasons))
+  if (!approved) return false
+
+  await api.setWorkspaceConfig(workspacePath, "plugins", JSON.stringify(nextPlugins))
+  return true
+}
+
+/**
+ * Save a plugin's declarative config to `plugins.<id>.config` and surface any
+ * permission request the host hands back for user approval.
+ *
+ * This is the new path for plugins that opt into host-managed config (e.g.
+ * the daily plugin's entry folder). The host persists the config; permission
+ * changes go through {@link applyPermissionRequestWithConsent}.
+ */
+export async function savePluginDeclarativeConfig(args: {
+  pluginId: string
+  config: JsonValue
+  api: Api
+  workspacePath: string | null
+}): Promise<void> {
+  const { pluginId, config, api, workspacePath } = args
+  const pending = readPendingReconcile(await api.setPluginConfig(pluginId, config))
+  if (!workspacePath) return
+  const request = pending?.permission_request
+  if (request) {
+    await applyPermissionRequestWithConsent({ pluginId, request, api, workspacePath })
+  }
+  // Migrations (tier-3, root-index legacy keys) are surfaced via the open-time
+  // migration prompt, not here.
+}
+
 export async function runPluginUpdateConfigFlow(args: {
   pluginId: string
   params: Record<string, JsonValue>

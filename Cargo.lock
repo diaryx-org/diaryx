@@ -2694,9 +2694,13 @@ dependencies = [
 name = "diaryx_render"
 version = "1.6.1"
 dependencies = [
+ "base64 0.22.1",
  "comrak",
  "diaryx_core",
+ "handlebars",
+ "indexmap 2.13.1",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2709,6 +2713,7 @@ dependencies = [
  "chrono",
  "diaryx_ark",
  "diaryx_core",
+ "diaryx_render",
  "futures",
  "hex",
  "hmac",
@@ -2877,8 +2882,8 @@ dependencies = [
  "chrono",
  "diaryx_core",
  "diaryx_plugin_sdk",
+ "diaryx_render",
  "extism-pdk",
- "handlebars",
  "indexmap 2.13.1",
  "serde",
  "serde_json",

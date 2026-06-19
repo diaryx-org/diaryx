@@ -214,6 +214,26 @@ mod tests {
                 .get(&(workspace_ark.to_string(), file_ark.to_string()))
                 .map(|(object_key, _, _)| object_key.clone()))
         }
+        async fn list_ark_entries(
+            &self,
+            workspace_ark: &str,
+        ) -> Result<Vec<ArkIndexEntry>, ServerCoreError> {
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|((ws, _), _)| ws == workspace_ark)
+                .map(|((ws, fa), (object_key, audience, source_key))| ArkIndexEntry {
+                    workspace_ark: ws.clone(),
+                    file_ark: fa.clone(),
+                    object_key: object_key.clone(),
+                    audience: audience.clone(),
+                    source_key: source_key.clone(),
+                    updated_at: 1,
+                })
+                .collect())
+        }
     }
     }
 

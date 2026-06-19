@@ -63,6 +63,134 @@ async fn sign_in(app: &TestApp, email: &str) -> String {
         .to_string()
 }
 
+/// End-to-end ARK Layer 3 (Phase 2): publish only markdown *sources* (no HTML),
+/// register ARKs against their dest keys, then `POST /build` and assert the ARK
+/// resolves to server-rendered HTML — with templating, nav, and link rewriting
+/// reconstructed from the sources.
+#[tokio::test]
+async fn server_build_renders_html_from_sources() {
+    let app = build_test_router();
+    let token = sign_in(&app, "build@example.com").await;
+
+    // Create namespace.
+    let resp = app
+        .request(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/namespaces")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({})).unwrap()))
+                .unwrap(),
+        )
+        .await;
+    let (status, body) = read_status_and_json(resp).await;
+    assert_eq!(status, StatusCode::CREATED, "create namespace: {body}");
+    let ns = body["id"].as_str().expect("namespace id").to_string();
+
+    // Public audience.
+    let resp = app
+        .request(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/api/namespaces/{ns}/audiences/public"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "gates": [] })).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let root_ark = "bcdfgr";
+    let child_ark = "bcdfgh";
+
+    // Root source — keyed by its workspace name (Welcome.md), registered to the
+    // dest index.html, flagged as the workspace index. Uses a template var and
+    // a contents link to the child.
+    let root_md = "---\ntitle: Welcome\nid: bcdfgr\ncontents:\n  - \"/child.md\"\n---\nHello from {{ title }}.\n";
+    let resp = authed_put(
+        &app,
+        &token,
+        &format!("/api/namespaces/{ns}/objects/public/Welcome.md"),
+        &[
+            ("x-audience", "public"),
+            ("content-type", "text/markdown"),
+            ("x-diaryx-file-ark", root_ark),
+            ("x-diaryx-source-key", "public/Welcome.md"),
+            ("x-diaryx-object-key", "public/index.html"),
+            ("x-diaryx-is-index", "true"),
+        ],
+        root_md,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Child source — links back to the root by its workspace name.
+    let child_md = "---\ntitle: Child\nid: bcdfgh\npart_of: \"/Welcome.md\"\n---\nChild body. See [home](/Welcome.md).\n";
+    let resp = authed_put(
+        &app,
+        &token,
+        &format!("/api/namespaces/{ns}/objects/public/child.md"),
+        &[
+            ("x-audience", "public"),
+            ("content-type", "text/markdown"),
+            ("x-diaryx-file-ark", child_ark),
+            ("x-diaryx-source-key", "public/child.md"),
+            ("x-diaryx-object-key", "public/child.html"),
+        ],
+        child_md,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Build: server renders HTML from the stored sources.
+    let resp = app
+        .request(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/api/namespaces/{ns}/build"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    let (status, body) = read_status_and_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "build: {body}");
+    assert_eq!(body["pages_rendered"], 2, "build summary: {body}");
+
+    // Root ARK resolves to server-rendered HTML: full document, template
+    // expanded, child nav link present.
+    let resp = app.get(&format!("/ark/{ns}/{root_ark}")).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let html = String::from_utf8_lossy(&read_body(resp).await).into_owned();
+    assert!(html.contains("<!DOCTYPE html>"), "not a full doc: {html}");
+    assert!(
+        html.contains("Hello from Welcome."),
+        "template not run: {html}"
+    );
+    assert!(html.contains("child.html"), "nav link missing: {html}");
+
+    // Child ARK resolves to HTML with the internal link rewritten to index.html.
+    let resp = app.get(&format!("/ark/{ns}/{child_ark}")).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let child_html = String::from_utf8_lossy(&read_body(resp).await).into_owned();
+    assert!(
+        child_html.contains("index.html"),
+        "child link not rewritten to root index: {child_html}"
+    );
+
+    // ?content still serves the original markdown source.
+    let resp = app.get(&format!("/ark/{ns}/{child_ark}?content")).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        String::from_utf8_lossy(&read_body(resp).await).contains("Child body."),
+        "content inflection should serve source markdown"
+    );
+}
+
 /// End-to-end ARK Layer 2: publish a source sibling + HTML rendition, then
 /// resolve the ARK with each inflection.
 #[tokio::test]

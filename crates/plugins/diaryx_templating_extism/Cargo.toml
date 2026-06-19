@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 diaryx_core = { workspace = true, default-features = false }
+diaryx_render = { workspace = true, features = ["templating"] }
 diaryx_plugin_sdk = { workspace = true }
 extism-pdk = "1.4"
 serde.workspace = true
@@ -18,4 +19,3 @@ serde_json.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
 indexmap.workspace = true
 base64 = "0.22"
-handlebars = "6"

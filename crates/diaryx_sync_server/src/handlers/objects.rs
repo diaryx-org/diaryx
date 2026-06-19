@@ -16,6 +16,7 @@ use diaryx_server::ports::{
 };
 use diaryx_server::use_cases::ark::{ARK_WORKSPACE_INDEX, ArkService, Inflection, inflection_json};
 use diaryx_server::use_cases::objects::ObjectService;
+use diaryx_server::use_cases::render::RenderService;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -160,6 +161,7 @@ pub fn object_routes(state: ObjectState) -> Router {
             "/objects/{*key}",
             put(put_object).get(get_object).delete(delete_object),
         )
+        .route("/build", post(build_namespace))
         .route("/usage", get(get_namespace_usage))
         .with_state(state)
 }
@@ -230,6 +232,13 @@ async fn put_object(
     let source_key = headers
         .get("x-diaryx-source-key")
         .and_then(|v| v.to_str().ok());
+    // When the client uploads a markdown *source* (server-side render flow), the
+    // ARK should resolve to the rendered HTML key (which the build creates),
+    // not the uploaded source key. The dest key rides as a header; absent it,
+    // registration falls back to the uploaded object's key (legacy HTML push).
+    let dest_object_key = headers
+        .get("x-diaryx-object-key")
+        .and_then(|v| v.to_str().ok());
     let is_index = headers
         .get("x-diaryx-is-index")
         .and_then(|v| v.to_str().ok())
@@ -250,9 +259,10 @@ async fn put_object(
     // (same provisional file blade, different object) surfaces as 409 so the
     // client remints and republishes. The object PUT is already owner-gated.
     if let Some(file_ark) = file_ark {
+        let registered_key = dest_object_key.unwrap_or(result.key.as_str());
         let ark_service = ArkService::new(state.ark_index_store.as_ref());
         if let Err(e) = ark_service
-            .register(&ns_id, file_ark, &result.key, audience, source_key)
+            .register(&ns_id, file_ark, registered_key, audience, source_key)
             .await
         {
             return core_error_response(e);
@@ -260,7 +270,7 @@ async fn put_object(
         // The workspace front-page pointer (last-publish-wins, no collision).
         if is_index
             && let Err(e) = ark_service
-                .register_index(&ns_id, &result.key, audience, source_key)
+                .register_index(&ns_id, registered_key, audience, source_key)
                 .await
         {
             return core_error_response(e);
@@ -272,6 +282,43 @@ async fn put_object(
         Json(serde_json::json!({ "key": result.key, "size_bytes": result.size_bytes })),
     )
         .into_response()
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BuildParams {
+    /// Base URL for canonical/sitemap/feed generation.
+    base_url: Option<String>,
+}
+
+/// POST /namespaces/{ns_id}/build — render the namespace's stored sources to
+/// HTML server-side (ARK Layer 3) and write the resulting pages + assets.
+async fn build_namespace(
+    State(state): State<ObjectState>,
+    RequireAuth(auth): RequireAuth,
+    Path(ns_id): Path<String>,
+    Query(params): Query<BuildParams>,
+) -> impl IntoResponse {
+    let service = RenderService::new(
+        state.namespace_store.as_ref(),
+        state.object_meta_store.as_ref(),
+        state.blob_store.as_ref(),
+        state.ark_index_store.as_ref(),
+    );
+    match service
+        .build_namespace(&ns_id, &auth.user.id, params.base_url.as_deref())
+        .await
+    {
+        Ok(summary) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "audiences": summary.audiences,
+                "pages_rendered": summary.pages_rendered,
+                "assets_written": summary.assets_written,
+            })),
+        )
+            .into_response(),
+        Err(e) => core_error_response(e),
+    }
 }
 
 /// GET /namespaces/{ns_id}/objects/{*key} — retrieve bytes by key.

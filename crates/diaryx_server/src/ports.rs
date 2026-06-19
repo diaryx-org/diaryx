@@ -519,6 +519,13 @@ pub trait ArkIndexStore: Send + Sync {
         workspace_ark: &str,
         file_ark: &str,
     ) -> Result<Option<String>, ServerCoreError>;
+
+    /// List every ARK index entry registered within a workspace. Used by
+    /// server-side rendering (Layer 3) to enumerate a namespace's pages.
+    async fn list_ark_entries(
+        &self,
+        workspace_ark: &str,
+    ) -> Result<Vec<crate::domain::ArkIndexEntry>, ServerCoreError>;
 }
 
 } // cfg_async_trait!

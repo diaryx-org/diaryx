@@ -1817,4 +1817,40 @@ impl ArkIndexStore for D1ArkIndexStore {
             .await?
             .map(|entry| entry.object_key))
     }
+
+    async fn list_ark_entries(
+        &self,
+        workspace_ark: &str,
+    ) -> Result<Vec<ArkIndexEntry>, ServerCoreError> {
+        let results = self
+            .db
+            .prepare(
+                "SELECT workspace_ark, file_ark, object_key, audience, source_key, updated_at \
+                 FROM ark_index WHERE workspace_ark = ?1",
+            )
+            .bind(&[workspace_ark.into()])
+            .map_err(e)?
+            .all()
+            .await
+            .map_err(e)?;
+        let rows: Vec<serde_json::Value> = results.results().map_err(e)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ArkIndexEntry {
+                workspace_ark: row["workspace_ark"].as_str().unwrap_or_default().to_string(),
+                file_ark: row["file_ark"].as_str().unwrap_or_default().to_string(),
+                object_key: row["object_key"].as_str().unwrap_or_default().to_string(),
+                audience: row["audience"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string()),
+                source_key: row["source_key"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string()),
+                updated_at: row["updated_at"].as_i64().unwrap_or_default(),
+            })
+            .collect())
+    }
 }

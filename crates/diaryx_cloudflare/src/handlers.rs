@@ -28,6 +28,7 @@ use diaryx_server::use_cases::{
     domains::DomainService,
     namespaces::NamespaceService,
     objects::ObjectService,
+    render::RenderService,
     sessions::SessionService,
 };
 use serde::Deserialize;
@@ -382,6 +383,9 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     // The source sibling key (Layer 2) and is-index flag ride the same PUT.
     let file_ark = req.headers().get("x-diaryx-file-ark")?;
     let source_key = req.headers().get("x-diaryx-source-key")?;
+    // Dest key the ARK should resolve to (the rendered HTML the build creates),
+    // distinct from the uploaded source key. Absent → legacy HTML-push behavior.
+    let dest_object_key = req.headers().get("x-diaryx-object-key")?;
     let is_index = req
         .headers()
         .get("x-diaryx-is-index")?
@@ -413,13 +417,14 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     // (same provisional file blade, different object) surfaces as 409 so the
     // client remints. The object PUT above is already owner-authenticated.
     if let Some(file_ark) = file_ark.as_deref() {
+        let registered_key = dest_object_key.as_deref().unwrap_or(result.key.as_str());
         let ark_store = D1ArkIndexStore::new(db(&ctx)?);
         let ark_service = ArkService::new(&ark_store);
         if let Err(e) = ark_service
             .register(
                 &ns_id,
                 file_ark,
-                &result.key,
+                registered_key,
                 audience.as_deref(),
                 source_key.as_deref(),
             )
@@ -430,7 +435,7 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
         // Workspace front-page pointer (last-publish-wins, no collision check).
         if is_index
             && let Err(e) = ark_service
-                .register_index(&ns_id, &result.key, audience.as_deref(), source_key.as_deref())
+                .register_index(&ns_id, registered_key, audience.as_deref(), source_key.as_deref())
                 .await
         {
             return error_response(e);
@@ -438,6 +443,40 @@ pub async fn put_object(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     }
 
     Response::from_json(&serde_json::json!({ "key": result.key, "size_bytes": result.size_bytes }))
+}
+
+/// POST /api/namespaces/:ns_id/build — render the namespace's stored sources to
+/// HTML server-side (ARK Layer 3) and write the resulting pages + assets.
+pub async fn build_namespace(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let user_id = require_auth!(&req, &ctx);
+    let ns_id = require_decoded_param(&ctx, "ns_id")?;
+
+    let base_url = req
+        .url()
+        .ok()
+        .and_then(|u| {
+            u.query_pairs()
+                .find(|(k, _)| k == "base_url")
+                .map(|(_, v)| v.into_owned())
+        });
+
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
+    let obj_store = D1ObjectMetaStore::new(db(&ctx)?);
+    let blob_store = R2BlobStore::new(bucket(&ctx)?);
+    let ark_store = D1ArkIndexStore::new(db(&ctx)?);
+    let service = RenderService::new(&ns_store, &obj_store, &blob_store, &ark_store);
+
+    match service
+        .build_namespace(&ns_id, &user_id, base_url.as_deref())
+        .await
+    {
+        Ok(summary) => Response::from_json(&serde_json::json!({
+            "audiences": summary.audiences,
+            "pages_rendered": summary.pages_rendered,
+            "assets_written": summary.assets_written,
+        })),
+        Err(e) => error_response(e),
+    }
 }
 
 pub async fn get_object(req: Request, ctx: RouteContext<()>) -> Result<Response> {

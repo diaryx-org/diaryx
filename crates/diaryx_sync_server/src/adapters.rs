@@ -1138,6 +1138,29 @@ impl ArkIndexStore for NativeArkIndexStore {
             .resolve_ark(workspace_ark, file_ark)
             .map(|(_, _, object_key, _, _, _)| object_key))
     }
+
+    async fn list_ark_entries(
+        &self,
+        workspace_ark: &str,
+    ) -> Result<Vec<CoreArkIndexEntry>, ServerCoreError> {
+        Ok(self
+            .repo
+            .list_ark_by_namespace(workspace_ark)
+            .into_iter()
+            .map(
+                |(workspace_ark, file_ark, object_key, audience, source_key, updated_at)| {
+                    CoreArkIndexEntry {
+                        workspace_ark,
+                        file_ark,
+                        object_key,
+                        audience,
+                        source_key,
+                        updated_at,
+                    }
+                },
+            )
+            .collect())
+    }
 }
 
 #[cfg(test)]

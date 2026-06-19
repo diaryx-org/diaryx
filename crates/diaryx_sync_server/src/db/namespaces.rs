@@ -252,6 +252,36 @@ impl NamespaceRepo {
         .unwrap_or(None)
     }
 
+    /// List every ARK index row for a workspace, as
+    /// `(workspace_ark, file_ark, object_key, audience, source_key, updated_at)`.
+    pub fn list_ark_by_namespace(
+        &self,
+        workspace_ark: &str,
+    ) -> Vec<(String, String, String, Option<String>, Option<String>, i64)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT workspace_ark, file_ark, object_key, audience, source_key, updated_at
+             FROM ark_index WHERE workspace_ark = ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = stmt.query_map(params![workspace_ark], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        });
+        match rows {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     pub fn get_object_meta(&self, namespace_id: &str, key: &str) -> Option<NamespaceObjectMeta> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(

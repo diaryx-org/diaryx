@@ -12,7 +12,18 @@ publish = false
 
 [lib]
 
+[features]
+# Render-time body templating (Handlebars + visibility directives). Pulls in
+# handlebars/serde_json; off by default so consumers that only need
+# markdown/html/nav (e.g. the publish plugin) stay lean. Enabled by the
+# templating plugin and the server-side renderer.
+templating = ["dep:handlebars", "dep:serde_json", "dep:indexmap", "diaryx_core/serde-json"]
+
 [dependencies]
 comrak = "0.49"
 diaryx_core = { workspace = true }
 serde = { workspace = true }
+base64 = "0.22"
+handlebars = { version = "6", optional = true }
+serde_json = { workspace = true, optional = true }
+indexmap = { workspace = true, optional = true }

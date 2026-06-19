@@ -1,6 +1,12 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/README.md"))]
 #![warn(missing_docs)]
 
+/// Re-export of the `fig` crate so downstream crates (plugins, the extism host)
+/// can name `fig::ToValue`/`fig::FromValue`/`fig::Value` to convert the core
+/// types — which derive fig's traits instead of serde — without taking their
+/// own `fig` dependency.
+pub use fig;
+
 /// Workspace appearance: theme colors, typography, and favicon resolution
 pub mod appearance;
 

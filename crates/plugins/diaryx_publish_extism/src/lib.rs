@@ -13,6 +13,18 @@ use diaryx_plugin_sdk::prelude::*;
 use diaryx_plugin_sdk::protocol::ServerFunctionDecl;
 
 use extism_pdk::*;
+
+/// Convert a core (fig) type into a `serde_json::Value` via fig's JSON
+/// serializer. `fig::Value` does not implement `serde::Serialize`, so we go
+/// through its JSON string form. Falls back to `Value::Null` on error.
+fn core_to_json_value<T: diaryx_core::fig::ToValue>(value: &T) -> serde_json::Value {
+    serde_json::from_str(
+        &diaryx_core::fig::ToValue::to_value(value)
+            .serialize(diaryx_core::fig::Format::Json)
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default()
+}
 use serde_json::Value as JsonValue;
 
 use diaryx_core::plugin::{
@@ -83,7 +95,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
         vec!["workspace_events".into(), "custom_commands".into()],
     )
     .min_app_version("1.4.1")
-    .ui(pm.ui.iter().map(|u| serde_json::to_value(u).unwrap_or_default()).collect())
+    .ui(pm.ui.iter().map(|u| core_to_json_value(u)).collect())
     .commands(all_commands())
     .cli(vec![
         serde_json::json!({

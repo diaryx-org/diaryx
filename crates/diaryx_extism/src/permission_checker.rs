@@ -84,10 +84,12 @@ impl FrontmatterPermissionChecker {
             None => return Ok(HashMap::new()),
         };
 
-        serde_json::from_value::<HashMap<String, PluginConfig>>(serde_json::Value::from(
+        let fig_value = serde_json::from_value::<diaryx_core::fig::Value>(serde_json::Value::from(
             plugins_value,
         ))
-        .map_err(|e| format!("Invalid workspace plugins config: {e}"))
+        .map_err(|e| format!("Invalid workspace plugins config: {e}"))?;
+        <HashMap<String, PluginConfig> as diaryx_core::fig::FromValue>::from_value(&fig_value)
+            .map_err(|e| format!("Invalid workspace plugins config: {e}"))
     }
 
     fn normalize_target(&self, permission_type: PermissionType, target: &str) -> String {

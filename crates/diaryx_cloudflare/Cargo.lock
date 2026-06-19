@@ -346,7 +346,6 @@ dependencies = [
  "pathdiff",
  "ryu",
  "serde",
- "serde_json",
  "sha2",
  "thiserror 2.0.18",
  "urlencoding",
@@ -508,9 +507,21 @@ checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 [[package]]
 name = "fig"
 version = "0.0.0"
-source = "git+https://github.com/adammharris/fig.git?rev=972c0fae960fef9a839aaa2cc99138c613dfa23a#972c0fae960fef9a839aaa2cc99138c613dfa23a"
+source = "git+https://github.com/adammharris/fig.git?rev=ee8189195103f69857ab165c92eeb1ebfffd7613#ee8189195103f69857ab165c92eeb1ebfffd7613"
 dependencies = [
+ "fig-macros",
+ "indexmap",
  "serde",
+]
+
+[[package]]
+name = "fig-macros"
+version = "0.0.0"
+source = "git+https://github.com/adammharris/fig.git?rev=ee8189195103f69857ab165c92eeb1ebfffd7613#ee8189195103f69857ab165c92eeb1ebfffd7613"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

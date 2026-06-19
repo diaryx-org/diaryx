@@ -183,7 +183,23 @@ fn handle_devices_list(service: &AuthService<FsAuthenticatedClient>, json: bool)
     match block_on(service.get_devices()) {
         Ok(devices) => {
             if json {
-                match serde_json::to_string_pretty(&devices) {
+                // `Device` is a fig type (not serde-serializable), so bridge
+                // through fig's JSON serializer into a `serde_json::Value` to
+                // keep `to_string_pretty` output identical.
+                let serialized = diaryx_core::fig::ToValue::to_value(&devices)
+                    .serialize_with(
+                        diaryx_core::fig::Format::Json,
+                        diaryx_core::fig::SerializeOptions::compact(),
+                    )
+                    .map_err(|e| e.to_string())
+                    .and_then(|json| {
+                        serde_json::from_str::<serde_json::Value>(json.trim_end())
+                            .map_err(|e| e.to_string())
+                    })
+                    .and_then(|value| {
+                        serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
+                    });
+                match serialized {
                     Ok(output) => println!("{output}"),
                     Err(e) => {
                         eprintln!("✗ Failed to serialize devices: {e}");

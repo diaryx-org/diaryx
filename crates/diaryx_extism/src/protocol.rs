@@ -23,11 +23,56 @@ fn default_protocol_version() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GuestRequestedPermissions {
     /// Default permission rules to apply at install time.
-    #[serde(default)]
+    ///
+    /// `PluginPermissions` is a `diaryx_core` type that implements fig's
+    /// `ToValue`/`FromValue` rather than serde, so it is bridged through
+    /// `fig::Value` (which is serde-compatible) by [`fig_permissions`].
+    #[serde(default, with = "fig_permissions")]
     pub defaults: PluginPermissions,
     /// Why each permission is needed, keyed by permission field name.
     #[serde(default)]
     pub reasons: HashMap<String, String>,
+}
+
+/// serde bridge for [`PluginPermissions`], which is a fig (not serde) type.
+///
+/// Serializes/deserializes through `fig::Value` so the JSON wire format is
+/// identical to what fig would produce, while keeping the field strongly typed
+/// for host consumers that read `defaults` as a `PluginPermissions`.
+mod fig_permissions {
+    use super::PluginPermissions;
+    use diaryx_core::fig::{Document, Format, FromValue, SerializeOptions, ToValue};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &PluginPermissions, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Render the fig value to JSON, then re-parse as a serde_json::Value so
+        // it slots into whatever serde format the outer struct is using. The
+        // JSON text is identical to what fig would emit on the wire.
+        let json = value
+            .to_value()
+            .serialize_with(Format::Json, SerializeOptions::compact())
+            .map_err(serde::ser::Error::custom)?;
+        let json_value: serde_json::Value =
+            serde_json::from_str(&json).map_err(serde::ser::Error::custom)?;
+        json_value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PluginPermissions, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Deserialize into a serde_json::Value, render to JSON, then parse with
+        // fig and convert via FromValue.
+        let json_value = serde_json::Value::deserialize(deserializer)?;
+        let json = serde_json::to_string(&json_value).map_err(serde::de::Error::custom)?;
+        let fig_value = Document::parse(json.as_bytes(), Format::Json)
+            .and_then(|doc| doc.to_value())
+            .map_err(serde::de::Error::custom)?;
+        PluginPermissions::from_value(&fig_value).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Manifest returned by the guest's exported `manifest` function.

@@ -13,6 +13,18 @@ diaryx_plugin_sdk::register_getrandom_v02!();
 
 use extism_pdk::*;
 
+/// Convert a core (fig) type into a `serde_json::Value` via fig's JSON
+/// serializer. `fig::Value` does not implement `serde::Serialize`, so we go
+/// through its JSON string form. Falls back to `Value::Null` on error.
+fn core_to_json_value<T: diaryx_core::fig::ToValue>(value: &T) -> serde_json::Value {
+    serde_json::from_str(
+        &diaryx_core::fig::ToValue::to_value(value)
+            .serialize(diaryx_core::fig::Format::Json)
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default()
+}
+
 use diaryx_core::export::Exporter;
 use diaryx_core::plugin::{PluginCapability, PluginId, PluginManifest, UiContribution};
 
@@ -50,11 +62,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
         vec!["workspace_events".into(), "custom_commands".into()],
     )
     .min_app_version("1.4.1")
-    .ui(pm
-        .ui
-        .iter()
-        .map(|u| serde_json::to_value(u).unwrap_or_default())
-        .collect())
+    .ui(pm.ui.iter().map(|u| core_to_json_value(u)).collect())
     .commands(all_commands())
     .requested_permissions(GuestRequestedPermissions {
         defaults: serde_json::json!({
@@ -228,7 +236,7 @@ pub fn handle_command(input: String) -> FnResult<String> {
                 std::path::Path::new("/tmp/export"),
                 default_aud.as_deref(),
             )) {
-                Ok(plan) => CommandResponse::ok(serde_json::to_value(plan).unwrap_or_default()),
+                Ok(plan) => CommandResponse::ok(core_to_json_value(&plan)),
                 Err(e) => CommandResponse::err(e.to_string()),
             }
         }
@@ -287,7 +295,7 @@ pub fn handle_command(input: String) -> FnResult<String> {
 
                         file.content = visibility_processed;
                     }
-                    CommandResponse::ok(serde_json::to_value(files).unwrap_or_default())
+                    CommandResponse::ok(core_to_json_value(&files))
                 }
                 Err(e) => CommandResponse::err(e.to_string()),
             }
@@ -304,7 +312,7 @@ pub fn handle_command(input: String) -> FnResult<String> {
             let resolved = resolve_path(root_path);
             let exporter = Exporter::new(HostFs);
             let attachments = poll_future(exporter.collect_binary_attachments(&resolved));
-            CommandResponse::ok(serde_json::to_value(attachments).unwrap_or_default())
+            CommandResponse::ok(core_to_json_value(&attachments))
         }
         "OpenExportDialog" => {
             // The host handles the UI — just acknowledge.

@@ -165,16 +165,31 @@ pub fn edit_router(workspace_root: PathBuf, upstream_url: String) -> (Router, Sh
 // ============================================================================
 
 /// POST /api/execute — run a Command, return a Response.
+///
+/// `Command` and `Response` are fig types (no serde), so we bridge JSON at the
+/// HTTP boundary: parse the raw request body via `Command::from_json` and emit
+/// the response via `Response::to_json`. The wire format is unchanged.
 async fn handle_execute(
     State(state): State<Arc<AppState>>,
-    Json(command): Json<Command>,
-) -> Result<Json<Response>, (StatusCode, String)> {
-    state
+    body: Bytes,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let body_str =
+        std::str::from_utf8(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let command =
+        Command::from_json(body_str).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let response: Response = state
         .diaryx
         .execute(command)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let json = response
+        .to_json()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok((
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        json,
+    ))
 }
 
 /// GET /api/binary/*path — read a binary file (attachments, images, etc.)

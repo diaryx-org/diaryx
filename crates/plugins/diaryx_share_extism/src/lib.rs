@@ -21,6 +21,18 @@ use serde_json::Value as JsonValue;
 
 use session::ShareRole;
 
+/// Convert a core (fig) type into a `serde_json::Value` via fig's JSON
+/// serializer. `fig::Value` does not implement `serde::Serialize`, so we go
+/// through its JSON string form. Falls back to `Value::Null` on error.
+fn core_to_json_value<T: diaryx_core::fig::ToValue>(value: &T) -> JsonValue {
+    serde_json::from_str(
+        &diaryx_core::fig::ToValue::to_value(value)
+            .serialize(diaryx_core::fig::Format::Json)
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default()
+}
+
 // ============================================================================
 // HTTP compat helpers
 // ============================================================================
@@ -753,8 +765,8 @@ fn build_manifest() -> GuestManifest {
         ],
     )
     .ui(vec![
-        serde_json::to_value(&share_settings_tab).unwrap_or_default(),
-        serde_json::to_value(&share_tab).unwrap_or_default(),
+        core_to_json_value(&share_settings_tab),
+        core_to_json_value(&share_tab),
     ])
     .commands(vec![
         "CreateShareSession".into(),

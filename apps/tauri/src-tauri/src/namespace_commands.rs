@@ -6,13 +6,11 @@
 //! familiar [`SerializableAuthError`] the frontend already knows how to
 //! parse.
 
-use diaryx_core::namespace::{
-    self, AudienceInfo, BulkImportResult, DomainInfo, NamespaceMetadata, RotatePasswordResult,
-    SubdomainInfo, SubscriberInfo, TokenResult,
-};
+use diaryx_core::namespace;
 use tauri::{AppHandle, State};
 
 use crate::auth_commands::{AuthServiceState, SerializableAuthError, ensure_service};
+use crate::fig_bridge::fig_to_json;
 
 // ============================================================================
 // Namespace CRUD
@@ -23,11 +21,12 @@ pub async fn namespace_get(
     state: State<'_, AuthServiceState>,
     app: AppHandle,
     id: String,
-) -> Result<NamespaceMetadata, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::get_namespace(service.client(), &id)
+    let result = namespace::get_namespace(service.client(), &id)
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -36,12 +35,13 @@ pub async fn namespace_create(
     app: AppHandle,
     id: Option<String>,
     metadata: Option<serde_json::Value>,
-) -> Result<NamespaceMetadata, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
     let metadata = metadata.map(diaryx_core::yaml::Value::from);
-    namespace::create_namespace(service.client(), id.as_deref(), metadata.as_ref())
+    let result = namespace::create_namespace(service.client(), id.as_deref(), metadata.as_ref())
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -50,12 +50,13 @@ pub async fn namespace_update_metadata(
     app: AppHandle,
     id: String,
     metadata: Option<serde_json::Value>,
-) -> Result<NamespaceMetadata, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
     let metadata = metadata.map(diaryx_core::yaml::Value::from);
-    namespace::update_namespace_metadata(service.client(), &id, metadata.as_ref())
+    let result = namespace::update_namespace_metadata(service.client(), &id, metadata.as_ref())
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -79,11 +80,12 @@ pub async fn namespace_list_audiences(
     state: State<'_, AuthServiceState>,
     app: AppHandle,
     id: String,
-) -> Result<Vec<AudienceInfo>, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::list_audiences(service.client(), &id)
+    let result = namespace::list_audiences(service.client(), &id)
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -106,11 +108,12 @@ pub async fn namespace_get_audience_token(
     app: AppHandle,
     id: String,
     name: String,
-) -> Result<TokenResult, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::get_audience_token(service.client(), &id, &name)
+    let result = namespace::get_audience_token(service.client(), &id, &name)
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -120,11 +123,12 @@ pub async fn namespace_rotate_audience_password(
     id: String,
     name: String,
     password: String,
-) -> Result<RotatePasswordResult, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::rotate_audience_password(service.client(), &id, &name, &password)
+    let result = namespace::rotate_audience_password(service.client(), &id, &name, &password)
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 // ============================================================================
@@ -138,16 +142,17 @@ pub async fn namespace_claim_subdomain(
     id: String,
     subdomain: String,
     default_audience: Option<String>,
-) -> Result<SubdomainInfo, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::claim_subdomain(
+    let result = namespace::claim_subdomain(
         service.client(),
         &id,
         &subdomain,
         default_audience.as_deref(),
     )
     .await
-    .map_err(Into::into)
+    .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -171,11 +176,12 @@ pub async fn namespace_list_domains(
     state: State<'_, AuthServiceState>,
     app: AppHandle,
     id: String,
-) -> Result<Vec<DomainInfo>, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::list_domains(service.client(), &id)
+    let result = namespace::list_domains(service.client(), &id)
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -185,11 +191,12 @@ pub async fn namespace_register_domain(
     id: String,
     domain: String,
     audience_name: String,
-) -> Result<DomainInfo, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::register_domain(service.client(), &id, &domain, &audience_name)
+    let result = namespace::register_domain(service.client(), &id, &domain, &audience_name)
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -215,11 +222,12 @@ pub async fn namespace_list_subscribers(
     app: AppHandle,
     id: String,
     audience: String,
-) -> Result<Vec<SubscriberInfo>, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::list_subscribers(service.client(), &id, &audience)
+    let result = namespace::list_subscribers(service.client(), &id, &audience)
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -229,11 +237,12 @@ pub async fn namespace_add_subscriber(
     id: String,
     audience: String,
     email: String,
-) -> Result<SubscriberInfo, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::add_subscriber(service.client(), &id, &audience, &email)
+    let result = namespace::add_subscriber(service.client(), &id, &audience, &email)
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -257,9 +266,10 @@ pub async fn namespace_bulk_import_subscribers(
     id: String,
     audience: String,
     emails: Vec<String>,
-) -> Result<BulkImportResult, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    namespace::bulk_import_subscribers(service.client(), &id, &audience, &emails)
+    let result = namespace::bulk_import_subscribers(service.client(), &id, &audience, &emails)
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }

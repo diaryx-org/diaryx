@@ -14,22 +14,23 @@ use diaryx_core::auth::{
     AuthError, AuthMetadata, AuthenticatedClient, DEFAULT_SYNC_SERVER, HttpResponse,
 };
 use diaryx_core::config::Config;
+use diaryx_core::fig;
 use diaryx_core::frontmatter::{parse_typed, serialize_typed};
 use diaryx_native::NativeConfigExt;
 
 /// On-disk auth file format (private to this module).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, diaryx_core::fig::ToValue, diaryx_core::fig::FromValue)]
 struct AuthFile {
-    #[serde(default = "default_auth_title")]
+    #[fig(default = "default_auth_title")]
     title: String,
-    #[serde(default = "default_auth_part_of")]
+    #[fig(default = "default_auth_part_of")]
     part_of: String,
     server_url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     session_token: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     email: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     workspace_id: Option<String>,
 }
 

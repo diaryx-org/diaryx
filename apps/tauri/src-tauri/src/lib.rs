@@ -16,6 +16,7 @@ mod commands;
 mod credentials;
 #[cfg(feature = "dev-ipc")]
 mod dev_ipc;
+mod fig_bridge;
 mod logging;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod macos_security_scoped;

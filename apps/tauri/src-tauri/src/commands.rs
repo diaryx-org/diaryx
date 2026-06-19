@@ -20,11 +20,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use crate::fig_bridge::SerializableError;
 use diaryx_core::{
     Command,
     config::Config,
     diaryx::Diaryx,
-    error::{DiaryxError, SerializableError},
+    error::DiaryxError,
     fs::{FileSystemEvent, InMemoryFileSystem, SyncToAsyncFs},
     plugin::permissions::{PermissionRule, PermissionType, PluginConfig, PluginPermissions},
     workspace::Workspace,
@@ -438,9 +439,14 @@ fn emit_workspace_watch_event<R: Runtime>(
     }
 
     for fs_event in filesystem_events_from_notify(&event.kind, paths) {
-        match serde_json::to_string(&fs_event) {
+        // `FileSystemEvent` is fig-only (no serde). Emit the same JSON-string
+        // shape the frontend already expects via fig's JSON serializer.
+        match diaryx_core::fig::ToValue::to_value(&fs_event).serialize_with(
+            diaryx_core::fig::Format::Json,
+            diaryx_core::fig::SerializeOptions::compact(),
+        ) {
             Ok(event_json) => {
-                let _ = app.emit("tauri-filesystem-event", event_json);
+                let _ = app.emit("tauri-filesystem-event", event_json.trim_end());
             }
             Err(e) => {
                 log::warn!("Failed to serialize workspace filesystem event: {e}");
@@ -512,7 +518,7 @@ async fn save_config_file(config: &Config, config_path: &Path) -> Result<(), Ser
     config
         .save_to(&SyncToAsyncFs::new(RealFileSystem), config_path)
         .await
-        .map_err(|e| e.to_serializable())
+        .map_err(|e| SerializableError::from(e.to_serializable()))
 }
 
 fn log_serializable_error(context: &str, err: &SerializableError) {
@@ -1026,9 +1032,10 @@ fn persist_requested_permission_defaults(
     }
 
     let workspace = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
-    let root_index_path =
-        futures_lite::future::block_on(workspace.find_root_index_in_dir(workspace_root))
-            .map_err(|e: diaryx_core::error::DiaryxError| e.to_serializable())?;
+    let root_index_path = futures_lite::future::block_on(
+        workspace.find_root_index_in_dir(workspace_root),
+    )
+    .map_err(|e: diaryx_core::error::DiaryxError| SerializableError::from(e.to_serializable()))?;
 
     let Some(root_index_path) = root_index_path else {
         return Ok(());
@@ -1038,19 +1045,25 @@ fn persist_requested_permission_defaults(
     // (with root-index fallback). Read and write it through the workspace config
     // layer so it stays out of the human-edited root index.
     let config = futures_lite::future::block_on(workspace.get_workspace_config(&root_index_path))
-        .map_err(|e: diaryx_core::error::DiaryxError| e.to_serializable())?;
+        .map_err(|e: diaryx_core::error::DiaryxError| {
+        SerializableError::from(e.to_serializable())
+    })?;
 
-    let mut plugins_config = match config.plugins {
+    let mut plugins_config: HashMap<String, PluginConfig> = match config.plugins {
         Some(value) => {
-            serde_json::from_value::<HashMap<String, PluginConfig>>(serde_json::Value::from(value))
-                .map_err(|e| SerializableError {
-                    kind: "ValidationError".to_string(),
-                    message: format!(
-                        "Invalid plugin permissions for '{}': {e}",
-                        root_index_path.display()
-                    ),
-                    path: Some(root_index_path.clone()),
-                })?
+            // `PluginConfig` is fig-only (no serde). Bridge the stored YAML value
+            // through serde_json into the fig type via the fig bridge.
+            crate::fig_bridge::json_to_fig::<HashMap<String, PluginConfig>>(
+                serde_json::Value::from(value),
+            )
+            .map_err(|e| SerializableError {
+                kind: "ValidationError".to_string(),
+                message: format!(
+                    "Invalid plugin permissions for '{}': {e}",
+                    root_index_path.display()
+                ),
+                path: Some(root_index_path.clone()),
+            })?
         }
         None => HashMap::new(),
     };
@@ -1068,18 +1081,26 @@ fn persist_requested_permission_defaults(
         return Ok(());
     }
 
-    let plugins_json = serde_json::to_string(&plugins_config).map_err(|e| SerializableError {
-        kind: "SerializationError".to_string(),
-        message: format!("Failed to serialize plugin permissions: {e}"),
-        path: Some(root_index_path.clone()),
-    })?;
+    // `PluginConfig` is fig-only (no serde); serialize the map via fig's JSON
+    // serializer into the string `set_workspace_config_field` expects.
+    let plugins_json = diaryx_core::fig::ToValue::to_value(&plugins_config)
+        .serialize_with(
+            diaryx_core::fig::Format::Json,
+            diaryx_core::fig::SerializeOptions::compact(),
+        )
+        .map(|s| s.trim_end().to_string())
+        .map_err(|e| SerializableError {
+            kind: "SerializationError".to_string(),
+            message: format!("Failed to serialize plugin permissions: {e}"),
+            path: Some(root_index_path.clone()),
+        })?;
 
     futures_lite::future::block_on(workspace.set_workspace_config_field(
         &root_index_path,
         "plugins",
         &plugins_json,
     ))
-    .map_err(|e: diaryx_core::error::DiaryxError| e.to_serializable())
+    .map_err(|e: diaryx_core::error::DiaryxError| SerializableError::from(e.to_serializable()))
 }
 
 #[cfg(feature = "extism-plugins")]
@@ -2004,13 +2025,21 @@ pub async fn install_user_plugin<R: Runtime>(
         manifest.name,
         plugin_id
     );
-    let manifest_json = serde_json::to_string(&manifest).map_err(|e| {
-        log_plugin_install_error(SerializableError {
-            kind: "SerializationError".to_string(),
-            message: format!("Failed to serialize plugin manifest: {e}"),
-            path: Some(tmp_wasm.clone()),
-        })
-    })?;
+    // `PluginManifest` is fig-only (no serde). Produce the same JSON-string
+    // return shape via fig's JSON serializer.
+    let manifest_json = diaryx_core::fig::ToValue::to_value(&manifest)
+        .serialize_with(
+            diaryx_core::fig::Format::Json,
+            diaryx_core::fig::SerializeOptions::compact(),
+        )
+        .map(|s| s.trim_end().to_string())
+        .map_err(|e| {
+            log_plugin_install_error(SerializableError {
+                kind: "SerializationError".to_string(),
+                message: format!("Failed to serialize plugin manifest: {e}"),
+                path: Some(tmp_wasm.clone()),
+            })
+        })?;
 
     // Persist WASM to {workspace_root}/.diaryx/plugins/{plugin_id}/plugin.wasm
     let base_dir = workspace_plugins_dir(&app).ok_or_else(|| {
@@ -2775,8 +2804,8 @@ pub async fn execute<R: Runtime>(
     log::trace!("[execute] Received command");
     log::trace!("[execute] Command JSON: {}", command_json);
 
-    // Parse the command from JSON
-    let cmd: Command = serde_json::from_str(&command_json).map_err(|e| {
+    // Parse the command from JSON (fig-based; Command is no longer serde).
+    let cmd: Command = Command::from_json(&command_json).map_err(|e| {
         log::error!("[execute] Failed to parse command: {}", e);
         SerializableError {
             kind: "ParseError".to_string(),
@@ -2813,7 +2842,7 @@ pub async fn execute<R: Runtime>(
         log::trace!("[execute] Using cached guest Diaryx instance");
         diaryx.execute(cmd).await.map_err(|e| {
             log_execute_error(&e);
-            e.to_serializable()
+            SerializableError::from(e.to_serializable())
         })?
     } else {
         // Normal mode: use real filesystem
@@ -2836,22 +2865,22 @@ pub async fn execute<R: Runtime>(
                 let app_state = app.state::<AppState>();
                 app_state.plugins_ready.wait().await;
                 // Re-parse the command since Command doesn't impl Clone
-                let retry_cmd: Command = serde_json::from_str(&command_json).unwrap();
+                let retry_cmd: Command = Command::from_json(&command_json).unwrap();
                 let diaryx = get_or_init_tauri_diaryx(&app).await?;
                 diaryx.execute(retry_cmd).await.map_err(|e| {
                     log_execute_error(&e);
-                    e.to_serializable()
+                    SerializableError::from(e.to_serializable())
                 })?
             }
             Err(e) => {
                 log_execute_error(&e);
-                return Err(e.to_serializable());
+                return Err(SerializableError::from(e.to_serializable()));
             }
         }
     };
 
-    // Serialize the response to JSON
-    let response_json = serde_json::to_string(&response).map_err(|e| {
+    // Serialize the response to JSON (fig-based; Response is no longer serde).
+    let response_json = response.to_json().map_err(|e| {
         log::error!("[execute] Failed to serialize response: {}", e);
         SerializableError {
             kind: "SerializeError".to_string(),
@@ -3243,7 +3272,7 @@ pub async fn pick_workspace_folder<R: Runtime>(
             );
             ws.init_workspace(&actual_workspace, Some("My Workspace"), None)
                 .await
-                .map_err(|e| e.to_serializable())?;
+                .map_err(|e| SerializableError::from(e.to_serializable()))?;
         }
 
         {
@@ -3355,7 +3384,7 @@ pub async fn pick_workspace_folder<R: Runtime>(
             );
             ws.init_workspace(&actual_workspace, Some("My Workspace"), None)
                 .await
-                .map_err(|e| e.to_serializable())?;
+                .map_err(|e| SerializableError::from(e.to_serializable()))?;
         }
 
         {
@@ -3757,7 +3786,7 @@ async fn list_icloud_workspace_records<R: Runtime>(
         let has_root = ws
             .find_root_index_in_dir(&path)
             .await
-            .map_err(|e| e.to_serializable())?
+            .map_err(|e| SerializableError::from(e.to_serializable()))?
             .is_some();
         if !has_root {
             continue;
@@ -3901,7 +3930,7 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
             .await
             .map_err(|e| {
                 log::error!("[initialize_app] Failed to save config: {:?}", e);
-                e.to_serializable()
+                SerializableError::from(e.to_serializable())
             })?;
         new_config
     };
@@ -4112,7 +4141,7 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
             .await
             .map_err(|e| {
                 log::error!("[initialize_app] Failed to initialize workspace: {:?}", e);
-                e.to_serializable()
+                SerializableError::from(e.to_serializable())
             })?;
         log::info!("[initialize_app] Workspace initialized successfully");
     }
@@ -4266,7 +4295,7 @@ pub async fn set_icloud_enabled<R: Runtime>(
         if !workspace_has_root {
             ws.init_workspace(&icloud_workspace, Some("My Workspace"), None)
                 .await
-                .map_err(|e| e.to_serializable())?;
+                .map_err(|e| SerializableError::from(e.to_serializable()))?;
         }
 
         // Update AppState
@@ -4506,7 +4535,7 @@ pub async fn link_icloud_workspace<R: Runtime>(
     let target_has_root = ws
         .find_root_index_in_dir(&target_workspace)
         .await
-        .map_err(|e| e.to_serializable())?
+        .map_err(|e| SerializableError::from(e.to_serializable()))?
         .is_some();
 
     if current_workspace != target_workspace && target_has_root {
@@ -4542,7 +4571,7 @@ pub async fn link_icloud_workspace<R: Runtime>(
     let workspace_has_root = ws
         .find_root_index_in_dir(&target_workspace)
         .await
-        .map_err(|e| e.to_serializable())?
+        .map_err(|e| SerializableError::from(e.to_serializable()))?
         .is_some();
     if !workspace_has_root {
         ws.init_workspace(
@@ -4551,7 +4580,7 @@ pub async fn link_icloud_workspace<R: Runtime>(
             None,
         )
         .await
-        .map_err(|e| e.to_serializable())?;
+        .map_err(|e| SerializableError::from(e.to_serializable()))?;
     }
 
     finalize_icloud_workspace_attach(&app, &mut config, &paths, target_workspace).await
@@ -4606,7 +4635,7 @@ pub async fn restore_icloud_workspace<R: Runtime>(
     let has_workspace = ws
         .find_root_index_in_dir(&icloud_workspace)
         .await
-        .map_err(|e| e.to_serializable())?
+        .map_err(|e| SerializableError::from(e.to_serializable()))?
         .is_some();
     if !has_workspace {
         return Err(SerializableError {
@@ -6379,7 +6408,7 @@ mod tests {
         assert!(command_waits_for_plugin_registry(&Command::PluginCommand {
             plugin: "diaryx.publish".to_string(),
             command: "status".to_string(),
-            params: JsonValue::Null,
+            params: diaryx_core::yaml::Value::Null,
         }));
         assert!(command_waits_for_plugin_registry(
             &Command::GetPluginConfig {
@@ -6389,7 +6418,7 @@ mod tests {
         assert!(command_waits_for_plugin_registry(
             &Command::SetPluginConfig {
                 plugin: "diaryx.publish".to_string(),
-                config: JsonValue::Null,
+                config: diaryx_core::yaml::Value::Null,
             }
         ));
 
@@ -6453,6 +6482,7 @@ mod tests {
                     http_requests: Some(rule(&["sync.diaryx.app"], &[])),
                     ..PluginPermissions::default()
                 },
+                config: None,
             },
         )]);
         let defaults = PluginPermissions {
@@ -6509,6 +6539,7 @@ mod tests {
                     read_files: Some(rule(&[], &[])),
                     ..PluginPermissions::default()
                 },
+                config: None,
             },
         )]);
         let defaults = PluginPermissions {
@@ -6546,6 +6577,7 @@ mod tests {
                     plugin_storage: Some(existing_rule),
                     ..PluginPermissions::default()
                 },
+                config: None,
             },
         )]);
 
@@ -6582,6 +6614,7 @@ mod tests {
                     plugin_storage: Some(existing_rule),
                     ..PluginPermissions::default()
                 },
+                config: None,
             },
         )]);
 

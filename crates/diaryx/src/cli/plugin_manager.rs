@@ -17,6 +17,21 @@ use crate::cli::args::PluginCommands;
 
 const REGISTRY_URL: &str = "https://app.diaryx.org/cdn/plugins/registry.md";
 
+/// Convert a fig `ToValue` type into a `serde_json::Value` so it can be embedded
+/// in `serde_json::json!` output. Core marketplace types migrated from serde to
+/// fig, so we bridge through fig's JSON serializer. Falls back to `Null` on the
+/// (unexpected) serialization error.
+fn fig_to_json<T: diaryx_core::fig::ToValue>(value: &T) -> serde_json::Value {
+    diaryx_core::fig::ToValue::to_value(value)
+        .serialize_with(
+            diaryx_core::fig::Format::Json,
+            diaryx_core::fig::SerializeOptions::compact(),
+        )
+        .ok()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json.trim_end()).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
 #[derive(Debug, Clone)]
 struct InstalledPlugin {
     id: String,
@@ -766,7 +781,7 @@ fn handle_search(filters: DiscoveryFilters, json: bool) {
                     "categories": plugin.categories,
                     "tags": plugin.tags,
                     "capabilities": plugin.capabilities,
-                    "artifact": plugin.artifact,
+                    "artifact": fig_to_json(&plugin.artifact),
                     "installed": installed_ids.contains(plugin.id.as_str()),
                 })
             })
@@ -878,7 +893,9 @@ fn handle_info(id: &str, json: bool) {
     if json {
         let out = serde_json::json!({
             "id": id,
-            "registry": registry_plugin,
+            "registry": registry_plugin
+                .map(|plugin| fig_to_json(plugin))
+                .unwrap_or(serde_json::Value::Null),
             "installed": installed_plugin.as_ref().map(|plugin| {
                 serde_json::json!({
                     "id": plugin.id,

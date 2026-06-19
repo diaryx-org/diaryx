@@ -922,6 +922,16 @@ fn find_plugin_wasm(plugin_id: &str) -> Result<PathBuf, String> {
 /// Discover installed plugin manifests by scanning cached `manifest.json` files.
 ///
 /// This is fast — no WASM loading, just JSON file reads.
+/// Parse a JSON string into a fig type `T` (replaces `serde_json::from_str`
+/// for core types that migrated from serde to fig).
+fn parse_fig_json<T: diaryx_core::fig::FromValue>(
+    json: &str,
+) -> Result<T, diaryx_core::fig::Error> {
+    let value = diaryx_core::fig::Document::parse(json.as_bytes(), diaryx_core::fig::Format::Json)
+        .and_then(|d| d.to_value())?;
+    <T as diaryx_core::fig::FromValue>::from_value(&value)
+}
+
 /// Returns `(plugin_id, PluginManifest)` pairs for every installed plugin
 /// that has a cached manifest.
 pub fn discover_plugin_manifests() -> Vec<(String, PluginManifest)> {
@@ -958,7 +968,9 @@ pub fn discover_plugin_manifests() -> Vec<(String, PluginManifest)> {
             };
 
             // Try parsing as PluginManifest first (the format we cache).
-            if let Ok(manifest) = serde_json::from_str::<PluginManifest>(&json) {
+            // `PluginManifest` is a fig type now, so bridge through fig's JSON
+            // parser instead of serde.
+            if let Ok(manifest) = parse_fig_json::<PluginManifest>(&json) {
                 let id = manifest.id.0.clone();
                 if !results.iter().any(|(existing_id, _)| existing_id == &id) {
                     results.push((id, manifest));
@@ -988,7 +1000,12 @@ fn convert_guest_manifest_to_plugin(guest: &GuestManifest) -> PluginManifest {
     let cli = guest
         .cli
         .iter()
-        .filter_map(|val| serde_json::from_value(val.clone()).ok())
+        .filter_map(|val| {
+            // `CliCommand` is a fig type; convert the serde_json::Value into a
+            // fig::Value (which is Deserialize) and decode via fig::FromValue.
+            let fv = serde_json::from_value::<diaryx_core::fig::Value>(val.clone()).ok()?;
+            <diaryx_core::plugin::CliCommand as diaryx_core::fig::FromValue>::from_value(&fv).ok()
+        })
         .collect();
 
     PluginManifest {

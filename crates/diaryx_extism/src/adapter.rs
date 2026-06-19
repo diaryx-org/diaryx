@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
 use diaryx_core::plugin::{
-    ConfigReconcile, FileCreatedEvent, FileDeletedEvent, FileMovedEvent, FilePlugin,
+    CliCommand, ConfigReconcile, FileCreatedEvent, FileDeletedEvent, FileMovedEvent, FilePlugin,
     FileSavedEvent, Plugin, PluginCapability, PluginContext, PluginError, PluginId, PluginManifest,
     UiContribution, WorkspaceChangedEvent, WorkspaceClosedEvent, WorkspaceCommittedEvent,
     WorkspaceOpenedEvent, WorkspacePlugin,
@@ -129,7 +129,11 @@ fn parse_config_reconcile(output: &str) -> ConfigReconcile {
     if trimmed.is_empty() {
         return ConfigReconcile::default();
     }
-    serde_json::from_str::<ConfigReconcile>(trimmed).unwrap_or_default()
+    diaryx_core::fig::Document::parse(trimmed.as_bytes(), diaryx_core::fig::Format::Json)
+        .and_then(|d| d.to_value())
+        .ok()
+        .and_then(|v| <ConfigReconcile as diaryx_core::fig::FromValue>::from_value(&v).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(feature = "ws-transport")]
@@ -391,12 +395,14 @@ fn convert_guest_manifest(guest: &GuestManifest) -> PluginManifest {
         .ui
         .iter()
         .filter_map(|val| {
-            serde_json::from_value(val.clone())
+            serde_json::from_value::<diaryx_core::fig::Value>(val.clone())
                 .map_err(|e| {
                     log::warn!("Plugin {}: failed to parse UI contribution: {e}", guest.id);
-                    e
                 })
                 .ok()
+                .and_then(|fv| {
+                    <UiContribution as diaryx_core::fig::FromValue>::from_value(&fv).ok()
+                })
         })
         .collect();
 
@@ -404,12 +410,12 @@ fn convert_guest_manifest(guest: &GuestManifest) -> PluginManifest {
         .cli
         .iter()
         .filter_map(|val| {
-            serde_json::from_value(val.clone())
+            serde_json::from_value::<diaryx_core::fig::Value>(val.clone())
                 .map_err(|e| {
                     log::warn!("Plugin {}: failed to parse CLI command: {e}", guest.id);
-                    e
                 })
                 .ok()
+                .and_then(|fv| <CliCommand as diaryx_core::fig::FromValue>::from_value(&fv).ok())
         })
         .collect();
 

@@ -26,15 +26,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use diaryx_core::auth::{
-    AuthError, AuthMetadata, AuthService, Device, MagicLinkResponse, MeResponse, User,
-    VerifyResponse,
-};
+use diaryx_core::auth::{AuthError, AuthService, VerifyResponse};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::RwLock;
 
 use crate::auth_client::KeyringAuthenticatedClient;
+use crate::fig_bridge::fig_to_json;
 
 // ============================================================================
 // State
@@ -121,8 +119,11 @@ pub struct SerializableAuthError {
     pub message: String,
     #[serde(rename = "statusCode")]
     pub status_code: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub devices: Option<Vec<Device>>,
+    // `Device` is fig-only (no serde); carry the devices as a JSON value bridged
+    // from the fig type so the JS-visible shape stays identical. `Null` here is
+    // omitted from the wire form, matching the previous `Option::is_none` skip.
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+    pub devices: serde_json::Value,
 }
 
 impl From<AuthError> for SerializableAuthError {
@@ -130,7 +131,10 @@ impl From<AuthError> for SerializableAuthError {
         Self {
             message: err.message,
             status_code: err.status_code,
-            devices: err.devices,
+            devices: match err.devices {
+                Some(devices) => crate::fig_bridge::fig_to_json(&devices),
+                None => serde_json::Value::Null,
+            },
         }
     }
 }
@@ -140,7 +144,7 @@ impl SerializableAuthError {
         Self {
             message: msg.into(),
             status_code: 0,
-            devices: None,
+            devices: serde_json::Value::Null,
         }
     }
 }
@@ -161,7 +165,9 @@ pub struct RedactedVerifyResponse {
     pub success: bool,
     /// Always an empty string once redaction is turned on.
     pub token: String,
-    pub user: User,
+    // `User` is fig-only (no serde); carry it as a JSON value bridged from the
+    // fig type so the JS-visible shape stays identical.
+    pub user: serde_json::Value,
 }
 
 impl From<VerifyResponse> for RedactedVerifyResponse {
@@ -169,7 +175,7 @@ impl From<VerifyResponse> for RedactedVerifyResponse {
         Self {
             success: v.success,
             token: String::new(),
-            user: v.user,
+            user: crate::fig_bridge::fig_to_json(&v.user),
         }
     }
 }
@@ -210,9 +216,14 @@ pub async fn auth_is_authenticated(
 pub async fn auth_get_metadata(
     state: State<'_, AuthServiceState>,
     app: AppHandle,
-) -> Result<Option<AuthMetadata>, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    Ok(service.get_metadata().await)
+    // `AuthMetadata` is fig-only (no serde); bridge the optional value to JSON.
+    // `None` maps to JSON `null`, matching the previous `Option` shape.
+    Ok(match service.get_metadata().await {
+        Some(metadata) => fig_to_json(&metadata),
+        None => serde_json::Value::Null,
+    })
 }
 
 // ============================================================================
@@ -224,9 +235,13 @@ pub async fn auth_request_magic_link(
     state: State<'_, AuthServiceState>,
     app: AppHandle,
     email: String,
-) -> Result<MagicLinkResponse, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    service.request_magic_link(&email).await.map_err(Into::into)
+    let result = service
+        .request_magic_link(&email)
+        .await
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -236,12 +251,13 @@ pub async fn auth_verify_magic_link(
     token: String,
     device_name: Option<String>,
     replace_device_id: Option<String>,
-) -> Result<VerifyResponse, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    service
+    let result = service
         .verify_magic_link(&token, device_name.as_deref(), replace_device_id.as_deref())
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -252,9 +268,9 @@ pub async fn auth_verify_code(
     email: String,
     device_name: Option<String>,
     replace_device_id: Option<String>,
-) -> Result<VerifyResponse, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    service
+    let result = service
         .verify_code(
             &code,
             &email,
@@ -262,7 +278,8 @@ pub async fn auth_verify_code(
             replace_device_id.as_deref(),
         )
         .await
-        .map_err(Into::into)
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 // ============================================================================
@@ -273,18 +290,26 @@ pub async fn auth_verify_code(
 pub async fn auth_get_me(
     state: State<'_, AuthServiceState>,
     app: AppHandle,
-) -> Result<MeResponse, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    service.get_me().await.map_err(Into::into)
+    let result = service
+        .get_me()
+        .await
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
 pub async fn auth_refresh_token(
     state: State<'_, AuthServiceState>,
     app: AppHandle,
-) -> Result<MeResponse, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    service.refresh_token().await.map_err(Into::into)
+    let result = service
+        .refresh_token()
+        .await
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]
@@ -304,9 +329,13 @@ pub async fn auth_logout(
 pub async fn auth_get_devices(
     state: State<'_, AuthServiceState>,
     app: AppHandle,
-) -> Result<Vec<Device>, SerializableAuthError> {
+) -> Result<serde_json::Value, SerializableAuthError> {
     let service = ensure_service(&state, &app).await?;
-    service.get_devices().await.map_err(Into::into)
+    let result = service
+        .get_devices()
+        .await
+        .map_err(SerializableAuthError::from)?;
+    Ok(fig_to_json(&result))
 }
 
 #[tauri::command]

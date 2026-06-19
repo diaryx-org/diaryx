@@ -1271,55 +1271,10 @@ fn is_local_file_ref(path: &str) -> bool {
     filename.contains('.')
 }
 
-/// Decode percent-encoded characters in a URL string (e.g. `%20` → ` `).
-pub(crate) fn percent_decode(input: &str) -> String {
-    let mut result = Vec::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
-        {
-            result.push(hi << 4 | lo);
-            i += 3;
-            continue;
-        }
-        result.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8(result).unwrap_or_else(|_| input.to_string())
-}
-
-pub(crate) fn hex_val(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_percent_decode() {
-        assert_eq!(percent_decode("hello"), "hello");
-        assert_eq!(percent_decode("hello%20world"), "hello world");
-        assert_eq!(
-            percent_decode("Message%20for%20my%20family.md"),
-            "Message for my family.md"
-        );
-        assert_eq!(percent_decode("%2Fpath%2Fto%2Ffile"), "/path/to/file");
-        // Incomplete sequences are left as-is
-        assert_eq!(percent_decode("hello%2"), "hello%2");
-        assert_eq!(percent_decode("hello%"), "hello%");
-        // Invalid hex chars left as-is
-        assert_eq!(percent_decode("hello%ZZ"), "hello%ZZ");
-    }
 
     #[test]
     fn test_strip_sensitive_frontmatter_removes_denylisted_keys() {

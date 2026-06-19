@@ -2675,9 +2675,9 @@ version = "0.2.11"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "comrak",
  "diaryx_core",
  "diaryx_plugin_sdk",
+ "diaryx_render",
  "extism-pdk",
  "futures-lite 2.6.1",
  "indexmap 2.13.1",
@@ -2688,6 +2688,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "urlencoding",
+]
+
+[[package]]
+name = "diaryx_render"
+version = "1.6.1"
+dependencies = [
+ "comrak",
+ "diaryx_core",
+ "serde",
 ]
 
 [[package]]

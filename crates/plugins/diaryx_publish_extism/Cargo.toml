@@ -11,8 +11,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 diaryx_core = { workspace = true, features = ["serde-json"] }
+diaryx_render = { workspace = true }
 diaryx_plugin_sdk = { workspace = true, features = ["core", "http", "namespaces", "events", "plugins", "wasi"] }
-comrak = "0.49"
 pathdiff = "0.2"
 async-trait = "0.1"
 extism-pdk = "1.4"

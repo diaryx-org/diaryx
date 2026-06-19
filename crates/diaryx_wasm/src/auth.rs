@@ -41,9 +41,13 @@
 //! ```
 
 use diaryx_core::auth::{AuthError, AuthMetadata, AuthService, AuthenticatedClient, HttpResponse};
+use std::rc::Rc;
+
 use js_sys::{Function, Promise, Reflect};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
+
+use crate::utils::promise;
 
 // ============================================================================
 // JS callbacks interface
@@ -288,7 +292,9 @@ impl AuthenticatedClient for WasmAuthenticatedClient {
 /// carrying `statusCode` and `devices` properties on failure.
 #[wasm_bindgen]
 pub struct AuthClient {
-    inner: AuthService<WasmAuthenticatedClient>,
+    // `Rc` so each exported method can move a cheap clone into a `'static`
+    // boxed future (see `crate::utils::promise`).
+    inner: Rc<AuthService<WasmAuthenticatedClient>>,
 }
 
 pub(crate) fn auth_error_to_js(err: AuthError) -> JsValue {
@@ -325,7 +331,7 @@ impl AuthClient {
     pub fn new(server_url: String, callbacks: AuthCallbacks) -> Self {
         let client = WasmAuthenticatedClient::new(server_url, callbacks.into());
         Self {
-            inner: AuthService::new(client),
+            inner: Rc::new(AuthService::new(client)),
         }
     }
 
@@ -337,17 +343,21 @@ impl AuthClient {
 
     /// Whether a session is currently established (per the `hasSession` callback).
     #[wasm_bindgen(js_name = isAuthenticated)]
-    pub async fn is_authenticated(&self) -> bool {
-        self.inner.is_authenticated().await
+    pub fn is_authenticated(&self) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move { Ok(JsValue::from(inner.is_authenticated().await)) })
     }
 
     /// Load non-secret session metadata as a JSON string (or `null`).
     #[wasm_bindgen(js_name = getMetadata)]
-    pub async fn get_metadata(&self) -> Result<JsValue, JsValue> {
-        match self.inner.get_metadata().await {
-            Some(m) => to_js_ok(&m),
-            None => Ok(JsValue::NULL),
-        }
+    pub fn get_metadata(&self) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            match inner.get_metadata().await {
+                Some(m) => to_js_ok(&m),
+                None => Ok(JsValue::NULL),
+            }
+        })
     }
 
     // =========================================================================
@@ -355,46 +365,55 @@ impl AuthClient {
     // =========================================================================
 
     #[wasm_bindgen(js_name = requestMagicLink)]
-    pub async fn request_magic_link(&self, email: String) -> Result<JsValue, JsValue> {
-        self.inner
-            .request_magic_link(&email)
-            .await
-            .map_err(auth_error_to_js)
-            .and_then(|r| to_js_ok(&r))
+    pub fn request_magic_link(&self, email: String) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner
+                .request_magic_link(&email)
+                .await
+                .map_err(auth_error_to_js)
+                .and_then(|r| to_js_ok(&r))
+        })
     }
 
     #[wasm_bindgen(js_name = verifyMagicLink)]
-    pub async fn verify_magic_link(
+    pub fn verify_magic_link(
         &self,
         token: String,
         device_name: Option<String>,
         replace_device_id: Option<String>,
-    ) -> Result<JsValue, JsValue> {
-        self.inner
-            .verify_magic_link(&token, device_name.as_deref(), replace_device_id.as_deref())
-            .await
-            .map_err(auth_error_to_js)
-            .and_then(|r| to_js_ok(&r))
+    ) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner
+                .verify_magic_link(&token, device_name.as_deref(), replace_device_id.as_deref())
+                .await
+                .map_err(auth_error_to_js)
+                .and_then(|r| to_js_ok(&r))
+        })
     }
 
     #[wasm_bindgen(js_name = verifyCode)]
-    pub async fn verify_code(
+    pub fn verify_code(
         &self,
         code: String,
         email: String,
         device_name: Option<String>,
         replace_device_id: Option<String>,
-    ) -> Result<JsValue, JsValue> {
-        self.inner
-            .verify_code(
-                &code,
-                &email,
-                device_name.as_deref(),
-                replace_device_id.as_deref(),
-            )
-            .await
-            .map_err(auth_error_to_js)
-            .and_then(|r| to_js_ok(&r))
+    ) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner
+                .verify_code(
+                    &code,
+                    &email,
+                    device_name.as_deref(),
+                    replace_device_id.as_deref(),
+                )
+                .await
+                .map_err(auth_error_to_js)
+                .and_then(|r| to_js_ok(&r))
+        })
     }
 
     // =========================================================================
@@ -402,26 +421,36 @@ impl AuthClient {
     // =========================================================================
 
     #[wasm_bindgen(js_name = getMe)]
-    pub async fn get_me(&self) -> Result<JsValue, JsValue> {
-        self.inner
-            .get_me()
-            .await
-            .map_err(auth_error_to_js)
-            .and_then(|r| to_js_ok(&r))
+    pub fn get_me(&self) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner
+                .get_me()
+                .await
+                .map_err(auth_error_to_js)
+                .and_then(|r| to_js_ok(&r))
+        })
     }
 
     #[wasm_bindgen(js_name = refreshToken)]
-    pub async fn refresh_token(&self) -> Result<JsValue, JsValue> {
-        self.inner
-            .refresh_token()
-            .await
-            .map_err(auth_error_to_js)
-            .and_then(|r| to_js_ok(&r))
+    pub fn refresh_token(&self) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner
+                .refresh_token()
+                .await
+                .map_err(auth_error_to_js)
+                .and_then(|r| to_js_ok(&r))
+        })
     }
 
     #[wasm_bindgen]
-    pub async fn logout(&self) -> Result<(), JsValue> {
-        self.inner.logout().await.map_err(auth_error_to_js)
+    pub fn logout(&self) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner.logout().await.map_err(auth_error_to_js)?;
+            Ok(JsValue::UNDEFINED)
+        })
     }
 
     // =========================================================================
@@ -429,28 +458,39 @@ impl AuthClient {
     // =========================================================================
 
     #[wasm_bindgen(js_name = getDevices)]
-    pub async fn get_devices(&self) -> Result<JsValue, JsValue> {
-        self.inner
-            .get_devices()
-            .await
-            .map_err(auth_error_to_js)
-            .and_then(|r| to_js_ok(&r))
+    pub fn get_devices(&self) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner
+                .get_devices()
+                .await
+                .map_err(auth_error_to_js)
+                .and_then(|r| to_js_ok(&r))
+        })
     }
 
     #[wasm_bindgen(js_name = renameDevice)]
-    pub async fn rename_device(&self, device_id: String, new_name: String) -> Result<(), JsValue> {
-        self.inner
-            .rename_device(&device_id, &new_name)
-            .await
-            .map_err(auth_error_to_js)
+    pub fn rename_device(&self, device_id: String, new_name: String) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner
+                .rename_device(&device_id, &new_name)
+                .await
+                .map_err(auth_error_to_js)?;
+            Ok(JsValue::UNDEFINED)
+        })
     }
 
     #[wasm_bindgen(js_name = deleteDevice)]
-    pub async fn delete_device(&self, device_id: String) -> Result<(), JsValue> {
-        self.inner
-            .delete_device(&device_id)
-            .await
-            .map_err(auth_error_to_js)
+    pub fn delete_device(&self, device_id: String) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner
+                .delete_device(&device_id)
+                .await
+                .map_err(auth_error_to_js)?;
+            Ok(JsValue::UNDEFINED)
+        })
     }
 
     // =========================================================================
@@ -458,7 +498,11 @@ impl AuthClient {
     // =========================================================================
 
     #[wasm_bindgen(js_name = deleteAccount)]
-    pub async fn delete_account(&self) -> Result<(), JsValue> {
-        self.inner.delete_account().await.map_err(auth_error_to_js)
+    pub fn delete_account(&self) -> Promise {
+        let inner = self.inner.clone();
+        promise(async move {
+            inner.delete_account().await.map_err(auth_error_to_js)?;
+            Ok(JsValue::UNDEFINED)
+        })
     }
 }

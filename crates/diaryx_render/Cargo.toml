@@ -1,0 +1,18 @@
+[package]
+name = "diaryx_render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish = false
+
+# Extism-free rendering engine shared by the publish plugin (client-side) and,
+# in ARK Layer 3, the sync server + Cloudflare worker (server-side render-on-write).
+# Must stay portable to `wasm32-unknown-unknown` — no Extism, no host functions.
+
+[lib]
+
+[dependencies]
+comrak = "0.49"
+diaryx_core = { workspace = true }
+serde = { workspace = true }

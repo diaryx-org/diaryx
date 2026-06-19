@@ -165,8 +165,8 @@ impl WasmCallbackRegistry {
     }
 
     pub(crate) fn emit(&self, event: &FileSystemEvent) {
-        if let Ok(json) = fig::to_value(event)
-            .and_then(|v| v.serialize_with(fig::Format::Json, fig::SerializeOptions::compact()))
+        if let Ok(json) = fig::ToValue::to_value(event)
+            .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())
         {
             let json = json.trim_end();
             let callbacks = self.callbacks.borrow();
@@ -484,7 +484,10 @@ impl DiaryxBackend {
     /// ```
     #[wasm_bindgen(js_name = "emitFileSystemEvent")]
     pub fn emit_filesystem_event(&self, event_json: &str) -> std::result::Result<(), JsValue> {
-        let event: FileSystemEvent = fig::from_slice(event_json.as_bytes(), fig::Format::Json)
+        let value = fig::Document::parse(event_json.as_bytes(), fig::Format::Json)
+            .and_then(|d| d.to_value())
+            .map_err(|e| JsValue::from_str(&format!("Invalid event JSON: {}", e)))?;
+        let event = <FileSystemEvent as fig::FromValue>::from_value(&value)
             .map_err(|e| JsValue::from_str(&format!("Invalid event JSON: {}", e)))?;
         self.wasm_event_registry.emit(&event);
         Ok(())

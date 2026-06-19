@@ -17,66 +17,64 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
-
 /// Configuration for a single plugin in the workspace.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 pub struct PluginConfig {
     /// Download URL for the plugin WASM binary.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub download: Option<String>,
 
     /// Permission rules for this plugin.
-    #[serde(default)]
+    #[fig(default)]
     pub permissions: PluginPermissions,
 
     /// Declarative, user-editable plugin configuration. Lives here in the
     /// workspace settings file (Config.md) so it is human-editable,
     /// git-diffable, and synced with the workspace — distinct from
     /// `host::storage`, which holds opaque per-plugin state/blobs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<crate::yaml::Value>,
 }
 
 /// All permission categories for a plugin.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 pub struct PluginPermissions {
     /// Read files: `host_read_file`, `host_list_files`, `host_file_exists`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub read_files: Option<PermissionRule>,
 
     /// Edit existing files: `host_write_file` (existing), `SaveEntry`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub edit_files: Option<PermissionRule>,
 
     /// Create new files: `CreateEntry`, `CreateChildEntry`, `host_write_file` (new).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub create_files: Option<PermissionRule>,
 
     /// Delete files: `DeleteEntry`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub delete_files: Option<PermissionRule>,
 
     /// Move/rename files: `MoveEntry`, `RenameEntry`, `ConvertToIndex`, `ConvertToLeaf`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub move_files: Option<PermissionRule>,
 
     /// HTTP requests: `host_http_request`.
     /// Scope values are domain patterns (e.g. `openrouter.ai`) or `all`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub http_requests: Option<PermissionRule>,
 
     /// Command execution: `host_execute_command` (future).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub execute_commands: Option<PermissionRule>,
 
     /// Plugin storage: `host_storage_get`, `host_storage_set`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub plugin_storage: Option<PermissionRule>,
 }
 
 /// A single permission rule with include/exclude lists.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 pub struct PermissionRule {
     /// Scope values that grant access. Can be:
     /// - `"all"` — allow everything
@@ -84,12 +82,12 @@ pub struct PermissionRule {
     /// - Plain paths: `journal/daily/` — folder and descendants
     /// - Audience tags: `work`, `personal` — files with that audience
     /// - Domain patterns: `openrouter.ai` — for HTTP permissions
-    #[serde(default)]
+    #[fig(default)]
     pub include: Vec<String>,
 
     /// Scope values that deny access. Same format as include.
     /// Exclude always wins over include.
-    #[serde(default)]
+    #[fig(default)]
     pub exclude: Vec<String>,
 
     /// Per-plugin quota in bytes. Only meaningful for `plugin_storage` —
@@ -97,7 +95,7 @@ pub struct PermissionRule {
     /// host default" (currently 1 MiB). The host caps the effective
     /// value at its hard ceiling regardless of what's configured here,
     /// so a plugin can't request unlimited disk by editing a number.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub quota_bytes: Option<u64>,
 }
 
@@ -739,8 +737,16 @@ mod tests {
             config: None,
         };
 
-        let yaml = crate::yaml::to_string(&config).unwrap();
-        let parsed: PluginConfig = crate::yaml::from_str(&yaml).unwrap();
+        let yaml = fig::ToValue::to_value(&config)
+            .serialize(fig::Format::Yaml)
+            .unwrap();
+        let parsed: PluginConfig = {
+            let __v = fig::Document::parse(yaml.as_bytes(), fig::Format::Yaml)
+                .unwrap()
+                .to_value()
+                .unwrap();
+            <PluginConfig as fig::FromValue>::from_value(&__v).unwrap()
+        };
 
         assert_eq!(parsed.download, config.download);
         assert!(parsed.permissions.read_files.is_some());

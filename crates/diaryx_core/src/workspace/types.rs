@@ -8,8 +8,6 @@
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::yaml;
 
 use crate::link_parser::{self, LinkFormat};
@@ -119,7 +117,7 @@ fn coerce_string_seq(value: yaml::Value) -> Option<Vec<String>> {
 /// walks `fig`'s native value tree rather than deriving `Deserialize`. The
 /// `Serialize` derive is retained because [`IndexFile`] serializes (e.g. for the
 /// CLI/JSON tree output); `skip_serializing_if` mirrors the previous output.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, fig::ToValue)]
 pub struct IndexFrontmatter {
     /// Display name for this index
     pub title: Option<String>,
@@ -133,15 +131,15 @@ pub struct IndexFrontmatter {
 
     /// List of paths to child index files (relative to this file)
     /// None means the key was absent; Some(vec) means it was present (even if empty)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub contents: Option<Vec<String>>,
 
     /// Explicit outbound links declared by this file.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub links: Option<Vec<String>>,
 
     /// Explicit backlinks from files whose `links` reference this file.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub link_of: Option<Vec<String>>,
 
     /// Path to parent index file (relative to this file)
@@ -153,27 +151,27 @@ pub struct IndexFrontmatter {
     /// `default_audience` in workspace config, the entry is private (excluded
     /// from exports). When `default_audience` is set, unconstrained entries
     /// are treated as belonging to that audience tag.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub audience: Option<Vec<String>>,
 
     /// List of paths to attachment files (images, documents, etc.) relative to this file.
     /// Attachments declared here are available to this entry and all children.
     /// These values point to attachment notes (markdown files), whose singular
     /// `attachment` property points to the actual binary asset.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<String>>,
 
     /// Singular link to the binary asset represented by this attachment note.
     pub attachment: Option<String>,
 
     /// Reverse links from entries whose `attachments` reference this note.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub attachment_of: Option<Vec<String>>,
 
     /// Glob patterns for files to exclude from orphan validation.
     /// Files matching these patterns won't trigger OrphanBinaryFile warnings.
     /// Example: `["*.lock", "*.toml", "build/*"]`
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
 
     // NOTE: `plugins` is intentionally NOT a typed field here. It is a workspace
@@ -183,7 +181,7 @@ pub struct IndexFrontmatter {
     // treat it uniformly. The permission layer deserializes it into
     // `HashMap<String, PluginConfig>` where it actually needs the typed shape.
     /// Additional frontmatter properties
-    #[serde(flatten)]
+    #[fig(flatten)]
     pub extra: HashMap<String, yaml::Value>,
 }
 
@@ -305,7 +303,7 @@ impl IndexFrontmatter {
 }
 
 /// Represents a parsed index file
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, fig::ToValue)]
 pub struct IndexFile {
     /// Path to the index file
     pub path: PathBuf,
@@ -319,7 +317,7 @@ pub struct IndexFile {
     /// Link format hint for resolving ambiguous paths.
     /// When set to Some(LinkFormat::PlainCanonical), ambiguous paths like "Folder/file.md"
     /// are resolved relative to workspace root instead of relative to current file.
-    #[serde(skip)]
+    #[fig(skip)]
     pub link_format_hint: Option<LinkFormat>,
 }
 
@@ -376,7 +374,7 @@ impl IndexFile {
 }
 
 /// Node in the workspace tree (for display purposes)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct TreeNode {
@@ -387,7 +385,7 @@ pub struct TreeNode {
     /// Path to index/root file
     pub path: PathBuf,
     /// Whether this node has a `contents` property (even if empty)
-    #[serde(default)]
+    #[fig(default)]
     pub is_index: bool,
     /// `contents` property list
     pub children: Vec<TreeNode>,
@@ -396,10 +394,10 @@ pub struct TreeNode {
         feature = "typescript",
         ts(type = "Record<string, string> | undefined")
     )]
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[fig(default, skip_serializing_if = "HashMap::is_empty")]
     pub properties: HashMap<String, String>,
     /// Audience tags from frontmatter (empty if not set)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[fig(default, skip_serializing_if = "Vec::is_empty")]
     pub audience: Vec<String>,
 }
 

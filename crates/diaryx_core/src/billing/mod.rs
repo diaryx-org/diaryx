@@ -21,13 +21,11 @@
 //! assert_eq!(billing.max_workspaces(), 10);
 //! ```
 
-use serde::{Deserialize, Serialize};
-
 use crate::auth::MeResponse;
 
 /// Subscription tier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, fig::ToValue, fig::FromValue)]
+#[fig(rename_all = "lowercase")]
 pub enum Tier {
     /// Free tier — local-only, single workspace.
     Free,
@@ -55,7 +53,7 @@ impl std::fmt::Display for Tier {
 }
 
 /// Current billing state derived from the server's `/auth/me` response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct BillingState {
     /// Active subscription tier.
     pub tier: Tier,

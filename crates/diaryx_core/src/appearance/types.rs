@@ -7,8 +7,6 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-
 // ============================================================================
 // Color palette
 // ============================================================================
@@ -17,40 +15,40 @@ use serde::{Deserialize, Serialize};
 ///
 /// Maps the app's 26-color OKLch theme palette to the 11 CSS variables used
 /// by the publish stylesheet. Values are CSS color strings (OKLch, hex, etc.).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 pub struct ColorPalette {
     /// Page background (`--bg`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub bg: Option<String>,
     /// Primary text color (`--text`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     /// Secondary/muted text (`--text-muted`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub text_muted: Option<String>,
     /// Accent/link color (`--accent`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
     /// Accent hover state (`--accent-hover`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub accent_hover: Option<String>,
     /// Border color (`--border`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub border: Option<String>,
     /// Code/pre background (`--code-bg`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub code_bg: Option<String>,
     /// Surface background for floating elements (`--surface-bg`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub surface_bg: Option<String>,
     /// Surface border (`--surface-border`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub surface_border: Option<String>,
     /// Surface shadow (`--surface-shadow`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub surface_shadow: Option<String>,
     /// Divider color (`--divider-color`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub divider_color: Option<String>,
 }
 
@@ -85,8 +83,8 @@ impl ColorPalette {
 // ============================================================================
 
 /// Font family choices matching the frontend `FontFamily` union type.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue, PartialEq)]
+#[fig(rename_all = "lowercase")]
 pub enum FontFamily {
     /// Inter font stack
     Inter,
@@ -127,8 +125,8 @@ impl FontFamily {
 }
 
 /// Content width choices matching the frontend `ContentWidth` union type.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue, PartialEq)]
+#[fig(rename_all = "lowercase")]
 pub enum ContentWidth {
     /// Narrow (55ch)
     Narrow,
@@ -167,19 +165,19 @@ impl ContentWidth {
 /// Typography settings for a workspace.
 ///
 /// Mirrors the frontend `TypographySettings` interface.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 pub struct TypographySettings {
     /// Font family choice.
-    #[serde(default)]
+    #[fig(default)]
     pub font_family: FontFamily,
     /// Base font size in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub base_font_size: Option<f64>,
     /// Line height multiplier.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub line_height: Option<f64>,
     /// Content max-width choice.
-    #[serde(default)]
+    #[fig(default)]
     pub content_width: ContentWidth,
 }
 
@@ -232,22 +230,22 @@ pub struct FaviconAsset {
 /// Resolved workspace appearance: theme colors, typography, and favicon.
 ///
 /// This is the top-level type returned by [`super::resolve_appearance`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 pub struct ThemeAppearance {
     /// Theme identifier (e.g. "default", "sepia", "nord").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// Light mode color palette.
-    #[serde(default)]
+    #[fig(default)]
     pub light: ColorPalette,
     /// Dark mode color palette.
-    #[serde(default)]
+    #[fig(default)]
     pub dark: ColorPalette,
     /// Optional favicon. Not serialized (binary data).
-    #[serde(skip)]
+    #[fig(skip)]
     pub favicon: Option<FaviconAsset>,
     /// Typography settings (font, size, line-height, content width).
-    #[serde(default)]
+    #[fig(default)]
     pub typography: Option<TypographySettings>,
 }
 

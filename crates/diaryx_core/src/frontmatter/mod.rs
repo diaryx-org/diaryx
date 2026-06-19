@@ -136,16 +136,15 @@ pub fn split(content: &str) -> Option<(&str, &str)> {
 ///
 /// Extracts the YAML between `---` delimiters and deserializes it into `T`.
 /// If no frontmatter delimiters are found, attempts to parse the entire content as YAML.
-pub fn parse_typed<T: serde::de::DeserializeOwned>(
-    content: &str,
-) -> std::result::Result<T, yaml::Error> {
+pub fn parse_typed<T: fig::FromValue>(content: &str) -> std::result::Result<T, yaml::Error> {
     let s = extract_yaml(content).unwrap_or(content);
-    yaml::from_str(s)
+    let value = fig::Document::parse(s.as_bytes(), fig::Format::Yaml).and_then(|d| d.to_value())?;
+    T::from_value(&value)
 }
 
 /// Serialize a typed struct as YAML frontmatter in a markdown file.
-pub fn serialize_typed<T: serde::Serialize>(value: &T) -> std::result::Result<String, yaml::Error> {
-    let s = yaml::to_string(value)?;
+pub fn serialize_typed<T: fig::ToValue>(value: &T) -> std::result::Result<String, yaml::Error> {
+    let s = fig::ToValue::to_value(value).serialize(fig::Format::Yaml)?;
     Ok(format!("---\n{}---\n", s))
 }
 

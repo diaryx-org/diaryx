@@ -13,8 +13,6 @@
 //! adding new endpoints, prefer `#[serde(default)]` + optional fields so
 //! we're resilient to server forward-compat additions.
 
-use serde::{Deserialize, Serialize};
-
 use crate::auth::{AuthError, AuthenticatedClient};
 use crate::yaml;
 
@@ -27,7 +25,7 @@ use crate::yaml;
 /// Mirrors the shape returned by `GET /namespaces/{id}`; only the fields
 /// cross-platform callers actually need are modelled here (extra fields on
 /// the wire are silently ignored by serde).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct NamespaceMetadata {
     /// Server-assigned namespace id.
     pub id: String,
@@ -36,7 +34,7 @@ pub struct NamespaceMetadata {
     /// Unix-epoch seconds when the namespace was created.
     pub created_at: i64,
     /// Arbitrary metadata attached by the creator (e.g. `{ "name": "..." }`).
-    #[serde(default)]
+    #[fig(default)]
     pub metadata: Option<yaml::Value>,
 }
 
@@ -51,7 +49,7 @@ impl NamespaceMetadata {
 }
 
 /// Audience visibility/permission entry attached to a namespace.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct AudienceInfo {
     /// Audience tag (matches the frontmatter `audience` values).
     pub name: String,
@@ -60,7 +58,7 @@ pub struct AudienceInfo {
 }
 
 /// Subdomain claim result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct SubdomainInfo {
     /// Claimed subdomain label (the part before the site domain).
     pub subdomain: String,
@@ -69,7 +67,7 @@ pub struct SubdomainInfo {
 }
 
 /// Custom domain registration info.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct DomainInfo {
     /// Fully-qualified custom domain.
     pub domain: String,
@@ -85,14 +83,14 @@ pub struct DomainInfo {
 
 /// Short-lived audience access token (returned by
 /// `GET /namespaces/{id}/audiences/{name}/token`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct TokenResult {
     /// Opaque token string, to be appended to published-site URLs.
     pub token: String,
 }
 
 /// Returned by `POST /namespaces/{id}/audiences/{name}/rotate-password`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct RotatePasswordResult {
     /// The password gate's new version number after rotation. Old unlock
     /// tokens minted under any previous version are invalidated.
@@ -103,7 +101,7 @@ pub struct RotatePasswordResult {
 }
 
 /// Subscriber (audience member) record.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct SubscriberInfo {
     /// Server-assigned subscriber id.
     pub id: String,
@@ -112,12 +110,12 @@ pub struct SubscriberInfo {
 }
 
 /// Result of a bulk-email subscriber import.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct BulkImportResult {
     /// How many subscribers were added successfully.
     pub added: u32,
     /// Per-email error messages for rejected rows (empty on full success).
-    #[serde(default)]
+    #[fig(default)]
     pub errors: Vec<String>,
 }
 

@@ -10,13 +10,11 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::fs::AsyncFileSystem;
 use crate::workspace::Workspace;
 
 /// Represents a search query configuration
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, fig::ToValue)]
 pub struct SearchQuery {
     /// The pattern to search for
     pub pattern: String,
@@ -27,7 +25,7 @@ pub struct SearchQuery {
 }
 
 /// What to search in files
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, fig::ToValue)]
 pub enum SearchMode {
     /// Search only the body content (after frontmatter)
     Content,
@@ -73,7 +71,7 @@ impl SearchQuery {
 }
 
 /// A single match within a file
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct SearchMatch {
@@ -88,7 +86,7 @@ pub struct SearchMatch {
 }
 
 /// Search results for a single file
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct FileSearchResult {
@@ -113,7 +111,7 @@ impl FileSearchResult {
 }
 
 /// Aggregated search results
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct SearchResults {

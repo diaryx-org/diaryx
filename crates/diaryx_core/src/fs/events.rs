@@ -5,27 +5,25 @@
 //! UI updates, sync broadcasts, or other side effects.
 
 use crate::yaml;
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Events emitted by filesystem operations.
 ///
 /// These events capture the semantics of filesystem changes, including both
 /// the operation type and relevant metadata for each type of change.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "type")]
+#[cfg_attr(feature = "typescript", ts(tag = "type"))]
+#[fig(tag = "type")]
 pub enum FileSystemEvent {
     /// A new file was created.
     FileCreated {
         /// Path of the created file.
         path: PathBuf,
         /// Frontmatter from the file, if any.
-        #[serde(default)]
         frontmatter: Option<yaml::Value>,
         /// Path of the parent index file, if known.
-        #[serde(default)]
         parent_path: Option<PathBuf>,
     },
 
@@ -34,7 +32,6 @@ pub enum FileSystemEvent {
         /// Path of the deleted file.
         path: PathBuf,
         /// Path of the parent index file, if known.
-        #[serde(default)]
         parent_path: Option<PathBuf>,
     },
 
@@ -51,10 +48,8 @@ pub enum FileSystemEvent {
         /// Path of the file after the move.
         path: PathBuf,
         /// Original parent directory path.
-        #[serde(default)]
         old_parent: Option<PathBuf>,
         /// New parent directory path.
-        #[serde(default)]
         new_parent: Option<PathBuf>,
     },
 
@@ -199,11 +194,16 @@ mod tests {
             Some(PathBuf::from("index.md")),
         );
 
-        let json = serde_json::to_string(&event).unwrap();
+        let json = fig::ToValue::to_value(&event)
+            .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())
+            .unwrap();
         assert!(json.contains("FileCreated"));
         assert!(json.contains("test.md"));
 
-        let parsed: FileSystemEvent = serde_json::from_str(&json).unwrap();
+        let value = fig::Document::parse(json.as_bytes(), fig::Format::Json)
+            .and_then(|d| d.to_value())
+            .unwrap();
+        let parsed = <FileSystemEvent as fig::FromValue>::from_value(&value).unwrap();
         assert_eq!(parsed.event_type(), "FileCreated");
     }
 }

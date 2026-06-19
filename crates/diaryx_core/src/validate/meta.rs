@@ -5,8 +5,6 @@
 //! derived from the raw [`super::types::ValidationWarning`] /
 //! [`super::types::ValidationError`] in the corresponding `From` impl.
 
-use serde::{Deserialize, Serialize};
-
 use super::detail::{error_detail, warning_detail};
 use super::types::{ValidationError, ValidationResult, ValidationWarning};
 
@@ -17,12 +15,13 @@ use super::types::{ValidationError, ValidationResult, ValidationWarning};
 /// and `primary_path` is the workspace-relative path (or platform path if no
 /// root is known) of the file most associated with the warning — it exists so
 /// consumers can render "jump to file" UI without switching on variant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ValidationWarningWithMeta {
     /// The warning data
-    #[serde(flatten)]
+    #[fig(flatten)]
+    #[cfg_attr(feature = "typescript", ts(flatten))]
     pub warning: ValidationWarning,
     /// Short human-readable header (e.g. "Missing backlink").
     pub description: String,
@@ -62,12 +61,13 @@ impl From<ValidationWarning> for ValidationWarningWithMeta {
 }
 
 /// A validation error with computed metadata for frontend display.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ValidationErrorWithMeta {
     /// The error data
-    #[serde(flatten)]
+    #[fig(flatten)]
+    #[cfg_attr(feature = "typescript", ts(flatten))]
     pub error: ValidationError,
     /// Short human-readable header (e.g. "Broken part_of reference").
     pub description: String,
@@ -90,7 +90,7 @@ impl From<ValidationError> for ValidationErrorWithMeta {
 }
 
 /// Validation result with computed metadata for frontend display.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ValidationResultWithMeta {

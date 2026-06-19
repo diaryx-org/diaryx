@@ -8,8 +8,6 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::error::Result;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser::{self, LinkFormat};
@@ -27,7 +25,7 @@ use super::types::{
 // ============================================================================
 
 /// Result of attempting to fix a validation issue.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct FixResult {

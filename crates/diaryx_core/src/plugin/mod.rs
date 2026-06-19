@@ -26,7 +26,6 @@ use std::path::PathBuf;
 
 use crate::yaml::Value as YamlValue;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::link_parser::LinkFormat;
@@ -37,7 +36,7 @@ pub use manifest::*;
 pub use registry::PluginRegistry;
 
 /// Unique identifier for a plugin.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct PluginId(pub String);
@@ -103,7 +102,7 @@ impl PluginError {
 }
 
 /// Health status of a registered plugin.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum PluginHealth {
@@ -207,28 +206,28 @@ pub trait Plugin: 'static {
 ///   **surfaces it for user approval** — never applied silently.
 /// - `migrations`: *requests* to adopt legacy keys from the workspace root
 ///   index (user-owned content), each **surfaced for user approval**.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 pub struct ConfigReconcile {
     /// Declarative config to persist to `plugins.<id>.config`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<YamlValue>,
     /// A request to re-scope this plugin's granted permissions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub permission_request: Option<PermissionRequest>,
     /// Requests to adopt legacy root-index frontmatter keys into config.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[fig(default, skip_serializing_if = "Vec::is_empty")]
     pub migrations: Vec<LegacyMigration>,
 }
 
 /// A plugin's request to change its own granted permissions. Surfaced to the
 /// user and clamped to the manifest-declared ceiling before being applied.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 pub struct PermissionRequest {
     /// Requested permission rules (same shape as manifest requested defaults).
-    #[serde(default)]
+    #[fig(default)]
     pub permissions: YamlValue,
     /// Per-category human-readable rationale shown in the approval prompt.
-    #[serde(default)]
+    #[fig(default)]
     pub reasons: std::collections::HashMap<String, String>,
 }
 
@@ -239,14 +238,14 @@ pub struct PermissionRequest {
 /// writes `plugins.<id>.config.<config_field>`, and strips the key from the
 /// root index, all on user approval. The guest never supplies the value or
 /// touches the file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct LegacyMigration {
     /// Frontmatter key in the workspace root index to adopt (e.g. `daily_entry_folder`).
     pub legacy_key: String,
     /// Field under `plugins.<id>.config` to move the value into (e.g. `entry_folder`).
     pub config_field: String,
     /// Human-readable description shown in the migration prompt.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 

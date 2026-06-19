@@ -9,15 +9,13 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::command::{BinaryFileInfo, ExportedFile};
 use crate::error::{DiaryxError, Result};
 use crate::fs::AsyncFileSystem;
 use crate::workspace::{IndexFrontmatter, Workspace};
 
 /// Result of planning an export operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ExportPlan {
@@ -34,7 +32,7 @@ pub struct ExportPlan {
 }
 
 /// A file to be exported
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ExportFile {
@@ -49,7 +47,7 @@ pub struct ExportFile {
 }
 
 /// A file that was excluded from export
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ExcludedFile {
@@ -60,7 +58,7 @@ pub struct ExcludedFile {
 }
 
 /// Why a file was excluded
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum ExclusionReason {
@@ -96,7 +94,7 @@ impl std::fmt::Display for ExclusionReason {
 }
 
 /// Options for export operation
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, fig::ToValue)]
 pub struct ExportOptions {
     /// Whether to overwrite existing destination
     pub force: bool,
@@ -593,7 +591,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
 }
 
 /// Statistics from an export operation
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, fig::ToValue)]
 pub struct ExportStats {
     /// Number of files successfully exported
     pub files_exported: usize,

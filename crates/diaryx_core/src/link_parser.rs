@@ -34,16 +34,16 @@
 //!
 //! The `/` prefix and markdown link syntax are purely for frontmatter serialization.
 
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// The format to use when writing links to frontmatter.
 ///
 /// This controls how frontmatter link paths are serialized.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, fig::FromValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(rename_all = "snake_case")]
+#[fig(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", ts(rename_all = "snake_case"))]
 pub enum LinkFormat {
     /// Markdown link with workspace-root path: `[Title](/path/to/file.md)`
     ///
@@ -53,24 +53,28 @@ pub enum LinkFormat {
     /// - Self-documenting with human-readable titles
     #[default]
     #[fig(rename = "markdown_root")]
+    #[cfg_attr(feature = "typescript", ts(rename = "markdown_root"))]
     MarkdownRoot,
 
     /// Markdown link with relative path: `[Title](../relative/path.md)`
     ///
     /// Useful for compatibility with tools that don't understand root paths.
     #[fig(rename = "markdown_relative")]
+    #[cfg_attr(feature = "typescript", ts(rename = "markdown_relative"))]
     MarkdownRelative,
 
     /// Plain relative path without markdown link syntax: `../relative/path.md`
     ///
     /// Legacy format for backwards compatibility.
     #[fig(rename = "plain_relative")]
+    #[cfg_attr(feature = "typescript", ts(rename = "plain_relative"))]
     PlainRelative,
 
     /// Plain canonical path (workspace-relative): `path/to/file.md`
     ///
     /// Simple format without markdown link syntax or leading slash.
     #[fig(rename = "plain_canonical")]
+    #[cfg_attr(feature = "typescript", ts(rename = "plain_canonical"))]
     PlainCanonical,
 }
 
@@ -1114,42 +1118,49 @@ mod tests {
         assert_eq!(LinkFormat::default(), LinkFormat::MarkdownRoot);
     }
 
+    fn to_json<T: fig::ToValue>(v: &T) -> String {
+        fig::ToValue::to_value(v)
+            .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())
+            .unwrap()
+            .trim_end()
+            .to_string()
+    }
+
+    fn from_json<T: fig::FromValue>(s: &str) -> T {
+        let v = fig::Document::parse(s.as_bytes(), fig::Format::Json)
+            .unwrap()
+            .to_value()
+            .unwrap();
+        <T as fig::FromValue>::from_value(&v).unwrap()
+    }
+
     #[test]
     fn test_link_format_serialize() {
+        assert_eq!(to_json(&LinkFormat::MarkdownRoot), "\"markdown_root\"");
         assert_eq!(
-            serde_json::to_string(&LinkFormat::MarkdownRoot).unwrap(),
-            "\"markdown_root\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LinkFormat::MarkdownRelative).unwrap(),
+            to_json(&LinkFormat::MarkdownRelative),
             "\"markdown_relative\""
         );
-        assert_eq!(
-            serde_json::to_string(&LinkFormat::PlainRelative).unwrap(),
-            "\"plain_relative\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LinkFormat::PlainCanonical).unwrap(),
-            "\"plain_canonical\""
-        );
+        assert_eq!(to_json(&LinkFormat::PlainRelative), "\"plain_relative\"");
+        assert_eq!(to_json(&LinkFormat::PlainCanonical), "\"plain_canonical\"");
     }
 
     #[test]
     fn test_link_format_deserialize() {
         assert_eq!(
-            serde_json::from_str::<LinkFormat>("\"markdown_root\"").unwrap(),
+            from_json::<LinkFormat>("\"markdown_root\""),
             LinkFormat::MarkdownRoot
         );
         assert_eq!(
-            serde_json::from_str::<LinkFormat>("\"markdown_relative\"").unwrap(),
+            from_json::<LinkFormat>("\"markdown_relative\""),
             LinkFormat::MarkdownRelative
         );
         assert_eq!(
-            serde_json::from_str::<LinkFormat>("\"plain_relative\"").unwrap(),
+            from_json::<LinkFormat>("\"plain_relative\""),
             LinkFormat::PlainRelative
         );
         assert_eq!(
-            serde_json::from_str::<LinkFormat>("\"plain_canonical\"").unwrap(),
+            from_json::<LinkFormat>("\"plain_canonical\""),
             LinkFormat::PlainCanonical
         );
     }

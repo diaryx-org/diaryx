@@ -90,8 +90,7 @@ impl<FS: AsyncFileSystem> EventEmittingFs<FS> {
     fn extract_frontmatter(&self, content: &str) -> Option<crate::yaml::Value> {
         frontmatter::parse_or_empty(content)
             .ok()
-            .and_then(|parsed| fig::to_value(&parsed.frontmatter).ok())
-            .map(crate::yaml::Value::from)
+            .map(|parsed| crate::yaml::Value::from(fig::ToValue::to_value(&parsed.frontmatter)))
     }
 
     fn get_parent_from_content(&self, file_path: &Path, content: &str) -> Option<PathBuf> {

@@ -19,8 +19,8 @@ fn parse_error_response(resp: &HttpResponse, fallback_msg: &str) -> AuthError {
     let mut err = AuthError::new(msg, resp.status);
     if resp.status == 403
         && let Some(devices_val) = value.as_ref().and_then(|v| v.get("devices"))
-        && let Ok(json) = devices_val.to_json()
-        && let Ok(devices) = fig::from_slice::<Vec<Device>>(json.as_bytes(), fig::Format::Json)
+        && let Ok(devices) =
+            <Vec<Device> as fig::FromValue>::from_value(&fig::ToValue::to_value(devices_val))
     {
         err.devices = Some(devices);
     }

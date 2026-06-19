@@ -4,8 +4,6 @@
 //! capabilities, and UI contributions. The frontend reads these manifests
 //! to dynamically render settings tabs, sidebar panels, command palette items, etc.
 
-use serde::{Deserialize, Serialize};
-
 use super::PluginId;
 use crate::error::DiaryxError;
 use crate::frontmatter;
@@ -14,7 +12,7 @@ use crate::frontmatter;
 ///
 /// Returned by [`Plugin::manifest()`](super::Plugin::manifest) and consumed
 /// by the frontend to build extension-point UI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct PluginManifest {
@@ -31,12 +29,12 @@ pub struct PluginManifest {
     /// UI extension points contributed by this plugin.
     pub ui: Vec<UiContribution>,
     /// CLI commands contributed by this plugin.
-    #[serde(default)]
+    #[fig(default)]
     pub cli: Vec<CliCommand>,
 }
 
 /// A capability that a plugin can declare.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum PluginCapability {
@@ -71,10 +69,11 @@ pub enum PluginCapability {
 }
 
 /// A UI extension point contributed by a plugin.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "slot")]
+#[fig(tag = "slot")]
+#[cfg_attr(feature = "typescript", ts(tag = "slot"))]
 pub enum UiContribution {
     /// A tab in the settings dialog.
     SettingsTab {
@@ -94,7 +93,7 @@ pub enum UiContribution {
         /// When present, the host renders this component instead of a declarative
         /// form from `fields`. Use `ComponentRef::Builtin` to reference a host-provided
         /// component (e.g., `"sync.settings"`).
-        #[serde(default)]
+        #[fig(default)]
         component: Option<ComponentRef>,
     },
     /// A tab in one of the sidebars.
@@ -191,7 +190,7 @@ pub enum UiContribution {
         ///
         /// The host calls the plugin's `get_component_html` command with this ID
         /// to load the iframe editor HTML.
-        #[serde(default)]
+        #[fig(default)]
         iframe_component_id: Option<String>,
         /// Optional CSS to inject for rendered output.
         css: Option<String>,
@@ -200,28 +199,28 @@ pub enum UiContribution {
         /// When present, the host adds a button in the appropriate editor menu
         /// (MoreStylesPicker for inline atoms/marks, BlockPicker for block
         /// atoms) to insert an empty node of this type.
-        #[serde(default)]
+        #[fig(default)]
         insert_command: Box<Option<InsertCommand>>,
         /// Optional keyboard shortcut string (e.g., `"Mod-Shift-s"`).
-        #[serde(default)]
+        #[fig(default)]
         keyboard_shortcut: Option<String>,
         /// Optional click behavior for marks (e.g., spoiler reveal/hide).
-        #[serde(default)]
+        #[fig(default)]
         click_behavior: Option<ClickBehavior>,
         /// HTML tag to render (defaults to "span" if absent).
-        #[serde(default)]
+        #[fig(default)]
         html_tag: Option<String>,
         /// Base CSS class always applied to the rendered element.
-        #[serde(default)]
+        #[fig(default)]
         base_css_class: Option<String>,
         /// Typed attributes for InlineMark extensions.
-        #[serde(default)]
+        #[fig(default)]
         attributes: Option<Vec<MarkAttribute>>,
         /// Optional toolbar configuration for InlineMark extensions.
         ///
         /// When present, the host renders a toolbar button in the bubble menu
         /// (web) and iOS keyboard toolbar with an optional attribute picker.
-        #[serde(default)]
+        #[fig(default)]
         toolbar: Box<Option<MarkToolbar>>,
     },
 }
@@ -231,7 +230,7 @@ pub enum UiContribution {
 /// When present, the host renders a toolbar button in the bubble menu
 /// (web) and iOS keyboard toolbar. For marks with attributes that have
 /// `valid_values`, the button opens a picker dropdown.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct MarkToolbar {
@@ -242,7 +241,7 @@ pub struct MarkToolbar {
 }
 
 /// Which sidebar a tab appears in.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum SidebarSide {
@@ -253,7 +252,7 @@ pub enum SidebarSide {
 }
 
 /// Where a status bar item appears.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum StatusBarPosition {
@@ -266,7 +265,7 @@ pub enum StatusBarPosition {
 }
 
 /// Which host context menu surface a plugin contribution targets.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum ContextMenuTarget {
@@ -275,7 +274,7 @@ pub enum ContextMenuTarget {
 }
 
 /// The kind of TipTap node an [`EditorExtension`](UiContribution::EditorExtension) creates.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum EditorNodeType {
@@ -293,7 +292,7 @@ pub enum EditorNodeType {
 }
 
 /// Markdown syntax delimiters for an editor extension.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct MarkdownSyntax {
@@ -304,12 +303,12 @@ pub struct MarkdownSyntax {
     /// Closing delimiter (e.g., `"$"` or `"$$"`).
     pub close: String,
     /// Optional attribute embedded in the markdown syntax.
-    #[serde(default)]
+    #[fig(default)]
     pub attribute_syntax: Option<MarkdownAttributeSyntax>,
     /// When true, the block syntax is single-line (no newlines between
     /// open/close delimiters). Used for markdown patterns like
     /// `![drawing:alt](path)` where the entire block is one line.
-    #[serde(default)]
+    #[fig(default)]
     pub single_line: bool,
 }
 
@@ -317,7 +316,7 @@ pub struct MarkdownSyntax {
 ///
 /// For highlight: `=={color}text==` means the attribute appears as `{value}`
 /// immediately after the opening delimiter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct MarkdownAttributeSyntax {
@@ -329,7 +328,7 @@ pub struct MarkdownAttributeSyntax {
     pub close: String,
     /// Where the attribute appears relative to the content.
     /// `"after_open"` means between the opening delimiter and the content.
-    #[serde(default = "default_after_open")]
+    #[fig(default = "default_after_open")]
     pub position: String,
 }
 
@@ -338,7 +337,7 @@ fn default_after_open() -> String {
 }
 
 /// A typed attribute on an InlineMark extension.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct MarkAttribute {
@@ -349,15 +348,15 @@ pub struct MarkAttribute {
     /// HTML attribute name for storage (e.g., "data-highlight-color").
     pub html_attribute: String,
     /// Allowed values. If non-empty, input/paste rules reject unknown values.
-    #[serde(default)]
+    #[fig(default)]
     pub valid_values: Vec<String>,
     /// If set, the factory generates `class="{prefix}{value}"` on rendered HTML.
-    #[serde(default)]
+    #[fig(default)]
     pub css_class_prefix: Option<String>,
 }
 
 /// Whether a markdown syntax is inline or block-level.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum MarkdownLevel {
@@ -368,7 +367,7 @@ pub enum MarkdownLevel {
 }
 
 /// How the user edits the source content of an editor extension node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum EditMode {
@@ -387,7 +386,7 @@ pub enum EditMode {
 /// `BlockPicker` so that block atoms only appear in the block picker ("+"
 /// menu on web, block picker dropdown on iOS) and not in the block style
 /// picker or as a standalone toolbar button.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum InsertCommandPlacement {
@@ -405,7 +404,7 @@ pub enum InsertCommandPlacement {
 /// When present on an [`EditorExtension`](UiContribution::EditorExtension),
 /// the host renders a button in the appropriate menu (MoreStylesPicker for
 /// inline atoms/marks, BlockPicker for block atoms).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct InsertCommand {
@@ -420,7 +419,7 @@ pub struct InsertCommand {
     ///
     /// Defaults to [`InsertCommandPlacement::Picker`] so that block atoms
     /// only show in the block picker and not duplicated in other surfaces.
-    #[serde(default)]
+    #[fig(default)]
     pub placement: InsertCommandPlacement,
 }
 
@@ -428,7 +427,7 @@ pub struct InsertCommand {
 ///
 /// When present, the host registers a ProseMirror plugin that toggles CSS
 /// classes on click (e.g., spoiler reveal/hide).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum ClickBehavior {
@@ -442,10 +441,11 @@ pub enum ClickBehavior {
 }
 
 /// How to render a plugin-contributed UI panel.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "type")]
+#[fig(tag = "type")]
+#[cfg_attr(feature = "typescript", ts(tag = "type"))]
 pub enum ComponentRef {
     /// Use an existing built-in component by ID.
     Builtin {
@@ -468,10 +468,11 @@ pub enum ComponentRef {
 }
 
 /// A declarative settings field rendered as a form control.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "type")]
+#[fig(tag = "type")]
+#[cfg_attr(feature = "typescript", ts(tag = "type"))]
 pub enum SettingsField {
     /// Text input.
     Text {
@@ -482,7 +483,7 @@ pub enum SettingsField {
         /// Optional description / help text.
         description: Option<String>,
         /// Optional placeholder text.
-        #[serde(default)]
+        #[fig(default)]
         placeholder: Option<String>,
     },
     /// Password input (rendered as `type="password"`).
@@ -494,7 +495,7 @@ pub enum SettingsField {
         /// Optional description / help text.
         description: Option<String>,
         /// Optional placeholder text.
-        #[serde(default)]
+        #[fig(default)]
         placeholder: Option<String>,
     },
     /// Boolean toggle.
@@ -542,7 +543,7 @@ pub enum SettingsField {
         /// Plugin command to dispatch on click.
         command: String,
         /// Button style variant: `"default"`, `"outline"`, or `"destructive"`.
-        #[serde(default)]
+        #[fig(default)]
         variant: Option<String>,
     },
     /// Action button that triggers a host-managed action instead of a plugin
@@ -553,7 +554,7 @@ pub enum SettingsField {
         /// Host action type to invoke.
         action_type: String,
         /// Button style variant: `"default"`, `"outline"`, or `"destructive"`.
-        #[serde(default)]
+        #[fig(default)]
         variant: Option<String>,
     },
     /// Host sign-in form. Renders inline email/magic-link sign-in when not
@@ -591,25 +592,25 @@ pub enum SettingsField {
         /// Optional host action to fire when the widget's sign-in CTA is
         /// clicked. Lets plugins declare which screen to open (e.g.
         /// account settings) instead of relying on a hard-coded default.
-        #[serde(default)]
+        #[fig(default)]
         sign_in_action: Option<HostAction>,
     },
 }
 
 /// A host action declaration used by declarative UI fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct HostAction {
     /// The host action type (e.g. `"open-settings"`).
     pub action_type: String,
     /// Optional payload passed to the host action handler.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<crate::yaml::Value>,
 }
 
 /// A select dropdown option.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct SelectOption {
@@ -629,7 +630,7 @@ fn default_true() -> bool {
 
 /// A CLI subcommand declared by a plugin. The CLI host builds
 /// dynamic clap commands from these declarations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct CliCommand {
@@ -638,32 +639,32 @@ pub struct CliCommand {
     /// Short help text shown in `--help`.
     pub about: String,
     /// Longer help text (shown with `--help` on the subcommand itself).
-    #[serde(default)]
+    #[fig(default)]
     pub long_about: Option<String>,
     /// Alternative names for this command (e.g., `["pub"]`).
-    #[serde(default)]
+    #[fig(default)]
     pub aliases: Vec<String>,
     /// Positional and named arguments.
-    #[serde(default)]
+    #[fig(default)]
     pub args: Vec<CliArg>,
     /// Nested subcommands.
-    #[serde(default)]
+    #[fig(default)]
     pub subcommands: Vec<CliCommand>,
     /// Internal command name sent to `handle_command`.
     /// Defaults to PascalCase of `name` if absent.
-    #[serde(default)]
+    #[fig(default)]
     pub command_name: Option<String>,
     /// If `true`, the CLI resolves the workspace root and passes it.
-    #[serde(default = "default_true")]
+    #[fig(default = "default_true")]
     pub requires_workspace: bool,
     /// Use a native CLI handler instead of WASM dispatch.
     /// Value is the handler ID (e.g., `"sync_start"`, `"preview"`).
-    #[serde(default)]
+    #[fig(default)]
     pub native_handler: Option<String>,
 }
 
 /// A CLI argument declared by a plugin command.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct CliArg {
@@ -672,27 +673,27 @@ pub struct CliArg {
     /// Help text.
     pub help: String,
     /// Value type for parsing.
-    #[serde(default)]
+    #[fig(default)]
     pub value_type: CliArgType,
     /// Whether this argument is required.
-    #[serde(default)]
+    #[fig(default)]
     pub required: bool,
     /// Default value as a string.
-    #[serde(default)]
+    #[fig(default)]
     pub default_value: Option<String>,
     /// Single-character short flag (e.g., `'p'` for `-p`).
-    #[serde(default)]
+    #[fig(default)]
     pub short: Option<char>,
     /// Long flag name (e.g., `"port"` for `--port`).
-    #[serde(default)]
+    #[fig(default)]
     pub long: Option<String>,
     /// If `true`, this is a boolean flag (no value needed).
-    #[serde(default)]
+    #[fig(default)]
     pub is_flag: bool,
 }
 
 /// Value types for CLI arguments.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum CliArgType {
@@ -714,7 +715,7 @@ pub enum CliArgType {
 // ============================================================================
 
 /// Reference to a WASM build artifact on the CDN.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue, PartialEq)]
 pub struct PluginArtifact {
     /// CDN URL for the WASM file.
     pub url: String,
@@ -727,7 +728,7 @@ pub struct PluginArtifact {
 }
 
 /// A single plugin listing in the marketplace registry.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue, PartialEq)]
 pub struct MarketplaceEntry {
     /// Canonical plugin ID (e.g., `"diaryx.sync"`).
     pub id: String,
@@ -744,35 +745,35 @@ pub struct MarketplaceEntry {
     /// License identifier.
     pub license: String,
     /// Repository URL.
-    #[serde(default)]
+    #[fig(default)]
     pub repository: Option<String>,
     /// Category tags for discovery.
-    #[serde(default)]
+    #[fig(default)]
     pub categories: Vec<String>,
     /// Free-form tags for search.
-    #[serde(default)]
+    #[fig(default)]
     pub tags: Vec<String>,
     /// WASM artifact reference.
     pub artifact: PluginArtifact,
     /// Declared capabilities.
-    #[serde(default)]
+    #[fig(default)]
     pub capabilities: Vec<String>,
     /// Icon URL.
-    #[serde(default)]
+    #[fig(default)]
     pub icon: Option<String>,
     /// Screenshot URLs.
-    #[serde(default)]
+    #[fig(default)]
     pub screenshots: Vec<String>,
     /// Requested default permissions (opaque value).
-    #[serde(default)]
+    #[fig(default)]
     pub requested_permissions: Option<crate::yaml::Value>,
     /// Protocol version this plugin was built against.
-    #[serde(default)]
+    #[fig(default)]
     pub protocol_version: Option<u32>,
 }
 
 /// The parsed CDN registry (`registry.md`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct MarketplaceRegistry {
     /// Schema version (must be `2`).
     pub schema_version: u64,
@@ -781,12 +782,12 @@ pub struct MarketplaceRegistry {
     /// Plugin listings.
     pub plugins: Vec<MarketplaceEntry>,
     /// Markdown body after the frontmatter.
-    #[serde(skip)]
+    #[fig(skip)]
     pub body: String,
 }
 
 /// Metadata parsed from a plugin workspace root `README.md`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct PluginWorkspaceMetadata {
     /// Canonical plugin ID.
     pub id: String,
@@ -797,39 +798,39 @@ pub struct PluginWorkspaceMetadata {
     /// Short description (from `description` frontmatter key).
     pub summary: String,
     /// Author or organization.
-    #[serde(default)]
+    #[fig(default)]
     pub author: Option<String>,
     /// License identifier.
-    #[serde(default)]
+    #[fig(default)]
     pub license: Option<String>,
     /// Repository URL.
-    #[serde(default)]
+    #[fig(default)]
     pub repository: Option<String>,
     /// Category tags.
-    #[serde(default)]
+    #[fig(default)]
     pub categories: Vec<String>,
     /// Free-form tags.
-    #[serde(default)]
+    #[fig(default)]
     pub tags: Vec<String>,
     /// Declared capabilities.
-    #[serde(default)]
+    #[fig(default)]
     pub capabilities: Vec<String>,
     /// WASM artifact reference.
     pub artifact: PluginArtifact,
     /// UI contributions (opaque value, preserved from frontmatter).
-    #[serde(default)]
+    #[fig(default)]
     pub ui: Option<crate::yaml::Value>,
     /// CLI commands (opaque value, preserved from frontmatter).
-    #[serde(default)]
+    #[fig(default)]
     pub cli: Option<crate::yaml::Value>,
     /// Requested permissions (opaque value).
-    #[serde(default)]
+    #[fig(default)]
     pub requested_permissions: Option<crate::yaml::Value>,
     /// Protocol version this plugin was built against.
-    #[serde(default)]
+    #[fig(default)]
     pub protocol_version: Option<u32>,
     /// Markdown body after the frontmatter.
-    #[serde(skip)]
+    #[fig(skip)]
     pub body: String,
 }
 
@@ -837,10 +838,10 @@ pub struct PluginWorkspaceMetadata {
 ///
 /// Routes through JSON text (the value's `to_json`) into `fig`'s JSON
 /// deserializer, keeping `serde_json` out of the parse path.
-fn yaml_value_to_typed<T: serde::de::DeserializeOwned>(
+fn yaml_value_to_typed<T: fig::FromValue>(
     yaml: &crate::yaml::Value,
 ) -> Result<T, crate::yaml::Error> {
-    fig::from_slice::<T>(yaml.to_json()?.as_bytes(), fig::Format::Json)
+    T::from_value(&fig::ToValue::to_value(yaml))
 }
 
 impl MarketplaceRegistry {
@@ -1049,6 +1050,22 @@ fn validate_marketplace_entry(entry: &MarketplaceEntry) -> Result<(), DiaryxErro
 mod tests {
     use super::*;
 
+    fn to_json<T: fig::ToValue>(v: &T) -> String {
+        fig::ToValue::to_value(v)
+            .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())
+            .unwrap()
+            .trim_end()
+            .to_string()
+    }
+
+    fn from_json<T: fig::FromValue>(s: &str) -> T {
+        let v = fig::Document::parse(s.as_bytes(), fig::Format::Json)
+            .unwrap()
+            .to_value()
+            .unwrap();
+        <T as fig::FromValue>::from_value(&v).unwrap()
+    }
+
     const SAMPLE_REGISTRY_MD: &str = r#"---
 title: "Diaryx Plugin Registry"
 description: "Official plugin directory"
@@ -1219,39 +1236,16 @@ plugins:
             protocol_version: Some(1),
         };
 
-        let json = serde_json::to_string(&entry).unwrap();
-        let deserialized: MarketplaceEntry = serde_json::from_str(&json).unwrap();
+        let json = to_json(&entry);
+        let deserialized: MarketplaceEntry = from_json(&json);
         assert_eq!(entry, deserialized);
     }
 
     #[test]
     fn parse_inline_mark_editor_extension_contribution() {
-        let contribution: UiContribution = serde_json::from_value(serde_json::json!({
-            "slot": "EditorExtension",
-            "extension_id": "spoiler",
-            "node_type": "InlineMark",
-            "markdown": {
-                "level": "Inline",
-                "open": "||",
-                "close": "||"
-            },
-            "render_export": null,
-            "edit_mode": null,
-            "css": ".spoiler { color: transparent; }",
-            "keyboard_shortcut": "Mod-Shift-s",
-            "click_behavior": {
-                "ToggleClass": {
-                    "hidden_class": "spoiler-hidden",
-                    "revealed_class": "spoiler-revealed"
-                }
-            },
-            "insert_command": {
-                "label": "Spoiler",
-                "icon": "eye-off",
-                "description": "Hide text behind a spoiler"
-            }
-        }))
-        .unwrap();
+        let contribution: UiContribution = from_json(
+            r#"{"slot":"EditorExtension","extension_id":"spoiler","node_type":"InlineMark","markdown":{"level":"Inline","open":"||","close":"||"},"render_export":null,"edit_mode":null,"css":".spoiler { color: transparent; }","keyboard_shortcut":"Mod-Shift-s","click_behavior":{"ToggleClass":{"hidden_class":"spoiler-hidden","revealed_class":"spoiler-revealed"}},"insert_command":{"label":"Spoiler","icon":"eye-off","description":"Hide text behind a spoiler"}}"#,
+        );
 
         match contribution {
             UiContribution::EditorExtension {
@@ -1281,12 +1275,8 @@ plugins:
 
     #[test]
     fn parse_builtin_editor_node_type() {
-        let node_type: EditorNodeType = serde_json::from_value(serde_json::json!({
-            "Builtin": {
-                "host_extension_id": "templateVariable"
-            }
-        }))
-        .unwrap();
+        let node_type: EditorNodeType =
+            from_json(r#"{"Builtin":{"host_extension_id":"templateVariable"}}"#);
 
         match node_type {
             EditorNodeType::Builtin { host_extension_id } => {

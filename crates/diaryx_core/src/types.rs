@@ -3,46 +3,42 @@
 //! These types represent file metadata, binary attachments, and version history
 //! structures that are used in the command/response API and across multiple crates.
 
-use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
-/// Deserializes a value that should be a string, but may be an integer or other type.
-/// Converts non-string values to their string representation.
-fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::de::Error;
-    let value: Option<crate::yaml::Value> = Option::deserialize(deserializer)?;
-    match value {
-        None => Ok(None),
-        Some(crate::yaml::Value::String(s)) => Ok(Some(s)),
-        Some(crate::yaml::Value::Int(i)) => Ok(Some(i.to_string())),
-        Some(crate::yaml::Value::Float(f)) => Ok(Some(f.to_string())),
-        Some(crate::yaml::Value::Bool(b)) => Ok(Some(b.to_string())),
-        Some(crate::yaml::Value::Null) => Ok(None),
-        Some(other) => Err(D::Error::custom(format!(
-            "expected string or number, got {:?}",
-            other
-        ))),
-    }
+/// Parses a value that should be a string, but may be an integer/float/bool.
+/// Converts non-string scalars to their string representation; null → `None`.
+/// Used via `#[fig(deserialize_with = ..)]`.
+fn deserialize_string_lenient(value: &fig::Value) -> Result<Option<String>, fig::Error> {
+    Ok(match value {
+        fig::Value::Null => None,
+        fig::Value::Str(s) => Some(s.clone()),
+        fig::Value::Int(i) => Some(i.to_string()),
+        fig::Value::Uint(u) => Some(u.to_string()),
+        fig::Value::Float(f) => Some(f.to_string()),
+        fig::Value::Bool(b) => Some(b.to_string()),
+        other => {
+            return Err(fig::Error::Message(format!(
+                "expected string or number, got {other:?}"
+            )));
+        }
+    })
 }
 
 /// Lightweight filesystem metadata returned by backend commands and plugin hosts.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct FileInfo {
     /// Whether the path currently exists.
-    #[serde(default)]
+    #[fig(default)]
     pub exists: bool,
 
     /// File size in bytes when known.
-    #[serde(default)]
+    #[fig(default)]
     pub size_bytes: Option<u64>,
 
     /// Modification time in milliseconds since Unix epoch when known.
-    #[serde(default)]
+    #[fig(default)]
     pub modified_at_ms: Option<i64>,
 }
 
@@ -58,74 +54,74 @@ pub struct FileInfo {
 /// The actual filesystem path is derived from the `filename` field and the parent chain:
 /// - `filename`: The file's name on disk (e.g., "my-note.md")
 /// - `part_of`: Document ID of the parent (or None for root files)
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct FileMetadata {
     /// Filename on disk (e.g., "my-note.md"). Required for non-deleted files.
     /// For files created before the doc-ID migration, this may be empty and
     /// should be derived from the path key during migration.
-    #[serde(default)]
+    #[fig(default)]
     pub filename: String,
 
     /// Display title from frontmatter
-    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    #[fig(default, deserialize_with = "deserialize_string_lenient")]
     pub title: Option<String>,
 
     /// Canonical self-link declared in frontmatter.
-    #[serde(default)]
+    #[fig(default)]
     pub link: Option<String>,
 
     /// Explicit outbound links declared in frontmatter.
-    #[serde(default)]
+    #[fig(default)]
     pub links: Option<Vec<String>>,
 
     /// Explicit backlinks declared in frontmatter.
-    #[serde(default)]
+    #[fig(default)]
     pub link_of: Option<Vec<String>>,
 
     /// Document ID of parent file (e.g., "abc123-uuid"), or None for root files.
     /// Note: For backward compatibility during migration, this may temporarily
     /// contain absolute paths which will be converted to doc_ids.
-    #[serde(default)]
+    #[fig(default)]
     pub part_of: Option<String>,
 
     /// Document IDs of child files.
     /// Note: For backward compatibility during migration, this may temporarily
     /// contain relative paths which will be converted to doc_ids.
-    #[serde(default)]
+    #[fig(default)]
     pub contents: Option<Vec<String>>,
 
     /// Binary attachment references
-    #[serde(default)]
+    #[fig(default)]
     pub attachments: Vec<BinaryRef>,
 
     /// Singular link to the binary asset for attachment-note entries.
-    #[serde(default)]
+    #[fig(default)]
     pub attachment: Option<String>,
 
     /// Reverse links from entries whose `attachments` reference this note.
-    #[serde(default)]
+    #[fig(default)]
     pub attachment_of: Option<Vec<String>>,
 
     /// Soft deletion tombstone - if true, file is considered deleted
-    #[serde(default)]
+    #[fig(default)]
     pub deleted: bool,
 
     /// Visibility/access control tags
-    #[serde(default)]
+    #[fig(default)]
     pub audience: Option<Vec<String>>,
 
     /// File description from frontmatter
-    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    #[fig(default, deserialize_with = "deserialize_string_lenient")]
     pub description: Option<String>,
 
     /// Additional frontmatter properties not covered by other fields
-    #[serde(default)]
+    #[fig(default)]
     pub extra: HashMap<String, crate::yaml::Value>,
 
     /// Unix timestamp of last modification (milliseconds)
-    #[serde(default)]
+    #[fig(default)]
     pub modified_at: i64,
 }
 
@@ -173,12 +169,14 @@ impl FileMetadata {
             "extra",
         ];
 
-        // Fast path: convert via JSON for automatic field mapping
-        if let Ok(fig_value) = fig::to_value(fm)
-            && let Ok(json) = crate::yaml::Value::from(fig_value).to_json()
-            && let Ok(mut metadata) =
-                fig::from_slice::<FileMetadata>(json.as_bytes(), fig::Format::Json)
-        {
+        // Fast path: build a fig map from the frontmatter and decode directly
+        // (serde-free) for automatic field mapping.
+        let __fm_value = fig::Value::Map(
+            fm.iter()
+                .map(|(k, v)| (fig::Value::Str(k.clone()), fig::ToValue::to_value(v)))
+                .collect(),
+        );
+        if let Ok(mut metadata) = <FileMetadata as fig::FromValue>::from_value(&__fm_value) {
             if let Some(updated) = fm.get("updated").and_then(parse_updated_value) {
                 metadata.modified_at = updated;
             }
@@ -430,7 +428,7 @@ impl FileMetadata {
 ///
 /// Binary files (images, PDFs, etc.) are stored separately from the document
 /// content, with only their metadata tracked here.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct BinaryRef {

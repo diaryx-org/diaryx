@@ -1,7 +1,5 @@
 //! Auth types shared across platforms.
 
-use serde::{Deserialize, Serialize};
-
 /// Default sync server URL.
 pub const DEFAULT_SYNC_SERVER: &str = "https://app.diaryx.org/api";
 
@@ -11,18 +9,18 @@ pub const DEFAULT_SYNC_SERVER: &str = "https://app.diaryx.org/api";
 /// UI layers, or expose through IPC. It intentionally does **not** contain the
 /// session token — that stays encapsulated inside each [`AuthenticatedClient`]
 /// implementation.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, fig::ToValue, fig::FromValue)]
 pub struct AuthMetadata {
     /// Authenticated user's email.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     /// Workspace ID on the server.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
 }
 
 /// User info returned by the server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct User {
     /// Server-assigned user ID.
     pub id: String,
@@ -31,7 +29,7 @@ pub struct User {
 }
 
 /// Server workspace info.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct ServerWorkspace {
     /// Server-assigned workspace ID.
     pub id: String,
@@ -40,7 +38,7 @@ pub struct ServerWorkspace {
 }
 
 /// Device info.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct Device {
     /// Device ID.
     pub id: String,
@@ -51,7 +49,7 @@ pub struct Device {
 }
 
 /// Response from magic link request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct MagicLinkResponse {
     /// Whether the request succeeded.
     pub success: bool,
@@ -64,7 +62,7 @@ pub struct MagicLinkResponse {
 }
 
 /// Response from magic link or code verification.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct VerifyResponse {
     /// Whether verification succeeded.
     pub success: bool,
@@ -75,7 +73,7 @@ pub struct VerifyResponse {
 }
 
 /// Response from /auth/me endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct MeResponse {
     /// Authenticated user.
     pub user: User,
@@ -94,7 +92,7 @@ pub struct MeResponse {
 }
 
 /// Auth error with HTTP status code.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct AuthError {
     /// Human-readable error message.
     pub message: String,
@@ -102,7 +100,7 @@ pub struct AuthError {
     pub status_code: u16,
     /// When the error is "device limit reached" (403), this holds the device
     /// list returned by the server so the UI can offer device replacement.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub devices: Option<Vec<Device>>,
 }
 
@@ -169,9 +167,12 @@ impl HttpResponse {
         (200..300).contains(&self.status)
     }
 
-    /// Parse the response body as JSON.
-    pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T, AuthError> {
-        fig::from_slice::<T>(self.body.as_bytes(), fig::Format::Json)
+    /// Parse the response body as JSON (serde-free, via fig's `FromValue`).
+    pub fn json<T: fig::FromValue>(&self) -> Result<T, AuthError> {
+        let value = fig::Document::parse(self.body.as_bytes(), fig::Format::Json)
+            .and_then(|d| d.to_value())
+            .map_err(|e| AuthError::new(format!("Failed to parse response: {}", e), self.status))?;
+        T::from_value(&value)
             .map_err(|e| AuthError::new(format!("Failed to parse response: {}", e), self.status))
     }
 }

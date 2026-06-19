@@ -38,7 +38,6 @@
 //! let workspace = config.default_workspace.clone();
 //! ```
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -48,42 +47,42 @@ use crate::link_parser::LinkFormat;
 use crate::workspace_registry::{WorkspaceEntry, WorkspaceRegistry};
 
 /// `Config` is a data structure that represents the parts of Diaryx that the user can configure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 pub struct Config {
     /// Workspace title (config.md is a root index)
-    #[serde(default = "default_config_title")]
+    #[fig(default = "default_config_title")]
     pub title: String,
 
     /// Contents list (workspace hierarchy — points to auth.md)
-    #[serde(default = "default_config_contents")]
+    #[fig(default = "default_config_contents")]
     pub contents: Vec<String>,
 
     /// Default workspace directory
     /// This is the main directory for your workspace/journal
-    #[serde(alias = "base_dir")]
+    #[fig(alias = "base_dir")]
     pub default_workspace: PathBuf,
 
     /// Preferred editor (falls back to $EDITOR if not set)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
 
     /// Format for `part_of`, `contents`, and `attachments` links in frontmatter.
     /// Used by CLI; web/tauri reads from WorkspaceConfig instead.
-    #[serde(default, skip_serializing_if = "is_default_link_format")]
+    #[fig(default, skip_serializing_if = "is_default_link_format")]
     pub link_format: LinkFormat,
 
     // ========================================================================
     // Git version history configuration
     // ========================================================================
     /// Git-backed version history settings
-    #[serde(default, skip_serializing_if = "GitConfig::is_default")]
+    #[fig(default, skip_serializing_if = "GitConfig::is_default")]
     pub git: GitConfig,
 
     // ========================================================================
     // Multi-workspace registry
     // ========================================================================
     /// Registered workspaces. Each entry has a stable `local-<uuid>` ID.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[fig(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<WorkspaceEntry>,
 
     /// Optional native bookmark data keyed by authorized workspace path.
@@ -91,24 +90,24 @@ pub struct Config {
     /// Sandboxed Apple builds use this to persist security-scoped bookmarks for
     /// workspace folders or single root files selected by the user. Other
     /// platforms ignore it.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[fig(default, skip_serializing_if = "HashMap::is_empty")]
     pub workspace_bookmarks: HashMap<String, String>,
 
     /// Whether iCloud Drive storage is enabled (iOS only).
     /// When true, the workspace is stored in the iCloud container directory.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[fig(default, skip_serializing_if = "std::ops::Not::not")]
     pub icloud_enabled: bool,
 }
 
 /// Configuration for git-backed version history.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue, PartialEq, Eq)]
 pub struct GitConfig {
     /// Whether to automatically commit on workspace changes
-    #[serde(default)]
+    #[fig(default)]
     pub auto_commit: bool,
 
     /// Interval in minutes between auto-commits (default: 30)
-    #[serde(default = "default_auto_commit_interval")]
+    #[fig(default = "default_auto_commit_interval")]
     pub auto_commit_interval_minutes: u32,
 }
 

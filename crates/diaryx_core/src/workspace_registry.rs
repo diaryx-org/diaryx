@@ -5,11 +5,10 @@
 //! type, plugin metadata) live in the frontend layer; only the stable core fields
 //! are defined here.
 
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// A single workspace known to the user.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue, PartialEq, Eq)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct WorkspaceEntry {
@@ -23,7 +22,7 @@ pub struct WorkspaceEntry {
 }
 
 /// An ordered collection of workspace entries with an optional default.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct WorkspaceRegistry {

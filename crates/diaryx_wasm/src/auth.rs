@@ -299,8 +299,8 @@ pub(crate) fn auth_error_to_js(err: AuthError) -> JsValue {
         &JsValue::from_f64(err.status_code as f64),
     );
     if let Some(devices) = &err.devices
-        && let Ok(devices_str) = fig::to_value(devices)
-            .and_then(|v| v.serialize_with(fig::Format::Json, fig::SerializeOptions::compact()))
+        && let Ok(devices_str) = fig::ToValue::to_value(devices)
+            .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())
         && let Ok(parsed) = js_sys::JSON::parse(devices_str.trim_end())
     {
         let _ = Reflect::set(&error, &JsValue::from_str("devices"), &parsed);
@@ -308,9 +308,9 @@ pub(crate) fn auth_error_to_js(err: AuthError) -> JsValue {
     error.into()
 }
 
-pub(crate) fn to_js_ok<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
-    fig::to_value(value)
-        .and_then(|v| v.serialize_with(fig::Format::Json, fig::SerializeOptions::compact()))
+pub(crate) fn to_js_ok<T: fig::ToValue>(value: &T) -> Result<JsValue, JsValue> {
+    fig::ToValue::to_value(value)
+        .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())
         .map(|s| JsValue::from_str(s.trim_end()))
         .map_err(|e| JsValue::from_str(&format!("serialize error: {e}")))
 }

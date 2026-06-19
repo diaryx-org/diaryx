@@ -18,7 +18,6 @@
 
 use std::path::PathBuf;
 
-use serde::Serialize;
 use thiserror::Error;
 
 impl From<crate::frontmatter::FrontmatterError> for DiaryxError {
@@ -198,7 +197,7 @@ pub enum DiaryxError {
 pub type Result<T> = std::result::Result<T, DiaryxError>;
 
 /// A serializable representation of DiaryxError for IPC (e.g., Tauri)
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, fig::ToValue)]
 pub struct SerializableError {
     /// Error kind/variant name
     pub kind: String,

@@ -19,7 +19,6 @@
 use std::path::PathBuf;
 
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
 
 use crate::link_parser::LinkFormat;
 use crate::search::SearchResults;
@@ -41,13 +40,14 @@ use crate::yaml;
 /// Deserialization is serde-free: `#[derive(fig::FromValue)]` walks `fig`'s
 /// value tree directly, so the adjacently-tagged `{ type, params }` envelope is
 /// decoded without serde's `Content`-buffering machinery (which previously cost
-/// ~127 KB of WASM and forced a hand-written `CommandWire` twin). `Serialize` +
-/// the `#[serde(tag/content)]` attribute still define the public contract and
-/// drive the ts-rs export; `#[fig(tag/content)]` mirrors it for the read path.
-#[derive(Debug, Clone, Serialize, Deserialize, fig::FromValue)]
+/// ~127 KB of WASM and forced a hand-written `CommandWire` twin). The
+/// `#[fig(tag/content)]` attribute defines the read path; the matching
+/// `#[ts(tag/content)]` drives the ts-rs export and the public `{ type, params }`
+/// contract.
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "type", content = "params")]
+#[cfg_attr(feature = "typescript", ts(tag = "type", content = "params"))]
 #[fig(tag = "type", content = "params")]
 pub enum Command {
     // === Entry Operations ===
@@ -65,12 +65,11 @@ pub enum Command {
         content: String,
         /// Optional workspace root index path for reading workspace config.
         /// When provided, `auto_update_timestamp` from workspace config is respected.
-        #[serde(default)]
+        #[fig(default)]
         root_index_path: Option<String>,
         /// When true, detect the first-line H1 heading and sync it to the
         /// frontmatter title and filename. Used for manual save / editor blur
         /// (not auto-save) to avoid mid-typing renames.
-        #[serde(default)]
         #[fig(default)]
         detect_h1_title: bool,
     },
@@ -80,7 +79,6 @@ pub enum Command {
         /// Path where the entry should be created.
         path: String,
         /// Optional creation options.
-        #[serde(default)]
         #[fig(default)]
         options: CreateEntryOptions,
     },
@@ -91,7 +89,6 @@ pub enum Command {
         path: String,
         /// If true, perform a hard delete (remove from filesystem).
         /// If false (default), perform a soft delete (mark as deleted).
-        #[serde(default)]
         #[fig(default)]
         hard_delete: bool,
     },
@@ -193,7 +190,7 @@ pub enum Command {
         ///
         /// When provided, this is used for duplicate detection against the
         /// current unsaved editor state instead of the last saved file body.
-        #[serde(default)]
+        #[fig(default)]
         content: Option<String>,
     },
 
@@ -210,7 +207,7 @@ pub enum Command {
         ///
         /// When provided, this is used to decide whether the relationship is
         /// still present in the current unsaved editor state.
-        #[serde(default)]
+        #[fig(default)]
         content: Option<String>,
     },
 
@@ -262,7 +259,7 @@ pub enum Command {
         /// Paths the user selected for deletion.
         paths: Vec<String>,
         /// Workspace root index path (to build the tree for ordering).
-        #[serde(default)]
+        #[fig(default)]
         tree_path: Option<String>,
     },
 
@@ -271,7 +268,7 @@ pub enum Command {
         /// Paths the user selected for deletion.
         paths: Vec<String>,
         /// Workspace root index path.
-        #[serde(default)]
+        #[fig(default)]
         tree_path: Option<String>,
     },
 
@@ -280,7 +277,6 @@ pub enum Command {
         /// Optional path to the workspace directory.
         path: Option<String>,
         /// Whether to include hidden files.
-        #[serde(default)]
         #[fig(default)]
         show_hidden: bool,
         /// Optional maximum depth to traverse.
@@ -319,7 +315,7 @@ pub enum Command {
         value: yaml::Value,
         /// Optional workspace root index path for reading workspace config.
         /// When provided, `sync_title_to_heading` is respected for title changes.
-        #[serde(default)]
+        #[fig(default)]
         root_index_path: Option<String>,
     },
 
@@ -348,7 +344,6 @@ pub enum Command {
         /// Path to the target file.
         target_path: String,
         /// Create the target file if it doesn't exist.
-        #[serde(default)]
         #[fig(default)]
         create_if_missing: bool,
     },
@@ -359,7 +354,6 @@ pub enum Command {
         /// Search pattern.
         pattern: String,
         /// Search options.
-        #[serde(default)]
         #[fig(default)]
         options: SearchOptions,
     },
@@ -605,7 +599,6 @@ pub enum Command {
         /// Optional specific file path to convert (if None, converts entire workspace).
         path: Option<String>,
         /// If true, only report what would be changed without modifying files.
-        #[serde(default)]
         #[fig(default)]
         dry_run: bool,
     },
@@ -631,7 +624,7 @@ pub enum Command {
         /// Existing local workspace names (for uniqueness check).
         existing_local_names: Vec<String>,
         /// Existing server workspace names (optional, for sync uniqueness check).
-        #[serde(default)]
+        #[fig(default)]
         existing_server_names: Option<Vec<String>>,
     },
 
@@ -951,7 +944,7 @@ impl Command {
 /// When creating a child under a leaf file, the leaf is converted to an index first.
 /// This struct provides both the new child path and the (possibly new) parent path,
 /// allowing the frontend to correctly update the tree and navigation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct CreateChildResult {
@@ -963,7 +956,7 @@ pub struct CreateChildResult {
     pub parent_converted: bool,
     /// Original parent path before conversion (only set if parent_converted is true).
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub original_parent_path: Option<String>,
 }
 
@@ -972,10 +965,11 @@ pub struct CreateChildResult {
 // ============================================================================
 
 /// Response from a command execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "type", content = "data")]
+#[fig(tag = "type", content = "data")]
+#[cfg_attr(feature = "typescript", ts(tag = "type", content = "data"))]
 pub enum Response {
     /// Command completed successfully with no data.
     Ok,
@@ -1065,12 +1059,13 @@ impl Command {
 }
 
 impl Response {
-    /// Serialize a `Response` to compact JSON via fig's serde adapter.
+    /// Serialize a `Response` to compact JSON, serde-free, via fig's derived
+    /// `ToValue`.
     ///
     /// fig's compact serializer appends a trailing newline; `serde_json::to_string`
-    /// does not, so we trim it to keep the wire bytes identical.
+    /// did not, so we trim it to keep the wire bytes identical.
     pub fn to_json(&self) -> Result<String, fig::Error> {
-        let json = fig::to_value(self)?
+        let json = fig::ToValue::to_value(self)
             .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())?;
         Ok(json.trim_end().to_string())
     }
@@ -1081,7 +1076,7 @@ impl Response {
 // ============================================================================
 
 /// Data for a single diary entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct EntryData {
@@ -1096,7 +1091,7 @@ pub struct EntryData {
 }
 
 /// Options for creating a new entry.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, fig::FromValue)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct CreateEntryOptions {
@@ -1108,31 +1103,29 @@ pub struct CreateEntryOptions {
     pub template: Option<String>,
     /// Optional workspace root index path for reading workspace config.
     /// When provided, `default_template` from workspace config is used as fallback.
-    #[serde(default)]
+    #[fig(default)]
     pub root_index_path: Option<String>,
 }
 
 /// Options for searching entries.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, fig::FromValue)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct SearchOptions {
     /// Workspace path to search in.
     pub workspace_path: Option<String>,
     /// Whether to search frontmatter.
-    #[serde(default)]
     #[fig(default)]
     pub search_frontmatter: bool,
     /// Specific property to search.
     pub property: Option<String>,
     /// Case sensitive search.
-    #[serde(default)]
     #[fig(default)]
     pub case_sensitive: bool,
 }
 
 /// An exported file with its path and content.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ExportedFile {
@@ -1143,7 +1136,7 @@ pub struct ExportedFile {
 }
 
 /// A binary file with its path and data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct BinaryExportFile {
@@ -1155,7 +1148,7 @@ pub struct BinaryExportFile {
 
 /// Binary file path info (without data) for efficient transfer.
 /// Use this when you need to list files and fetch data separately.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct BinaryFileInfo {
@@ -1166,7 +1159,7 @@ pub struct BinaryFileInfo {
 }
 
 /// Information about storage usage.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct StorageInfo {
@@ -1179,7 +1172,7 @@ pub struct StorageInfo {
 }
 
 /// Summary of fix operations performed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct FixSummary {
@@ -1194,7 +1187,7 @@ pub struct FixSummary {
 }
 
 /// A single entry's attachments in the ancestor chain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct AncestorAttachmentEntry {
@@ -1207,7 +1200,7 @@ pub struct AncestorAttachmentEntry {
 }
 
 /// Result of GetAncestorAttachments command.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct AncestorAttachmentsResult {
@@ -1217,7 +1210,7 @@ pub struct AncestorAttachmentsResult {
 }
 
 /// A declared attachment note and the binary asset it resolves to.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ResolvedAttachmentRef {
@@ -1227,12 +1220,12 @@ pub struct ResolvedAttachmentRef {
     pub attachment_path: String,
     /// Optional title from the attachment note.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub note_title: Option<String>,
 }
 
 /// Result of resolving effective audience for an entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct EffectiveAudienceResult {
@@ -1242,7 +1235,7 @@ pub struct EffectiveAudienceResult {
     pub inherited: bool,
     /// Title of the ancestor entry the audience was inherited from.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[fig(skip_serializing_if = "Option::is_none")]
     pub source_title: Option<String>,
     /// Whether this entry has a parent and can potentially inherit.
     pub can_inherit: bool,
@@ -1252,7 +1245,7 @@ pub struct EffectiveAudienceResult {
 }
 
 /// Result of converting links to a new format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ConvertLinksResult {
@@ -1267,11 +1260,14 @@ pub struct ConvertLinksResult {
 }
 
 /// Link parser operation selector.
-#[derive(Debug, Clone, Serialize, Deserialize, fig::FromValue)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "type", content = "params", rename_all = "snake_case")]
-#[fig(tag = "type", content = "params")]
+#[fig(tag = "type", content = "params", rename_all = "snake_case")]
+#[cfg_attr(
+    feature = "typescript",
+    ts(tag = "type", content = "params", rename_all = "snake_case")
+)]
 pub enum LinkParserOperation {
     /// Parse a link string into title/path/path type.
     #[fig(rename = "parse")]
@@ -1287,7 +1283,7 @@ pub enum LinkParserOperation {
         /// Canonical path of the file containing the link.
         current_file_path: String,
         /// Optional hint for resolving ambiguous links.
-        #[serde(default)]
+        #[fig(default)]
         link_format_hint: Option<LinkFormat>,
     },
     /// Format a canonical path as a link string.
@@ -1312,16 +1308,17 @@ pub enum LinkParserOperation {
         /// Canonical path of the file containing the link.
         current_file_path: String,
         /// Optional hint for interpreting ambiguous source links.
-        #[serde(default)]
+        #[fig(default)]
         source_format_hint: Option<LinkFormat>,
     },
 }
 
 /// Path classification from the link parser.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(rename_all = "snake_case")]
+#[fig(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", ts(rename_all = "snake_case"))]
 pub enum LinkPathType {
     /// Link path starts at workspace root (`/path/file.md`).
     WorkspaceRoot,
@@ -1332,7 +1329,7 @@ pub enum LinkPathType {
 }
 
 /// Parsed link payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ParsedLinkResult {
@@ -1345,10 +1342,14 @@ pub struct ParsedLinkResult {
 }
 
 /// Result of running a link parser operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+#[fig(tag = "type", content = "data", rename_all = "snake_case")]
+#[cfg_attr(
+    feature = "typescript",
+    ts(tag = "type", content = "data", rename_all = "snake_case")
+)]
 pub enum LinkParserResult {
     /// Structured parse output.
     Parsed(ParsedLinkResult),
@@ -1364,12 +1365,28 @@ pub enum LinkParserResult {
 mod tests {
     use super::*;
 
+    fn to_json<T: fig::ToValue>(v: &T) -> String {
+        fig::ToValue::to_value(v)
+            .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())
+            .unwrap()
+            .trim_end()
+            .to_string()
+    }
+
+    fn from_json<T: fig::FromValue>(s: &str) -> T {
+        let v = fig::Document::parse(s.as_bytes(), fig::Format::Json)
+            .unwrap()
+            .to_value()
+            .unwrap();
+        <T as fig::FromValue>::from_value(&v).unwrap()
+    }
+
     #[test]
     fn test_command_serialization() {
         let cmd = Command::GetEntry {
             path: "notes/hello.md".to_string(),
         };
-        let json = serde_json::to_string(&cmd).unwrap();
+        let json = to_json(&cmd);
         assert!(json.contains("GetEntry"));
         assert!(json.contains("notes/hello.md"));
 
@@ -1385,7 +1402,7 @@ mod tests {
     #[test]
     fn test_command_deserialize_wire_shapes() {
         // Exact wire envelope `{ type, params }` for a multi-field variant,
-        // with optional `#[serde(default)]` fields omitted.
+        // with optional `#[fig(default)]` fields omitted.
         let cmd: Command =
             Command::from_json(r#"{"type":"SaveEntry","params":{"path":"a.md","content":"x"}}"#)
                 .unwrap();
@@ -1405,7 +1422,7 @@ mod tests {
         }
 
         // Unit variant: serialized as `{ "type": "GetStorageUsage" }` (no params).
-        let json = serde_json::to_string(&Command::GetStorageUsage).unwrap();
+        let json = to_json(&Command::GetStorageUsage);
         assert_eq!(json, r#"{"type":"GetStorageUsage"}"#);
         assert!(matches!(
             Command::from_json(&json).unwrap(),
@@ -1425,12 +1442,12 @@ mod tests {
     #[test]
     fn test_response_serialization() {
         let resp = Response::String("hello".to_string());
-        let json = serde_json::to_string(&resp).unwrap();
+        let json = to_json(&resp);
         assert!(json.contains("String"));
         assert!(json.contains("hello"));
 
         // Deserialize back
-        let resp2: Response = serde_json::from_str(&json).unwrap();
+        let resp2: Response = from_json(&json);
         if let Response::String(s) = resp2 {
             assert_eq!(s, "hello");
         } else {

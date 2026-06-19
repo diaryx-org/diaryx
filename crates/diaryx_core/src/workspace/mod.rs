@@ -25,8 +25,6 @@ pub use types::{IndexFile, IndexFrontmatter, TreeNode, format_tree_node};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::yaml;
 
 use crate::config::Config;
@@ -37,10 +35,11 @@ use crate::path_utils::normalize_sync_path;
 use crate::utils::{is_workspace_skip_dir, matches_glob_pattern};
 
 /// How to generate filenames from entry titles.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(rename_all = "snake_case")]
+#[fig(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", ts(rename_all = "snake_case"))]
 pub enum FilenameStyle {
     /// Keep the title as-is, stripping only filesystem-illegal characters.
     #[default]
@@ -67,10 +66,11 @@ fn default_true() -> bool {
 /// Phase 1 variants are unit-style; future kinds (e.g. `ip_allowlist`,
 /// `totp`) can be added without breaking older clients because unknown
 /// variants are tolerated by the parser.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[fig(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", ts(tag = "kind", rename_all = "snake_case"))]
 pub enum Gate {
     /// Reader presents a signed magic-link token whose `audience` claim
     /// matches. The server signing key handles all validation.
@@ -85,10 +85,11 @@ pub enum Gate {
 /// distribute the audience's URL. Channels are clipboard-mediated by design;
 /// the writer is the one who actually presses send. Tagged so future kinds
 /// (`discord_webhook`, etc.) can be added later.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[fig(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", ts(tag = "kind", rename_all = "snake_case"))]
 pub enum ShareAction {
     /// Pre-fill a `mailto:` URL with the recipient list (BCC), templated
     /// subject, and templated body. Templates support `{{title}}` and
@@ -96,17 +97,17 @@ pub enum ShareAction {
     /// pressed.
     Email {
         /// BCC list packed into the generated `mailto:` URL.
-        #[serde(default)]
+        #[fig(default)]
         recipients: Vec<String>,
         /// `{{title}}` / `{{url}}`-templated subject line. Falls back to a
         /// generic subject if absent.
         #[cfg_attr(feature = "typescript", ts(optional))]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[fig(default, skip_serializing_if = "Option::is_none")]
         subject_template: Option<String>,
         /// `{{title}}` / `{{url}}`-templated body text. Falls back to just
         /// the URL if absent.
         #[cfg_attr(feature = "typescript", ts(optional))]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[fig(default, skip_serializing_if = "Option::is_none")]
         body_template: Option<String>,
     },
     /// A labeled copy-to-clipboard button. The label is purely informational
@@ -116,7 +117,7 @@ pub enum ShareAction {
         /// Optional label rendered next to the copy button. Falls back to
         /// "Copy link" when absent.
         #[cfg_attr(feature = "typescript", ts(optional))]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[fig(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
 }
@@ -124,7 +125,7 @@ pub enum ShareAction {
 /// A workspace-declared audience with a set of access gates and labeled
 /// share-channel shortcuts. The workspace file is the writer's source of
 /// truth; the server's audience records mirror this list.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct AudienceDecl {
@@ -132,11 +133,11 @@ pub struct AudienceDecl {
     /// entries to control visibility.
     pub name: String,
     /// Stackable challenge gates. Empty list = public.
-    #[serde(default)]
+    #[fig(default)]
     pub gates: Vec<Gate>,
     /// Labeled share channels surfaced in the audience UI. Empty list is
     /// fine — the UI always offers a generic copy-link affordance.
-    #[serde(default)]
+    #[fig(default)]
     pub share_actions: Vec<ShareAction>,
 }
 
@@ -144,43 +145,43 @@ pub struct AudienceDecl {
 ///
 /// This allows workspace settings to live with the data (local-first philosophy)
 /// rather than in separate config files.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct WorkspaceConfig {
     /// Format for `part_of`, `contents`, and `attachments` links.
     /// Defaults to MarkdownRoot if not specified.
-    #[serde(default)]
+    #[fig(default)]
     pub link_format: LinkFormat,
 
     /// Link to the default template entry for new files (in link_format style).
     /// If absent, uses the built-in "note" template.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub default_template: Option<String>,
 
     /// When true, setting the `title` frontmatter property also updates the first H1 heading.
     /// Unidirectional: title → heading only.
-    #[serde(default)]
+    #[fig(default)]
     pub sync_title_to_heading: bool,
 
     /// When true, saving content automatically updates the `updated` timestamp.
-    #[serde(default = "default_true")]
+    #[fig(default = "default_true")]
     pub auto_update_timestamp: bool,
 
     /// When true, changing the title automatically renames the file.
-    #[serde(default = "default_true")]
+    #[fig(default = "default_true")]
     pub auto_rename_to_title: bool,
 
     /// How to generate filenames from entry titles.
-    #[serde(default)]
+    #[fig(default)]
     pub filename_style: FilenameStyle,
 
     /// Audience tag assigned to entries with no explicit or inherited audience.
     /// Unset = private (excluded from exports). Entries that have this tag via
     /// the default are included in audience-filtered exports for that tag.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(
+    #[fig(
         default,
         skip_serializing_if = "Option::is_none",
         alias = "public_audience"
@@ -189,43 +190,43 @@ pub struct WorkspaceConfig {
 
     /// Folder used by the Daily plugin for date-based entries.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub daily_entry_folder: Option<String>,
 
     /// When true, show files not linked in the workspace hierarchy.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub show_unlinked_files: Option<bool>,
 
     /// When true, show hidden (dot-prefixed) files in the tree.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub show_hidden_files: Option<bool>,
 
     /// Theme mode preference for this workspace: "light", "dark", or "system".
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub theme_mode: Option<String>,
 
     /// Active workspace theme preset ID.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub theme_preset: Option<String>,
 
     /// Accent hue override applied to the active theme preset.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub theme_accent_hue: Option<f64>,
 
     /// Map of audience name → Tailwind color class (e.g., "family" → "bg-indigo-500").
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub audience_colors: Option<std::collections::HashMap<String, String>>,
 
     /// List of plugin IDs that are explicitly disabled in this workspace.
     /// Plugins not listed here are enabled by default.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub disabled_plugins: Option<Vec<String>>,
 
     /// Per-plugin workspace configuration keyed by plugin ID — install records
@@ -235,7 +236,7 @@ pub struct WorkspaceConfig {
     /// agnostic to the permission schema, which lives in
     /// `crate::plugin::permissions`.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<yaml::Value>,
 
     /// Declared audiences for selective sharing. When present, this is the
@@ -244,7 +245,7 @@ pub struct WorkspaceConfig {
     /// When absent, the publish plugin falls back to its legacy
     /// `audience_states` HashMap for backward compatibility.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub audiences: Option<Vec<AudienceDecl>>,
 
     /// True once the writer has imported any pre-existing
@@ -254,7 +255,7 @@ pub struct WorkspaceConfig {
     /// strict-truth: removing an audience from the file removes it
     /// server-side on next publish.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
     pub audiences_migrated: Option<bool>,
 }
 
@@ -1345,14 +1346,12 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             .filter(|v| matches!(v, yaml::Value::Mapping(_)))
             .cloned();
 
-        // Parse `audiences:` via serde, round-tripping through JSON because
-        // the project's custom `yaml::Value` doesn't expose a direct
-        // `from_value` shim. A malformed top-level shape (or a single bad
-        // entry) drops the whole list to `None` rather than silently
-        // accepting partial garbage.
+        // Parse `audiences:` via fig's `FromValue`, converting the dynamic
+        // `yaml::Value` into a fig value first. A malformed top-level shape (or
+        // a single bad entry) drops the whole list to `None` rather than
+        // silently accepting partial garbage.
         let audiences = get("audiences").and_then(|v| {
-            fig::from_slice::<Vec<AudienceDecl>>(v.to_json().ok()?.as_bytes(), fig::Format::Json)
-                .ok()
+            <Vec<AudienceDecl> as fig::FromValue>::from_value(&fig::ToValue::to_value(v)).ok()
         });
 
         let audiences_migrated = get("audiences_migrated").and_then(|v| v.as_bool());

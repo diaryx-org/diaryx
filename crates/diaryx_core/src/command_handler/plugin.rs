@@ -112,11 +112,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             indexmap::IndexMap::from([
                 (
                     "permission_request".to_string(),
-                    yaml::Value::from(fig::to_value(&reconcile.permission_request)?),
+                    yaml::Value::from(fig::ToValue::to_value(&reconcile.permission_request)),
                 ),
                 (
                     "migrations".to_string(),
-                    yaml::Value::from(fig::to_value(&reconcile.migrations)?),
+                    yaml::Value::from(fig::ToValue::to_value(&reconcile.migrations)),
                 ),
             ]),
         )))

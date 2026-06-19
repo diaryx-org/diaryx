@@ -81,6 +81,7 @@ extern "ExtismHost" {
     pub fn host_namespace_sync_audience(input: String) -> String;
     pub fn host_namespace_list_audiences(input: String) -> String;
     pub fn host_namespace_delete_audience(input: String) -> String;
+    pub fn host_namespace_build(input: String) -> String;
 
     // Cancellation
     pub fn host_is_cancelled(input: String) -> String;

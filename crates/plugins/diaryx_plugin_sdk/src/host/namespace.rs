@@ -253,14 +253,19 @@ pub fn put_object_with_audience(
     mime_type: &str,
     audience: Option<&str>,
 ) -> Result<(), String> {
-    put_object_with_ark(ns_id, key, bytes, mime_type, audience, None, None, false)
+    put_object_with_ark(
+        ns_id, key, bytes, mime_type, audience, None, None, None, false,
+    )
 }
 
 /// Upload an object with an optional audience tag and ARK registration data.
 /// When `file_ark` is set, the server registers `(workspace_ark, file_ark) ->
-/// key` (publish doubles as registration); `source_key` links the markdown
-/// source sibling (Layer 2 resolution) and `is_index` marks the workspace
-/// front-page rendition.
+/// object_key` (publish doubles as registration); `source_key` links the
+/// markdown source sibling (Layer 2 resolution) and `is_index` marks the
+/// workspace front-page rendition. `object_key` is the key the ARK should
+/// resolve to (the rendered HTML the server builds) when it differs from the
+/// uploaded `key` — e.g. when uploading a markdown source for server-side
+/// rendering. `None` → the ARK resolves to the uploaded `key` (legacy push).
 #[allow(clippy::too_many_arguments)]
 pub fn put_object_with_ark(
     ns_id: &str,
@@ -270,6 +275,7 @@ pub fn put_object_with_ark(
     audience: Option<&str>,
     file_ark: Option<&str>,
     source_key: Option<&str>,
+    object_key: Option<&str>,
     is_index: bool,
 ) -> Result<(), String> {
     let mut input = serde_json::json!({
@@ -286,6 +292,9 @@ pub fn put_object_with_ark(
     }
     if let Some(source_key) = source_key {
         input["source_key"] = serde_json::Value::String(source_key.to_string());
+    }
+    if let Some(object_key) = object_key {
+        input["object_key"] = serde_json::Value::String(object_key.to_string());
     }
     if is_index {
         input["is_index"] = serde_json::Value::Bool(true);
@@ -417,6 +426,24 @@ pub fn delete_audience(ns_id: &str, audience: &str) -> Result<(), String> {
         .map_err(|e| format!("host_namespace_delete_audience failed: {e}"))?;
     let parsed: serde_json::Value = serde_json::from_str(&result)
         .map_err(|e| format!("Failed to parse delete_audience response: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    Ok(())
+}
+
+/// Trigger a server-side render of the namespace's stored markdown sources into
+/// HTML (ARK Layer 3). Called by the publish plugin after uploading sources.
+/// `base_url`, when set, is forwarded for canonical/sitemap/feed URLs.
+pub fn build_namespace(ns_id: &str, base_url: Option<&str>) -> Result<(), String> {
+    let mut input = serde_json::json!({ "ns_id": ns_id });
+    if let Some(base_url) = base_url {
+        input["base_url"] = serde_json::Value::String(base_url.to_string());
+    }
+    let result = unsafe { host_namespace_build(input.to_string()) }
+        .map_err(|e| format!("host_namespace_build failed: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse build_namespace response: {e}"))?;
     if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
         return Err(err.to_string());
     }

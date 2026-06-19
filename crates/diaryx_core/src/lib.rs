@@ -81,6 +81,12 @@ pub mod types;
 /// Plugin architecture for modular feature composition
 pub mod plugin;
 
+/// Publish pipeline: collect markdown sources, diff against server state, upload
+/// via a `NamespaceProvider` port, and trigger the server-side render (ARK
+/// Layer 3). Feature-gated (`publish`); the app shells provide the HTTP provider.
+#[cfg(feature = "publish")]
+pub mod publish;
+
 /// YAML format primitives (Value, Mapping, Error, from_str, to_string).
 ///
 /// Formerly the `bookmatter` crate, consolidated into diaryx_core.

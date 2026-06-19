@@ -249,7 +249,9 @@ impl NamespaceProvider for HttpNamespaceProvider {
         mime_type: &str,
         audience: Option<&str>,
     ) -> Result<(), String> {
-        self.put_object_with_ark(ns_id, key, bytes, mime_type, audience, None, None, false)
+        self.put_object_with_ark(
+            ns_id, key, bytes, mime_type, audience, None, None, None, false,
+        )
     }
 
     fn put_object_with_ark(
@@ -261,6 +263,7 @@ impl NamespaceProvider for HttpNamespaceProvider {
         audience: Option<&str>,
         file_ark: Option<&str>,
         source_key: Option<&str>,
+        object_key: Option<&str>,
         is_index: bool,
     ) -> Result<(), String> {
         let url = format!(
@@ -276,6 +279,9 @@ impl NamespaceProvider for HttpNamespaceProvider {
         if let Some(sk) = source_key {
             headers.push(("X-Diaryx-Source-Key", sk));
         }
+        if let Some(ok) = object_key {
+            headers.push(("X-Diaryx-Object-Key", ok));
+        }
         if is_index {
             headers.push(("X-Diaryx-Is-Index", "true"));
         }
@@ -287,6 +293,20 @@ impl NamespaceProvider for HttpNamespaceProvider {
             audience,
             &headers,
         )?;
+        Ok(())
+    }
+
+    fn build_namespace(&self, ns_id: &str, base_url: Option<&str>) -> Result<(), String> {
+        let mut url = format!(
+            "{}/namespaces/{}/build",
+            self.base_url,
+            Self::encode_component(ns_id),
+        );
+        if let Some(bu) = base_url {
+            url.push_str("?base_url=");
+            url.push_str(&Self::encode_component(bu));
+        }
+        self.request_json::<serde_json::Value>("POST", url, None, None, None, &[])?;
         Ok(())
     }
 

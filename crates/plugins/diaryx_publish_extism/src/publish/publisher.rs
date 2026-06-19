@@ -36,6 +36,11 @@ pub struct RenderedFile {
     /// The page's audience-scoped markdown source, for content pages. Uploaded
     /// as a sibling object so the server can resolve `?content`/`?json`.
     pub source_markdown: Option<String>,
+    /// The page's sanitized workspace-relative source path (e.g. `"Welcome.md"`,
+    /// `"notes/post.md"`), for content pages. Server-side rendering keys the
+    /// uploaded source by this path so frontmatter `contents`/`part_of` links
+    /// (which reference workspace paths) resolve correctly; `None` for assets.
+    pub source_rel_path: Option<String>,
     /// `true` when this rendition is the workspace root index page.
     pub is_index: bool,
 }
@@ -228,6 +233,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 .unwrap_or_else(|| "Journal".to_string())
         });
 
+        let workspace_dir = workspace_root.parent().unwrap_or(workspace_root);
         let nav_tree = build_site_nav_tree(&pages);
         let mut rendered_files = Vec::new();
 
@@ -256,6 +262,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 mime_type: mime_type.to_string(),
                 file_ark: page.file_ark.clone(),
                 source_markdown: Some(page.source_markdown.clone()),
+                source_rel_path: Some(self.source_rel_path(page, workspace_dir)),
                 is_index: page.is_root,
             });
         }
@@ -275,6 +282,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 mime_type: mime_type.to_string(),
                 file_ark: None,
                 source_markdown: None,
+                source_rel_path: None,
                 is_index: false,
             });
         }
@@ -294,6 +302,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 mime_type: mime_type.to_string(),
                 file_ark: None,
                 source_markdown: None,
+                source_rel_path: None,
                 is_index: false,
             });
         }
@@ -364,6 +373,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 mime_type: mime_type.to_string(),
                 file_ark: page.file_ark.clone(),
                 source_markdown: Some(page.source_markdown.clone()),
+                source_rel_path: Some(self.source_rel_path(page, workspace_dir)),
                 is_index: page.is_root,
             });
         }
@@ -382,6 +392,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 mime_type: mime_type.to_string(),
                 file_ark: None,
                 source_markdown: None,
+                source_rel_path: None,
                 is_index: false,
             });
         }
@@ -400,6 +411,7 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
                 mime_type: mime_type.to_string(),
                 file_ark: None,
                 source_markdown: None,
+                source_rel_path: None,
                 is_index: false,
             });
         }
@@ -837,6 +849,19 @@ impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
             .unwrap_or_else(|| self.filename_to_title(&canonical));
 
         Some(NavLink { href, title })
+    }
+
+    /// Sanitized workspace-relative `.md` source path for a page (e.g.
+    /// `"Welcome.md"`, `"notes/post.md"`). Server-side rendering keys the
+    /// uploaded source by this path so frontmatter links resolve correctly.
+    fn source_rel_path(&self, page: &PublishedPage, workspace_dir: &Path) -> String {
+        let dest = self
+            .format
+            .output_filename(&page.source_path, workspace_dir);
+        Path::new(&dest)
+            .with_extension("md")
+            .to_string_lossy()
+            .into_owned()
     }
 
     /// Get title from a file's frontmatter

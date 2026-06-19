@@ -142,9 +142,17 @@ pub trait NamespaceProvider: Send + Sync {
         audience: Option<&str>,
         _file_ark: Option<&str>,
         _source_key: Option<&str>,
+        _object_key: Option<&str>,
         _is_index: bool,
     ) -> Result<(), String> {
         self.put_object(ns_id, key, bytes, mime_type, audience)
+    }
+
+    /// Trigger a server-side render of the namespace's stored sources into HTML
+    /// (ARK Layer 3). `base_url` is forwarded for canonical/sitemap/feed URLs.
+    /// The default impl is a no-op for providers without a server build step.
+    fn build_namespace(&self, _ns_id: &str, _base_url: Option<&str>) -> Result<(), String> {
+        Ok(())
     }
     fn get_object(&self, ns_id: &str, key: &str) -> Result<Vec<u8>, String>;
     fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String>;
@@ -1148,6 +1156,13 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_namespace_delete_audience,
+        )
+        .with_function(
+            "host_namespace_build",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_namespace_build,
         )
         .with_function(
             "host_ws_request",
@@ -2825,6 +2840,8 @@ fn host_namespace_put_object(
         #[serde(default)]
         source_key: Option<String>,
         #[serde(default)]
+        object_key: Option<String>,
+        #[serde(default)]
         is_index: bool,
     }
 
@@ -2847,6 +2864,7 @@ fn host_namespace_put_object(
         parsed.audience.as_deref(),
         parsed.file_ark.as_deref(),
         parsed.source_key.as_deref(),
+        parsed.object_key.as_deref(),
         parsed.is_index,
     );
 
@@ -3303,6 +3321,42 @@ fn host_namespace_delete_audience(
     let result = ctx
         .namespace_provider
         .delete_audience(&parsed.ns_id, &parsed.audience);
+
+    let json = match result {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    plugin.memory_set_val(&mut outputs[0], json.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_namespace_build(input: {ns_id, base_url?}) -> {ok} or
+/// {error}`. Triggers server-side rendering of the namespace's stored sources.
+fn host_namespace_build(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        ns_id: String,
+        #[serde(default)]
+        base_url: Option<String>,
+    }
+
+    let parsed: Input = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_namespace_build: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx
+        .lock()
+        .map_err(|e| ExtismError::msg(format!("host_namespace_build: lock: {e}")))?;
+    let result = ctx
+        .namespace_provider
+        .build_namespace(&parsed.ns_id, parsed.base_url.as_deref());
 
     let json = match result {
         Ok(()) => serde_json::json!({ "ok": true }),

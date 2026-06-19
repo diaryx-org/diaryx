@@ -567,35 +567,38 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 .map(|a| a.is_empty())
                 .unwrap_or(false);
             let mut planned: Vec<(String, Vec<u8>, String)> =
-                Vec::with_capacity(rendered.len() * 2 + attachment_paths.len());
+                Vec::with_capacity(rendered.len() + attachment_paths.len());
+            // Per source-object key: the page's ARK blade and the dest HTML key
+            // the ARK should resolve to (the server build creates that HTML).
             let mut key_to_ark: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
-            let mut key_to_source: std::collections::HashMap<String, String> =
+            let mut key_to_object: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             let mut index_key: Option<String> = None;
             for file in rendered {
-                let key = format!("{}/{}", audience_name, file.path);
+                // Server-side rendering: upload only the markdown source for each
+                // content page. The server build generates the HTML + static /
+                // supplementary assets, so those renditions are NOT uploaded.
+                // Sources key by their workspace-relative path so frontmatter
+                // links resolve server-side; the ARK resolves to the dest HTML.
+                let (Some(src_md), Some(src_rel)) = (&file.source_markdown, &file.source_rel_path)
+                else {
+                    continue;
+                };
+                let source_key = format!("{}/{}", audience_name, src_rel);
+                let dest_object_key = format!("{}/{}", audience_name, file.path);
                 if let Some(ark) = &file.file_ark {
-                    key_to_ark.insert(key.clone(), ark.clone());
+                    key_to_ark.insert(source_key.clone(), ark.clone());
                 }
-                if let Some(src_md) = &file.source_markdown {
-                    let source_rel = match file.path.strip_suffix(".html") {
-                        Some(stem) => format!("{stem}.md"),
-                        None => format!("{}.md", file.path),
-                    };
-                    let source_key = format!("{}/{}", audience_name, source_rel);
-                    key_to_source.insert(key.clone(), source_key.clone());
-                    // The source sibling is its own audience-tagged object.
-                    planned.push((
-                        source_key,
-                        src_md.clone().into_bytes(),
-                        "text/markdown".to_string(),
-                    ));
-                }
+                key_to_object.insert(source_key.clone(), dest_object_key);
                 if file.is_index && audience_public {
-                    index_key = Some(key.clone());
+                    index_key = Some(source_key.clone());
                 }
-                planned.push((key, file.content, file.mime_type));
+                planned.push((
+                    source_key,
+                    src_md.clone().into_bytes(),
+                    "text/markdown".to_string(),
+                ));
             }
             for (src_path, dest_rel) in &attachment_paths {
                 if !self.fs.try_exists(src_path).await.unwrap_or(false) {
@@ -618,18 +621,31 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 }
             }
 
+            // Diff against only client-managed objects (sources + attachments).
+            // Server-generated renditions (HTML/CSS/feeds/sitemap) are owned by
+            // the build step; excluding them keeps the publish from pruning the
+            // live rendered site every time.
+            let client_existing: std::collections::HashMap<String, Option<String>> = existing
+                .iter()
+                .filter(|(k, _)| !plan::is_server_generated_key(k))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             let mut audience_plan = plan::diff_audience(
                 audience_name.clone(),
                 audience.gates.clone(),
                 planned,
-                &existing,
+                &client_existing,
             );
-            // Tag content-page uploads with their source-file ARK + source key
-            // (and the index flag) so the server registers + indexes on upload.
+            // Tag content-source uploads so the server registers the ARK against
+            // the dest HTML key + indexes on upload. The source lives at `up.key`;
+            // attachments (absent from `key_to_ark`) carry no ARK metadata.
             for up in &mut audience_plan.uploads {
-                up.file_ark = key_to_ark.get(&up.key).cloned();
-                up.source_key = key_to_source.get(&up.key).cloned();
-                up.is_index = index_key.as_deref() == Some(up.key.as_str());
+                if let Some(ark) = key_to_ark.get(&up.key) {
+                    up.file_ark = Some(ark.clone());
+                    up.object_key = key_to_object.get(&up.key).cloned();
+                    up.source_key = Some(up.key.clone());
+                    up.is_index = index_key.as_deref() == Some(up.key.as_str());
+                }
             }
             audience_plans.push(audience_plan);
         }
@@ -847,6 +863,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                             Some(ap.name.as_str()),
                             up.file_ark.as_deref(),
                             up.source_key.as_deref(),
+                            up.object_key.as_deref(),
                             up.is_index,
                         )
                         .map_err(|e| {
@@ -894,6 +911,23 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                         }
                     }
                 }
+
+                // --- Phase 4: server-side render. Sources are now stored; ask
+                // the server to reconstruct + render the site to HTML (ARK
+                // Layer 3). Fatal: without it the published site has no HTML, so
+                // the user should see the failure (sources persist; a retry
+                // re-runs the build cheaply since unchanged sources are skipped).
+                emit_publish_progress(serde_json::json!({
+                    "type": "PublishProgress",
+                    "phase": "rendering",
+                    "current": uploaded,
+                    "total": total_uploads,
+                }));
+                diaryx_plugin_sdk::host::namespace::build_namespace(&namespace_id, None).map_err(
+                    |e| {
+                        PluginError::CommandError(format!("server-side render (build) failed: {e}"))
+                    },
+                )?;
 
                 // Legacy plugin-config cleanup: drop audiences that rendered no
                 // entries this run (legacy-source path only).

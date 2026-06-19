@@ -2,9 +2,8 @@
 //!
 //! A [`PublishPlan`] is the diff between what we just rendered for a namespace
 //! and what the namespace already holds, so the apply step only uploads objects
-//! whose content actually changed. This module performs no host calls and is
-//! fully unit-testable; the host-facing orchestration lives in
-//! [`crate::publish_plugin`].
+//! whose content actually changed. This module performs no I/O and is fully
+//! unit-testable; the orchestration lives in [`super::service`].
 
 use std::collections::{HashMap, HashSet};
 

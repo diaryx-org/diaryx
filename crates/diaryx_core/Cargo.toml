@@ -60,6 +60,11 @@ serde-json = ["dep:serde_json"]
 # Browser WASM support (uuid/js for browser crypto)
 browser-js = ["uuid", "uuid/js"]
 
+# Publish pipeline (collect sources → diff → upload via NamespaceProvider port →
+# server build). Opt-in so size-sensitive builds don't pull it. Needs the
+# serde_json bridge for audience gate JSON.
+publish = ["serde-json"]
+
 # Default features — enabled for native builds (CLI, Tauri, Apple, Extism guests).
 # diaryx_wasm uses default-features = false to exclude these from the WASM binary.
 # The `typescript` feature is opt-in (enabled by diaryx_wasm for binding generation).

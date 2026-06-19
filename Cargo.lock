@@ -3633,7 +3633,7 @@ dependencies = [
 [[package]]
 name = "fig"
 version = "0.0.0"
-source = "git+https://github.com/adammharris/fig.git?rev=ee8189195103f69857ab165c92eeb1ebfffd7613#ee8189195103f69857ab165c92eeb1ebfffd7613"
+source = "git+https://github.com/adammharris/fig.git?rev=adfea95499f5120ff0ee8ece07d946feda220b6e#adfea95499f5120ff0ee8ece07d946feda220b6e"
 dependencies = [
  "fig-macros",
  "indexmap 2.13.1",
@@ -3643,7 +3643,7 @@ dependencies = [
 [[package]]
 name = "fig-macros"
 version = "0.0.0"
-source = "git+https://github.com/adammharris/fig.git?rev=ee8189195103f69857ab165c92eeb1ebfffd7613#ee8189195103f69857ab165c92eeb1ebfffd7613"
+source = "git+https://github.com/adammharris/fig.git?rev=adfea95499f5120ff0ee8ece07d946feda220b6e#adfea95499f5120ff0ee8ece07d946feda220b6e"
 dependencies = [
  "proc-macro2",
  "quote",

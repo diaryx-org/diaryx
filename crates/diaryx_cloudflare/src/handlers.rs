@@ -232,17 +232,15 @@ pub async fn create_namespace(mut req: Request, ctx: RouteContext<()>) -> Result
     let service = NamespaceService::new(&ns_store);
     let metadata_str = body.metadata_str();
 
-    // Generate a UUID from JS crypto if the client didn't provide one,
-    // since getrandom 0.4 (used by uuid::Uuid::new_v4) doesn't compile
-    // for wasm32-unknown-unknown in Cloudflare Workers.
-    let generated_id = if body.id.is_none() {
-        Some(js_uuid_v4())
-    } else {
-        None
-    };
-    let id = body.id.as_deref().or(generated_id.as_deref());
-
-    match service.create(&user_id, id, metadata_str.as_deref()).await {
+    // No client-supplied id ⇒ let the service mint an opaque `dx`-blade ARK
+    // (`NamespaceService::mint_workspace_id`). Its `Uuid`-backed rng works in
+    // the worker via the `uuid` crate's `js` feature — the same path used for
+    // token/user/device id generation in the D1 adapter. (No more UUID
+    // namespace ids: the workspace blade is the ARK.)
+    match service
+        .create(&user_id, body.id.as_deref(), metadata_str.as_deref())
+        .await
+    {
         Ok(ns) => Response::from_json(&NamespaceResponse::from(ns)).map(|r| r.with_status(201)),
         Err(e) => error_response(e),
     }

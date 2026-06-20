@@ -1049,8 +1049,9 @@ pub enum Response {
     /// Link format response.
     LinkFormat(LinkFormat),
 
-    /// Workspace config response.
-    WorkspaceConfig(WorkspaceConfig),
+    /// Workspace config response. Boxed: `WorkspaceConfig` is by far the
+    /// largest `Response` variant (serde/ts-rs serialize `Box<T>` as `T`).
+    WorkspaceConfig(Box<WorkspaceConfig>),
 
     /// Convert links result response.
     ConvertLinksResult(ConvertLinksResult),

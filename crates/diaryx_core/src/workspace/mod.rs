@@ -141,6 +141,56 @@ pub struct AudienceDecl {
     pub share_actions: Vec<ShareAction>,
 }
 
+/// Publishing configuration for a workspace, stored under the top-level
+/// `publish:` key in the workspace settings file.
+///
+/// This replaces the former `plugins."diaryx.publish".config` location (publish
+/// is integrated into the app, not a plugin) and absorbs the previously
+/// top-level `audiences` declaration. `default_audience` stays top-level because
+/// it also governs local export visibility, not just publishing.
+#[derive(Debug, Clone, Default, PartialEq, fig::ToValue, fig::FromValue)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub struct PublishSettings {
+    /// Server namespace this workspace publishes to (server-assigned on first
+    /// publish; persisted here so the binding travels with the workspace).
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_id: Option<String>,
+
+    /// Claimed subdomain for the published site, if any.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
+    pub subdomain: Option<String>,
+
+    /// Declared audiences for selective sharing. When present, this is the
+    /// authoritative list — publish syncs it to the server (creating, updating,
+    /// or removing audience records to match). When absent, publish falls back
+    /// to the legacy `audience_states` map for backward compatibility.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
+    pub audiences: Option<Vec<AudienceDecl>>,
+
+    /// True once any pre-existing `audience_states` have been imported into the
+    /// `audiences` declaration. While false, publish is dual-read (file OR
+    /// legacy) and non-destructive; once true the file is strict-truth.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
+    pub audiences_migrated: Option<bool>,
+
+    /// Legacy per-audience publish state map (pre-`audiences`). Kept as an opaque
+    /// value so the config layer stays agnostic to its shape; superseded by
+    /// `audiences` for migrated workspaces.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
+    pub audience_states: Option<yaml::Value>,
+
+    /// Legacy list of public audience names (pre-`audiences`).
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[fig(default, skip_serializing_if = "Option::is_none")]
+    pub public_audiences: Option<Vec<String>>,
+}
+
 /// Workspace-level configuration stored in the root index file's frontmatter.
 ///
 /// This allows workspace settings to live with the data (local-first philosophy)
@@ -239,24 +289,13 @@ pub struct WorkspaceConfig {
     #[fig(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<yaml::Value>,
 
-    /// Declared audiences for selective sharing. When present, this is the
-    /// authoritative list — the publish plugin syncs it to the server on
-    /// publish (creating, updating, or removing audience records to match).
-    /// When absent, the publish plugin falls back to its legacy
-    /// `audience_states` HashMap for backward compatibility.
+    /// Publishing configuration: namespace binding, subdomain, and the declared
+    /// `audiences`. Replaces the former `plugins."diaryx.publish".config` and the
+    /// top-level `audiences`/`audiences_migrated` keys (both relocated here by the
+    /// eager migration on workspace open).
     #[cfg_attr(feature = "typescript", ts(optional))]
     #[fig(default, skip_serializing_if = "Option::is_none")]
-    pub audiences: Option<Vec<AudienceDecl>>,
-
-    /// True once the writer has imported any pre-existing
-    /// `audience_states` into the new `audiences` declaration. While this
-    /// is false the publish plugin is dual-read (file OR legacy) and
-    /// non-destructive (no audience deletions). Once true, the file is
-    /// strict-truth: removing an audience from the file removes it
-    /// server-side on next publish.
-    #[cfg_attr(feature = "typescript", ts(optional))]
-    #[fig(default, skip_serializing_if = "Option::is_none")]
-    pub audiences_migrated: Option<bool>,
+    pub publish: Option<PublishSettings>,
 }
 
 #[derive(Default)]
@@ -1198,6 +1237,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         "audience_colors",
         "disabled_plugins",
         "plugins",
+        "publish",
+        // Legacy top-level keys, swept inline → settings file, then relocated
+        // under `publish` by `migrate_publish_config`.
         "audiences",
         "audiences_migrated",
     ];
@@ -1346,15 +1388,64 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             .filter(|v| matches!(v, yaml::Value::Mapping(_)))
             .cloned();
 
-        // Parse `audiences:` via fig's `FromValue`, converting the dynamic
-        // `yaml::Value` into a fig value first. A malformed top-level shape (or
-        // a single bad entry) drops the whole list to `None` rather than
-        // silently accepting partial garbage.
-        let audiences = get("audiences").and_then(|v| {
-            <Vec<AudienceDecl> as fig::FromValue>::from_value(&fig::ToValue::to_value(v)).ok()
+        // Publishing config lives under the top-level `publish:` key. Parse it
+        // via fig's `FromValue`; a malformed shape drops to `None` rather than
+        // accepting partial garbage.
+        let mut publish = get("publish").and_then(|v| {
+            <PublishSettings as fig::FromValue>::from_value(&fig::ToValue::to_value(v)).ok()
         });
 
-        let audiences_migrated = get("audiences_migrated").and_then(|v| v.as_bool());
+        // Backward compatibility: fold in the pre-migration locations — the
+        // top-level `audiences`/`audiences_migrated` keys and the former
+        // `plugins."diaryx.publish".config` blob. The eager migration on open
+        // relocates these permanently; this keeps reads correct before it runs
+        // (and on the server, which reads config without migrating).
+        let legacy_audiences = get("audiences").and_then(|v| {
+            <Vec<AudienceDecl> as fig::FromValue>::from_value(&fig::ToValue::to_value(v)).ok()
+        });
+        let legacy_audiences_migrated = get("audiences_migrated").and_then(|v| v.as_bool());
+        let legacy_plugin_cfg = get("plugins")
+            .and_then(|p| p.get("diaryx.publish"))
+            .and_then(|e| e.get("config"))
+            .cloned();
+
+        if publish.is_none()
+            && (legacy_audiences.is_some()
+                || legacy_audiences_migrated.is_some()
+                || legacy_plugin_cfg.is_some())
+        {
+            publish = Some(PublishSettings::default());
+        }
+        if let Some(p) = publish.as_mut() {
+            if p.audiences.is_none() {
+                p.audiences = legacy_audiences;
+            }
+            if p.audiences_migrated.is_none() {
+                p.audiences_migrated = legacy_audiences_migrated;
+            }
+            if let Some(cfg) = legacy_plugin_cfg {
+                if p.namespace_id.is_none() {
+                    p.namespace_id = cfg
+                        .get("namespace_id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                }
+                if p.subdomain.is_none() {
+                    p.subdomain = cfg
+                        .get("subdomain")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                }
+                if p.audience_states.is_none() {
+                    p.audience_states = cfg.get("audience_states").cloned();
+                }
+                if p.public_audiences.is_none() {
+                    p.public_audiences = cfg.get("public_audiences").and_then(|v| {
+                        <Vec<String> as fig::FromValue>::from_value(&fig::ToValue::to_value(v)).ok()
+                    });
+                }
+            }
+        }
 
         Ok(WorkspaceConfig {
             link_format,
@@ -1373,8 +1464,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             audience_colors,
             disabled_plugins,
             plugins,
-            audiences,
-            audiences_migrated,
+            publish,
         })
     }
 
@@ -1653,6 +1743,112 @@ and is intentionally kept out of the content hierarchy.\n";
         self.write_config_file(&config_path, &collected).await?;
         self.rewrite_root_config_link(root_index_path, link_format)
             .await?;
+        Ok(true)
+    }
+
+    /// Relocate legacy publish config into the top-level `publish:` section of
+    /// the settings file: the former `plugins."diaryx.publish".config` blob
+    /// (`namespace_id`, `subdomain`, `audience_states`, `public_audiences`) and
+    /// the previously top-level `audiences`/`audiences_migrated` keys.
+    ///
+    /// Idempotent: returns `Ok(false)` when there is nothing to relocate (no
+    /// settings file, or the legacy keys are already gone). Run after
+    /// [`Self::migrate_workspace_config_to_file`] so all config lives in the
+    /// settings file first.
+    pub async fn migrate_publish_config(&self, root_index_path: &Path) -> Result<bool> {
+        let (_extra, config_path) = self.resolve_config_source(root_index_path).await?;
+        // No linked settings file → nothing to relocate (clean/new workspace).
+        let Some(config_path) = config_path else {
+            return Ok(false);
+        };
+
+        let content = match self.fs.read_to_string(&config_path).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: config_path,
+                    source: e,
+                });
+            }
+        };
+        let parsed = crate::frontmatter::parse_or_empty(&content)?;
+        let mut fm = parsed.frontmatter;
+
+        let legacy_audiences = fm.shift_remove("audiences");
+        let legacy_migrated = fm.shift_remove("audiences_migrated");
+        let plugin_cfg = fm
+            .get("plugins")
+            .and_then(|p| p.get("diaryx.publish"))
+            .and_then(|e| e.get("config"))
+            .cloned();
+
+        // Nothing to relocate → leave the file untouched (idempotent).
+        if legacy_audiences.is_none() && legacy_migrated.is_none() && plugin_cfg.is_none() {
+            return Ok(false);
+        }
+
+        fn set_if_absent(map: &mut yaml::Mapping, key: &str, val: Option<yaml::Value>) {
+            if let Some(v) = val
+                && !map.contains_key(key)
+            {
+                map.insert(key.to_string(), v);
+            }
+        }
+
+        // Merge onto any existing `publish` mapping (existing values win).
+        let mut publish = match fm.shift_remove("publish") {
+            Some(yaml::Value::Mapping(m)) => m,
+            _ => yaml::Mapping::new(),
+        };
+        if let Some(cfg) = &plugin_cfg {
+            set_if_absent(
+                &mut publish,
+                "namespace_id",
+                cfg.get("namespace_id").cloned(),
+            );
+            set_if_absent(&mut publish, "subdomain", cfg.get("subdomain").cloned());
+            set_if_absent(
+                &mut publish,
+                "audience_states",
+                cfg.get("audience_states").cloned(),
+            );
+            set_if_absent(
+                &mut publish,
+                "public_audiences",
+                cfg.get("public_audiences").cloned(),
+            );
+        }
+        set_if_absent(&mut publish, "audiences_migrated", legacy_migrated);
+        set_if_absent(&mut publish, "audiences", legacy_audiences);
+
+        // Drop the former plugin entry (remove `plugins` entirely if now empty).
+        if let Some(yaml::Value::Mapping(mut plugins)) = fm.shift_remove("plugins") {
+            plugins.shift_remove("diaryx.publish");
+            if !plugins.is_empty() {
+                fm.insert("plugins".to_string(), yaml::Value::Mapping(plugins));
+            }
+        }
+
+        // Keep the nested `audiences` block sequence LAST within `publish`: fig's
+        // YAML parser drops a key that follows a block sequence at the same
+        // level, so nothing may come after it.
+        if let Some(aud) = publish.shift_remove("audiences") {
+            publish.insert("audiences".to_string(), aud);
+        }
+
+        // Likewise `publish` (which contains that nested sequence) must be the
+        // last top-level key in the settings file.
+        fm.insert("publish".to_string(), yaml::Value::Mapping(publish));
+
+        let new_content = crate::frontmatter::serialize(&fm, &parsed.body)?;
+        self.fs
+            .write(&config_path, new_content.as_bytes())
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: config_path,
+                source: e,
+            })?;
         Ok(true)
     }
 
@@ -4810,7 +5006,8 @@ audiences_migrated: true
         let ws = Workspace::new(async_fs);
 
         let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
-        let audiences = config.audiences.expect("audiences parsed");
+        let publish = config.publish.clone().expect("publish parsed");
+        let audiences = publish.audiences.expect("audiences parsed");
         assert_eq!(audiences.len(), 3);
 
         // Public: empty gates, two share actions.
@@ -4837,7 +5034,7 @@ audiences_migrated: true
         assert_eq!(audiences[2].name, "Close");
         assert_eq!(audiences[2].gates, vec![Gate::Password, Gate::Link]);
 
-        assert_eq!(config.audiences_migrated, Some(true));
+        assert_eq!(publish.audiences_migrated, Some(true));
     }
 
     #[test]
@@ -4852,8 +5049,7 @@ audiences_migrated: true
         let ws = Workspace::new(async_fs);
 
         let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
-        assert!(config.audiences.is_none());
-        assert!(config.audiences_migrated.is_none());
+        assert!(config.publish.is_none());
     }
 
     #[test]
@@ -4872,7 +5068,7 @@ audiences_migrated: true
         let ws = Workspace::new(async_fs);
 
         let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
-        assert!(config.audiences.is_none());
+        assert!(config.publish.and_then(|p| p.audiences).is_none());
     }
 
     #[test]
@@ -4889,7 +5085,10 @@ audiences_migrated: true
         let ws = Workspace::new(async_fs);
 
         let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
-        let audiences = config.audiences.expect("audiences parsed");
+        let audiences = config
+            .publish
+            .and_then(|p| p.audiences)
+            .expect("audiences parsed");
         assert_eq!(audiences.len(), 1);
         assert_eq!(audiences[0].name, "Public");
         assert!(audiences[0].gates.is_empty());
@@ -6129,13 +6328,76 @@ audiences_migrated: true
             "root still has audiences: {root}"
         );
 
-        // The full audiences shape still parses through get_workspace_config.
+        // The full audiences shape still parses through get_workspace_config
+        // (folded under `publish` via back-compat read of top-level `audiences`).
         let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
-        let audiences = config.audiences.expect("audiences parsed after migration");
+        let publish = config
+            .publish
+            .clone()
+            .expect("publish parsed after migration");
+        let audiences = publish.audiences.expect("audiences parsed after migration");
         assert_eq!(audiences.len(), 2);
         assert_eq!(audiences[0].name, "Public");
         assert_eq!(audiences[1].name, "Family");
-        assert_eq!(config.audiences_migrated, Some(true));
+        assert_eq!(publish.audiences_migrated, Some(true));
+    }
+
+    #[test]
+    fn test_migrate_publish_config_relocates_legacy_into_publish_section() {
+        let fs = InMemoryFileSystem::new();
+        fs.write(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\nworkspace_config: '[Config](/Meta/Config.md)'\n---\n"
+                .as_bytes(),
+        )
+        .unwrap();
+        // Settings file with the legacy locations: top-level audiences +
+        // audiences_migrated, and the former plugins."diaryx.publish".config blob.
+        fs.write(
+            Path::new("Meta/Config.md"),
+            "---\ntitle: Workspace Settings\n\
+default_audience: family\n\
+audiences:\n  - name: Public\n  - name: Family\n    gates:\n      - kind: link\n\
+audiences_migrated: true\n\
+plugins:\n  diaryx.publish:\n    config:\n      namespace_id: ns-abc\n      subdomain: my-site\n\
+---\n"
+                .as_bytes(),
+        )
+        .unwrap();
+        let ws = Workspace::new(SyncToAsyncFs::new(fs));
+
+        let migrated = block_on_test(ws.migrate_publish_config(Path::new("README.md"))).unwrap();
+        assert!(migrated);
+
+        // The settings file now has a `publish:` section; the legacy top-level
+        // keys and the plugin entry are gone.
+        let cfg = block_on_test(ws.fs.read_to_string(Path::new("Meta/Config.md"))).unwrap();
+        assert!(cfg.contains("publish:"), "cfg: {cfg}");
+        assert!(
+            !cfg.contains("diaryx.publish"),
+            "plugin entry remains: {cfg}"
+        );
+        assert!(
+            !cfg.contains("\naudiences_migrated:"),
+            "top-level audiences_migrated remains: {cfg}"
+        );
+
+        // get_workspace_config exposes everything under `publish`, and
+        // default_audience stays top-level.
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(config.default_audience.as_deref(), Some("family"));
+        let publish = config.publish.expect("publish section");
+        assert_eq!(publish.namespace_id.as_deref(), Some("ns-abc"));
+        assert_eq!(publish.subdomain.as_deref(), Some("my-site"));
+        assert_eq!(publish.audiences_migrated, Some(true));
+        let audiences = publish.audiences.expect("audiences relocated");
+        assert_eq!(audiences.len(), 2);
+        assert_eq!(audiences[0].name, "Public");
+        assert_eq!(audiences[1].name, "Family");
+
+        // Idempotent: a second run finds nothing to relocate.
+        let again = block_on_test(ws.migrate_publish_config(Path::new("README.md"))).unwrap();
+        assert!(!again, "migration should be idempotent");
     }
 
     #[test]

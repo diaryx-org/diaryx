@@ -51,7 +51,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let ws = self.workspace().inner();
         let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
         let config = ws.get_workspace_config(&resolved_root_index_path).await?;
-        Ok(Response::WorkspaceConfig(config))
+        Ok(Response::WorkspaceConfig(Box::new(config)))
     }
 
     pub(crate) async fn cmd_generate_filename(
@@ -93,10 +93,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ) -> Result<Response> {
         let ws = self.workspace().inner();
         let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
-        let migrated = ws
+        // First sweep any inline config into the settings file, then relocate
+        // legacy publish config (plugin blob + top-level audiences) under the
+        // `publish:` section.
+        let file_migrated = ws
             .migrate_workspace_config_to_file(&resolved_root_index_path)
             .await?;
-        Ok(Response::Bool(migrated))
+        let publish_migrated = ws.migrate_publish_config(&resolved_root_index_path).await?;
+        Ok(Response::Bool(file_migrated || publish_migrated))
     }
 
     pub(crate) async fn cmd_convert_links(

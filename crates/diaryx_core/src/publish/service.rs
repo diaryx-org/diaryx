@@ -304,9 +304,10 @@ impl<'p> PublishService<'p> {
             .await
             .map_err(|e| format!("failed to read workspace config: {e}"))?;
 
-        let migrated = config.audiences_migrated.unwrap_or(false);
+        let publish = config.publish.clone().unwrap_or_default();
+        let migrated = publish.audiences_migrated.unwrap_or(false);
         let default_aud = config.default_audience.clone();
-        let decls = config.audiences.clone().unwrap_or_default();
+        let decls = publish.audiences.clone().unwrap_or_default();
 
         // ARK file blades already in the workspace, scanned once and shared
         // across audiences so mint-on-publish backfill stays collision-free

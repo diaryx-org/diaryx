@@ -3,7 +3,7 @@ title: Diaryx
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.6.1
-updated: 2026-06-04T14:24:18-07:00
+updated: 2026-06-20T10:39:34-04:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[Contributing To Diaryx](</Contributing to Diaryx.md>)'
@@ -21,44 +21,6 @@ audience:
 exclude:
 - '**/{target,dist}'
 - '**/*.!(md|png)'
-workspace_config:
-  link_format: markdown_root
-  audience_colors:
-    agents: bg-indigo-500
-    developers: bg-rose-500
-    public: bg-emerald-500
-  theme_preset: default
-  theme_accent_hue: null
-  disabled_plugins: []
-  audiences:
-  - gates: []
-    name: public
-    share_actions:
-    - kind: copy_link
-      label: For group chat
-  audiences_migrated: true
-plugins:
-  diaryx.publish:
-    permissions:
-      read_files:
-        include:
-        - all
-        exclude: []
-      edit_files:
-        include:
-        - all
-        exclude: []
-      create_files:
-        include:
-        - all
-        exclude: []
-    public_audiences:
-    - public
-    audience_states:
-      public:
-        state: public
-        email_on_publish: false
-    namespace_id: e108abba-9268-4fa6-a786-f3b94cfe357e
 links:
 - '[ROADMAP](/ROADMAP.md)'
 - '[PHILOSOPHY](/PHILOSOPHY.md)'
@@ -66,6 +28,8 @@ attachments:
 - '[icon-dark.png](/_attachments/icon-dark.png.md)'
 - '[icon.png](/_attachments/icon.png.md)'
 - '[Audience Filtering Demo](/_attachments/audience-filter-demo.html.md)'
+workspace_config: '[Config](/Meta/Config.md)'
+id: ccvh3h
 ---
 <div>
   <p align="center">
@@ -80,25 +44,25 @@ attachments:
 </div>
 
 
-Diaryx is a writing space that lets you choose who sees what. So you can write honestly and share without fear.
+Diaryx is a space for important memories. It lets you choose who sees what, so you can share safely and archive with peace-of-mind.
 
 - [Start writing](https://app.diaryx.org)
 
 ---
 
-### The problem: you already censor yourself.
+### Sharing and publishing
 
 Most writing tools force a choice. Either your writing is private, locked away where nobody benefits from it, or it's public, exposed to everyone equally. There's no middle ground.
 
 Diaryx gives you that middle ground. Write once, then decide which parts are for which people.
 
-## How it works: label a file, a folder, or a paragraph.
+## Audience filtering
 
-Tag any section of your writing with an audience — just you, family, close friends, or everyone. When you share, each person sees only what's meant for them.[^1]
+Tag any section of your writing with an audience — just you, family, close friends, or everyone. When you share, each person sees only what's meant for them.
 
 ![Audience Filtering Demo](_attachments/audience-filter-demo.html)
 
-### We never hold your words hostage.
+###
 
 Diaryx is local-first. Your entries live in a folder you choose as plain Markdown files you can open in any text editor. Put that folder in iCloud Drive, Dropbox, Syncthing, Git, or another external sync tool if you want it available elsewhere.
 
@@ -118,5 +82,3 @@ Read more:
 
 - See the [Diaryx Roadmap](/ROADMAP.md)
 - Read about the [Diaryx Philosophy](/PHILOSOPHY.md)
-
-[^1]: Note that this is only an interactive demo.

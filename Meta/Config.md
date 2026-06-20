@@ -1,12 +1,6 @@
 ---
 title: Workspace Settings
 description: Diaryx settings for this workspace. Linked from the root index; not part of your content and not published.
-plugins:
-    config:
-      namespace_id: b195a26a-139c-42c8-b057-d301a3410663
-      subdomain: null
-      audience_states: {}
-      public_audiences: []
 link_format: markdown_root
 audience_colors:
   agents: bg-indigo-500
@@ -15,11 +9,13 @@ audience_colors:
 theme_preset: default
 theme_accent_hue: null
 disabled_plugins: []
-audiences_migrated: true
-audiences:
-- name: public
-  gates: []
-  share_actions: []
+publish:
+  namespace_id: dxc9s8z5s
+  audiences:
+  - name: public
+    gates: []
+    share_actions: []
+  audiences_migrated: true
 ---
 
 # Workspace Settings

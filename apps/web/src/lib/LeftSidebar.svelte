@@ -81,6 +81,7 @@
     onToggleNode: (path: string) => void;
     onToggleCollapse: () => void;
     onOpenSettings: () => void;
+    onOpenPublish: () => void;
     onOpenMarketplace: () => void;
     settingsDialogOpen?: boolean;
     marketplaceDialogOpen?: boolean;
@@ -138,6 +139,7 @@
     onToggleNode,
     onToggleCollapse,
     onOpenSettings,
+    onOpenPublish,
     onOpenMarketplace,
     settingsDialogOpen = false,
     marketplaceDialogOpen = false,
@@ -1482,9 +1484,7 @@
         <span class="relative shrink-0">
           <CircleUser class="size-5 text-muted-foreground" />
         </span>
-        {#if authState.isAuthenticated && authState.user}
-          <span class="text-sm truncate text-sidebar-foreground">{authState.user.email}</span>
-        {:else}
+        {#if !authState.isAuthenticated}
           <span class="text-sm text-muted-foreground">Sign in</span>
         {/if}
       </button>
@@ -1493,6 +1493,24 @@
         onOpenAccountSettings={() => { profilePopoverOpen = false; onOpenAccountSettings(); }}
       />
       <div class="flex items-center gap-1 shrink-0">
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            <Button
+              variant="ghost"
+              size="icon"
+              onclick={onOpenPublish}
+              data-window-drag-exclude
+              class="size-10 md:size-8"
+              aria-label="Publish"
+              data-testid="publish-button"
+            >
+              <Globe class="size-5 md:size-4" />
+            </Button>
+          </Tooltip.Trigger>
+          {#if !mobileState.isMobile && !collapsed}
+            <Tooltip.Content>Publish</Tooltip.Content>
+          {/if}
+        </Tooltip.Root>
         <Tooltip.Root>
           <Tooltip.Trigger>
             <Button

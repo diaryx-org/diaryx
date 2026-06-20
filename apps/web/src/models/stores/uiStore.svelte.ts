@@ -35,6 +35,7 @@ let rightSidebarWidth = $state(loadSidebarWidth('diaryx:rightSidebarWidth'));
 let showCommandPalette = $state(false);
 let showSettingsDialog = $state(false);
 let showExportDialog = $state(false);
+let showPublishDialog = $state(false);
 let showNewEntryModal = $state(false);
 
 // Export state
@@ -68,6 +69,7 @@ export function getUIStore() {
     set showCommandPalette(value: boolean) { showCommandPalette = value; },
     get showSettingsDialog() { return showSettingsDialog; },
     get showExportDialog() { return showExportDialog; },
+    get showPublishDialog() { return showPublishDialog; },
     get showNewEntryModal() { return showNewEntryModal; },
 
     // Other getters
@@ -123,6 +125,9 @@ export function getUIStore() {
     closeSettingsDialog() { showSettingsDialog = false; },
     setShowSettingsDialog(show: boolean) { showSettingsDialog = show; },
 
+    openPublishDialog() { showPublishDialog = true; },
+    closePublishDialog() { showPublishDialog = false; },
+    setShowPublishDialog(show: boolean) { showPublishDialog = show; },
     openExportDialog(path: string = '') {
       exportPath = path;
       showExportDialog = true;

@@ -2670,27 +2670,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diaryx_publish_extism"
-version = "0.2.11"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "diaryx_core",
- "diaryx_plugin_sdk",
- "diaryx_render",
- "extism-pdk",
- "futures-lite 2.6.1",
- "indexmap 2.13.1",
- "log",
- "mrml",
- "pathdiff",
- "serde",
- "serde_json",
- "sha2",
- "urlencoding",
-]
-
-[[package]]
 name = "diaryx_render"
 version = "1.6.1"
 dependencies = [
@@ -3312,30 +3291,6 @@ name = "entities"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5320ae4c3782150d900b79807611a59a99fc9a1d61d686faafc24b93fc8d7ca"
-
-[[package]]
-name = "enum-as-inner"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1e6a265c649f3f5979b601d26f1d05ada116434c87741c9493cb56218f76cbc"
-dependencies = [
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "enum_dispatch"
-version = "0.3.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa18ce2bc66555b3218614519ac839ddb759a7d6720732f979ef8d13be147ecd"
-dependencies = [
- "once_cell",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "enumflags2"
@@ -4543,12 +4498,6 @@ dependencies = [
  "log",
  "markup5ever 0.38.0",
 ]
-
-[[package]]
-name = "htmlparser"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48ce8546b993eaf241d69ded33b1be6d205dd9857ec879d9d18bd05d3676e144"
 
 [[package]]
 name = "http"
@@ -5908,21 +5857,6 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
-]
-
-[[package]]
-name = "mrml"
-version = "5.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f2d4de127b05e0abf5bfe406ca8c766bb16e9150b040ff1525bccc20ee7c132"
-dependencies = [
- "enum-as-inner",
- "enum_dispatch",
- "htmlparser",
- "indexmap 2.13.1",
- "itertools 0.14.0",
- "rustc-hash 2.1.2",
- "thiserror 2.0.18",
 ]
 
 [[package]]

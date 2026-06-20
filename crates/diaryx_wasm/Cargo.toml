@@ -23,12 +23,14 @@ browser = ["dep:opfs", "dep:indexed-db", "dep:web-sys"]
 panic-hook = ["dep:console_error_panic_hook"]
 
 [dependencies]
-diaryx_core = { workspace = true, default-features = false, features = ["browser-js", "typescript"] }
+diaryx_core = { workspace = true, default-features = false, features = ["browser-js", "typescript", "publish"] }
 wasm-bindgen = "0.2"
 serde.workspace = true
 # JSON codec at the JS boundary — fig, not serde_json (keeps serde_json out of
 # the WASM binary). `to_value` + `serialize_with(Json, compact)` for output;
-# `from_slice(.., Json)` for input.
+# `from_slice(.., Json)` for input. The publish provider (`publish.rs`) also uses
+# fig to (de)serialize namespace gate/list JSON, so the publish path adds no
+# serde_json to the binary.
 fig.workspace = true
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"

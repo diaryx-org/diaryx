@@ -14,7 +14,7 @@ pub mod provider;
 pub mod service;
 pub mod source;
 
-pub use collect::collect_audience_sources;
+pub use collect::{CollectedAudience, collect_audience};
 pub use provider::{NamespaceProvider, ObjectMeta};
 pub use service::{PublishOutcome, PublishService};
 pub use source::{Attachment, AudienceInput, SourceFile};

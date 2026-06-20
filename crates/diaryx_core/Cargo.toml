@@ -61,9 +61,12 @@ serde-json = ["dep:serde_json"]
 browser-js = ["uuid", "uuid/js"]
 
 # Publish pipeline (collect sources → diff → upload via NamespaceProvider port →
-# server build). Opt-in so size-sensitive builds don't pull it. Needs the
-# serde_json bridge for audience gate JSON.
-publish = ["serde-json"]
+# server build). Opt-in so size-sensitive builds don't pull it. Gate values and
+# plan summaries use `yaml::Value` (serialized to JSON via `fig`), so this does
+# NOT pull `serde_json` into the binary — the WASM publish build stays
+# serde_json-free. Native consumers that want the `serde_json <-> yaml` bridge at
+# their own provider boundary enable `serde-json` separately (it is in `default`).
+publish = []
 
 # Default features — enabled for native builds (CLI, Tauri, Apple, Extism guests).
 # diaryx_wasm uses default-features = false to exclude these from the WASM binary.

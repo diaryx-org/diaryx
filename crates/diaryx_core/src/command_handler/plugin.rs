@@ -158,14 +158,19 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         // Resolve where they actually live — the linked file if the root index
         // points to one, else the root index itself for un-migrated workspaces —
         // and edit that file.
+        //
+        // Resolve the (workspace-relative) root index path against the workspace
+        // root first; on native (Tauri) the real filesystem needs an absolute
+        // path, on web the root is empty so this is a no-op.
+        let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
         let (_, config_path) = self
             .workspace()
             .inner()
-            .resolve_config_source(std::path::Path::new(&root_index_path))
+            .resolve_config_source(&resolved_root_index_path)
             .await?;
         let target = config_path
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| root_index_path.clone());
+            .unwrap_or_else(|| resolved_root_index_path.to_string_lossy().into_owned());
 
         let frontmatter = self.entry().get_frontmatter(&target).await?;
 
@@ -205,6 +210,45 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
         }
 
+        Ok(Response::Ok)
+    }
+
+    /// Read a plugin's workspace data (`plugins.<id>.config` in the resolved
+    /// config source) without requiring the plugin to be registered. Returns
+    /// `Null` when absent. Backs host-owned publish config after the publish
+    /// plugin is removed.
+    pub(crate) async fn cmd_get_workspace_plugin_data(
+        &self,
+        root_index_path: String,
+        plugin: String,
+    ) -> Result<Response> {
+        // Resolve the workspace-relative path against the workspace root so the
+        // native filesystem gets an absolute path (no-op on web).
+        let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
+        let config = self
+            .workspace()
+            .inner()
+            .get_workspace_plugin_config(&resolved_root_index_path, &plugin)
+            .await?
+            .unwrap_or(yaml::Value::Null);
+        Ok(Response::PluginResult(config))
+    }
+
+    /// Write a plugin's workspace data (`plugins.<id>.config` in the resolved
+    /// config source) without requiring the plugin to be registered.
+    pub(crate) async fn cmd_set_workspace_plugin_data(
+        &self,
+        root_index_path: String,
+        plugin: String,
+        data: yaml::Value,
+    ) -> Result<Response> {
+        // Resolve the workspace-relative path against the workspace root so the
+        // native filesystem gets an absolute path (no-op on web).
+        let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
+        self.workspace()
+            .inner()
+            .set_workspace_plugin_config(&resolved_root_index_path, &plugin, data)
+            .await?;
         Ok(Response::Ok)
     }
 }

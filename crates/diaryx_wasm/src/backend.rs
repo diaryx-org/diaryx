@@ -43,6 +43,11 @@ use diaryx_core::fs::{
     AsyncFileSystem, CallbackRegistry, EventEmittingFs, FileSystemEvent, InMemoryFileSystem,
     SyncToAsyncFs,
 };
+use diaryx_core::publish::PublishService;
+use diaryx_core::workspace::Workspace;
+
+use crate::publish::JsNamespaceProvider;
+use crate::utils::promise;
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
@@ -384,6 +389,84 @@ impl DiaryxBackend {
         result
             .to_json()
             .map_err(|e| JsValue::from_str(&format!("Failed to serialize response: {}", e)))
+    }
+
+    // ========================================================================
+    // Publish (core PublishService, no Extism plugin)
+    // ========================================================================
+
+    /// Publish (or preview) the active workspace to its namespace using the core
+    /// [`PublishService`]. `provider` is a JS object whose seven async methods
+    /// perform the namespace HTTP calls on the main thread (see
+    /// [`crate::publish`] for the expected shape). When `preview` is true the
+    /// plan is computed but NOT applied (no uploads/deletes/build).
+    ///
+    /// Resolves to a JSON string: a publish receipt (apply) or the plan summary
+    /// (preview).
+    #[wasm_bindgen(js_name = publishWorkspace)]
+    pub fn publish_workspace_js(
+        &self,
+        provider: JsValue,
+        namespace_id: String,
+        base_url: Option<String>,
+        preview: bool,
+    ) -> Promise {
+        let fs = (*self.fs).clone();
+        let workspace_root = self.diaryx.workspace_root().unwrap_or_default();
+        promise(async move {
+            let root_index = Workspace::new(fs.clone())
+                .find_root_index_in_dir(&workspace_root)
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?
+                .ok_or_else(|| JsValue::from_str("Could not find the workspace root index"))?;
+
+            let provider = JsNamespaceProvider::new(provider);
+            let service = PublishService::new(&provider);
+
+            let summary = if preview {
+                let plan = service
+                    .plan_workspace(fs, &root_index, &namespace_id)
+                    .await
+                    .map_err(|e| JsValue::from_str(&e))?;
+                plan.to_summary_json()
+            } else {
+                let (plan, outcome) = service
+                    .publish_workspace(fs, &root_index, &namespace_id, base_url.as_deref())
+                    .await
+                    .map_err(|e| JsValue::from_str(&e))?;
+                use diaryx_core::yaml;
+                let mut m = yaml::Mapping::new();
+                m.insert("uploaded".into(), yaml::Value::Int(outcome.uploaded as i64));
+                m.insert(
+                    "skipped_unchanged".into(),
+                    yaml::Value::Int(plan.totals.unchanged as i64),
+                );
+                m.insert("deleted".into(), yaml::Value::Int(outcome.deleted as i64));
+                m.insert(
+                    "bytes_uploaded".into(),
+                    yaml::Value::Int(outcome.bytes_uploaded as i64),
+                );
+                m.insert(
+                    "audiences_deleted".into(),
+                    yaml::Value::Sequence(
+                        outcome
+                            .audiences_deleted
+                            .iter()
+                            .cloned()
+                            .map(yaml::Value::String)
+                            .collect(),
+                    ),
+                );
+                m.insert("built".into(), yaml::Value::Bool(outcome.built));
+                m.insert("summary".into(), plan.to_summary_json());
+                yaml::Value::Mapping(m)
+            };
+            // Serialize to JSON via fig (no serde_json in the WASM binary).
+            let json = fig::Value::from(&summary)
+                .serialize_with(fig::Format::Json, fig::SerializeOptions::compact())
+                .map_err(|e| JsValue::from_str(&format!("serialize publish result: {e}")))?;
+            Ok(JsValue::from_str(json.trim_end()))
+        })
     }
 
     // ========================================================================

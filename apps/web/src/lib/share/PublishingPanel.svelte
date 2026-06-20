@@ -18,7 +18,8 @@
     Settings2,
     Tags,
   } from '@lucide/svelte';
-  import * as browserPlugins from '$lib/plugins/browserPluginManager.svelte';
+  import * as corePublish from '$lib/publish/corePublishService';
+  import { describePublishError } from '$lib/publish/publishErrors';
   import { showError, showSuccess, showInfo } from '@/models/services/toastService';
   import { getAuthState, getServerUrl } from '$lib/auth';
   import { createNamespace } from '$lib/namespace/namespaceService';
@@ -38,21 +39,11 @@
   const colorStore = getAudienceColorStore();
   const configStore = getWorkspaceConfigStore();
 
-  // ---- Plugin command helper ----
-
-  function normalizeToObject(value: any): any {
-    if (value instanceof Map) {
-      const obj: Record<string, any> = {};
-      for (const [k, v] of value.entries()) {
-        obj[k] = normalizeToObject(v);
-      }
-      return obj;
-    }
-    if (Array.isArray(value)) {
-      return value.map(normalizeToObject);
-    }
-    return value;
-  }
+  // ---- Publish command helper ----
+  //
+  // Routes the panel's command surface to `corePublishService` — i.e. directly
+  // to `diaryx_core::publish` (WASM backend on web, native IPC on Tauri). No
+  // Extism `diaryx.publish` plugin is involved.
 
   async function executePublishCommand<T = any>(
     command: string,
@@ -60,17 +51,33 @@
   ): Promise<T> {
     if (!api) throw new Error('Publish API unavailable');
 
-    const browserPublish = browserPlugins.getPlugin('diaryx.publish');
-    if (browserPublish) {
-      const result = await browserPlugins.dispatchCommand('diaryx.publish', command, params);
-      if (!result.success) {
-        throw new Error(result.error ?? `Publish command failed: ${command}`);
-      }
-      return normalizeToObject(result.data) as T;
+    switch (command) {
+      case 'GetPublishConfig':
+        return (await corePublish.getPublishConfig(api)) as T;
+      case 'SetPublishConfig':
+        await corePublish.setPublishConfig(api, params as corePublish.PublishConfig);
+        return { ok: true } as T;
+      case 'GetAudiencePublishStates':
+        return ((await corePublish.getPublishConfig(api)).audience_states ?? {}) as T;
+      case 'SetAudiencePublishState':
+        return (await corePublish.setAudiencePublishState(
+          api,
+          params.audience,
+          params.config,
+        )) as T;
+      case 'PreviewPublish':
+        return (await corePublish.previewPublish(
+          params.server_url,
+          params.namespace_id,
+        )) as T;
+      case 'PublishToNamespace':
+        return (await corePublish.publishToNamespace(
+          params.server_url,
+          params.namespace_id,
+        )) as T;
+      default:
+        throw new Error(`Unknown publish command: ${command}`);
     }
-
-    const data = await api.executePluginCommand('diaryx.publish', command, params as any);
-    return normalizeToObject(data) as T;
   }
 
   // ---- State ----
@@ -87,6 +94,24 @@
   let namespaceId = $state<string | null>(null);
   let subdomain = $state<string | null>(null);
   let error = $state<string | null>(null);
+  let errorDetail = $state<string | null>(null);
+
+  /**
+   * Surface a publish/preview failure: translate it to a friendly message,
+   * show it in the inline alert (with an expandable detail line) and as a
+   * toast, and log the raw error for debugging.
+   */
+  function reportPublishError(e: unknown, fallback: string) {
+    const friendly = describePublishError(e, fallback);
+    error = friendly.title;
+    errorDetail = friendly.detail ?? null;
+    showError(friendly.title, 'Publishing');
+  }
+
+  function clearError() {
+    error = null;
+    errorDetail = null;
+  }
 
   type AudienceConfig = { state: string; access_method?: string };
   let audienceStates = $state<Record<string, AudienceConfig>>({});
@@ -241,7 +266,7 @@
   async function loadPublishConfig() {
     if (!api) return;
     isLoading = true;
-    error = null;
+    clearError();
     try {
       const config = await executePublishCommand<{
         namespace_id?: string | null;
@@ -252,7 +277,10 @@
       subdomain = config.subdomain ?? null;
       audienceStates = config.audience_states ?? {};
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load publish config';
+      const friendly = describePublishError(e, 'Failed to load publish config');
+      error = friendly.title;
+      errorDetail = friendly.detail ?? null;
+      console.error('[Publishing] load config failed', e);
       namespaceId = null;
       subdomain = null;
       audienceStates = {};
@@ -304,13 +332,16 @@
 
   async function handleQuickPublish() {
     if (!api || !rootPath) return;
-    error = null;
+    clearError();
 
     try {
       // Set audience: ["public"] on the root index so children inherit
       const rootIndexPath = await api.resolveWorkspaceRootIndexPath(rootPath);
       if (!rootIndexPath) {
-        showError('Could not resolve workspace root index', 'Publishing');
+        reportPublishError(
+          'Could not find the workspace root index',
+          'Could not find the workspace root index',
+        );
         return;
       }
       await api.setFrontmatterProperty(rootIndexPath, 'audience', ['public']);
@@ -328,7 +359,7 @@
       colorStore.assignColor('public');
       templateContextStore.bumpAudiencesVersion();
     } catch (e) {
-      showError(e instanceof Error ? e.message : 'Failed to set up public audience', 'Publishing');
+      reportPublishError(e, 'Failed to set up public audience');
       return;
     }
 
@@ -338,7 +369,7 @@
 
   async function handlePreview() {
     if (!api || !namespaceId) return;
-    error = null;
+    clearError();
     isPreviewing = true;
     previewResult = null;
     try {
@@ -348,14 +379,14 @@
       });
       previewResult = result;
     } catch (e) {
-      showError(e instanceof Error ? e.message : 'Preview failed', 'Publishing');
+      reportPublishError(e, 'Preview failed');
     } finally {
       isPreviewing = false;
     }
   }
 
   async function handlePublish() {
-    error = null;
+    clearError();
 
     // Auto-create namespace if not configured
     if (!isConfigured) {
@@ -373,7 +404,7 @@
             .map(([name]) => name),
         });
       } catch (e) {
-        showError(e instanceof Error ? e.message : 'Failed to create namespace', 'Publishing');
+        reportPublishError(e, 'Failed to create namespace');
         isCreatingNamespace = false;
         return;
       } finally {
@@ -397,7 +428,7 @@
       if (result.deleted) parts.push(`${result.deleted} deleted`);
       showSuccess(`Published — ${parts.join(' · ')}`);
     } catch (e) {
-      showError(e instanceof Error ? e.message : 'Publish failed', 'Publishing');
+      reportPublishError(e, 'Publish failed');
     } finally {
       isPublishing = false;
       progress = null;
@@ -425,7 +456,17 @@
   {#if error}
     <Alert.Root variant="destructive" class="py-2">
       <AlertCircle class="size-4" />
-      <Alert.Description class="text-xs">{error}</Alert.Description>
+      <Alert.Description class="text-xs">
+        <span class="font-medium">{error}</span>
+        {#if errorDetail && errorDetail !== error}
+          <details class="mt-1">
+            <summary class="cursor-pointer text-[11px] opacity-80 hover:opacity-100">
+              Details
+            </summary>
+            <pre class="mt-1 whitespace-pre-wrap break-words text-[11px] opacity-80">{errorDetail}</pre>
+          </details>
+        {/if}
+      </Alert.Description>
     </Alert.Root>
   {/if}
 

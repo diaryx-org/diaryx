@@ -26,6 +26,7 @@
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import MarketplaceDialog from "./lib/MarketplaceDialog.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
+  import PublishDialog from "./lib/share/PublishDialog.svelte";
   import DeviceReplacementDialog from "./lib/components/DeviceReplacementDialog.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
   import MoveEntryDialog from "./lib/MoveEntryDialog.svelte";
@@ -299,6 +300,7 @@
   let rightSidebarWidth = $derived(uiStore.rightSidebarWidth);
   let showSettingsDialog = $derived(uiStore.showSettingsDialog);
   let showExportDialog = $derived(uiStore.showExportDialog);
+  let showPublishDialog = $derived(uiStore.showPublishDialog);
   let showNewEntryModal = $derived(uiStore.showNewEntryModal);
   let exportPath = $derived(uiStore.exportPath);
   let editorRef = $derived(uiStore.editorRef);
@@ -3456,6 +3458,13 @@
   onOpenChange={(open) => (showExportDialog = open)}
 />
 
+<!-- Publish Dialog -->
+<PublishDialog
+  bind:open={showPublishDialog}
+  {api}
+  onOpenChange={(open) => uiStore.setShowPublishDialog(open)}
+/>
+
 
 <!-- Device Replacement Dialog (shown when sign-in hits device limit) -->
 <DeviceReplacementDialog onAuthenticated={() => {
@@ -3656,6 +3665,7 @@
     onToggleNode={toggleNode}
     onToggleCollapse={toggleLeftSidebar}
     onOpenSettings={() => { settingsInitialTab = undefined; showSettingsDialog = true; }}
+    onOpenPublish={() => uiStore.openPublishDialog()}
     onOpenMarketplace={() => { showMarketplaceDialog = true; }}
     settingsDialogOpen={showSettingsDialog}
     marketplaceDialogOpen={showMarketplaceDialog}

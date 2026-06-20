@@ -31,14 +31,6 @@ mod normalize;
 /// Frontmatter property manipulation
 mod property;
 
-/// Preview workspace as local HTTP server
-#[cfg(feature = "plugins")]
-mod preview;
-
-/// `diaryx_core` publish
-#[cfg(feature = "plugins")]
-mod publish;
-
 /// Search command handler
 mod search;
 

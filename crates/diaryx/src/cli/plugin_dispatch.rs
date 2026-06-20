@@ -29,12 +29,9 @@ pub struct NativeHandlerRegistry {
 impl NativeHandlerRegistry {
     /// Create the registry with all registered native handlers.
     pub fn new() -> Self {
-        let mut handlers: HashMap<&'static str, NativeHandlerFn> = HashMap::new();
-
-        // Publish handlers
-        handlers.insert("publish", native_publish);
-        handlers.insert("preview", native_preview);
-
+        // No native fast-path handlers remain; plugin CLI commands dispatch to
+        // their WASM guests. Kept as an extension point.
+        let handlers: HashMap<&'static str, NativeHandlerFn> = HashMap::new();
         Self { handlers }
     }
 
@@ -305,46 +302,6 @@ fn resolve_workspace_root() -> PathBuf {
         .unwrap_or(cwd)
 }
 
-fn native_publish(matches: &ArgMatches, _workspace_root: Option<&Path>) {
-    let destination: PathBuf = matches
-        .get_one::<String>("destination")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("publish"));
-    let audience = matches.get_one::<String>("audience").cloned();
-    let format = matches
-        .get_one::<String>("format")
-        .map(|s| s.as_str())
-        .unwrap_or("html");
-    let single_file = matches.get_flag("single-file");
-    let title = matches.get_one::<String>("title").cloned();
-    let force = matches.get_flag("force");
-    let no_copy_attachments = matches.get_flag("no-copy-attachments");
-    let dry_run = matches.get_flag("dry-run");
-
-    super::publish::handle_publish(
-        destination,
-        None, // workspace_override handled by resolve
-        audience,
-        format,
-        single_file,
-        title,
-        force,
-        no_copy_attachments,
-        dry_run,
-    );
-}
-
-fn native_preview(matches: &ArgMatches, _workspace_root: Option<&Path>) {
-    let port: u16 = matches
-        .get_one::<String>("port")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(3456);
-    let no_open = matches.get_flag("no-open");
-    let audience = matches.get_one::<String>("audience").cloned();
-    let title = matches.get_one::<String>("title").cloned();
-
-    super::preview::handle_preview(None, port, no_open, audience, title);
-}
 // ============================================================================
 // clap command builder
 // ============================================================================

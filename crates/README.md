@@ -12,7 +12,6 @@ contents:
 - '[README](/crates/diaryx_sync_server/README.md)'
 - '[README](/crates/diaryx_extism/README.md)'
 - '[README](/crates/plugins/diaryx_plugin_sdk/README.md)'
-- '[README](/crates/plugins/diaryx_publish_extism/README.md)'
 exclude:
 - LICENSE.md
 - '**/*.rs'
@@ -41,7 +40,6 @@ This folder contains Diaryx crates for core features and platform bindings.
 ### Plugin crates (`plugins/`)
 
 - `[diaryx_plugin_sdk](/crates/plugins/diaryx_plugin_sdk/README.md)`: SDK for building Diaryx Extism WASM plugins (published to crates.io)
-- `[diaryx_publish_extism](/crates/plugins/diaryx_publish_extism/README.md)`: Publish plugin — export and website publishing (Extism guest WASM)
 
 Other plugin guest crates (daily, AI, math, spoiler, import, templating, S3 storage, Google Drive storage, and friends) now live in `crates/plugins/` in this monorepo.
 

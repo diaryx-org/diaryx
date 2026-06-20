@@ -5,11 +5,15 @@
 //! `compute_publish_plan` + apply. It is transport-agnostic (works over the
 //! port) and unit-testable with a fake provider.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
+use crate::fs::AsyncFileSystem;
+use crate::publish::collect::collect_audience;
 use crate::publish::plan::{self, AudiencePlan, PublishPlan};
 use crate::publish::provider::NamespaceProvider;
 use crate::publish::source::AudienceInput;
+use crate::workspace::{Gate, Workspace};
 
 /// Outcome of applying a publish plan.
 #[derive(Debug, Clone, Default)]
@@ -242,6 +246,107 @@ impl<'p> PublishService<'p> {
         let outcome = self.apply(ns_id, &plan, base_url).await?;
         Ok((plan, outcome))
     }
+
+    /// High-level entry point: read a workspace's file-declared audiences, collect
+    /// each audience's sources, and publish — the single call native (Tauri) and
+    /// web (diaryx_wasm) make to publish directly (no Extism plugin).
+    ///
+    /// File-based audiences only (the migrated path); legacy plugin-config
+    /// audiences are not handled here. `root_index_path` is the workspace's root
+    /// index file.
+    pub async fn publish_workspace<FS>(
+        &self,
+        fs: FS,
+        root_index_path: &Path,
+        namespace_id: &str,
+        base_url: Option<&str>,
+    ) -> Result<(PublishPlan, PublishOutcome), String>
+    where
+        FS: AsyncFileSystem + Clone,
+    {
+        let plan = self
+            .plan_workspace(fs, root_index_path, namespace_id)
+            .await?;
+        let outcome = self.apply(namespace_id, &plan, base_url).await?;
+        Ok((plan, outcome))
+    }
+
+    /// Compute the publish plan for a workspace WITHOUT applying it (the
+    /// preview path). Reads the file-declared audiences, collects each
+    /// audience's sources, lists the namespace's current objects/audiences, and
+    /// diffs. Performs no mutations. `publish_workspace` is this plus `apply`.
+    pub async fn plan_workspace<FS>(
+        &self,
+        fs: FS,
+        root_index_path: &Path,
+        namespace_id: &str,
+    ) -> Result<PublishPlan, String>
+    where
+        FS: AsyncFileSystem + Clone,
+    {
+        let config = Workspace::new(fs.clone())
+            .get_workspace_config(root_index_path)
+            .await
+            .map_err(|e| format!("failed to read workspace config: {e}"))?;
+
+        let migrated = config.audiences_migrated.unwrap_or(false);
+        let default_aud = config.default_audience.clone();
+        let decls = config.audiences.clone().unwrap_or_default();
+
+        let mut audience_inputs: Vec<AudienceInput> = Vec::with_capacity(decls.len());
+        for decl in &decls {
+            let gates = crate::yaml::Value::Sequence(decl.gates.iter().map(gate_to_yaml).collect());
+            let collected = collect_audience(
+                fs.clone(),
+                root_index_path,
+                &decl.name,
+                default_aud.as_deref(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            audience_inputs.push(AudienceInput {
+                name: decl.name.clone(),
+                gates,
+                publish: true,
+                sources: collected.sources,
+                attachments: collected.attachments,
+            });
+        }
+
+        // Strict-sync: server audiences not declared in the file are removed.
+        let mut audiences_to_delete: Vec<String> = Vec::new();
+        if migrated && let Ok(server_audiences) = self.provider.list_audiences(namespace_id).await {
+            let declared: HashSet<&str> = decls.iter().map(|d| d.name.as_str()).collect();
+            for server_aud in server_audiences {
+                if !declared.contains(server_aud.as_str()) {
+                    audiences_to_delete.push(server_aud);
+                }
+            }
+        }
+
+        self.compute_plan(
+            namespace_id,
+            &audience_inputs,
+            audiences_to_delete,
+            migrated,
+        )
+        .await
+    }
+}
+
+/// Convert a workspace audience [`Gate`] to the server's gate value
+/// (`{ kind: "link" | "password" }`), as a [`crate::yaml::Value`].
+fn gate_to_yaml(gate: &Gate) -> crate::yaml::Value {
+    let kind = match gate {
+        Gate::Link => "link",
+        Gate::Password => "password",
+    };
+    let mut m = crate::yaml::Mapping::new();
+    m.insert(
+        "kind".to_string(),
+        crate::yaml::Value::String(kind.to_string()),
+    );
+    crate::yaml::Value::Mapping(m)
 }
 
 #[cfg(test)]
@@ -295,7 +400,7 @@ mod tests {
             &self,
             _ns_id: &str,
             audience: &str,
-            _gates: &serde_json::Value,
+            _gates: &crate::yaml::Value,
         ) -> Result<(), String> {
             self.synced.lock().unwrap().push(audience.to_string());
             Ok(())
@@ -319,7 +424,7 @@ mod tests {
     fn public_audience(sources: Vec<SourceFile>, attachments: Vec<Attachment>) -> AudienceInput {
         AudienceInput {
             name: "public".into(),
-            gates: serde_json::json!([]),
+            gates: serde_json::json!([]).into(),
             publish: true,
             sources,
             attachments,
@@ -454,7 +559,7 @@ mod tests {
         };
         let audiences = vec![AudienceInput {
             name: "secret".into(),
-            gates: serde_json::json!([]),
+            gates: serde_json::json!([]).into(),
             publish: false,
             sources: vec![],
             attachments: vec![],

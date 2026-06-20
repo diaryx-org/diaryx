@@ -680,6 +680,27 @@ pub enum Command {
         /// Plugin identifier to remove.
         plugin: String,
     },
+
+    /// Read a plugin's workspace-level data (`plugins.<id>` frontmatter in the
+    /// resolved config source) WITHOUT requiring the plugin to be registered.
+    /// Used by host-owned publish so config survives the plugin's removal.
+    GetWorkspacePluginData {
+        /// Root index path for the current workspace.
+        root_index_path: String,
+        /// Plugin identifier.
+        plugin: String,
+    },
+
+    /// Write a plugin's workspace-level data (`plugins.<id>` frontmatter in the
+    /// resolved config source) WITHOUT requiring the plugin to be registered.
+    SetWorkspacePluginData {
+        /// Root index path for the current workspace.
+        root_index_path: String,
+        /// Plugin identifier.
+        plugin: String,
+        /// The data value to store under `plugins.<id>`.
+        data: yaml::Value,
+    },
 }
 
 impl Command {
@@ -721,6 +742,12 @@ impl Command {
             }
 
             Command::RemoveWorkspacePluginData {
+                root_index_path, ..
+            }
+            | Command::GetWorkspacePluginData {
+                root_index_path, ..
+            }
+            | Command::SetWorkspacePluginData {
                 root_index_path, ..
             } => {
                 *root_index_path = normalizer(root_index_path);

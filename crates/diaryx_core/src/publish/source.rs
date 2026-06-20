@@ -40,8 +40,10 @@ pub struct Attachment {
 pub struct AudienceInput {
     /// Audience name (object key prefix).
     pub name: String,
-    /// Gate stack JSON (empty array = public).
-    pub gates: serde_json::Value,
+    /// Gate stack (empty sequence = public). Serialized to JSON at the
+    /// transport boundary, so a [`crate::yaml::Value`] keeps `serde_json` out
+    /// of the WASM binary.
+    pub gates: crate::yaml::Value,
     /// `false` = legacy "unpublished": delete all the audience's objects and
     /// upload nothing.
     pub publish: bool,
@@ -55,6 +57,9 @@ impl AudienceInput {
     /// An audience is the public front-page audience when its gate stack is
     /// empty (no access restrictions).
     pub fn is_public(&self) -> bool {
-        self.gates.as_array().map(|a| a.is_empty()).unwrap_or(false)
+        self.gates
+            .as_sequence()
+            .map(|a| a.is_empty())
+            .unwrap_or(false)
     }
 }

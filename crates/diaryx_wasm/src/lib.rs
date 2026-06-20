@@ -41,6 +41,7 @@ mod js_async_fs;
 mod namespace;
 #[cfg(feature = "browser")]
 mod opfs_fs;
+mod publish;
 mod utils;
 
 // Re-export the auth client

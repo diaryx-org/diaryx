@@ -50,6 +50,7 @@ import type {
   PluginManifest,
 } from './generated';
 import type { JsonValue } from './generated/serde_json/JsonValue';
+import type { YamlValue } from './generated/YamlValue';
 
 export type LinkPathType = 'workspace_root' | 'relative' | 'ambiguous';
 
@@ -1177,7 +1178,7 @@ export function createApi(backend: Backend) {
     async writeFileWithMetadata(path: string, metadata: JsonValue, body: string): Promise<void> {
       await backend.execute({
         type: 'WriteFileWithMetadata',
-        params: { path, metadata, body },
+        params: { path, metadata: metadata as YamlValue, body },
       });
     },
 
@@ -1188,7 +1189,7 @@ export function createApi(backend: Backend) {
     async updateFileMetadata(path: string, metadata: JsonValue, body?: string): Promise<void> {
       await backend.execute({
         type: 'UpdateFileMetadata',
-        params: { path, metadata, body: body ?? null },
+        params: { path, metadata: metadata as YamlValue, body: body ?? null },
       });
     },
 
@@ -1301,9 +1302,37 @@ export function createApi(backend: Backend) {
     async setPluginConfig(plugin: string, config: JsonValue): Promise<JsonValue> {
       const response = await backend.execute({
         type: 'SetPluginConfig',
-        params: { plugin, config },
+        params: { plugin, config: config as YamlValue },
       });
       return expectResponse(response, 'PluginResult').data;
+    },
+
+    /**
+     * Read a plugin's workspace data (`plugins.<id>.config` in the resolved
+     * config source) WITHOUT requiring the plugin to be registered. Returns
+     * `null` when absent. Used by host-owned publish so config survives the
+     * publish plugin's removal.
+     */
+    async getWorkspacePluginData(rootIndexPath: string, plugin: string): Promise<JsonValue | null> {
+      const response = await backend.execute({
+        type: 'GetWorkspacePluginData' as any,
+        params: { root_index_path: rootIndexPath, plugin },
+      } as any);
+      const data = expectResponse(response, 'PluginResult').data;
+      return data ?? null;
+    },
+
+    /**
+     * Write a plugin's workspace data (`plugins.<id>.config` in the resolved
+     * config source) WITHOUT requiring the plugin to be registered.
+     */
+    async setWorkspacePluginData(rootIndexPath: string, plugin: string, data: JsonValue): Promise<void> {
+      await backend.execute({
+        type: 'SetWorkspacePluginData' as any,
+        params: { root_index_path: rootIndexPath, plugin, data },
+      } as any);
+      await dispatchFileSavedEvent(rootIndexPath, { bodyChanged: false });
+      await mirrorWorkspaceMutation();
     },
 
     /** Remove workspace-level plugin data from the root index frontmatter. */

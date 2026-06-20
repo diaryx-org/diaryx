@@ -526,6 +526,29 @@ export const workerApi = {
     return backend !== null;
   },
 
+  // =========================================================================
+  // Publish (core PublishService — no Extism plugin)
+  //
+  // `provider` is a Comlink.proxy of the main-thread namespace HTTP provider
+  // (see `$lib/publish/publishProvider`). The WASM backend owns the workspace
+  // filesystem and drives the diff/upload/build; each namespace HTTP call is
+  // marshalled back to the main thread through the proxy. Returns a JSON string
+  // (publish receipt, or plan summary when `preview` is true).
+  // =========================================================================
+  async publishWorkspace(
+    provider: unknown,
+    namespaceId: string,
+    baseUrl: string | null,
+    preview: boolean,
+  ): Promise<string> {
+    return getBackend().publishWorkspace(
+      provider,
+      namespaceId,
+      baseUrl ?? undefined,
+      preview,
+    );
+  },
+
   // Event stubs - events will go through MessagePort
   on(_event: BackendEventType, _listener: BackendEventListener): void {
     console.warn("[WasmWorker] Events are forwarded via MessagePort, not on()");

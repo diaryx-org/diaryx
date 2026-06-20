@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-06-04T22:03:07Z
+updated: 2026-06-20T02:12:17Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -16,7 +16,7 @@ Always read the relevant docs before making changes, and update the relevant doc
 ```workspace-index
 Diaryx - README/repo for the Diaryx project - README.md
 ├── AGENTS - Instructions for AI Agents - AGENTS.md
-├── CONTRIBUTING - A guide for making contributions in the Diaryx repo - CONTRIBUTING.md
+├── Contributing to Diaryx - A guide for making contributions in the Diaryx repo - Contributing to Diaryx.md
 ├── LICENSE - PolyForm Shield License 1.0.0 - LICENSE.md
 ├── PHILOSOPHY - PHILOSOPHY.md
 ├── Privacy Policy - Privacy Policy for Diaryx - privacy.md
@@ -53,7 +53,6 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │   └── TipTap Custom Extensions - Guide to creating custom TipTap extensions with markdown support - apps/web/docs/tiptap-custom-extensions.md
 │   └── tauri - Web app + native backend - apps/tauri/README.md
 ├── crates - Cargo crates for Diaryx - crates/README.md
-│   ├── bookmatter - Order-preserving, round-trip metadata parser for plain text - crates/bookmatter/README.md
 │   ├── crossfs - std::fs / tokio::fs that also runs on OPFS, IndexedDB, and the File System Access API in the browser - crates/crossfs/README.md
 │   ├── diaryx - CLI frontend - crates/diaryx/README.md
 │   │   └── diaryx src - Source code for the Diaryx CLI application - crates/diaryx/src/README.md
@@ -76,8 +75,7 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
 │   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
 │   ├── crates/diaryx_extism/README.md
-│   ├── crates/plugins/diaryx_plugin_sdk/README.md
-│   └── Publish - Export and publish content with optional format conversion - crates/plugins/diaryx_publish_extism/README.md
+│   └── crates/plugins/diaryx_plugin_sdk/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 └── Terms of Service - Terms of Service for Diaryx - terms.md
 ```

@@ -157,7 +157,9 @@ impl CommandDomain {
             | Command::GetPluginManifests
             | Command::GetPluginConfig { .. }
             | Command::SetPluginConfig { .. }
-            | Command::RemoveWorkspacePluginData { .. } => CommandDomain::Plugin,
+            | Command::RemoveWorkspacePluginData { .. }
+            | Command::GetWorkspacePluginData { .. }
+            | Command::SetWorkspacePluginData { .. } => CommandDomain::Plugin,
 
             // Synchronous utilities (no .await, no I/O)
             Command::LinkParser { .. }
@@ -907,6 +909,21 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.cmd_remove_workspace_plugin_data(root_index_path, plugin)
                         .await
                 }
+                Command::GetWorkspacePluginData {
+                    root_index_path,
+                    plugin,
+                } => {
+                    self.cmd_get_workspace_plugin_data(root_index_path, plugin)
+                        .await
+                }
+                Command::SetWorkspacePluginData {
+                    root_index_path,
+                    plugin,
+                    data,
+                } => {
+                    self.cmd_set_workspace_plugin_data(root_index_path, plugin, data)
+                        .await
+                }
                 _ => unreachable!("non-plugin command routed to execute_plugin_command"),
             }
         })
@@ -1533,6 +1550,88 @@ mod tests {
                     assert_eq!(tree.children[0].path, child_path);
                 }
                 other => panic!("Expected Response::Tree, got {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn test_workspace_plugin_data_resolves_relative_root_index_against_workspace_root() {
+        // Regression: the publish dialog passes a workspace-relative root index
+        // path (e.g. "Adam's Archive.md"). On native the real filesystem needs
+        // an absolute path, so the handler must resolve it against the workspace
+        // root — otherwise the read fails with "No such file or directory".
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let diaryx = Diaryx::new(fs);
+
+            let workspace_root = PathBuf::from("/workspace");
+            diaryx.set_workspace_root(workspace_root.clone());
+
+            // Root index lives at /workspace/Adam's Archive.md with an inline
+            // (un-migrated) plugin config.
+            let root_path = workspace_root.join("Adam's Archive.md");
+            diaryx
+                .fs()
+                .write(
+                    &root_path,
+                    "---\ntitle: Root\nplugins:\n  diaryx.test:\n    config:\n      hello: world\n---\n\n# Root\n".as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            // Read with the *relative* path — must resolve, not fail.
+            let response = diaryx
+                .execute(Command::GetWorkspacePluginData {
+                    root_index_path: "Adam's Archive.md".to_string(),
+                    plugin: "diaryx.test".to_string(),
+                })
+                .await
+                .expect("GetWorkspacePluginData should resolve the relative root index path");
+
+            match response {
+                Response::PluginResult(value) => {
+                    let hello = value
+                        .get("hello")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    assert_eq!(hello, "world", "got config: {value:?}");
+                }
+                other => panic!("Expected Response::PluginResult, got {other:?}"),
+            }
+
+            // Write with the relative path, then confirm it round-trips.
+            diaryx
+                .execute(Command::SetWorkspacePluginData {
+                    root_index_path: "Adam's Archive.md".to_string(),
+                    plugin: "diaryx.test".to_string(),
+                    data: {
+                        let mut m = crate::yaml::Mapping::new();
+                        m.insert(
+                            "color".to_string(),
+                            crate::yaml::Value::String("blue".to_string()),
+                        );
+                        crate::yaml::Value::Mapping(m)
+                    },
+                })
+                .await
+                .expect("SetWorkspacePluginData should resolve the relative root index path");
+
+            let response = diaryx
+                .execute(Command::GetWorkspacePluginData {
+                    root_index_path: "Adam's Archive.md".to_string(),
+                    plugin: "diaryx.test".to_string(),
+                })
+                .await
+                .unwrap();
+            match response {
+                Response::PluginResult(value) => {
+                    assert_eq!(
+                        value.get("color").and_then(|v| v.as_str()),
+                        Some("blue"),
+                        "round-trip config: {value:?}"
+                    );
+                }
+                other => panic!("Expected Response::PluginResult, got {other:?}"),
             }
         });
     }

@@ -10,7 +10,7 @@
 import { getContext, setContext } from 'svelte';
 import type { Api } from '$lib/backend/api';
 import type { HostAction } from '$lib/backend/generated';
-import * as browserPlugins from '$lib/plugins/browserPluginManager.svelte';
+import * as corePublish from '$lib/publish/corePublishService';
 import { getAuthState, getServerUrl } from '$lib/auth';
 import { getTemplateContextStore } from '$lib/stores/templateContextStore.svelte';
 import { getAudienceColorStore } from '$lib/stores/audienceColorStore.svelte';
@@ -40,20 +40,6 @@ export type AudienceConfig = {
   state: string;
   access_method?: string;
 };
-
-function normalizeToObject(value: any): any {
-  if (value instanceof Map) {
-    const obj: Record<string, any> = {};
-    for (const [k, v] of value.entries()) {
-      obj[k] = normalizeToObject(v);
-    }
-    return obj;
-  }
-  if (Array.isArray(value)) {
-    return value.map(normalizeToObject);
-  }
-  return value;
-}
 
 export class NamespaceContext {
   // --- Injected deps (reactive so effects re-trigger on init) ---
@@ -201,17 +187,29 @@ export class NamespaceContext {
   ): Promise<T> {
     if (!this.api) throw new Error('Publish API unavailable');
 
-    const browserPublish = browserPlugins.getPlugin('diaryx.publish');
-    if (browserPublish) {
-      const result = await browserPlugins.dispatchCommand('diaryx.publish', command, params);
-      if (!result.success) {
-        throw new Error(result.error ?? `Publish command failed: ${command}`);
-      }
-      return normalizeToObject(result.data) as T;
+    // Routed to `diaryx_core::publish` (WASM backend on web, native IPC on
+    // Tauri) — no Extism `diaryx.publish` plugin.
+    switch (command) {
+      case 'GetPublishConfig':
+        return (await corePublish.getPublishConfig(this.api)) as T;
+      case 'SetPublishConfig':
+        await corePublish.setPublishConfig(this.api, params as corePublish.PublishConfig);
+        return { ok: true } as T;
+      case 'GetAudiencePublishStates':
+        return ((await corePublish.getPublishConfig(this.api)).audience_states ?? {}) as T;
+      case 'SetAudiencePublishState':
+        return (await corePublish.setAudiencePublishState(
+          this.api,
+          params.audience,
+          params.config,
+        )) as T;
+      case 'PreviewPublish':
+        return (await corePublish.previewPublish(params.server_url, params.namespace_id)) as T;
+      case 'PublishToNamespace':
+        return (await corePublish.publishToNamespace(params.server_url, params.namespace_id)) as T;
+      default:
+        throw new Error(`Unknown publish command: ${command}`);
     }
-
-    const data = await this.api.executePluginCommand('diaryx.publish', command, params as any);
-    return normalizeToObject(data) as T;
   }
 
   // --- Data loading ---
@@ -337,14 +335,17 @@ export class NamespaceContext {
     this.isPublishing = true;
     try {
       const result = await this.executePublishCommand<{
-        audiences_published: string[];
-        files_uploaded: number;
-        files_deleted: number;
+        uploaded: number;
+        skipped_unchanged: number;
+        deleted: number;
       }>('PublishToNamespace', {
         namespace_id: this.namespaceId,
         server_url: this.serverUrl,
       });
-      showSuccess(`Published ${result.audiences_published.length} audience(s)`);
+      const parts = [`${result.uploaded} uploaded`];
+      if (result.skipped_unchanged) parts.push(`${result.skipped_unchanged} unchanged`);
+      if (result.deleted) parts.push(`${result.deleted} deleted`);
+      showSuccess(`Published — ${parts.join(' · ')}`);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Publish failed', 'Publishing');
     } finally {

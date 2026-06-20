@@ -289,6 +289,195 @@ impl AuthenticatedClient for KeyringAuthenticatedClient {
     }
 }
 
+// ============================================================================
+// Publish provider — server-side rendering (ARK Layer 3) direct from native.
+//
+// Implements `diaryx_core::publish::NamespaceProvider` over this client's own
+// reqwest client + keyring token, so the Tauri app can drive
+// `PublishService::publish_workspace` without going through the Extism plugin.
+// Kept in this module so the raw token stays isolated to the keyring helpers.
+// ============================================================================
+
+impl KeyringAuthenticatedClient {
+    fn ns_url(&self, path: &str) -> String {
+        self.build_url(path)
+    }
+
+    fn enc_component(value: &str) -> String {
+        percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
+    }
+
+    fn enc_key(key: &str) -> String {
+        key.split('/')
+            .map(Self::enc_component)
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match Self::load_token() {
+            Some(token) => rb.bearer_auth(token),
+            None => rb,
+        }
+    }
+
+    async fn ns_ok(rb: reqwest::RequestBuilder, what: &str) -> Result<reqwest::Response, String> {
+        let resp = rb.send().await.map_err(|e| format!("{what}: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(if body.is_empty() {
+                format!("{what} failed: {status}")
+            } else {
+                format!("{what} failed ({status}): {body}")
+            });
+        }
+        Ok(resp)
+    }
+}
+
+#[async_trait::async_trait]
+impl diaryx_core::publish::NamespaceProvider for KeyringAuthenticatedClient {
+    async fn list_objects(
+        &self,
+        ns_id: &str,
+    ) -> Result<Vec<diaryx_core::publish::ObjectMeta>, String> {
+        let url = self.ns_url(&format!(
+            "/namespaces/{}/objects",
+            Self::enc_component(ns_id)
+        ));
+        let resp = Self::ns_ok(self.authed(self.http.get(&url)), "list_objects").await?;
+        #[derive(serde::Deserialize)]
+        struct Row {
+            key: String,
+            #[serde(default)]
+            audience: Option<String>,
+            #[serde(default)]
+            content_hash: Option<String>,
+        }
+        let rows: Vec<Row> = resp
+            .json()
+            .await
+            .map_err(|e| format!("list_objects decode: {e}"))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| diaryx_core::publish::ObjectMeta {
+                key: r.key,
+                audience: r.audience,
+                content_hash: r.content_hash,
+            })
+            .collect())
+    }
+
+    async fn put_object(
+        &self,
+        ns_id: &str,
+        key: &str,
+        bytes: &[u8],
+        mime_type: &str,
+        audience: Option<&str>,
+        file_ark: Option<&str>,
+        source_key: Option<&str>,
+        object_key: Option<&str>,
+        is_index: bool,
+    ) -> Result<(), String> {
+        let url = self.ns_url(&format!(
+            "/namespaces/{}/objects/{}",
+            Self::enc_component(ns_id),
+            Self::enc_key(key)
+        ));
+        let mut rb = self
+            .authed(self.http.put(&url))
+            .header("Content-Type", mime_type)
+            .body(bytes.to_vec());
+        if let Some(a) = audience {
+            rb = rb.header("X-Audience", a);
+        }
+        if let Some(fa) = file_ark {
+            rb = rb.header("X-Diaryx-File-Ark", fa);
+        }
+        if let Some(sk) = source_key {
+            rb = rb.header("X-Diaryx-Source-Key", sk);
+        }
+        if let Some(ok) = object_key {
+            rb = rb.header("X-Diaryx-Object-Key", ok);
+        }
+        if is_index {
+            rb = rb.header("X-Diaryx-Is-Index", "true");
+        }
+        Self::ns_ok(rb, &format!("put_object {key}")).await?;
+        Ok(())
+    }
+
+    async fn delete_object(&self, ns_id: &str, key: &str) -> Result<(), String> {
+        let url = self.ns_url(&format!(
+            "/namespaces/{}/objects/{}",
+            Self::enc_component(ns_id),
+            Self::enc_key(key)
+        ));
+        Self::ns_ok(self.authed(self.http.delete(&url)), "delete_object").await?;
+        Ok(())
+    }
+
+    async fn sync_audience(
+        &self,
+        ns_id: &str,
+        audience: &str,
+        gates: &diaryx_core::yaml::Value,
+    ) -> Result<(), String> {
+        let url = self.ns_url(&format!(
+            "/namespaces/{}/audiences/{}",
+            Self::enc_component(ns_id),
+            Self::enc_component(audience)
+        ));
+        let body =
+            serde_json::json!({ "gates": serde_json::Value::from(gates.clone()) }).to_string();
+        let rb = self
+            .authed(self.http.put(&url))
+            .header("Content-Type", "application/json")
+            .body(body);
+        Self::ns_ok(rb, "sync_audience").await?;
+        Ok(())
+    }
+
+    async fn list_audiences(&self, ns_id: &str) -> Result<Vec<String>, String> {
+        let url = self.ns_url(&format!(
+            "/namespaces/{}/audiences",
+            Self::enc_component(ns_id)
+        ));
+        let resp = Self::ns_ok(self.authed(self.http.get(&url)), "list_audiences").await?;
+        #[derive(serde::Deserialize)]
+        struct Item {
+            name: String,
+        }
+        let items: Vec<Item> = resp
+            .json()
+            .await
+            .map_err(|e| format!("list_audiences decode: {e}"))?;
+        Ok(items.into_iter().map(|i| i.name).collect())
+    }
+
+    async fn delete_audience(&self, ns_id: &str, audience: &str) -> Result<(), String> {
+        let url = self.ns_url(&format!(
+            "/namespaces/{}/audiences/{}",
+            Self::enc_component(ns_id),
+            Self::enc_component(audience)
+        ));
+        Self::ns_ok(self.authed(self.http.delete(&url)), "delete_audience").await?;
+        Ok(())
+    }
+
+    async fn build_namespace(&self, ns_id: &str, base_url: Option<&str>) -> Result<(), String> {
+        let mut path = format!("/namespaces/{}/build", Self::enc_component(ns_id));
+        if let Some(bu) = base_url {
+            path.push_str(&format!("?base_url={}", Self::enc_component(bu)));
+        }
+        let url = self.ns_url(&path);
+        Self::ns_ok(self.authed(self.http.post(&url)), "build_namespace").await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

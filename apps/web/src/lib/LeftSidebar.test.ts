@@ -15,6 +15,7 @@ const onOpenEntry = vi.fn();
 const onToggleNode = vi.fn();
 const onToggleCollapse = vi.fn();
 const onOpenSettings = vi.fn();
+const onOpenPublish = vi.fn();
 const onOpenMarketplace = vi.fn();
 const onOpenAccountSettings = vi.fn();
 const onAddWorkspace = vi.fn();
@@ -226,6 +227,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     onToggleNode,
     onToggleCollapse,
     onOpenSettings,
+    onOpenPublish,
     onOpenMarketplace,
     onOpenAccountSettings,
     onAddWorkspace,

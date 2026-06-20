@@ -21,6 +21,7 @@ mod logging;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod macos_security_scoped;
 mod namespace_commands;
+mod publish_commands;
 
 use auth_commands::AuthServiceState;
 use commands::{AppState, GuestModeState};
@@ -237,6 +238,8 @@ pub fn run() {
             namespace_commands::namespace_add_subscriber,
             namespace_commands::namespace_remove_subscriber,
             namespace_commands::namespace_bulk_import_subscribers,
+            publish_commands::publish_to_namespace,
+            publish_commands::preview_to_namespace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

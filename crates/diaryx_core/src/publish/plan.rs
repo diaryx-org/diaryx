@@ -9,6 +9,8 @@ use std::collections::{HashMap, HashSet};
 
 use sha2::{Digest, Sha256};
 
+use crate::yaml;
+
 /// Lowercase-hex SHA-256 of `bytes`.
 ///
 /// Must match the server's `content_hash` algorithm so the diff lines up:
@@ -52,8 +54,9 @@ pub struct PendingUpload {
 #[derive(Debug, Clone)]
 pub struct AudiencePlan {
     pub name: String,
-    /// Gate stack JSON for the server's `sync_audience` endpoint.
-    pub gates: serde_json::Value,
+    /// Gate stack (a sequence of `{ kind: ... }` maps) for the server's
+    /// `sync_audience` endpoint. Serialized to JSON at the transport boundary.
+    pub gates: yaml::Value,
     /// New/changed objects to upload.
     pub uploads: Vec<PendingUpload>,
     /// Count of planned objects already present with identical content.
@@ -111,42 +114,69 @@ impl PublishPlan {
         }
     }
 
-    /// JSON summary of the plan WITHOUT object bytes — safe to return to the UI
-    /// for previews and receipts.
-    pub fn to_summary_json(&self) -> serde_json::Value {
-        let audiences: Vec<serde_json::Value> = self
+    /// Summary of the plan WITHOUT object bytes — safe to return to the UI for
+    /// previews and receipts. A [`yaml::Value`] so it serializes to JSON via
+    /// `fig` on every platform (no `serde_json` in the WASM binary).
+    pub fn to_summary_json(&self) -> yaml::Value {
+        let str_seq = |items: &[String]| {
+            yaml::Value::Sequence(items.iter().cloned().map(yaml::Value::String).collect())
+        };
+        let audiences: Vec<yaml::Value> = self
             .audiences
             .iter()
             .map(|a| {
-                serde_json::json!({
-                    "name": a.name,
-                    "publish": a.publish,
-                    "stale": a.stale,
-                    "upload_count": a.uploads.len(),
-                    "upload_bytes": a.uploads.iter().map(|u| u.bytes.len() as u64).sum::<u64>(),
-                    "uploads": a.uploads.iter().map(|u| serde_json::json!({
-                        "key": u.key,
-                        "size": u.bytes.len(),
-                    })).collect::<Vec<_>>(),
-                    "unchanged": a.unchanged,
-                    "delete_count": a.deletes.len(),
-                    "deletes": a.deletes,
-                })
+                let uploads: Vec<yaml::Value> = a
+                    .uploads
+                    .iter()
+                    .map(|u| {
+                        map([
+                            ("key", yaml::Value::String(u.key.clone())),
+                            ("size", yaml::Value::Int(u.bytes.len() as i64)),
+                        ])
+                    })
+                    .collect();
+                let upload_bytes: i64 = a.uploads.iter().map(|u| u.bytes.len() as i64).sum();
+                map([
+                    ("name", yaml::Value::String(a.name.clone())),
+                    ("publish", yaml::Value::Bool(a.publish)),
+                    ("stale", yaml::Value::Bool(a.stale)),
+                    ("upload_count", yaml::Value::Int(a.uploads.len() as i64)),
+                    ("upload_bytes", yaml::Value::Int(upload_bytes)),
+                    ("uploads", yaml::Value::Sequence(uploads)),
+                    ("unchanged", yaml::Value::Int(a.unchanged as i64)),
+                    ("delete_count", yaml::Value::Int(a.deletes.len() as i64)),
+                    ("deletes", str_seq(&a.deletes)),
+                ])
             })
             .collect();
 
-        serde_json::json!({
-            "audiences": audiences,
-            "audiences_to_delete": self.audiences_to_delete,
-            "audiences_migrated": self.audiences_migrated,
-            "totals": {
-                "uploads": self.totals.uploads,
-                "unchanged": self.totals.unchanged,
-                "deletes": self.totals.deletes,
-                "bytes": self.totals.bytes,
-            },
-        })
+        map([
+            ("audiences", yaml::Value::Sequence(audiences)),
+            ("audiences_to_delete", str_seq(&self.audiences_to_delete)),
+            (
+                "audiences_migrated",
+                yaml::Value::Bool(self.audiences_migrated),
+            ),
+            (
+                "totals",
+                map([
+                    ("uploads", yaml::Value::Int(self.totals.uploads as i64)),
+                    ("unchanged", yaml::Value::Int(self.totals.unchanged as i64)),
+                    ("deletes", yaml::Value::Int(self.totals.deletes as i64)),
+                    ("bytes", yaml::Value::Int(self.totals.bytes as i64)),
+                ]),
+            ),
+        ])
     }
+}
+
+/// Build a [`yaml::Value::Mapping`] from string-keyed pairs (preserving order).
+fn map<const N: usize>(pairs: [(&str, yaml::Value); N]) -> yaml::Value {
+    let mut m = yaml::Mapping::new();
+    for (k, v) in pairs {
+        m.insert(k.to_string(), v);
+    }
+    yaml::Value::Mapping(m)
 }
 
 /// Whether an object key names a *server-generated* artifact (rendered HTML or
@@ -180,7 +210,7 @@ pub fn is_server_generated_key(key: &str) -> bool {
 /// the server never recorded one, which we conservatively treat as changed).
 pub fn diff_audience(
     name: String,
-    gates: serde_json::Value,
+    gates: yaml::Value,
     planned: Vec<(String, Vec<u8>, String)>,
     existing: &HashMap<String, Option<String>>,
 ) -> AudiencePlan {
@@ -273,7 +303,7 @@ mod tests {
     fn new_file_is_uploaded() {
         let plan = diff_audience(
             "pub".into(),
-            serde_json::json!([]),
+            yaml::Value::Sequence(vec![]),
             vec![("pub/a.html".into(), b"hi".to_vec(), "text/html".into())],
             &existing(&[]),
         );
@@ -287,7 +317,7 @@ mod tests {
         let hash = sha256_hex(b"hi");
         let plan = diff_audience(
             "pub".into(),
-            serde_json::json!([]),
+            yaml::Value::Sequence(vec![]),
             vec![("pub/a.html".into(), b"hi".to_vec(), "text/html".into())],
             &existing(&[("pub/a.html", Some(hash.as_str()))]),
         );
@@ -300,7 +330,7 @@ mod tests {
     fn changed_file_is_uploaded() {
         let plan = diff_audience(
             "pub".into(),
-            serde_json::json!([]),
+            yaml::Value::Sequence(vec![]),
             vec![("pub/a.html".into(), b"new".to_vec(), "text/html".into())],
             &existing(&[("pub/a.html", Some(&sha256_hex(b"old")))]),
         );
@@ -312,7 +342,7 @@ mod tests {
     fn missing_server_hash_forces_upload() {
         let plan = diff_audience(
             "pub".into(),
-            serde_json::json!([]),
+            yaml::Value::Sequence(vec![]),
             vec![("pub/a.html".into(), b"hi".to_vec(), "text/html".into())],
             &existing(&[("pub/a.html", None)]),
         );
@@ -324,7 +354,7 @@ mod tests {
     fn stale_existing_object_is_deleted() {
         let plan = diff_audience(
             "pub".into(),
-            serde_json::json!([]),
+            yaml::Value::Sequence(vec![]),
             vec![("pub/a.html".into(), b"hi".to_vec(), "text/html".into())],
             &existing(&[
                 ("pub/a.html", Some(&sha256_hex(b"hi"))),
@@ -339,13 +369,13 @@ mod tests {
     fn totals_aggregate_across_audiences() {
         let a = diff_audience(
             "a".into(),
-            serde_json::json!([]),
+            yaml::Value::Sequence(vec![]),
             vec![("a/x".into(), b"12345".to_vec(), "text/plain".into())],
             &existing(&[("a/old", Some("deadbeef"))]),
         );
         let b = diff_audience(
             "b".into(),
-            serde_json::json!([]),
+            yaml::Value::Sequence(vec![]),
             vec![("b/y".into(), b"hi".to_vec(), "text/plain".into())],
             &existing(&[("b/y", Some(&sha256_hex(b"hi")))]),
         );

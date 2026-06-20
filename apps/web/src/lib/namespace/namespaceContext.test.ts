@@ -51,6 +51,13 @@ const mockCreateNamespace = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ id: 'ns-123', owner_user_id: 'user-1', created_at: 1000 }),
 );
 
+// Publish now routes through `corePublishService` (no Extism plugin).
+const mockGetPublishConfig = vi.hoisted(() => vi.fn());
+const mockSetPublishConfig = vi.hoisted(() => vi.fn());
+const mockSetAudiencePublishState = vi.hoisted(() => vi.fn());
+const mockPreviewPublish = vi.hoisted(() => vi.fn());
+const mockPublishToNamespace = vi.hoisted(() => vi.fn());
+
 // ---------------------------------------------------------------------------
 // vi.mock calls
 // ---------------------------------------------------------------------------
@@ -84,6 +91,14 @@ vi.mock('$lib/backend/proxyFetch', () => ({
 
 vi.mock('./namespaceService', () => ({
   createNamespace: mockCreateNamespace,
+}));
+
+vi.mock('$lib/publish/corePublishService', () => ({
+  getPublishConfig: mockGetPublishConfig,
+  setPublishConfig: mockSetPublishConfig,
+  setAudiencePublishState: mockSetAudiencePublishState,
+  previewPublish: mockPreviewPublish,
+  publishToNamespace: mockPublishToNamespace,
 }));
 
 vi.mock('$lib/stores/workspaceConfigStore.svelte', () => ({
@@ -139,6 +154,15 @@ describe('NamespaceContext', () => {
     mockWorkspaceStore.workspaceStore.tree = { path: '/workspace/root' };
     mockGetPlugin.mockReturnValue(null);
     mockConfigStore.config = { default_audience: 'public' };
+    mockGetPublishConfig.mockResolvedValue({});
+    mockSetPublishConfig.mockResolvedValue(undefined);
+    mockSetAudiencePublishState.mockResolvedValue({});
+    mockPreviewPublish.mockResolvedValue({});
+    mockPublishToNamespace.mockResolvedValue({
+      uploaded: 0,
+      skipped_unchanged: 0,
+      deleted: 0,
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -486,7 +510,7 @@ describe('NamespaceContext', () => {
       const api = createMockApi();
       ctx.init(api);
       ctx.tryLoad();
-      expect(api.executePluginCommand).not.toHaveBeenCalled();
+      expect(mockGetPublishConfig).not.toHaveBeenCalled();
     });
 
     it('does nothing when api is null', () => {
@@ -497,12 +521,11 @@ describe('NamespaceContext', () => {
 
     it('loads config on first call', () => {
       const ctx = createCtx();
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockResolvedValue({
-          namespace_id: 'ns-1',
-          subdomain: 'test',
-          audience_states: {},
-        }),
+      const api = createMockApi();
+      mockGetPublishConfig.mockResolvedValue({
+        namespace_id: 'ns-1',
+        subdomain: 'test',
+        audience_states: {},
       });
       ctx.init(api);
 
@@ -513,16 +536,14 @@ describe('NamespaceContext', () => {
 
       ctx.tryLoad();
 
-      // Should have called executePluginCommand (via loadPublishConfig)
-      expect(api.executePluginCommand).toHaveBeenCalled();
+      // Should have loaded config (via loadPublishConfig → corePublishService).
+      expect(mockGetPublishConfig).toHaveBeenCalled();
       expect(mockConfigStore.load).toHaveBeenCalledWith('/workspace/root');
     });
 
     it('skips if same rootPath already initialized', () => {
       const ctx = createCtx();
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockResolvedValue({}),
-      });
+      const api = createMockApi();
       ctx.init(api);
 
       mockProxyFetch.mockResolvedValue({
@@ -531,11 +552,11 @@ describe('NamespaceContext', () => {
       });
 
       ctx.tryLoad();
-      api.executePluginCommand.mockClear();
+      mockGetPublishConfig.mockClear();
       mockConfigStore.load.mockClear();
 
       ctx.tryLoad();
-      expect(api.executePluginCommand).not.toHaveBeenCalled();
+      expect(mockGetPublishConfig).not.toHaveBeenCalled();
       expect(mockConfigStore.load).not.toHaveBeenCalled();
     });
   });
@@ -596,52 +617,47 @@ describe('NamespaceContext', () => {
       await expect(ctx.executePublishCommand('Test')).rejects.toThrow('Publish API unavailable');
     });
 
-    it('uses browser plugin when available', async () => {
+    it('routes GetPublishConfig to corePublishService', async () => {
       const ctx = createCtx();
-      ctx.init(createMockApi());
-
-      mockGetPlugin.mockReturnValue({ id: 'diaryx.publish' });
-      mockDispatchCommand.mockResolvedValue({ success: true, data: { key: 'val' } });
-
-      const result = await ctx.executePublishCommand('TestCmd', { a: 1 });
-      expect(mockDispatchCommand).toHaveBeenCalledWith('diaryx.publish', 'TestCmd', { a: 1 });
-      expect(result).toEqual({ key: 'val' });
-    });
-
-    it('throws on browser plugin failure', async () => {
-      const ctx = createCtx();
-      ctx.init(createMockApi());
-
-      mockGetPlugin.mockReturnValue({ id: 'diaryx.publish' });
-      mockDispatchCommand.mockResolvedValue({ success: false, error: 'bad command' });
-
-      await expect(ctx.executePublishCommand('Fail')).rejects.toThrow('bad command');
-    });
-
-    it('falls back to api.executePluginCommand when no browser plugin', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockResolvedValue({ result: true }),
-      });
-      const ctx = createCtx();
+      const api = createMockApi();
       ctx.init(api);
-      mockGetPlugin.mockReturnValue(null);
+      mockGetPublishConfig.mockResolvedValue({ namespace_id: 'ns-9' });
 
-      const result = await ctx.executePublishCommand('SomeCmd', { x: 1 });
-      expect(api.executePluginCommand).toHaveBeenCalledWith('diaryx.publish', 'SomeCmd', { x: 1 });
-      expect(result).toEqual({ result: true });
+      const result = await ctx.executePublishCommand('GetPublishConfig', {});
+      expect(mockGetPublishConfig).toHaveBeenCalledWith(api);
+      expect(result).toEqual({ namespace_id: 'ns-9' });
     });
 
-    it('normalizes Map values to plain objects', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockResolvedValue(
-          new Map([['nested', new Map([['a', 1]])]]),
-        ),
-      });
+    it('routes PublishToNamespace to corePublishService', async () => {
       const ctx = createCtx();
+      const api = createMockApi();
+      ctx.init(api);
+      mockPublishToNamespace.mockResolvedValue({ uploaded: 3 });
+
+      const result = await ctx.executePublishCommand('PublishToNamespace', {
+        server_url: 'https://s',
+        namespace_id: 'ns-1',
+      });
+      expect(mockPublishToNamespace).toHaveBeenCalledWith('https://s', 'ns-1');
+      expect(result).toEqual({ uploaded: 3 });
+    });
+
+    it('routes SetAudiencePublishState to corePublishService', async () => {
+      const ctx = createCtx();
+      const api = createMockApi();
       ctx.init(api);
 
-      const result = await ctx.executePublishCommand('MapCmd');
-      expect(result).toEqual({ nested: { a: 1 } });
+      await ctx.executePublishCommand('SetAudiencePublishState', {
+        audience: 'vip',
+        config: { state: 'private' },
+      });
+      expect(mockSetAudiencePublishState).toHaveBeenCalledWith(api, 'vip', { state: 'private' });
+    });
+
+    it('throws on unknown command', async () => {
+      const ctx = createCtx();
+      ctx.init(createMockApi());
+      await expect(ctx.executePublishCommand('Bogus')).rejects.toThrow('Unknown publish command: Bogus');
     });
   });
 
@@ -651,12 +667,11 @@ describe('NamespaceContext', () => {
 
   describe('loadPublishConfig', () => {
     it('loads config and sets state', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockResolvedValue({
-          namespace_id: 'ns-42',
-          subdomain: 'mysite',
-          audience_states: { public: { state: 'public' } },
-        }),
+      const api = createMockApi();
+      mockGetPublishConfig.mockResolvedValue({
+        namespace_id: 'ns-42',
+        subdomain: 'mysite',
+        audience_states: { public: { state: 'public' } },
       });
       const ctx = createCtx();
       ctx.init(api);
@@ -673,9 +688,8 @@ describe('NamespaceContext', () => {
     });
 
     it('sets error on failure', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockRejectedValue(new Error('load fail')),
-      });
+      const api = createMockApi();
+      mockGetPublishConfig.mockRejectedValue(new Error('load fail'));
       const ctx = createCtx();
       ctx.init(api);
 
@@ -694,15 +708,11 @@ describe('NamespaceContext', () => {
     });
 
     it('clears stale namespace when server returns 404', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn()
-          .mockResolvedValueOnce({
-            namespace_id: 'stale-ns',
-            subdomain: 'old',
-            audience_states: { public: { state: 'public' } },
-          })
-          // SetPublishConfig call from verifyNamespace cleanup
-          .mockResolvedValueOnce(undefined),
+      const api = createMockApi();
+      mockGetPublishConfig.mockResolvedValue({
+        namespace_id: 'stale-ns',
+        subdomain: 'old',
+        audience_states: { public: { state: 'public' } },
       });
       const ctx = createCtx();
       ctx.init(api);
@@ -715,9 +725,8 @@ describe('NamespaceContext', () => {
     });
 
     it('handles null fields gracefully', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockResolvedValue({}),
-      });
+      const api = createMockApi();
+      mockGetPublishConfig.mockResolvedValue({});
       const ctx = createCtx();
       ctx.init(api);
 
@@ -753,7 +762,7 @@ describe('NamespaceContext', () => {
     });
 
     it('executes SetAudiencePublishState command', async () => {
-      const api = createMockApi({ executePluginCommand: vi.fn().mockResolvedValue(undefined) });
+      const api = createMockApi();
       const ctx = createCtx();
       ctx.init(api);
 
@@ -762,24 +771,15 @@ describe('NamespaceContext', () => {
         access_method: 'token',
       });
 
-      expect(api.executePluginCommand).toHaveBeenCalledWith(
-        'diaryx.publish',
-        'SetAudiencePublishState',
-        {
-          audience: 'vip',
-          server_url: 'https://server.example.com',
-          config: {
-            state: 'private',
-            access_method: 'token',
-          },
-        },
-      );
+      expect(mockSetAudiencePublishState).toHaveBeenCalledWith(api, 'vip', {
+        state: 'private',
+        access_method: 'token',
+      });
     });
 
     it('still updates local state if command fails', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockRejectedValue(new Error('fail')),
-      });
+      const api = createMockApi();
+      mockSetAudiencePublishState.mockRejectedValue(new Error('fail'));
       const ctx = createCtx();
       ctx.init(api);
 
@@ -817,16 +817,11 @@ describe('NamespaceContext', () => {
 
   describe('handlePublish', () => {
     it('creates namespace when not configured then publishes', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn()
-          // SetPublishConfig
-          .mockResolvedValueOnce(undefined)
-          // PublishToNamespace
-          .mockResolvedValueOnce({
-            audiences_published: ['public'],
-            files_uploaded: 5,
-            files_deleted: 0,
-          }),
+      const api = createMockApi();
+      mockPublishToNamespace.mockResolvedValue({
+        uploaded: 5,
+        skipped_unchanged: 0,
+        deleted: 0,
       });
       const ctx = createCtx();
       ctx.init(api);
@@ -835,18 +830,17 @@ describe('NamespaceContext', () => {
       await ctx.handlePublish();
       expect(mockCreateNamespace).toHaveBeenCalled();
       expect(ctx.namespaceId).toBe('ns-123');
-      expect(mockShowSuccess).toHaveBeenCalledWith('Published 1 audience(s)');
+      expect(mockShowSuccess).toHaveBeenCalledWith('Published — 5 uploaded');
       expect(ctx.isPublishing).toBe(false);
       expect(ctx.isCreatingNamespace).toBe(false);
     });
 
     it('skips namespace creation when already configured', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockResolvedValue({
-          audiences_published: ['public', 'members'],
-          files_uploaded: 10,
-          files_deleted: 2,
-        }),
+      const api = createMockApi();
+      mockPublishToNamespace.mockResolvedValue({
+        uploaded: 10,
+        skipped_unchanged: 0,
+        deleted: 2,
       });
       const ctx = createCtx();
       ctx.init(api);
@@ -855,7 +849,7 @@ describe('NamespaceContext', () => {
 
       await ctx.handlePublish();
       expect(mockCreateNamespace).not.toHaveBeenCalled();
-      expect(mockShowSuccess).toHaveBeenCalledWith('Published 2 audience(s)');
+      expect(mockShowSuccess).toHaveBeenCalledWith('Published — 10 uploaded · 2 deleted');
     });
 
     it('shows error when namespace creation fails', async () => {
@@ -870,9 +864,8 @@ describe('NamespaceContext', () => {
     });
 
     it('shows error when publish fails', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockRejectedValue(new Error('publish fail')),
-      });
+      const api = createMockApi();
+      mockPublishToNamespace.mockRejectedValue(new Error('publish fail'));
       const ctx = createCtx();
       ctx.init(api);
       ctx.namespaceId = 'ns-1';
@@ -883,12 +876,11 @@ describe('NamespaceContext', () => {
     });
 
     it('resets isPublishing on success', async () => {
-      const api = createMockApi({
-        executePluginCommand: vi.fn().mockResolvedValue({
-          audiences_published: [],
-          files_uploaded: 0,
-          files_deleted: 0,
-        }),
+      const api = createMockApi();
+      mockPublishToNamespace.mockResolvedValue({
+        uploaded: 0,
+        skipped_unchanged: 0,
+        deleted: 0,
       });
       const ctx = createCtx();
       ctx.init(api);

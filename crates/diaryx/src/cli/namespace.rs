@@ -97,6 +97,7 @@ fn format_size(bytes: u64) -> String {
 pub fn handle_namespace_command(command: NamespaceCommands) -> bool {
     match command {
         NamespaceCommands::List { json } => handle_list(json),
+        NamespaceCommands::Create { id } => super::publish::handle_namespace_create(id),
         NamespaceCommands::Delete { id, yes } => handle_delete(&id, yes),
         NamespaceCommands::Objects { command } => handle_objects_command(command),
         NamespaceCommands::Subdomain { command } => handle_subdomain_command(command),

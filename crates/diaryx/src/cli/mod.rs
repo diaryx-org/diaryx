@@ -40,6 +40,9 @@ mod sort;
 /// Server namespace management
 mod namespace;
 
+/// Publish a workspace to a server namespace (ARK permalinks)
+pub mod publish;
+
 /// Navigate workspace hierarchy with TUI
 mod nav;
 
@@ -310,6 +313,28 @@ fn dispatch_core_command(cli: Cli) -> bool {
         Commands::Devices { command } => account::handle_devices_command(command),
 
         Commands::Namespace { command } => namespace::handle_namespace_command(command),
+
+        Commands::Publish {
+            base_url,
+            dry_run,
+            new_namespace,
+            json,
+            server,
+        } => publish::handle_publish(
+            cli.workspace,
+            base_url,
+            dry_run,
+            new_namespace,
+            json,
+            server,
+        ),
+
+        Commands::Unpublish {
+            namespace,
+            yes,
+            delete_namespace,
+            server,
+        } => publish::handle_unpublish(cli.workspace, namespace, yes, delete_namespace, server),
 
         Commands::Nav { path, depth } => {
             let current_dir = std::env::current_dir().unwrap_or_default();

@@ -2416,6 +2416,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "crossterm",
+ "diaryx_ark",
  "diaryx_core",
  "diaryx_extism",
  "diaryx_native",

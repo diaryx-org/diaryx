@@ -93,6 +93,27 @@ fn show_workspace_config(
                 "Link format: {}",
                 format_link_format_display(ws_config.link_format)
             );
+            if let Some(audience) = ws_config.default_audience.as_deref() {
+                println!("Default audience: {audience}");
+            }
+            if let Some(publish) = ws_config.publish.as_ref() {
+                println!();
+                println!("Publishing:");
+                match publish.namespace_id.as_deref() {
+                    Some(ns) => {
+                        println!("  Namespace (workspace ARK): {ns}");
+                        println!("  Permalink: https://diaryx.org/ark/{ns}/index");
+                    }
+                    None => println!("  Namespace: (not published yet — run `diaryx publish`)"),
+                }
+                if let Some(sub) = publish.subdomain.as_deref() {
+                    println!("  Subdomain: {sub}.diaryx.org");
+                }
+                if let Some(audiences) = publish.audiences.as_ref() {
+                    let names: Vec<&str> = audiences.iter().map(|a| a.name.as_str()).collect();
+                    println!("  Audiences: {}", names.join(", "));
+                }
+            }
             true
         }
         Err(e) => {

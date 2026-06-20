@@ -280,6 +280,48 @@ pub enum Commands {
         command: NamespaceCommands,
     },
 
+    /// Publish the workspace to its server namespace (ARK permalinks)
+    Publish {
+        /// Canonical base URL for sitemaps/feeds (e.g. https://diaryx.org)
+        #[arg(long)]
+        base_url: Option<String>,
+
+        /// Compute and print the publish plan without uploading anything
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Mint a fresh dx-blade namespace and bind it, even if one exists
+        #[arg(long)]
+        new_namespace: bool,
+
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+
+        /// Sync server URL override (default: stored / https://app.diaryx.org/api)
+        #[arg(short, long)]
+        server: Option<String>,
+    },
+
+    /// Take a published namespace down (wipe its objects)
+    Unpublish {
+        /// Namespace to unpublish (default: the workspace's bound namespace)
+        #[arg(long)]
+        namespace: Option<String>,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Also delete the namespace record from the server
+        #[arg(long)]
+        delete_namespace: bool,
+
+        /// Sync server URL override (default: stored / https://app.diaryx.org/api)
+        #[arg(short, long)]
+        server: Option<String>,
+    },
+
     /// Navigate workspace hierarchy with interactive TUI
     /// Opens a tree view with preview pane for browsing entries
     #[command(alias = "go")]
@@ -963,6 +1005,13 @@ pub enum NamespaceCommands {
         /// Emit JSON output
         #[arg(long)]
         json: bool,
+    },
+
+    /// Create a namespace (mints a fresh dx-blade id when --id is omitted)
+    Create {
+        /// Explicit namespace id to register (default: mint a dx-blade)
+        #[arg(long)]
+        id: Option<String>,
     },
 
     /// Delete a namespace from the sync server

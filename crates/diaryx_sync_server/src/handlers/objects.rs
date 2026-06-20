@@ -573,9 +573,15 @@ pub fn public_object_routes(state: ObjectState) -> Router {
 // ---------------------------------------------------------------------------
 
 pub fn ark_routes(state: ObjectState) -> Router {
+    // Canonical `ark:{NAAN}/...` aliases resolve identically to the bare form
+    // (blade-based; the NAAN is never consulted). Built from `ARK_NAAN` so the
+    // accepted prefix tracks the constant with no second source of truth.
+    let naan = diaryx_server::use_cases::ark::ARK_NAAN;
     Router::new()
         .route("/ark/{ws}/{file}", get(resolve_ark))
         .route("/ark/{ws}", get(resolve_ark_index))
+        .route(&format!("/ark:{naan}/{{ws}}/{{file}}"), get(resolve_ark))
+        .route(&format!("/ark:{naan}/{{ws}}"), get(resolve_ark_index))
         .with_state(state)
 }
 

@@ -5,9 +5,21 @@ mod handlers;
 
 use worker::*;
 
+// Canonical `ark:{NAAN}/...` alias routes. `worker::Router` borrows its route
+// patterns for `'static`, so these must be string literals rather than built
+// from `ARK_NAAN` at runtime; the `debug_assert_eq!` in `main` guards against
+// the literal drifting from `diaryx_server`'s `ARK_NAAN`.
+const ARK_NAAN_FILE_ROUTE: &str = "/ark:99999/:ws/:file";
+const ARK_NAAN_INDEX_ROUTE: &str = "/ark:99999/:ws";
+
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
+    debug_assert_eq!(
+        diaryx_server::use_cases::ark::ARK_NAAN,
+        "99999",
+        "ARK_NAAN changed — update ARK_NAAN_FILE_ROUTE / ARK_NAAN_INDEX_ROUTE literals",
+    );
 
     // Handle CORS preflight
     if req.method() == Method::Options {
@@ -48,9 +60,11 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "/api/public/:ns_id/objects/*key",
             handlers::get_public_object,
         )
-        // ARK resolution
+        // ARK resolution (bare `/ark/...` + canonical `ark:{NAAN}/...` alias)
         .get_async("/ark/:ws/:file", handlers::resolve_ark)
         .get_async("/ark/:ws", handlers::resolve_ark_index)
+        .get_async(ARK_NAAN_FILE_ROUTE, handlers::resolve_ark)
+        .get_async(ARK_NAAN_INDEX_ROUTE, handlers::resolve_ark_index)
         // Audiences
         .put_async(
             "/api/namespaces/:ns_id/audiences/:name",

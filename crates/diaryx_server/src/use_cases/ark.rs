@@ -12,6 +12,14 @@ use crate::ports::{ArkIndexStore, ServerCoreError};
 /// betanumeric alphabet; this contains vowels and is 5 chars).
 pub const ARK_WORKSPACE_INDEX: &str = "index";
 
+/// ARK NAAN (Name Assigning Authority Number) — the assigning-authority prefix
+/// shared by every Diaryx ARK. Until Diaryx registers its own with the ARK
+/// Alliance this is `99999`, the spec-reserved example NAAN, and the canonical
+/// `ark:{NAAN}/{ws}/{file}` URL is accepted only as an ALIAS of the bare
+/// `/ark/{ws}/{file}` form. Resolution is blade-based and never consults the
+/// NAAN, so swapping in a real NAAN here is a one-line, link-preserving change.
+pub const ARK_NAAN: &str = "99999";
+
 /// A resolution inflection — what representation of a file an ARK request wants.
 /// Parsed from the URL query string (the part after `?`).
 #[derive(Debug, Clone, PartialEq, Eq)]

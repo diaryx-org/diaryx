@@ -265,6 +265,12 @@ async fn ark_resolution_serves_html_content_and_info() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(read_body(resp).await, b"<h1>Hello</h1>");
 
+    // Canonical `ark:{NAAN}/...` alias resolves identically to the bare form.
+    let naan = diaryx_server::use_cases::ark::ARK_NAAN;
+    let resp = app.get(&format!("/ark:{naan}/{ns}/{file_ark}")).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(read_body(resp).await, b"<h1>Hello</h1>");
+
     // ?content → markdown source.
     let resp = app.get(&format!("/ark/{ns}/{file_ark}?content")).await;
     assert_eq!(resp.status(), StatusCode::OK);

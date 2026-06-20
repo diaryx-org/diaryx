@@ -57,6 +57,10 @@ const metaCache = new Map<string, { expiresAt: number; value: SiteMeta | null }>
 const SITE_DOMAIN = 'diaryx.org';
 const ROOT_SITE_SUBDOMAIN = 'main';
 
+/** Sentinel file blade for the workspace front-page pointer. Mirrors
+ * `diaryx_server`'s `ARK_WORKSPACE_INDEX`. */
+const ARK_WORKSPACE_INDEX = 'index';
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -67,6 +71,26 @@ export default {
     if (isPassthroughSubdomain(host)) {
       return fetch(request);
     }
+
+    // ARK global resolution: `/ark/{ws}/{file}` is a host-independent permalink,
+    // so it's matched here before any site/subdomain routing — the 3-segment
+    // form is unambiguous on every host. The shorter `/ark/{file}` form (and
+    // `/ark/{ws}` workspace-index form) is host-dependent: namespace-scoped on a
+    // site host (handled in serveSubdomainSite / serveNamespaceCustomDomain),
+    // global workspace-index on a non-site host (handled in standard routing).
+    {
+      const arkSegs = url.pathname.split('/').filter(Boolean);
+      if (arkSegs[0] === 'ark' && arkSegs.length >= 3) {
+        return resolveArk(
+          request,
+          url,
+          env,
+          decodeURIComponent(arkSegs[1]),
+          decodeURIComponent(arkSegs[2]),
+        );
+      }
+    }
+
     if (host === SITE_DOMAIN) {
       const rootMapping = await resolveNamedSubdomain(ROOT_SITE_SUBDOMAIN, env);
       if (rootMapping) {
@@ -123,6 +147,17 @@ export default {
     // reader was originally on.
     if (slug === '__unlock') {
       return handleUnlockRequest(request, env, url, segments);
+    }
+
+    // ARK global workspace-index route: /ark/{ws} on a non-site host. (The
+    // /ark/{ws}/{file} file form is handled earlier, before site routing.)
+    if (slug === 'ark') {
+      const ws = segments[1] ? decodeURIComponent(segments[1]) : null;
+      if (!ws) {
+        return notFound();
+      }
+      const file = segments[2] ? decodeURIComponent(segments[2]) : ARK_WORKSPACE_INDEX;
+      return resolveArk(request, url, env, ws, file);
     }
 
     // Namespace object route: /ns/{ns_id}/{*path}
@@ -729,6 +764,106 @@ function buildNamespaceCookie(nsId: string, token: string, path = '/'): string {
   return `diaryx_access_${nsId}=${encodeURIComponent(token)}; Path=${path}; HttpOnly; Secure; SameSite=Lax`;
 }
 
+// ---------------------------------------------------------------------------
+// ARK resolution
+// ---------------------------------------------------------------------------
+
+type ArkEntry = {
+  object_key: string;
+  source_key: string | null;
+  audience: string | null;
+};
+
+/** Look up an ARK in the `ark_index` D1 table. Mirrors the Rust
+ * `D1ArkIndexStore::resolve_ark` — null columns are stored as empty strings. */
+async function getArkEntry(
+  env: Env,
+  workspaceArk: string,
+  fileArk: string,
+): Promise<ArkEntry | null> {
+  const row = await env.DB.prepare(
+    `SELECT object_key, source_key, audience
+       FROM ark_index
+      WHERE workspace_ark = ?1 AND file_ark = ?2`,
+  )
+    .bind(workspaceArk, fileArk)
+    .first<{ object_key: string; source_key: string | null; audience: string | null }>();
+
+  if (!row || !row.object_key) {
+    return null;
+  }
+  return {
+    object_key: row.object_key,
+    source_key: row.source_key && row.source_key.length > 0 ? row.source_key : null,
+    audience: row.audience && row.audience.length > 0 ? row.audience : null,
+  };
+}
+
+/**
+ * Resolve an ARK to its rendered object and serve it inline.
+ *
+ * The registered `object_key` is a `namespace_objects` key, so we hand off to
+ * the existing gate-enforcing object server. Gates are evaluated against the
+ * object's own audience (audience-token cookie / `?audience_token=` flow), and
+ * the rendered HTML is served as-is — matching the Rust `/ark/{ws}/{file}`
+ * resolver's default behavior.
+ */
+async function resolveArk(
+  request: Request,
+  url: URL,
+  env: Env,
+  workspaceArk: string,
+  fileArk: string,
+): Promise<Response> {
+  const entry = await getArkEntry(env, workspaceArk, fileArk);
+  if (!entry) {
+    return notFound();
+  }
+  // The flat `/ark/{ws}/{file}` permalink doesn't mirror the site's directory
+  // tree, so the rendered page's relative asset/nav links (`style.css`,
+  // `feed.xml`, sibling `.html`) would resolve against `/ark/{ws}/` and 404.
+  // Anchor the page at its canonical `/sites/{ns}/{dir}/` mount via a <base>
+  // tag so every relative URL resolves where the assets actually live.
+  const arkBaseHref = buildArkSiteBaseHref(workspaceArk, entry.object_key);
+  return serveNamespaceObjectByKey(request, url, env, workspaceArk, entry.object_key, {
+    arkBaseHref,
+  });
+}
+
+/**
+ * Build the absolute `<base href>` for an ARK-served page: the canonical
+ * `/sites/{ns}/{dir}/` asset mount on the apex host, where `{dir}` is the
+ * object key's directory (audience-prefixed, e.g. `public` or `public/sub`).
+ * Absolute (apex) so it resolves identically from the apex permalink and from
+ * the namespace-scoped `/ark/{file}` form on subdomain / custom-domain hosts.
+ */
+function buildArkSiteBaseHref(nsId: string, objectKey: string): string {
+  const slash = objectKey.lastIndexOf('/');
+  const dir = slash === -1 ? '' : objectKey.slice(0, slash);
+  const dirPath = dir
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+  const trailingDir = dirPath ? `${dirPath}/` : '';
+  return `https://${SITE_DOMAIN}/sites/${encodeURIComponent(nsId)}/${trailingDir}`;
+}
+
+/**
+ * Insert a `<base>` element as the first child of `<head>` so it governs every
+ * relative URL in the document (it must precede the first `<link>`/`<img>`).
+ * No-op when the markup has no `<head>`.
+ */
+function injectBaseHref(html: string, baseHref: string): string {
+  const headOpen = /<head[^>]*>/i.exec(html);
+  if (!headOpen) {
+    return html;
+  }
+  const insertAt = headOpen.index + headOpen[0].length;
+  const baseTag = `\n    <base href="${baseHref.replace(/"/g, '&quot;')}">`;
+  return html.slice(0, insertAt) + baseTag + html.slice(insertAt);
+}
+
 async function serveNamespaceObjectByKey(
   request: Request,
   url: URL,
@@ -739,6 +874,10 @@ async function serveNamespaceObjectByKey(
     allowedAudience?: string;
     htmlPrefix?: string;
     cookiePath?: string;
+    /** When set, inject a `<base href>` so the served HTML's relative URLs
+     * resolve against this mount (used by ARK permalinks, which don't mirror
+     * the site's directory tree). */
+    arkBaseHref?: string;
   },
 ): Promise<Response> {
   const meta = await getNamespaceObjectMeta(env, nsId, key);
@@ -805,9 +944,12 @@ async function serveNamespaceObjectByKey(
 
   if (contentType.toLowerCase().includes('text/html')) {
     const html = await object.text();
-    const rewritten = options?.htmlPrefix
+    let rewritten = options?.htmlPrefix
       ? rewriteRootRelativeUrlsWithPrefix(html, options.htmlPrefix)
       : html;
+    if (options?.arkBaseHref) {
+      rewritten = injectBaseHref(rewritten, options.arkBaseHref);
+    }
     return new Response(rewritten, { headers });
   }
 
@@ -911,6 +1053,14 @@ async function serveSubdomainSite(
     return handleUnlockRequest(request, env, url, segments);
   }
 
+  // Namespace-scoped ARK permalink: `/ark/{file}` (or `/ark` for the workspace
+  // index). The workspace blade is implied by the subdomain's namespace. (The
+  // global 3-segment `/ark/{ws}/{file}` form is intercepted before we get here.)
+  if (segments[0] === 'ark') {
+    const file = segments[1] ? decodeURIComponent(segments[1]) : ARK_WORKSPACE_INDEX;
+    return resolveArk(request, url, env, mapping.namespace_id, file);
+  }
+
   if (segments.length === 0 && !url.pathname.endsWith('/')) {
     const canonicalUrl = new URL(url.toString());
     canonicalUrl.pathname = '/';
@@ -1003,6 +1153,13 @@ async function serveNamespaceCustomDomain(
   // Password-unlock POST handler — same as subdomain path.
   if (segments[0] === '__unlock') {
     return handleUnlockRequest(request, env, url, segments);
+  }
+
+  // Namespace-scoped ARK permalink: `/ark/{file}` (or `/ark` for the workspace
+  // index). The global 3-segment form is intercepted before we get here.
+  if (segments[0] === 'ark') {
+    const file = segments[1] ? decodeURIComponent(segments[1]) : ARK_WORKSPACE_INDEX;
+    return resolveArk(request, url, env, mapping.namespace_id, file);
   }
 
   let objectPath = segments.map((s) => decodeURIComponent(s)).join('/');

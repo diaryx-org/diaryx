@@ -79,6 +79,23 @@ export function createWorkspaceConfigStore() {
   }
 
   /**
+   * Merge a patch into the top-level `publish:` section and persist it.
+   *
+   * Read-modify-writes the whole `publish` mapping so unrelated keys
+   * (`namespace_id`, `subdomain`, …) survive a partial update. The nested
+   * `audiences` block sequence is always emitted last to avoid the YAML
+   * block-sequence ordering pitfall.
+   */
+  async function updatePublish(patch: Record<string, unknown>) {
+    const current = (config?.publish ?? {}) as Record<string, unknown>;
+    const merged: Record<string, unknown> = { ...current, ...patch };
+    const { audiences, ...rest } = merged;
+    const ordered =
+      audiences === undefined ? rest : { ...rest, audiences };
+    await setField("publish", JSON.stringify(ordered));
+  }
+
+  /**
    * Save a plugin's declarative config to `plugins.<id>.config` (for plugins
    * that opt into host-managed config, e.g. the daily plugin). Surfaces any
    * permission request for approval, then re-reads the full workspace config.
@@ -122,6 +139,7 @@ export function createWorkspaceConfigStore() {
     },
     load,
     setField,
+    updatePublish,
     savePluginConfig,
   };
 }
@@ -149,6 +167,7 @@ export function getWorkspaceConfigStore() {
       },
       load: async () => {},
       setField: async () => {},
+      updatePublish: async () => {},
       savePluginConfig: async () => {},
     };
   }

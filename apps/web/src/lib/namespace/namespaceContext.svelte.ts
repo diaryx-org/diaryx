@@ -98,7 +98,7 @@ export class NamespaceContext {
    * frontmatter). When present, this is the source of truth and supersedes the
    * legacy `audienceStates` map — see NamespaceAudienceManager's `usingFile`.
    */
-  get declaredAudiences() { return this.configStore.config?.audiences ?? null; }
+  get declaredAudiences() { return this.configStore.config?.publish?.audiences ?? null; }
 
   get allAudiences(): string[] {
     const set = new Set(this.availableAudiences);

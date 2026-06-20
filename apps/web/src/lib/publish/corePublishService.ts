@@ -8,11 +8,12 @@
  * - **Tauri**: the `publish_to_namespace` / `preview_to_namespace` IPC commands
  *   reuse the keyring-backed client as the `NamespaceProvider`.
  *
- * Publish config (namespace id, subdomain, per-audience access state) lives in
- * the root index frontmatter under `plugins."diaryx.publish"` — the same
- * location the plugin used. It is read/written through the core
- * `GetPluginConfig` / `SetPluginConfig` commands (plugin-independent), so
- * existing workspaces keep working after the plugin is removed.
+ * Publish config (namespace id, subdomain, declared audiences, legacy
+ * per-audience state) lives in the workspace settings file (`Meta/Config.md`)
+ * under the top-level `publish:` key — read/written via the core
+ * `GetWorkspaceConfig` / `SetWorkspaceConfig` commands. Workspaces that still
+ * have the old `plugins."diaryx.publish".config` blob are relocated by the eager
+ * migration on open (and core reads fall back to it in the meantime).
  */
 
 import * as Comlink from "comlink";
@@ -21,7 +22,6 @@ import { getBackend } from "$lib/backend";
 import type { WorkerBackendNew } from "$lib/backend/workerBackendNew";
 import type { WorkerApi } from "$lib/backend/wasmWorkerNew";
 import type { Api } from "$lib/backend/api";
-import type { YamlValue } from "$lib/backend/generated/YamlValue";
 import { createPublishProvider } from "./publishProvider";
 
 // ============================================================================
@@ -137,10 +137,13 @@ export async function unpublishNamespace(
 }
 
 // ============================================================================
-// Config (frontmatter `plugins."diaryx.publish"`, via core Get/SetPluginConfig)
+// Config (top-level `publish:` section of the workspace settings file).
+//
+// Publish is integrated into the app, so its config no longer lives under the
+// `plugins."diaryx.publish".config` namespace. It's the typed `publish` field of
+// WorkspaceConfig (Meta/Config.md). Existing workspaces are relocated by the
+// eager migration on open; reads still fall back to the legacy location in core.
 // ============================================================================
-
-const PUBLISH_PLUGIN_ID = "diaryx.publish";
 
 async function rootIndexPath(api: Api): Promise<string> {
   const root = await api.resolveWorkspaceRootIndexPath();
@@ -150,24 +153,24 @@ async function rootIndexPath(api: Api): Promise<string> {
 
 export async function getPublishConfig(api: Api): Promise<PublishConfig> {
   const root = await rootIndexPath(api);
-  const raw = (await api.getWorkspacePluginData(
-    root,
-    PUBLISH_PLUGIN_ID,
-  )) as PublishConfig | null;
-  return raw ?? {};
+  const config = (await api.getWorkspaceConfig(root)) as {
+    publish?: PublishConfig | null;
+  };
+  return config.publish ?? {};
 }
 
 export async function setPublishConfig(
   api: Api,
   config: PublishConfig,
 ): Promise<void> {
-  // Merge over the persisted config so unrelated keys survive.
+  // Merge over the persisted config so unrelated keys survive. Keep the nested
+  // `audiences` block sequence last to avoid the YAML ordering pitfall.
   const root = await rootIndexPath(api);
   const existing = await getPublishConfig(api);
-  await api.setWorkspacePluginData(root, PUBLISH_PLUGIN_ID, {
-    ...existing,
-    ...config,
-  } as unknown as YamlValue);
+  const merged: Record<string, unknown> = { ...existing, ...config };
+  const { audiences, ...rest } = merged;
+  const ordered = audiences === undefined ? rest : { ...rest, audiences };
+  await api.setWorkspaceConfig(root, "publish", JSON.stringify(ordered));
 }
 
 /**

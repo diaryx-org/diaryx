@@ -52,6 +52,7 @@ export type { PluginCapability } from './PluginCapability';
 export type { PluginHealth } from './PluginHealth';
 export type { PluginId } from './PluginId';
 export type { PluginManifest } from './PluginManifest';
+export type { PublishSettings } from './PublishSettings';
 export type { ResolvedAttachmentRef } from './ResolvedAttachmentRef';
 export type { Response } from './Response';
 export type { SearchMatch } from './SearchMatch';

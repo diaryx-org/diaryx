@@ -1,14 +1,13 @@
 <script lang="ts">
   /**
-   * Master-detail editor for the workspace's `audiences:` declaration.
+   * Master-detail editor for the workspace's `publish.audiences` declaration.
    *
-   * Source of truth: the root index frontmatter, read + written through
+   * Source of truth: the workspace settings file, read + written through
    * `getWorkspaceConfigStore()`. The dialog keeps a working copy of the
-   * declared audiences that is committed back to the file via
-   * `setField('audiences', JSON.stringify(...))` — coarse changes
-   * (add/delete) save immediately; per-audience field edits batch under an
-   * explicit Save button so a half-edited audience can never reach the
-   * file.
+   * declared audiences that is committed back to the `publish:` section via
+   * `updatePublish({ audiences })` — coarse changes (add/delete) save
+   * immediately; per-audience field edits batch under an explicit Save button
+   * so a half-edited audience can never reach the file.
    */
 
   import { untrack } from 'svelte';
@@ -86,7 +85,7 @@
   });
 
   function hydrate() {
-    const fileDecls = configStore.config?.audiences ?? [];
+    const fileDecls = configStore.config?.publish?.audiences ?? [];
     // Deep clone via JSON so editing the working copy can't bleed into the
     // store's value before Save.
     originalDecls = JSON.parse(JSON.stringify(fileDecls));
@@ -141,7 +140,7 @@
     }
     isSaving = true;
     try {
-      await configStore.setField('audiences', JSON.stringify(updated));
+      await configStore.updatePublish({ audiences: updated });
       // After persist, treat the persisted shape as the new baseline.
       originalDecls = JSON.parse(JSON.stringify(updated));
       decls = JSON.parse(JSON.stringify(updated));

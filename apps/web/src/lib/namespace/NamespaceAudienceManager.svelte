@@ -64,9 +64,9 @@
   // file, the legacy panel hides itself.
   // ==========================================================================
 
-  const declaredAudiences = $derived(configStore.config?.audiences ?? null);
+  const declaredAudiences = $derived(configStore.config?.publish?.audiences ?? null);
   const audiencesMigrated = $derived(
-    configStore.config?.audiences_migrated === true,
+    configStore.config?.publish?.audiences_migrated === true,
   );
   const legacyEntriesPresent = $derived(
     Object.keys(audienceStates).length > 0,
@@ -342,10 +342,8 @@
     isMigrating = true;
     try {
       const decls = legacyToDecl();
-      // The setField API expects a string value; for structured fields we
-      // pass JSON which the Rust core re-parses into the expected shape.
-      await configStore.setField('audiences', JSON.stringify(decls));
-      await configStore.setField('audiences_migrated', 'true');
+      // Write both into the `publish:` section in one read-modify-write.
+      await configStore.updatePublish({ audiences: decls, audiences_migrated: true });
       showSuccess(
         `Imported ${decls.length} audience${decls.length === 1 ? '' : 's'} into the workspace file.`,
       );

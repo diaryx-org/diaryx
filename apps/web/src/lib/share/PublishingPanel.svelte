@@ -194,7 +194,7 @@
   // File-declared audiences (`audiences:` in the root index frontmatter) are
   // the source of truth when present. They supersede the legacy
   // `audience_states` map — see NamespaceAudienceManager's `usingFile` logic.
-  let declaredAudiences = $derived(configStore.config?.audiences ?? null);
+  let declaredAudiences = $derived(configStore.config?.publish?.audiences ?? null);
 
   let allAudiences = $derived.by(() => {
     const set = new Set(availableAudiences);

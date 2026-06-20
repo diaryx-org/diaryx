@@ -173,6 +173,15 @@ async fn authenticate_context(
     let service = SessionValidationService::new(&auth_store, &session_store);
     match service.validate(&token).await {
         Ok(auth_ctx) => Ok(Ok(auth_ctx)),
+        // A present-but-invalid/expired session (or a vanished user) surfaces as
+        // `NotFound`. At the HTTP boundary that's 401, not 404 — the client keys
+        // off 401 to clear its stale session and log out, and would otherwise
+        // keep the cached user around indefinitely. Other variants (e.g. a
+        // transient D1 `Internal`) keep their `error_response`-mapped status.
+        Err(e @ ServerCoreError::NotFound(_)) => Ok(Err(Response::from_json(
+            &serde_json::json!({ "error": e.to_string() }),
+        )
+        .map(|r| r.with_status(401))?)),
         Err(e) => Ok(Err(error_response(e)?)),
     }
 }
@@ -1302,39 +1311,18 @@ pub async fn delete_session(req: Request, ctx: RouteContext<()>) -> Result<Respo
 // ---------------------------------------------------------------------------
 
 pub async fn get_current_user(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let auth_store = D1AuthStore::new(db(&ctx)?);
-    let session_store = D1AuthSessionStore::new(db(&ctx)?);
-    let ns_store = D1NamespaceStore::new(db(&ctx)?);
-
-    let authorization = req.headers().get("Authorization")?;
-    let cookie = req.headers().get("Cookie")?;
-    let query = req.url()?.query().map(|s| s.to_string());
-
-    // Missing token → 401 (not a 500). Returning `Err(Error::from(...))?`
-    // here would bubble up to the Workers runtime as a generic 500 —
-    // caught by `test_me_without_auth_returns_401` in the shared contract
-    // suite. Matches the pattern already used in the auth-required
-    // extractor higher in this file.
-    let token = match extract_token(
-        authorization.as_deref(),
-        cookie.as_deref(),
-        query.as_deref(),
-    ) {
-        Some(t) => t,
-        None => {
-            return Response::from_json(
-                &serde_json::json!({ "error": "Authentication required" }),
-            )
-            .map(|r| r.with_status(401));
-        }
+    // Authenticate via the shared helper so every failure maps to the right
+    // status: missing token → 401, invalid/expired session → 401, transient DB
+    // error → 500. The previous inline `validate(...).map_err(Error::from)?`
+    // turned an expired session into a generic Worker 500, which the client
+    // mistook for a network blip and never logged out from.
+    let auth = match authenticate_context(&req, &ctx).await? {
+        Ok(auth_ctx) => auth_ctx,
+        Err(resp) => return Ok(resp),
     };
 
-    let validation = SessionValidationService::new(&auth_store, &session_store);
-    let auth = validation
-        .validate(&token)
-        .await
-        .map_err(|e| Error::from(e.to_string()))?;
-
+    let auth_store = D1AuthStore::new(db(&ctx)?);
+    let ns_store = D1NamespaceStore::new(db(&ctx)?);
     let current_user =
         diaryx_server::use_cases::current_user::CurrentUserService::new(&auth_store, &ns_store);
     match current_user.load(&auth.user.id, &auth.user.email).await {

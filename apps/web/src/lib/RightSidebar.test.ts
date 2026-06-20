@@ -132,7 +132,7 @@ vi.mock("$lib/utils/linkParser", () => ({
   parseLinkDisplay: vi.fn(() => null),
 }));
 
-vi.mock("$lib/backend/generated/serde_json/JsonValue", () => ({}));
+vi.mock("$lib/backend/generated/YamlValue", () => ({}));
 
 // --- Lucide icons: proxy that returns a stub for every named export ---
 vi.mock("@lucide/svelte", async () => {

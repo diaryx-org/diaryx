@@ -7,7 +7,7 @@
    * For Iframe component refs, renders plugin HTML in a sandboxed iframe.
    */
   import type { ComponentRef, PluginId } from "$lib/backend/generated";
-  import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
+  import type { YamlValue } from "$lib/backend/generated/YamlValue";
   import type { Api } from "$lib/backend/api";
   import type { EntryData } from "$lib/backend/interface";
   import PluginSettingsTab from "$lib/settings/PluginSettingsTab.svelte";
@@ -34,7 +34,7 @@
     nsCtx.init(api, (action) => onHostAction?.(action));
   });
 
-  let config = $state<Record<string, JsonValue>>({});
+  let config = $state<Record<string, YamlValue>>({});
   let legacyBuiltinFields = $derived(
     component.type === "Builtin"
       ? getLegacyBuiltinFields(component.component_id)
@@ -57,21 +57,21 @@
         const raw = await browserPlugin.getConfig();
         config = mergeRuntimePluginConfig(
           pluginId as unknown as string,
-          ((raw as Record<string, JsonValue>) ?? {}),
+          ((raw as Record<string, YamlValue>) ?? {}),
         );
         return;
       }
       const raw = await api.getPluginConfig(pluginId);
       config = mergeRuntimePluginConfig(
         pluginId as unknown as string,
-        ((raw as Record<string, JsonValue>) ?? {}),
+        ((raw as Record<string, YamlValue>) ?? {}),
       );
     } catch {
       config = {};
     }
   }
 
-  async function handleConfigChange(key: string, value: JsonValue) {
+  async function handleConfigChange(key: string, value: YamlValue) {
     config = { ...config, [key]: value };
     try {
       const browserPlugin = getBrowserPlugin(pluginId as unknown as string);

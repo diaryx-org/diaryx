@@ -49,7 +49,6 @@ import type {
   WorkspaceConfig,
   PluginManifest,
 } from './generated';
-import type { JsonValue } from './generated/serde_json/JsonValue';
 import type { YamlValue } from './generated/YamlValue';
 
 export type LinkPathType = 'workspace_root' | 'relative' | 'ambiguous';
@@ -275,7 +274,7 @@ async function withPluginPermissionRetry<T>(
  * Create a typed API wrapper around a Backend instance.
  */
 export function createApi(backend: Backend) {
-  function extractPluginComponentHtml(value: JsonValue): string | null {
+  function extractPluginComponentHtml(value: YamlValue): string | null {
     if (typeof value === 'string') {
       return value;
     }
@@ -284,7 +283,7 @@ export function createApi(backend: Backend) {
       return null;
     }
 
-    const obj = value as Record<string, JsonValue>;
+    const obj = value as Record<string, YamlValue>;
     if (typeof obj.response === 'string') return obj.response;
     if (typeof obj.html === 'string') return obj.html;
     if (typeof obj.data === 'string') return obj.data;
@@ -302,9 +301,9 @@ export function createApi(backend: Backend) {
   async function pluginCommand(
     plugin: string,
     command: string,
-    params: JsonValue = null,
+    params: YamlValue = null,
     requestFiles?: Record<string, Uint8Array>,
-  ): Promise<JsonValue> {
+  ): Promise<YamlValue> {
     return await withPluginPermissionRetry(backend, async () => {
       if (
         requestFiles &&
@@ -316,7 +315,7 @@ export function createApi(backend: Backend) {
           command,
           params,
           requestFiles,
-        ) as JsonValue;
+        ) as YamlValue;
       }
 
       const response = await backend.execute({
@@ -627,7 +626,7 @@ export function createApi(backend: Backend) {
     // =========================================================================
 
     /** Get all frontmatter properties for an entry. */
-    async getFrontmatter(path: string): Promise<Record<string, JsonValue | undefined>> {
+    async getFrontmatter(path: string): Promise<Record<string, YamlValue | undefined>> {
       const response = await backend.execute({ type: 'GetFrontmatter', params: { path } });
       return expectResponse(response, 'Frontmatter').data;
     },
@@ -637,13 +636,13 @@ export function createApi(backend: Backend) {
      * (no filesystem access). Use this instead of a JS YAML library when you
      * only need to read frontmatter out of an in-memory document.
      */
-    async parseFrontmatter(content: string): Promise<Record<string, JsonValue | undefined>> {
+    async parseFrontmatter(content: string): Promise<Record<string, YamlValue | undefined>> {
       const response = await backend.execute({ type: 'ParseFrontmatter', params: { content } });
       return expectResponse(response, 'Frontmatter').data;
     },
 
     /** Set a frontmatter property. Returns new path if a rename occurred (title + auto-rename), null otherwise. */
-    async setFrontmatterProperty(path: string, key: string, value: JsonValue, rootIndexPath?: string): Promise<string | null> {
+    async setFrontmatterProperty(path: string, key: string, value: YamlValue, rootIndexPath?: string): Promise<string | null> {
       const response = await backend.execute({
         type: 'SetFrontmatterProperty',
         params: { path, key, value, root_index_path: rootIndexPath ?? null },
@@ -1175,10 +1174,10 @@ export function createApi(backend: Backend) {
      * Write a file with metadata as YAML frontmatter + body content.
      * Generates the YAML frontmatter from the metadata and writes it to the file.
      */
-    async writeFileWithMetadata(path: string, metadata: JsonValue, body: string): Promise<void> {
+    async writeFileWithMetadata(path: string, metadata: YamlValue, body: string): Promise<void> {
       await backend.execute({
         type: 'WriteFileWithMetadata',
-        params: { path, metadata: metadata as YamlValue, body },
+        params: { path, metadata, body },
       });
     },
 
@@ -1186,10 +1185,10 @@ export function createApi(backend: Backend) {
      * Update file's frontmatter metadata, preserving or replacing the body.
      * If body is provided, it replaces the existing body.
      */
-    async updateFileMetadata(path: string, metadata: JsonValue, body?: string): Promise<void> {
+    async updateFileMetadata(path: string, metadata: YamlValue, body?: string): Promise<void> {
       await backend.execute({
         type: 'UpdateFileMetadata',
-        params: { path, metadata: metadata as YamlValue, body: body ?? null },
+        params: { path, metadata, body: body ?? null },
       });
     },
 
@@ -1283,7 +1282,7 @@ export function createApi(backend: Backend) {
     },
 
     /** Get a plugin's configuration. */
-    async getPluginConfig(plugin: string): Promise<JsonValue> {
+    async getPluginConfig(plugin: string): Promise<YamlValue> {
       const response = await backend.execute({
         type: 'GetPluginConfig',
         params: { plugin },
@@ -1299,10 +1298,10 @@ export function createApi(backend: Backend) {
      * config itself but never applies permission/migration changes without
      * explicit consent. Callers that don't need approval can ignore the result.
      */
-    async setPluginConfig(plugin: string, config: JsonValue): Promise<JsonValue> {
+    async setPluginConfig(plugin: string, config: YamlValue): Promise<YamlValue> {
       const response = await backend.execute({
         type: 'SetPluginConfig',
-        params: { plugin, config: config as YamlValue },
+        params: { plugin, config },
       });
       return expectResponse(response, 'PluginResult').data;
     },
@@ -1313,7 +1312,7 @@ export function createApi(backend: Backend) {
      * `null` when absent. Used by host-owned publish so config survives the
      * publish plugin's removal.
      */
-    async getWorkspacePluginData(rootIndexPath: string, plugin: string): Promise<JsonValue | null> {
+    async getWorkspacePluginData(rootIndexPath: string, plugin: string): Promise<YamlValue | null> {
       const response = await backend.execute({
         type: 'GetWorkspacePluginData' as any,
         params: { root_index_path: rootIndexPath, plugin },
@@ -1326,7 +1325,7 @@ export function createApi(backend: Backend) {
      * Write a plugin's workspace data (`plugins.<id>.config` in the resolved
      * config source) WITHOUT requiring the plugin to be registered.
      */
-    async setWorkspacePluginData(rootIndexPath: string, plugin: string, data: JsonValue): Promise<void> {
+    async setWorkspacePluginData(rootIndexPath: string, plugin: string, data: YamlValue): Promise<void> {
       await backend.execute({
         type: 'SetWorkspacePluginData' as any,
         params: { root_index_path: rootIndexPath, plugin, data },

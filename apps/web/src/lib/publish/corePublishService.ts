@@ -21,7 +21,7 @@ import { getBackend } from "$lib/backend";
 import type { WorkerBackendNew } from "$lib/backend/workerBackendNew";
 import type { WorkerApi } from "$lib/backend/wasmWorkerNew";
 import type { Api } from "$lib/backend/api";
-import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
+import type { YamlValue } from "$lib/backend/generated/YamlValue";
 import { createPublishProvider } from "./publishProvider";
 
 // ============================================================================
@@ -104,6 +104,38 @@ export function publishToNamespace(
   return runPublish(serverUrl, namespaceId, baseUrl, false);
 }
 
+/**
+ * Take the published site down to nothing: delete every object stored under the
+ * namespace (uploaded sources + server-rendered HTML/assets). The namespace,
+ * its audiences, and its subdomain mapping are preserved, so a later publish
+ * re-populates it. Returns `{ deleted }`.
+ *
+ * - **Tauri**: native IPC (auth lives in the keyring client).
+ * - **Browser**: list + delete on the main thread via the authenticated
+ *   `PublishProvider` fetches (cookie auth), so no WASM worker is involved.
+ */
+export async function unpublishNamespace(
+  serverUrl: string,
+  namespaceId: string,
+): Promise<{ deleted: number }> {
+  if (isTauri()) {
+    return tauriInvoke<{ deleted: number }>("unpublish_namespace", {
+      namespaceId,
+    });
+  }
+
+  const provider = createPublishProvider(serverUrl);
+  const objects = JSON.parse(await provider.listObjects(namespaceId)) as Array<{
+    key: string;
+  }>;
+  let deleted = 0;
+  for (const obj of objects) {
+    await provider.deleteObject(namespaceId, obj.key);
+    deleted += 1;
+  }
+  return { deleted };
+}
+
 // ============================================================================
 // Config (frontmatter `plugins."diaryx.publish"`, via core Get/SetPluginConfig)
 // ============================================================================
@@ -135,7 +167,7 @@ export async function setPublishConfig(
   await api.setWorkspacePluginData(root, PUBLISH_PLUGIN_ID, {
     ...existing,
     ...config,
-  } as unknown as JsonValue);
+  } as unknown as YamlValue);
 }
 
 /**

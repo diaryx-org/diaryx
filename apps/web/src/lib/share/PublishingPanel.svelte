@@ -17,6 +17,7 @@
     Loader2,
     Settings2,
     Tags,
+    Trash2,
   } from '@lucide/svelte';
   import * as corePublish from '$lib/publish/corePublishService';
   import { describePublishError } from '$lib/publish/publishErrors';
@@ -123,6 +124,10 @@
   let isPublishing = $state(false);
   let isCreatingNamespace = $state(false);
   let isPreviewing = $state(false);
+  let isUnpublishing = $state(false);
+
+  // Inline confirm for the destructive "remove published files" action.
+  let showUnpublishConfirm = $state(false);
 
   // ---- Preview / progress / receipt ----
 
@@ -186,18 +191,31 @@
 
   let isConfigured = $derived(namespaceId !== null);
 
+  // File-declared audiences (`audiences:` in the root index frontmatter) are
+  // the source of truth when present. They supersede the legacy
+  // `audience_states` map — see NamespaceAudienceManager's `usingFile` logic.
+  let declaredAudiences = $derived(configStore.config?.audiences ?? null);
+
   let allAudiences = $derived.by(() => {
     const set = new Set(availableAudiences);
     if (defaultAudience && !set.has(defaultAudience)) {
       set.add(defaultAudience);
+    }
+    for (const decl of declaredAudiences ?? []) {
+      set.add(decl.name);
     }
     return [...set];
   });
 
   let hasAnyAudience = $derived(allAudiences.length > 0);
 
+  // When audiences are declared in the workspace file, every declaration is a
+  // published audience (its gates control access, not whether it publishes).
+  // Otherwise fall back to the legacy per-audience `state` map.
   let publishedAudienceCount = $derived(
-    Object.values(audienceStates).filter(c => c.state !== 'unpublished').length
+    declaredAudiences !== null
+      ? declaredAudiences.length
+      : Object.values(audienceStates).filter(c => c.state !== 'unpublished').length
   );
 
   let hasPublishingAccess = $derived(
@@ -215,6 +233,9 @@
   );
 
   let firstPublishedAudience = $derived.by(() => {
+    if (declaredAudiences && declaredAudiences.length > 0) {
+      return declaredAudiences[0].name;
+    }
     const entry = Object.entries(audienceStates).find(([, c]) => c.state !== 'unpublished');
     return entry?.[0];
   });
@@ -432,6 +453,26 @@
     } finally {
       isPublishing = false;
       progress = null;
+    }
+  }
+
+  // ---- Unpublish (remove uploaded files) ----
+
+  async function handleUnpublish() {
+    if (!namespaceId) return;
+    clearError();
+    isUnpublishing = true;
+    try {
+      const { deleted } = await corePublish.unpublishNamespace(serverUrl, namespaceId);
+      // Any cached preview/receipt is now stale.
+      previewResult = null;
+      publishResult = null;
+      showSuccess(`Removed ${deleted} published file${deleted === 1 ? '' : 's'}`);
+    } catch (e) {
+      reportPublishError(e, 'Failed to remove published files');
+    } finally {
+      isUnpublishing = false;
+      showUnpublishConfirm = false;
     }
   }
 
@@ -707,6 +748,58 @@
               </div>
             {/if}
           </div>
+
+          <!-- Danger zone: remove all uploaded files for this namespace. -->
+          {#if isConfigured && namespaceId}
+            <div class="space-y-2 border-t border-border pt-3">
+              <span class="text-xs font-medium text-muted-foreground">Danger zone</span>
+              {#if !showUnpublishConfirm}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="w-full text-xs text-destructive hover:text-destructive"
+                  onclick={() => { showUnpublishConfirm = true; }}
+                  disabled={isUnpublishing || isPublishing}
+                >
+                  <Trash2 class="size-3.5 mr-1.5" />
+                  Remove published files
+                </Button>
+              {:else}
+                <div class="rounded-md border border-destructive/40 p-2.5 space-y-2">
+                  <p class="text-xs text-muted-foreground">
+                    Deletes every uploaded source and rendered page from your site.
+                    Your audiences and site address are kept; publish again to restore.
+                  </p>
+                  <div class="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      class="flex-1 text-xs"
+                      onclick={() => { showUnpublishConfirm = false; }}
+                      disabled={isUnpublishing}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      class="flex-1 text-xs"
+                      onclick={handleUnpublish}
+                      disabled={isUnpublishing}
+                    >
+                      {#if isUnpublishing}
+                        <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+                        Removing…
+                      {:else}
+                        <Trash2 class="size-3.5 mr-1.5" />
+                        Delete everything
+                      {/if}
+                    </Button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>

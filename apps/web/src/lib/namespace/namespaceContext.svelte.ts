@@ -93,10 +93,20 @@ export class NamespaceContext {
     );
   }
 
+  /**
+   * Audiences declared in the workspace file (`audiences:` in the root index
+   * frontmatter). When present, this is the source of truth and supersedes the
+   * legacy `audienceStates` map — see NamespaceAudienceManager's `usingFile`.
+   */
+  get declaredAudiences() { return this.configStore.config?.audiences ?? null; }
+
   get allAudiences(): string[] {
     const set = new Set(this.availableAudiences);
     if (this.defaultAudience && !set.has(this.defaultAudience)) {
       set.add(this.defaultAudience);
+    }
+    for (const decl of this.declaredAudiences ?? []) {
+      set.add(decl.name);
     }
     return [...set];
   }
@@ -104,6 +114,9 @@ export class NamespaceContext {
   get hasAnyAudience() { return this.allAudiences.length > 0; }
 
   get publishedAudienceCount() {
+    // File-declared audiences each publish (gates control access, not whether
+    // the audience publishes); fall back to the legacy per-audience state map.
+    if (this.declaredAudiences !== null) return this.declaredAudiences.length;
     return Object.values(this.audienceStates).filter(c => c.state !== 'unpublished').length;
   }
 
@@ -127,6 +140,8 @@ export class NamespaceContext {
   }
 
   get firstPublishedAudience(): string | undefined {
+    const declared = this.declaredAudiences;
+    if (declared && declared.length > 0) return declared[0].name;
     const entry = Object.entries(this.audienceStates).find(([, c]) => c.state !== 'unpublished');
     return entry?.[0];
   }

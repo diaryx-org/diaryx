@@ -16,7 +16,7 @@
   import { addFilesToZip } from "./lib/settings/zipUtils";
   import { useMobileGestures } from "$lib/hooks/useMobileGestures.svelte";
   import { createApi, type Api } from "./lib/backend/api";
-  import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
+  import type { YamlValue } from "./lib/backend/generated/YamlValue";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
   import { openOauthWindow } from "$lib/plugins/oauthWindow";
   import LeftSidebar from "./lib/LeftSidebar.svelte";
@@ -2890,7 +2890,7 @@
           try {
             const backend = workspaceStore.backend ?? await getBackend();
             const tauriApi = createApi(backend);
-            const data = await tauriApi.executePluginCommand(pluginId, command, params ?? {});
+            const data = await tauriApi.executePluginCommand(pluginId, command, (params ?? {}) as YamlValue);
             return { success: true, data };
           } catch (e) {
             return { success: false, error: e instanceof Error ? e.message : String(e) };
@@ -3068,7 +3068,7 @@
             try {
               if (!api) return;
               await api.attachEntryToParent(entryPath, oldParentPath);
-              await api.setFrontmatterProperty(oldParentPath, "contents", oldContents as JsonValue, tree?.path);
+              await api.setFrontmatterProperty(oldParentPath, "contents", oldContents as YamlValue, tree?.path);
               await refreshTree();
               if (currentEntry?.path === oldParentPath || currentEntry?.path === newParentPath) {
                 const refreshed = await api.getEntry(currentEntry!.path);
@@ -3301,7 +3301,7 @@
         }
       } else {
         // Non-title properties: update normally
-        await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue, tree?.path);
+        await api.setFrontmatterProperty(currentEntry.path, key, value as YamlValue, tree?.path);
         const updatedEntry = {
           ...currentEntry,
           frontmatter: { ...normalizedFrontmatter, [key]: value },
@@ -3332,7 +3332,7 @@
   async function handlePropertyAdd(key: string, value: unknown) {
     if (!api || !currentEntry) return;
     try {
-      await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue, tree?.path);
+      await api.setFrontmatterProperty(currentEntry.path, key, value as YamlValue, tree?.path);
       const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
       // Update local state
       const updatedEntry = {

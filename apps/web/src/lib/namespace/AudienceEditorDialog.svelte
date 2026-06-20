@@ -107,8 +107,12 @@
 
   function isDirty(index: number): boolean {
     const a = decls[index];
+    if (!a) return false;
     const b = originalDecls[index];
-    if (!a || !b) return false;
+    // No counterpart in the last-committed snapshot means this is a freshly
+    // added draft that has never been persisted — always treat as dirty so it
+    // can be saved and warns on close.
+    if (!b) return true;
     return JSON.stringify(a) !== JSON.stringify(b);
   }
 
@@ -116,6 +120,14 @@
     selectedIndex !== null && isDirty(selectedIndex),
   );
   const anyDirty = $derived(decls.some((_, i) => isDirty(i)));
+
+  // A draft is an audience that has been added to the working copy but not yet
+  // persisted. Drafts live past the end of `originalDecls` (they're appended).
+  // Only a draft's name is editable — once saved, entry `audience:` tags may
+  // reference the name, so renaming is locked (v1 constraint).
+  const isDraftSelected = $derived(
+    selectedIndex !== null && selectedIndex >= originalDecls.length,
+  );
 
   // ==========================================================================
   // Persistence helpers
@@ -174,21 +186,37 @@
     await reallyAdd();
   }
 
-  async function reallyAdd() {
+  function reallyAdd() {
+    // Stage the new audience in the working copy only. Persistence is deferred
+    // to Save so the writer can choose a name first (and a cancelled add never
+    // leaves a stray `audience-N` in the file).
     const next: AudienceDecl[] = [
       ...decls,
       { name: uniqueDefaultName(), gates: [], share_actions: [] },
     ];
-    const ok = await persist(next);
-    if (ok) {
-      selectedIndex = next.length - 1;
-      showSuccess('Audience added.');
+    decls = next;
+    selectedIndex = next.length - 1;
+  }
+
+  /** Drop an unsaved draft from the working copy and fix up the selection. */
+  function dropDraft(index: number) {
+    decls = decls.filter((_, i) => i !== index);
+    if (decls.length === 0) {
+      selectedIndex = null;
+    } else if (selectedIndex !== null && selectedIndex >= decls.length) {
+      selectedIndex = decls.length - 1;
     }
   }
 
   function deleteAudience(index: number) {
     const decl = decls[index];
     if (!decl) return;
+    // Unsaved draft: nothing is on disk and no entry can reference it yet, so
+    // drop it locally without the confirm prompt or a file write.
+    if (index >= originalDecls.length) {
+      dropDraft(index);
+      return;
+    }
     const hasPassword = decl.gates.some((g) => g.kind === 'password');
     const hasLink = decl.gates.some((g) => g.kind === 'link');
     const consequences: string[] = [];
@@ -238,15 +266,23 @@
           'Switching to a different audience without saving will discard the edits in progress.',
         destructive: true,
         onConfirm: () => {
-          // Roll back working copy to original for the dirty audience.
+          let target = index;
           if (selectedIndex !== null) {
-            decls = decls.map((d, i) =>
-              i === selectedIndex
-                ? JSON.parse(JSON.stringify(originalDecls[i]))
-                : d,
-            );
+            if (selectedIndex >= originalDecls.length) {
+              // Leaving an unsaved draft — drop it entirely. Drafts are
+              // appended last, so only later indices (if any) shift down.
+              decls = decls.filter((_, i) => i !== selectedIndex);
+              if (target > selectedIndex) target -= 1;
+            } else {
+              // Roll back working copy to original for the dirty audience.
+              decls = decls.map((d, i) =>
+                i === selectedIndex
+                  ? JSON.parse(JSON.stringify(originalDecls[i]))
+                  : d,
+              );
+            }
           }
-          selectedIndex = index;
+          selectedIndex = target;
         },
       });
       return;
@@ -256,6 +292,12 @@
 
   function discardChanges() {
     if (selectedIndex === null) return;
+    // Discarding a never-persisted draft removes it outright (there is no
+    // original to revert to).
+    if (selectedIndex >= originalDecls.length) {
+      dropDraft(selectedIndex);
+      return;
+    }
     decls = decls.map((d, i) =>
       i === selectedIndex
         ? JSON.parse(JSON.stringify(originalDecls[i]))
@@ -288,6 +330,11 @@
   function setSelectedDecl(updater: (d: AudienceDecl) => AudienceDecl) {
     if (selectedIndex === null) return;
     decls = decls.map((d, i) => (i === selectedIndex ? updater(d) : d));
+  }
+
+  /** Update the selected draft's name (only reachable while it is a draft). */
+  function setSelectedName(name: string) {
+    setSelectedDecl((d) => ({ ...d, name }));
   }
 
   // --- gates ----------------------------------------------------------------
@@ -561,19 +608,35 @@
             </p>
           </div>
         {:else}
-          <!-- Name (rename disabled in v1) -->
+          <!-- Name: editable while creating, locked once saved. Entry
+               `audience:` tags reference the name, so renaming an existing
+               audience would orphan them (v1 constraint). -->
           <div>
             <Label for="audience-name">Name</Label>
             <Input
               id="audience-name"
               type="text"
               value={selectedDecl.name}
-              disabled
-              title="Renaming an audience is not supported in v1 because entry frontmatter `audience:` tags reference the name. Delete this audience and create a new one if needed."
+              disabled={!isDraftSelected}
+              oninput={isDraftSelected
+                ? (e) => setSelectedName(e.currentTarget.value)
+                : undefined}
+              placeholder={isDraftSelected
+                ? 'e.g. family, close-friends'
+                : undefined}
+              title={isDraftSelected
+                ? 'Choose a name for this audience. After saving, renaming is disabled because entry `audience:` tags reference it.'
+                : 'Renaming an audience is not supported because entry frontmatter `audience:` tags reference the name. Delete this audience and create a new one if needed.'}
             />
             <p class="mt-1 text-[11px] text-muted-foreground">
-              Renaming is disabled — entry tags reference this name. Delete
-              and recreate to rename.
+              {#if isDraftSelected}
+                Pick a name matching the
+                <code class="rounded bg-muted px-1">audience:</code> tags on
+                your entries. Renaming locks after the first save.
+              {:else}
+                Renaming is disabled — entry tags reference this name. Delete
+                and recreate to rename.
+              {/if}
             </p>
           </div>
 

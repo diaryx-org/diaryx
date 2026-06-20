@@ -247,6 +247,21 @@ impl<'p> PublishService<'p> {
         Ok((plan, outcome))
     }
 
+    /// Delete every object stored under `ns_id` — both client-uploaded sources
+    /// and server-rendered HTML/assets — taking the published site down to
+    /// nothing. The namespace itself, its audiences, and its subdomain mapping
+    /// are left intact, so a subsequent publish re-populates it. Returns the
+    /// number of objects deleted.
+    pub async fn unpublish_all(&self, ns_id: &str) -> Result<usize, String> {
+        let existing = self.provider.list_objects(ns_id).await?;
+        let mut deleted = 0;
+        for obj in &existing {
+            self.provider.delete_object(ns_id, &obj.key).await?;
+            deleted += 1;
+        }
+        Ok(deleted)
+    }
+
     /// High-level entry point: read a workspace's file-declared audiences, collect
     /// each audience's sources, and publish — the single call native (Tauri) and
     /// web (diaryx_wasm) make to publish directly (no Extism plugin).
@@ -293,6 +308,14 @@ impl<'p> PublishService<'p> {
         let default_aud = config.default_audience.clone();
         let decls = config.audiences.clone().unwrap_or_default();
 
+        // ARK file blades already in the workspace, scanned once and shared
+        // across audiences so mint-on-publish backfill stays collision-free
+        // without rescanning per audience.
+        let workspace_dir = root_index_path.parent().unwrap_or(root_index_path);
+        let mut existing_blades = Workspace::new(fs.clone())
+            .collect_file_blades(workspace_dir)
+            .await;
+
         let mut audience_inputs: Vec<AudienceInput> = Vec::with_capacity(decls.len());
         for decl in &decls {
             let gates = crate::yaml::Value::Sequence(decl.gates.iter().map(gate_to_yaml).collect());
@@ -301,6 +324,7 @@ impl<'p> PublishService<'p> {
                 root_index_path,
                 &decl.name,
                 default_aud.as_deref(),
+                &mut existing_blades,
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -573,5 +597,38 @@ mod tests {
         // Unpublished → delete all objects (including server HTML).
         assert_eq!(plan.audiences[0].deletes.len(), 2);
         assert!(plan.audiences[0].uploads.is_empty());
+    }
+
+    #[test]
+    fn unpublish_all_deletes_every_object() {
+        let provider = FakeProvider {
+            existing: vec![
+                ObjectMeta {
+                    key: "public/index.html".into(),
+                    audience: Some("public".into()),
+                    content_hash: Some("a".into()),
+                },
+                ObjectMeta {
+                    key: "public/note.md".into(),
+                    audience: Some("public".into()),
+                    content_hash: Some("b".into()),
+                },
+                ObjectMeta {
+                    key: "family/index.html".into(),
+                    audience: Some("family".into()),
+                    content_hash: Some("c".into()),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let service = PublishService::new(&provider);
+        let deleted = futures_lite::future::block_on(service.unpublish_all("ns1")).unwrap();
+
+        assert_eq!(deleted, 3);
+        let deletes = provider.deletes.lock().unwrap();
+        assert_eq!(deletes.len(), 3);
+        assert!(deletes.contains(&"public/index.html".to_string()));
+        assert!(deletes.contains(&"family/index.html".to_string()));
     }
 }

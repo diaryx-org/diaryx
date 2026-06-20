@@ -96,3 +96,24 @@ pub async fn preview_to_namespace(
 
     Ok(serde_json::Value::from(plan.to_summary_json()))
 }
+
+/// Delete every object stored under the namespace (uploaded sources +
+/// server-rendered HTML/assets), taking the published site down to nothing. The
+/// namespace, its audiences, and its subdomain mapping are preserved. Returns
+/// the number of objects deleted.
+#[tauri::command]
+pub async fn unpublish_namespace(
+    state: State<'_, AuthServiceState>,
+    app: AppHandle,
+    namespace_id: String,
+) -> Result<serde_json::Value, String> {
+    let service = ensure_service(&state, &app)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+
+    let deleted = PublishService::new(service.client())
+        .unpublish_all(&namespace_id)
+        .await?;
+
+    Ok(serde_json::json!({ "deleted": deleted }))
+}

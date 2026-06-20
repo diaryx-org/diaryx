@@ -1,5 +1,5 @@
 import { isTauri } from "$lib/backend/interface";
-import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
+import type { YamlValue } from "$lib/backend/generated/YamlValue";
 
 const GDRIVE_PLUGIN_ID = "diaryx.storage.gdrive";
 const GITHUB_PLUGIN_ID = "diaryx.github";
@@ -51,8 +51,8 @@ function resolveOauthClientId(
 
 export function mergeRuntimePluginConfig(
   pluginId: string,
-  config: Record<string, JsonValue>,
-): Record<string, JsonValue> {
+  config: Record<string, YamlValue>,
+): Record<string, YamlValue> {
   if (pluginId !== GDRIVE_PLUGIN_ID && pluginId !== GITHUB_PLUGIN_ID) {
     return config;
   }
@@ -99,8 +99,8 @@ async function createPkcePair(): Promise<{
 export async function getRuntimePluginCommandParams(
   pluginId: string,
   command: string,
-  config: Record<string, JsonValue>,
-): Promise<Record<string, JsonValue>> {
+  config: Record<string, YamlValue>,
+): Promise<Record<string, YamlValue>> {
   if (
     (pluginId !== GDRIVE_PLUGIN_ID && pluginId !== GITHUB_PLUGIN_ID)
     || command !== "BeginOAuth"

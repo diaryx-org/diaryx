@@ -57,7 +57,7 @@
   import { getAuthState } from "$lib/auth";
   import PluginSidebarPanel from "$lib/components/PluginSidebarPanel.svelte";
   import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
-  import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
+  import type { YamlValue } from "$lib/backend/generated/YamlValue";
   import {
     getAttachmentAvailability,
     getAttachmentMediaKind,
@@ -157,7 +157,7 @@
   const rightSidebarPluginsLoading = $derived(pluginStore.rightSidebarLoading);
   let authState = $derived(getAuthState());
 
-  let aiPluginConfig = $state<Record<string, JsonValue>>({});
+  let aiPluginConfig = $state<Record<string, YamlValue>>({});
   let aiConfigLoading = $state(false);
 
   // Tab state — built-in "properties" + plugin tab IDs
@@ -182,7 +182,7 @@
     }
   });
 
-  function isManagedMode(config: Record<string, JsonValue>): boolean {
+  function isManagedMode(config: Record<string, YamlValue>): boolean {
     const mode = config.provider_mode;
     return typeof mode === "string" && mode.toLowerCase() === "managed";
   }
@@ -194,11 +194,11 @@
       const browserPlugin = getBrowserPlugin("diaryx.ai");
       if (browserPlugin) {
         const raw = await browserPlugin.getConfig();
-        aiPluginConfig = (raw as Record<string, JsonValue>) ?? {};
+        aiPluginConfig = (raw as Record<string, YamlValue>) ?? {};
         return;
       }
       const raw = await api.getPluginConfig("diaryx.ai");
-      aiPluginConfig = (raw as Record<string, JsonValue>) ?? {};
+      aiPluginConfig = (raw as Record<string, YamlValue>) ?? {};
     } catch {
       aiPluginConfig = {};
     } finally {

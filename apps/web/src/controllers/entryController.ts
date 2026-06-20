@@ -13,7 +13,7 @@
 
 import type { EntryData, TreeNode, Api, CreateChildResult } from '../lib/backend';
 import { getBackend } from '../lib/backend';
-import type { JsonValue } from '../lib/backend/generated/serde_json/JsonValue';
+import type { YamlValue } from '../lib/backend/generated/YamlValue';
 import { entryStore, uiStore } from '../models/stores';
 import {
   revokeBlobUrls,
@@ -437,7 +437,7 @@ export async function handlePropertyChange(
     } else {
       // Non-title properties: update normally
       const newFrontmatter = { ...normalizedFrontmatter, [key]: value };
-      await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue, options?.rootIndexPath);
+      await api.setFrontmatterProperty(currentEntry.path, key, value as YamlValue, options?.rootIndexPath);
       entryStore.setCurrentEntry({
         ...currentEntry,
         frontmatter: newFrontmatter,
@@ -489,7 +489,7 @@ export async function addProperty(
   rootIndexPath?: string
 ): Promise<boolean> {
   try {
-    await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue, rootIndexPath);
+    await api.setFrontmatterProperty(currentEntry.path, key, value as YamlValue, rootIndexPath);
     const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
 
     // Update local state

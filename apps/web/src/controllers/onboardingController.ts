@@ -11,7 +11,7 @@
  */
 
 import type { Api } from '../lib/backend/api';
-import type { JsonValue } from '../lib/backend/generated/serde_json/JsonValue';
+import type { YamlValue } from '../lib/backend/generated/YamlValue';
 import {
   resolveStorageType,
   storeWorkspaceFileSystemHandle,
@@ -171,7 +171,7 @@ If you want all the details, explore [the detailed guide](</Detailed Guide.md>) 
   const newPath = await apiInstance.setFrontmatterProperty(
     gettingStartedPath,
     "title",
-    "Detailed Guide" as JsonValue,
+    "Detailed Guide" as YamlValue,
     rootPath,
   );
   if (newPath) gettingStartedPath = newPath;

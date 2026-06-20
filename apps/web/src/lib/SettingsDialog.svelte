@@ -33,7 +33,7 @@
   import { runPluginUpdateConfigFlow } from "$lib/plugins/configUpdateFlow";
   import { mergeRuntimePluginConfig } from "$lib/plugins/pluginRuntimeConfig";
   import type { Api } from "$lib/backend/api";
-  import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
+  import type { YamlValue } from "$lib/backend/generated/YamlValue";
 
   interface Props {
     open?: boolean;
@@ -69,9 +69,9 @@
   const pluginSettingsTabs = $derived(pluginStore.settingsTabs);
 
   // Plugin config state: keyed by pluginId
-  let pluginConfigs = $state<Record<string, Record<string, JsonValue>>>({});
+  let pluginConfigs = $state<Record<string, Record<string, YamlValue>>>({});
 
-  function isManagedMode(config: Record<string, JsonValue>): boolean {
+  function isManagedMode(config: Record<string, YamlValue>): boolean {
     const mode = config.provider_mode;
     return typeof mode === "string" && mode.toLowerCase() === "managed";
   }
@@ -102,7 +102,7 @@
           ...pluginConfigs,
           [pluginId]: mergeRuntimePluginConfig(
             pluginId,
-            ((raw as Record<string, JsonValue>) ?? {}),
+            ((raw as Record<string, YamlValue>) ?? {}),
           ),
         };
         return;
@@ -113,7 +113,7 @@
         ...pluginConfigs,
         [pluginId]: mergeRuntimePluginConfig(
           pluginId,
-          ((raw as Record<string, JsonValue>) ?? {}),
+          ((raw as Record<string, YamlValue>) ?? {}),
         ),
       };
     } catch {
@@ -121,7 +121,7 @@
     }
   }
 
-  async function handlePluginConfigChange(pluginId: string, key: string, value: JsonValue) {
+  async function handlePluginConfigChange(pluginId: string, key: string, value: YamlValue) {
     const current = pluginConfigs[pluginId] ?? {};
     const updated = { ...current, [key]: value };
     pluginConfigs = { ...pluginConfigs, [pluginId]: updated };

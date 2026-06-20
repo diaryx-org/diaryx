@@ -35,13 +35,13 @@
   import Self from "./PluginSettingsTab.svelte";
   import { evaluateFieldCondition } from "./pluginFieldConditions";
   import type { SettingsField, SelectOption } from "$lib/backend/generated";
-  import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
+  import type { YamlValue } from "$lib/backend/generated/YamlValue";
 
   interface Props {
     pluginId: string;
     fields: SettingsField[];
-    config: Record<string, JsonValue>;
-    onConfigChange: (key: string, value: JsonValue) => void | Promise<void>;
+    config: Record<string, YamlValue>;
+    onConfigChange: (key: string, value: YamlValue) => void | Promise<void>;
     api?: Api | null;
     onHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
   }
@@ -83,7 +83,7 @@
   }
 
   function buildBrowserCallOptions(
-    params: Record<string, JsonValue>,
+    params: Record<string, YamlValue>,
   ): BrowserPluginCallOptions | undefined {
     const fileKey = typeof params.file_key === "string" ? params.file_key : null;
     if (!fileKey) {
@@ -101,7 +101,7 @@
   }
 
   async function buildNativeRequestFiles(
-    params: Record<string, JsonValue>,
+    params: Record<string, YamlValue>,
   ): Promise<Record<string, Uint8Array> | undefined> {
     const fileKey = typeof params.file_key === "string" ? params.file_key : null;
     if (!fileKey) {
@@ -141,7 +141,7 @@
     return envelope;
   }
 
-  function readConfigPatch(data: unknown): Record<string, JsonValue> | null {
+  function readConfigPatch(data: unknown): Record<string, YamlValue> | null {
     if (!data || typeof data !== "object" || !("config_patch" in data)) {
       return null;
     }
@@ -149,7 +149,7 @@
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
       return null;
     }
-    return patch as Record<string, JsonValue>;
+    return patch as Record<string, YamlValue>;
   }
 
   function readWorkspaceMetadataPatch(
@@ -203,7 +203,7 @@
 
   async function executePluginCommand(
     command: string,
-    params: Record<string, JsonValue>,
+    params: Record<string, YamlValue>,
   ): Promise<PluginCommandResult> {
     const browserPlugin = getPlugin(pluginId);
     if (browserPlugin) {
@@ -222,7 +222,7 @@
       const data = await api.executePluginCommand(
         pluginId,
         command,
-        params as JsonValue,
+        params as YamlValue,
         requestFiles,
       );
       return { success: true, data };
@@ -241,7 +241,7 @@
       return;
     }
     if (api) {
-      await api.setPluginConfig(pluginId, config as JsonValue);
+      await api.setPluginConfig(pluginId, config as YamlValue);
     }
   }
 
@@ -300,12 +300,12 @@
 
         const hostResultPatch =
           hostResult && typeof hostResult === "object" && !Array.isArray(hostResult)
-            ? (hostResult as Record<string, JsonValue>)
+            ? (hostResult as Record<string, YamlValue>)
             : {};
         result = await executePluginCommand(
           hostAction.follow_up.command,
           {
-            ...((hostAction.follow_up.params as Record<string, JsonValue> | undefined) ?? {}),
+            ...((hostAction.follow_up.params as Record<string, YamlValue> | undefined) ?? {}),
             ...hostResultPatch,
           },
         );

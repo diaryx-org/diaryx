@@ -61,6 +61,12 @@ async fn contract_me_without_auth_returns_401() {
 }
 
 #[tokio::test]
+async fn contract_me_with_invalid_token_returns_401() {
+    let (_s, d) = fresh_dispatcher().await;
+    contract::test_me_with_invalid_token_returns_401(&d).await;
+}
+
+#[tokio::test]
 async fn contract_delete_current_device_returns_actionable_error() {
     let (_s, d) = fresh_dispatcher().await;
     contract::test_delete_current_device_returns_actionable_error(&d).await;

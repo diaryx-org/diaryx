@@ -37,11 +37,16 @@ pub struct CollectedAudience {
 /// `default_audience` is the tag assigned to entries with no explicit/inherited
 /// audience (`None` ⇒ such entries are private). The workspace root index is
 /// emitted first and flagged `is_index` (its dest is `index.html`).
+/// `existing_blades` is the set of ARK file blades already present in the
+/// workspace, used for collision-free mint-on-publish. It is shared across all
+/// audiences in a single publish (and grows as new blades are minted) so the
+/// same workspace scan isn't repeated per audience.
 pub async fn collect_audience<FS>(
     fs: FS,
     workspace_root: &Path,
     audience: &str,
     default_audience: Option<&str>,
+    existing_blades: &mut HashSet<String>,
 ) -> Result<CollectedAudience>
 where
     FS: AsyncFileSystem + Clone,
@@ -81,8 +86,15 @@ where
     let mut seen_attachments: HashSet<String> = HashSet::new();
 
     for (idx, ef) in included.iter().enumerate() {
-        let Some((source, att_refs)) =
-            build_source_file(&fs, &ef.source_path, workspace_dir, audience, idx == 0).await?
+        let Some((source, att_refs)) = build_source_file(
+            &fs,
+            &ef.source_path,
+            workspace_dir,
+            audience,
+            idx == 0,
+            existing_blades,
+        )
+        .await?
         else {
             continue;
         };
@@ -120,11 +132,12 @@ async fn build_source_file<FS>(
     workspace_dir: &Path,
     audience: &str,
     is_root: bool,
+    existing_blades: &mut HashSet<String>,
 ) -> Result<Option<(SourceFile, Vec<String>)>>
 where
     FS: AsyncFileSystem,
 {
-    let content = match fs.read_to_string(path).await {
+    let mut content = match fs.read_to_string(path).await {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
@@ -135,7 +148,14 @@ where
         }
     };
 
-    let parsed = frontmatter::parse_or_empty(&content)?;
+    let mut parsed = frontmatter::parse_or_empty(&content)?;
+
+    // Mint-on-publish backfill: the server only registers an ARK (and thus only
+    // renders a page) when the upload carries a file blade, which comes from the
+    // entry's `id` frontmatter. Entries created before ARK id assignment have
+    // none, so mint a unique blade and persist it to the file here. Done before
+    // the source body is built so the uploaded source matches what's on disk.
+    let file_ark = ensure_file_ark(fs, path, &mut content, &mut parsed, existing_blades).await?;
 
     // Audience visibility filtering; the server stores this (pre-template) body.
     let filtered_body = visibility::filter_body_for_audience(&parsed.body, audience);
@@ -147,8 +167,6 @@ where
     }
     let source_markdown = frontmatter::serialize(&source_fm, &filtered_body)
         .unwrap_or_else(|_| filtered_body.clone());
-
-    let file_ark = frontmatter::get_string(&parsed.frontmatter, "id").map(String::from);
 
     let rel = path.strip_prefix(workspace_dir).unwrap_or(path);
     // Sources key by their (sanitized) workspace-relative path; only the dest
@@ -188,6 +206,73 @@ where
         },
         att_refs,
     )))
+}
+
+/// Ensure the entry at `path` carries a valid ARK file blade in its `id`
+/// frontmatter, minting and persisting one when absent (mint-on-publish
+/// backfill). Returns the blade to register the ARK against, or `None` when the
+/// entry has no valid id and no entropy source is compiled in (non-`uuid`
+/// builds — e.g. the dumb server, which never publishes).
+///
+/// On a successful mint the file is rewritten in place, `content`/`parsed` are
+/// updated to the new frontmatter, and the blade is inserted into
+/// `existing_blades` so later files in the same publish can't collide with it.
+async fn ensure_file_ark<FS>(
+    fs: &FS,
+    path: &Path,
+    content: &mut String,
+    parsed: &mut frontmatter::ParsedFile,
+    existing_blades: &mut HashSet<String>,
+) -> Result<Option<String>>
+where
+    FS: AsyncFileSystem,
+{
+    // Reuse an already-present, valid blade.
+    if let Some(id) = frontmatter::get_string(&parsed.frontmatter, "id")
+        && diaryx_ark::validate_file_blade(id).is_ok()
+    {
+        let id = id.to_string();
+        existing_blades.insert(id.clone());
+        return Ok(Some(id));
+    }
+
+    #[cfg(feature = "uuid")]
+    {
+        // Entropy from v4 UUIDs (refill a small byte buffer as the minter
+        // consumes it) — mirrors entry creation's minting.
+        let mut buf: Vec<u8> = Vec::new();
+        let mut rng = move || {
+            if buf.is_empty() {
+                buf.extend_from_slice(&uuid::Uuid::new_v4().into_bytes());
+            }
+            buf.pop().unwrap()
+        };
+        let blade = diaryx_ark::mint_file_blade_unique(&mut rng, |b| existing_blades.contains(b));
+
+        let new_content = frontmatter::set_property_in_text(
+            content,
+            "id",
+            &crate::yaml::Value::String(blade.clone()),
+        )?;
+        fs.write(path, new_content.as_bytes())
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
+        *parsed = frontmatter::parse_or_empty(&new_content)?;
+        *content = new_content;
+        existing_blades.insert(blade.clone());
+        Ok(Some(blade))
+    }
+
+    #[cfg(not(feature = "uuid"))]
+    {
+        // No entropy source: leave the file untouched and publish without a
+        // blade (the page won't render server-side, but neither build can mint).
+        let _ = (fs, path, content);
+        Ok(None)
+    }
 }
 
 /// Sanitize each component of a relative path and set its extension. Mirrors the
@@ -360,5 +445,98 @@ mod tests {
             mime_type_from_ext(Path::new("a.bin")),
             "application/octet-stream"
         );
+    }
+
+    /// Mint-on-publish: an entry with no `id` gets a valid ARK blade minted,
+    /// returned as `file_ark`, persisted to disk, and reflected in the uploaded
+    /// source markdown.
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn mint_on_publish_backfills_missing_id() {
+        use crate::fs::{InMemoryFileSystem, SyncToAsyncFs, block_on_test};
+        use crossfs::FileSystem;
+
+        let mem = InMemoryFileSystem::new();
+        mem.write(
+            Path::new("/ws/note.md"),
+            "---\ntitle: Note\n---\n\nBody".as_bytes(),
+        )
+        .unwrap();
+        let fs = SyncToAsyncFs::new(mem);
+
+        let mut blades = std::collections::HashSet::new();
+        let (source, _refs) = block_on_test(build_source_file(
+            &fs,
+            Path::new("/ws/note.md"),
+            Path::new("/ws"),
+            "public",
+            false,
+            &mut blades,
+        ))
+        .unwrap()
+        .expect("source built");
+
+        let ark = source.file_ark.clone().expect("file_ark minted");
+        assert!(diaryx_ark::validate_file_blade(&ark).is_ok());
+        assert!(blades.contains(&ark));
+
+        // Persisted to disk.
+        let on_disk = block_on_test(fs.read_to_string(Path::new("/ws/note.md"))).unwrap();
+        let parsed = crate::frontmatter::parse_or_empty(&on_disk).unwrap();
+        assert_eq!(
+            crate::frontmatter::get_string(&parsed.frontmatter, "id"),
+            Some(ark.as_str())
+        );
+
+        // The uploaded source carries the id too.
+        assert!(source.source_markdown.contains(&ark));
+    }
+
+    /// A re-publish must reuse the now-present id, not mint a fresh one.
+    #[cfg(feature = "uuid")]
+    #[test]
+    fn existing_id_is_reused_on_republish() {
+        use crate::fs::{InMemoryFileSystem, SyncToAsyncFs, block_on_test};
+        use crossfs::FileSystem;
+
+        let mem = InMemoryFileSystem::new();
+        mem.write(
+            Path::new("/ws/note.md"),
+            "---\ntitle: Note\n---\n\nBody".as_bytes(),
+        )
+        .unwrap();
+        let fs = SyncToAsyncFs::new(mem);
+
+        let mut blades = std::collections::HashSet::new();
+        let first = block_on_test(build_source_file(
+            &fs,
+            Path::new("/ws/note.md"),
+            Path::new("/ws"),
+            "public",
+            false,
+            &mut blades,
+        ))
+        .unwrap()
+        .unwrap()
+        .0
+        .file_ark
+        .unwrap();
+
+        let second = block_on_test(build_source_file(
+            &fs,
+            Path::new("/ws/note.md"),
+            Path::new("/ws"),
+            "public",
+            false,
+            &mut blades,
+        ))
+        .unwrap()
+        .unwrap()
+        .0
+        .file_ark
+        .unwrap();
+
+        assert_eq!(first, second, "id must be stable across publishes");
+        assert_eq!(blades.len(), 1, "no extra blade minted on republish");
     }
 }

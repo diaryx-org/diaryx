@@ -403,6 +403,26 @@ pub async fn test_me_without_auth_returns_401<D: HttpDispatcher>(dispatcher: &D)
     );
 }
 
+/// A request to `/api/auth/me` with a *present but invalid/expired* session
+/// token must return 401 — not 500. The token is well-formed enough to be
+/// extracted, but `validate()` reports it as not-found. If the adapter lets
+/// that bubble up as a generic error (e.g. the Workers runtime turning an
+/// `Err` into a 500), the web client treats it as a network blip, keeps the
+/// stale cached user, and never logs out — re-firing the failure on every
+/// init. 401 is the only status the client acts on to clear the session.
+pub async fn test_me_with_invalid_token_returns_401<D: HttpDispatcher>(dispatcher: &D) {
+    let resp = dispatcher
+        .dispatch(ContractRequest::get("/api/auth/me").with_bearer("definitely-not-a-real-session"))
+        .await;
+    assert_eq!(
+        resp.status,
+        401,
+        "/auth/me with an invalid token must be 401 (not 500), got {}: {}",
+        resp.status,
+        resp.body_text()
+    );
+}
+
 /// Deleting the device behind the current session must fail with an
 /// actionable JSON error. Otherwise settings clients can only show a generic
 /// "Failed to delete device" message for the most common invalid action.

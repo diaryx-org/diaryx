@@ -1,5 +1,5 @@
 import type { Api } from "$lib/backend/api"
-import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue"
+import type { YamlValue } from "$lib/backend/generated/YamlValue"
 import { dispatchCommand, getPlugin } from "$lib/plugins/browserPluginManager.svelte"
 
 type PluginCommandResult = {
@@ -106,7 +106,7 @@ export function applyPluginPermissionsPatch(
 async function executePluginCommand(
   pluginId: string,
   command: string,
-  params: Record<string, JsonValue>,
+  params: Record<string, YamlValue>,
   api?: Api | null,
 ): Promise<PluginCommandResult> {
   const browserPlugin = getPlugin(pluginId)
@@ -122,7 +122,7 @@ async function executePluginCommand(
   }
 
   try {
-    const data = await api.executePluginCommand(pluginId, command, params as JsonValue)
+    const data = await api.executePluginCommand(pluginId, command, params as YamlValue)
     return { success: true, data }
   } catch (error) {
     return {
@@ -251,7 +251,7 @@ export async function applyPermissionRequestWithConsent(args: {
  */
 export async function savePluginDeclarativeConfig(args: {
   pluginId: string
-  config: JsonValue
+  config: YamlValue
   api: Api
   workspacePath: string | null
 }): Promise<void> {
@@ -268,7 +268,7 @@ export async function savePluginDeclarativeConfig(args: {
 
 export async function runPluginUpdateConfigFlow(args: {
   pluginId: string
-  params: Record<string, JsonValue>
+  params: Record<string, YamlValue>
   api?: Api | null
   workspacePath?: string | null
 }): Promise<void> {

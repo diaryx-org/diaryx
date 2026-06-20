@@ -1,11 +1,11 @@
-import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
+import type { YamlValue } from "$lib/backend/generated/YamlValue";
 
 export interface FieldConditionAuthState {
   isAuthenticated: boolean;
   tier: string;
 }
 
-function parseConditionLiteral(raw: string): JsonValue {
+function parseConditionLiteral(raw: string): YamlValue {
   const value = raw.trim();
   if (value === "true") return true;
   if (value === "false") return false;
@@ -21,7 +21,7 @@ function parseConditionLiteral(raw: string): JsonValue {
 
 function matchesConfigCondition(
   condition: string,
-  config: Record<string, JsonValue>,
+  config: Record<string, YamlValue>,
 ): boolean | null {
   if (!condition.startsWith("config:")) return null;
 
@@ -46,7 +46,7 @@ function matchesConfigCondition(
 export function evaluateFieldCondition(
   condition: string,
   authState: FieldConditionAuthState,
-  config: Record<string, JsonValue>,
+  config: Record<string, YamlValue>,
 ): boolean {
   switch (condition) {
     case "authenticated":

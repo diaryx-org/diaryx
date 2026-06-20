@@ -8,7 +8,7 @@
 import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
 import { createApi, type Api } from "../backend/api";
 import type { Backend } from "../backend/interface";
-import type { JsonValue } from "../backend/generated/serde_json/JsonValue";
+import type { YamlValue } from "../backend/generated/YamlValue";
 import { getBackend } from "../backend";
 import { getWorkspaceDirectoryPath } from "../../controllers/onboardingController";
 import { deleteEntry } from "../../controllers";
@@ -244,7 +244,7 @@ export function registerE2EBridge(deps: E2EBridgeDeps): void {
       const updatedPath = await apiInstance.setFrontmatterProperty(
         resolvedPath,
         key,
-        value as JsonValue,
+        value as YamlValue,
         workspaceStore.tree?.path,
       );
       const effectivePath = updatedPath ?? resolvedPath;

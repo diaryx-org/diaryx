@@ -11,7 +11,7 @@ import {
   runPluginUpdateConfigFlow,
   savePluginDeclarativeConfig,
 } from "$lib/plugins/configUpdateFlow";
-import type { JsonValue } from "../backend/generated/serde_json/JsonValue";
+import type { YamlValue } from "../backend/generated/YamlValue";
 
 /**
  * Creates reactive workspace config state with backend persistence.
@@ -83,7 +83,7 @@ export function createWorkspaceConfigStore() {
    * that opt into host-managed config, e.g. the daily plugin). Surfaces any
    * permission request for approval, then re-reads the full workspace config.
    */
-  async function savePluginConfig(pluginId: string, pluginConfig: JsonValue) {
+  async function savePluginConfig(pluginId: string, pluginConfig: YamlValue) {
     if (!rootIndexPath) {
       error = "No workspace root index loaded";
       return;

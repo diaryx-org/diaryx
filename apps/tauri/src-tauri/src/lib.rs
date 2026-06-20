@@ -240,6 +240,7 @@ pub fn run() {
             namespace_commands::namespace_bulk_import_subscribers,
             publish_commands::publish_to_namespace,
             publish_commands::preview_to_namespace,
+            publish_commands::unpublish_namespace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,6 +6,7 @@ link_of:
 - '[Diaryx](/Diaryx.md)'
 - '[Diaryx](/diaryx.md)'
 link: '[PHILOSOPHY](/PHILOSOPHY.md)'
+id: 4z7yqp
 ---
 # PHILOSOPHY
 

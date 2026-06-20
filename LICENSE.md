@@ -3,6 +3,7 @@ title: LICENSE
 description: PolyForm Shield License 1.0.0
 part_of: '[Diaryx](/Diaryx.md)'
 updated: 2026-03-29T19:38:10-06:00
+id: wjjw6j
 ---
 The Diaryx project generally uses the PolyForm Shield license for its software, which allows any use except for competing with Diaryx’s business interests. This includes personal and even commercial non-competitive use. The full legal text of the license is below. Please contact us at [contact@diaryx.org](mailto:contact@diaryx.org) for clarification, information, or to request a special licensing exception.
 

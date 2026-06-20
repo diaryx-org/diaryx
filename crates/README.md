@@ -3,7 +3,6 @@ title: crates
 description: Cargo crates for Diaryx
 author: adammharris
 contents:
-- '[README](/crates/bookmatter/README.md)'
 - '[README](/crates/crossfs/README.md)'
 - '[README](/crates/diaryx/README.md)'
 - '[README](/crates/diaryx_server/README.md)'

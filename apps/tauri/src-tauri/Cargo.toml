@@ -14,7 +14,10 @@ crate-type = ["staticlib", "cdylib", "lib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-diaryx_core = { workspace = true, features = ["publish"] }
+# `uuid` is required for ARK id minting (entry creation + mint-on-publish). The
+# workspace pins diaryx_core with default-features = false, so it must be opted
+# in here explicitly — without it minting silently compiles out on native.
+diaryx_core = { workspace = true, features = ["publish", "uuid"] }
 diaryx_native = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true

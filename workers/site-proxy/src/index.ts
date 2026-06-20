@@ -61,6 +61,20 @@ const ROOT_SITE_SUBDOMAIN = 'main';
  * `diaryx_server`'s `ARK_WORKSPACE_INDEX`. */
 const ARK_WORKSPACE_INDEX = 'index';
 
+/** ARK NAAN (Name Assigning Authority Number). Until Diaryx registers its own
+ * with the ARK Alliance this is `99999` — the spec-reserved example NAAN —
+ * accepted only as an ALIAS of the bare `ark` label; the advertised canonical
+ * permalink stays the bare `/ark/{ws}/{file}` form. Resolution is blade-based
+ * and ignores the NAAN entirely, so swapping in a real NAAN here (and in
+ * `diaryx_server`'s `ARK_NAAN`) never breaks an already-shared link. */
+const ARK_NAAN = '99999';
+
+/** True when a first path segment denotes the ARK route: the bare `ark` label
+ * or the canonical `ark:{NAAN}` form (e.g. `ark:99999`). */
+function isArkPrefix(segment: string): boolean {
+  return segment === 'ark' || segment === `ark:${ARK_NAAN}`;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -80,7 +94,7 @@ export default {
     // global workspace-index on a non-site host (handled in standard routing).
     {
       const arkSegs = url.pathname.split('/').filter(Boolean);
-      if (arkSegs[0] === 'ark' && arkSegs.length >= 3) {
+      if (isArkPrefix(arkSegs[0]) && arkSegs.length >= 3) {
         const ws = decodeURIComponent(arkSegs[1]);
         // `/ark/{ws}/_a/{objectKey}` — sibling assets of an ARK-served page.
         if (arkSegs[2] === '_a') {
@@ -154,7 +168,7 @@ export default {
 
     // ARK global workspace-index route: /ark/{ws} on a non-site host. (The
     // /ark/{ws}/{file} file form is handled earlier, before site routing.)
-    if (slug === 'ark') {
+    if (isArkPrefix(slug)) {
       const ws = segments[1] ? decodeURIComponent(segments[1]) : null;
       if (!ws) {
         return notFound();
@@ -1081,7 +1095,7 @@ async function serveSubdomainSite(
   // Namespace-scoped ARK permalink: `/ark/{file}` (or `/ark` for the workspace
   // index). The workspace blade is implied by the subdomain's namespace. (The
   // global 3-segment `/ark/{ws}/{file}` form is intercepted before we get here.)
-  if (segments[0] === 'ark') {
+  if (isArkPrefix(segments[0])) {
     const file = segments[1] ? decodeURIComponent(segments[1]) : ARK_WORKSPACE_INDEX;
     return resolveArk(request, url, env, mapping.namespace_id, file);
   }
@@ -1182,7 +1196,7 @@ async function serveNamespaceCustomDomain(
 
   // Namespace-scoped ARK permalink: `/ark/{file}` (or `/ark` for the workspace
   // index). The global 3-segment form is intercepted before we get here.
-  if (segments[0] === 'ark') {
+  if (isArkPrefix(segments[0])) {
     const file = segments[1] ? decodeURIComponent(segments[1]) : ARK_WORKSPACE_INDEX;
     return resolveArk(request, url, env, mapping.namespace_id, file);
   }

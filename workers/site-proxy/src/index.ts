@@ -81,13 +81,16 @@ export default {
     {
       const arkSegs = url.pathname.split('/').filter(Boolean);
       if (arkSegs[0] === 'ark' && arkSegs.length >= 3) {
-        return resolveArk(
-          request,
-          url,
-          env,
-          decodeURIComponent(arkSegs[1]),
-          decodeURIComponent(arkSegs[2]),
-        );
+        const ws = decodeURIComponent(arkSegs[1]);
+        // `/ark/{ws}/_a/{objectKey}` — sibling assets of an ARK-served page.
+        if (arkSegs[2] === '_a') {
+          const objectKey = arkSegs
+            .slice(3)
+            .map((s) => decodeURIComponent(s))
+            .join('/');
+          return serveArkAsset(request, url, env, ws, objectKey);
+        }
+        return resolveArk(request, url, env, ws, decodeURIComponent(arkSegs[2]));
       }
     }
 
@@ -822,22 +825,23 @@ async function resolveArk(
   // The flat `/ark/{ws}/{file}` permalink doesn't mirror the site's directory
   // tree, so the rendered page's relative asset/nav links (`style.css`,
   // `feed.xml`, sibling `.html`) would resolve against `/ark/{ws}/` and 404.
-  // Anchor the page at its canonical `/sites/{ns}/{dir}/` mount via a <base>
-  // tag so every relative URL resolves where the assets actually live.
-  const arkBaseHref = buildArkSiteBaseHref(workspaceArk, entry.object_key);
+  // Anchor the page at the `/ark/{ws}/_a/{dir}/` asset mount via a <base> tag,
+  // so every relative URL resolves to a sibling object served by `serveArkAsset`
+  // (same origin, the object's own gates enforced).
+  const arkBaseHref = buildArkAssetBaseHref(workspaceArk, entry.object_key);
   return serveNamespaceObjectByKey(request, url, env, workspaceArk, entry.object_key, {
     arkBaseHref,
   });
 }
 
 /**
- * Build the absolute `<base href>` for an ARK-served page: the canonical
- * `/sites/{ns}/{dir}/` asset mount on the apex host, where `{dir}` is the
- * object key's directory (audience-prefixed, e.g. `public` or `public/sub`).
- * Absolute (apex) so it resolves identically from the apex permalink and from
- * the namespace-scoped `/ark/{file}` form on subdomain / custom-domain hosts.
+ * Build the `<base href>` for an ARK-served page: the `/ark/{ws}/_a/{dir}/`
+ * asset mount, where `{dir}` is the object key's directory (audience-prefixed,
+ * e.g. `public` or `public/sub`). Host-relative so it resolves on whichever
+ * host served the page; the global `/ark/{ws}/_a/...` interception (which runs
+ * before site routing on every host) serves the sibling object.
  */
-function buildArkSiteBaseHref(nsId: string, objectKey: string): string {
+function buildArkAssetBaseHref(nsId: string, objectKey: string): string {
   const slash = objectKey.lastIndexOf('/');
   const dir = slash === -1 ? '' : objectKey.slice(0, slash);
   const dirPath = dir
@@ -846,7 +850,28 @@ function buildArkSiteBaseHref(nsId: string, objectKey: string): string {
     .map(encodeURIComponent)
     .join('/');
   const trailingDir = dirPath ? `${dirPath}/` : '';
-  return `https://${SITE_DOMAIN}/sites/${encodeURIComponent(nsId)}/${trailingDir}`;
+  return `/ark/${encodeURIComponent(nsId)}/_a/${trailingDir}`;
+}
+
+/**
+ * Serve a sibling object of an ARK-served page (CSS, favicon, feeds, nav target
+ * pages), addressed as `/ark/{ws}/_a/{objectKey}`. Reuses the gate-enforcing
+ * object server WITHOUT the audience-prefix guard — access control comes from
+ * the object's own audience gates, not from the URL. Because `_a` mirrors the
+ * site's directory tree, relative links inside served sibling pages resolve
+ * transitively without further `<base>` injection.
+ */
+async function serveArkAsset(
+  request: Request,
+  url: URL,
+  env: Env,
+  nsId: string,
+  objectKey: string,
+): Promise<Response> {
+  if (!objectKey) {
+    return notFound();
+  }
+  return serveNamespaceObjectByKey(request, url, env, nsId, objectKey);
 }
 
 /**

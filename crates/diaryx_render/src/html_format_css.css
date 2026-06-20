@@ -74,6 +74,15 @@ a:hover {
     text-decoration: underline;
 }
 
+/* A link whose target isn't published for this audience: kept as text so the
+   page reads naturally, but visibly inert (muted, dotted underline). */
+.unpublished-link {
+    color: var(--text-muted);
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+    cursor: not-allowed;
+}
+
 .content h1, .content h2, .content h3, .content h4, .content h5, .content h6 {
     margin-top: 2rem;
     margin-bottom: 0.5rem;

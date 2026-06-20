@@ -22,6 +22,15 @@ pub fn root_prefix(dest_filename: &str) -> String {
 /// `.html` destinations, resolving relative/workspace-root paths via the
 /// `path_to_filename` map. External links, anchors, and non-`.md` hrefs are
 /// left untouched.
+///
+/// The lookup key is sanitized the same way `path_to_filename`'s keys are (see
+/// [`sanitize_rel_path`]), so a link like `First post!.md` resolves to the
+/// stored `First post.html` instead of a fabricated `First post!.html`.
+///
+/// A link whose target is **not** in this render set (excluded by audience
+/// visibility, or simply missing) is stripped: the `<a>` becomes a
+/// `<span class="unpublished-link">` that keeps the link text but isn't
+/// clickable, so the page never points at something that 404s.
 pub fn transform_links(
     html: &str,
     current_path: &Path,
@@ -38,45 +47,128 @@ pub fn transform_links(
     let mut result = String::with_capacity(html.len());
     let mut remaining = html;
 
-    while let Some(href_start) = remaining.find("href=\"") {
-        result.push_str(&remaining[..href_start + 6]);
-        remaining = &remaining[href_start + 6..];
+    while let Some(tag_start) = remaining.find("<a ") {
+        // Emit everything before the anchor verbatim.
+        result.push_str(&remaining[..tag_start]);
+        let after = &remaining[tag_start..];
 
-        if let Some(href_end) = remaining.find('"') {
-            let rest = &remaining[href_end..];
-            let raw_href = &remaining[..href_end];
+        // Find the end of the opening tag. comrak escapes `>` inside attribute
+        // values, so the first `>` reliably closes the tag.
+        let Some(gt) = after.find('>') else {
+            result.push_str(after);
+            remaining = "";
+            break;
+        };
+        let open_tag = &after[..=gt];
+        let tail = &after[gt + 1..];
 
-            if raw_href.ends_with(".md")
-                && !raw_href.starts_with("http://")
-                && !raw_href.starts_with("https://")
-                && !raw_href.starts_with('#')
-            {
-                let decoded_href = percent_decode(raw_href);
-                let parsed = link_parser::parse_link(&decoded_href);
-                let canonical = link_parser::to_canonical(&parsed, current_relative);
-                let target_path = workspace_dir.join(&canonical);
+        // Only internal `.md` links are candidates for rewrite/strip.
+        let canonical =
+            extract_href(open_tag).and_then(|href| md_link_canonical(href, current_relative));
 
-                let html_path = path_to_filename
-                    .get(&target_path)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        Path::new(&canonical)
-                            .with_extension("html")
-                            .to_string_lossy()
-                            .into_owned()
-                    });
-
-                result.push_str(&format!("{}{}", prefix, html_path));
-            } else {
-                result.push_str(raw_href);
+        match canonical {
+            None => {
+                // External link, anchor, or non-`.md` target — leave untouched.
+                result.push_str(open_tag);
+                remaining = tail;
             }
+            Some(canonical) => {
+                // Anchors can't nest, so the next `</a>` closes this one.
+                let Some(close) = tail.find("</a>") else {
+                    result.push_str(open_tag);
+                    remaining = tail;
+                    continue;
+                };
+                let inner = &tail[..close];
+                let after_close = &tail[close + "</a>".len()..];
 
-            remaining = rest;
+                let key = workspace_dir.join(sanitize_rel_path(&canonical));
+                match path_to_filename.get(&key) {
+                    Some(html_path) => {
+                        // Published target — rewrite the href, keep the anchor.
+                        result
+                            .push_str(&replace_href(open_tag, &format!("{}{}", prefix, html_path)));
+                        result.push_str(inner);
+                        result.push_str("</a>");
+                    }
+                    None => {
+                        // Not in this render set — strip to a marked span.
+                        result.push_str(
+                            r#"<span class="unpublished-link" title="This page isn’t published">"#,
+                        );
+                        result.push_str(inner);
+                        result.push_str("</span>");
+                    }
+                }
+                remaining = after_close;
+            }
         }
     }
     result.push_str(remaining);
 
     result
+}
+
+/// Extract the raw (still percent-encoded) `href="…"` value from an opening tag.
+fn extract_href(open_tag: &str) -> Option<&str> {
+    let start = open_tag.find("href=\"")? + 6;
+    let rest = &open_tag[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// If `raw_href` is an internal `.md` link, return its workspace-relative
+/// canonical path; otherwise `None` (external/anchor/non-`.md` links skipped).
+fn md_link_canonical(raw_href: &str, current_relative: &Path) -> Option<String> {
+    if !raw_href.ends_with(".md")
+        || raw_href.starts_with("http://")
+        || raw_href.starts_with("https://")
+        || raw_href.starts_with('#')
+    {
+        return None;
+    }
+    let decoded = percent_decode(raw_href);
+    let parsed = link_parser::parse_link(&decoded);
+    Some(link_parser::to_canonical(&parsed, current_relative))
+}
+
+/// Replace the `href="…"` value in an opening tag, preserving other attributes.
+fn replace_href(open_tag: &str, new_value: &str) -> String {
+    let Some(start) = open_tag.find("href=\"") else {
+        return open_tag.to_string();
+    };
+    let value_start = start + 6;
+    let rest = &open_tag[value_start..];
+    let Some(end) = rest.find('"') else {
+        return open_tag.to_string();
+    };
+    format!("{}{}{}", &open_tag[..value_start], new_value, &rest[end..])
+}
+
+/// Sanitize a single path component for safe use in URLs. Keeps alphanumerics,
+/// spaces, dots, hyphens, and underscores; strips URL-unsafe characters. Mirrors
+/// the publish client's dest-name sanitization so links resolve to the stored
+/// filenames.
+pub fn sanitize_path_component(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_' || *c == '.')
+        .collect()
+}
+
+/// Sanitize each component of a relative path, preserving its extension. Used to
+/// normalize both stored source paths and resolved frontmatter/body links to a
+/// common key form.
+pub fn sanitize_rel_path(path: &str) -> String {
+    let sanitized: PathBuf = Path::new(path)
+        .components()
+        .map(|c| match c {
+            std::path::Component::Normal(s) => {
+                std::ffi::OsString::from(sanitize_path_component(&s.to_string_lossy()))
+            }
+            other => other.as_os_str().to_owned(),
+        })
+        .collect();
+    sanitized.to_string_lossy().into_owned()
 }
 
 /// Decode percent-encoded characters in a URL string (e.g. `%20` → ` `).
@@ -152,13 +244,48 @@ mod tests {
     }
 
     #[test]
-    fn transform_links_unknown_md_falls_back_to_html_extension() {
+    fn transform_links_unknown_md_is_stripped_and_marked() {
+        // A link to a page that isn't in the render set (excluded/missing) must
+        // not become a dead .html link — it's stripped to a marked span that
+        // keeps the text but isn't clickable.
         let workspace = Path::new("/ws");
         let map = HashMap::new();
-        let html = r#"<a href="missing.md">x</a>"#;
+        let html = r#"<a href="missing.md">link text</a>"#;
         let current = Path::new("/ws/source.md");
         let out = transform_links(html, current, &map, workspace, "source.html");
-        assert_eq!(out, r#"<a href="missing.html">x</a>"#);
+        assert_eq!(
+            out,
+            r#"<span class="unpublished-link" title="This page isn’t published">link text</span>"#
+        );
+    }
+
+    #[test]
+    fn transform_links_resolves_sanitized_target() {
+        // The link text references "First post!.md" but the stored/published key
+        // is the sanitized "First post.md" → "First post.html". The '!' must not
+        // leak into the href (regression for the sanitization-mismatch bug).
+        let workspace = Path::new("");
+        let mut map = HashMap::new();
+        map.insert(
+            PathBuf::from("First post.md"),
+            "First post.html".to_string(),
+        );
+        let html = r#"<a href="First%20post!.md">x</a>"#;
+        let current = Path::new("source.md");
+        let out = transform_links(html, current, &map, workspace, "source.html");
+        assert_eq!(out, r#"<a href="First post.html">x</a>"#);
+    }
+
+    #[test]
+    fn transform_links_preserves_inner_markup_when_stripping() {
+        let workspace = Path::new("");
+        let map = HashMap::new();
+        let html = r#"<a href="gone.md">see <em>this</em></a>"#;
+        let current = Path::new("source.md");
+        let out = transform_links(html, current, &map, workspace, "source.html");
+        assert!(out.contains(r#"<span class="unpublished-link""#));
+        assert!(out.contains("see <em>this</em></span>"));
+        assert!(!out.contains("<a "));
     }
 
     #[test]

@@ -94,7 +94,7 @@ pub fn build_pages(sources: &[SourceDoc], audience: Option<&str>) -> Vec<Publish
         } else {
             output_filename(&s.path)
         };
-        path_to_filename.insert(PathBuf::from(sanitize_rel_path(&s.path)), dest);
+        path_to_filename.insert(PathBuf::from(links::sanitize_rel_path(&s.path)), dest);
     }
 
     // Map sanitized canonical `.md` path → frontmatter title (for contents/
@@ -103,7 +103,10 @@ pub fn build_pages(sources: &[SourceDoc], audience: Option<&str>) -> Vec<Publish
     for s in sources {
         if let Ok(parsed) = frontmatter::parse_or_empty(&s.markdown) {
             if let Some(t) = frontmatter::get_string(&parsed.frontmatter, "title") {
-                title_map.insert(PathBuf::from(sanitize_rel_path(&s.path)), t.to_string());
+                title_map.insert(
+                    PathBuf::from(links::sanitize_rel_path(&s.path)),
+                    t.to_string(),
+                );
             }
         }
     }
@@ -199,7 +202,7 @@ fn build_page(
 
     let current_path = PathBuf::from(&s.path);
     let dest_filename = path_to_filename
-        .get(&PathBuf::from(sanitize_rel_path(&s.path)))
+        .get(&PathBuf::from(links::sanitize_rel_path(&s.path)))
         .cloned()
         .unwrap_or_else(|| output_filename(&s.path));
 
@@ -213,13 +216,17 @@ fn build_page(
                 .to_string()
         });
 
+    // Resolve only against THIS audience's rendered set: a `contents`/`part_of`
+    // link whose target was excluded for this audience is dropped, so it never
+    // surfaces as a dead nav/breadcrumb entry that 404s. The render set is the
+    // manifest — no separate per-audience list is needed.
     let contents_links: Vec<NavLink> = frontmatter::get_string_array(fm, "contents")
         .into_iter()
-        .map(|child| resolve_link(&child, &current_path, path_to_filename, title_map))
+        .filter_map(|child| resolve_link(&child, &current_path, path_to_filename, title_map))
         .collect();
 
     let parent_link = frontmatter::get_string(fm, "part_of")
-        .map(|p| resolve_link(p, &current_path, path_to_filename, title_map));
+        .and_then(|p| resolve_link(p, &current_path, path_to_filename, title_map));
 
     // The stored body is already visibility-filtered; template rendering still
     // needs to run (sources are stored pre-template). `template::render*`
@@ -281,23 +288,25 @@ fn build_page(
 
 /// Resolve a `contents`/`part_of` link string to a [`NavLink`] whose href is the
 /// target's output `.html` filename and whose title comes from the target's
-/// frontmatter, the link text, or a filename-derived fallback.
+/// frontmatter or the link text.
+///
+/// Returns `None` when the target is not part of the current render set (e.g.
+/// excluded by audience visibility). Dropping it keeps nav/breadcrumbs limited
+/// to pages that actually exist for this audience — without any separate
+/// manifest, since `path_to_filename` already is the rendered-page set.
 fn resolve_link(
     link_str: &str,
     current_relative: &Path,
     path_to_filename: &HashMap<PathBuf, String>,
     title_map: &HashMap<PathBuf, String>,
-) -> NavLink {
+) -> Option<NavLink> {
     let parsed = link_parser::parse_link(link_str);
     let canonical = link_parser::to_canonical(&parsed, current_relative);
     // Sanitize so links carrying unsanitized characters resolve against the
     // sanitized source-path keys.
-    let key = PathBuf::from(sanitize_rel_path(&canonical));
+    let key = PathBuf::from(links::sanitize_rel_path(&canonical));
 
-    let href = path_to_filename
-        .get(&key)
-        .cloned()
-        .unwrap_or_else(|| output_filename(&canonical));
+    let href = path_to_filename.get(&key)?.clone();
 
     let title = title_map
         .get(&key)
@@ -305,7 +314,7 @@ fn resolve_link(
         .or_else(|| parsed.title.clone())
         .unwrap_or_else(|| filename_to_title(&canonical));
 
-    NavLink { href, title }
+    Some(NavLink { href, title })
 }
 
 // ── Filename helpers (ported from the publish plugin) ────────────────────────
@@ -317,31 +326,7 @@ fn output_filename(canonical_md: &str) -> String {
         .components()
         .map(|c| match c {
             std::path::Component::Normal(s) => {
-                std::ffi::OsString::from(sanitize_path_component(&s.to_string_lossy()))
-            }
-            other => other.as_os_str().to_owned(),
-        })
-        .collect();
-    sanitized.to_string_lossy().into_owned()
-}
-
-/// Sanitize a single path component for safe use in URLs. Keeps alphanumerics,
-/// spaces, dots, hyphens, and underscores; strips URL-unsafe characters.
-fn sanitize_path_component(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_' || *c == '.')
-        .collect()
-}
-
-/// Sanitize each component of a relative path, preserving its extension. Used to
-/// normalize both stored source paths and resolved frontmatter links to a common
-/// key form (the same sanitization the publish client applies to dest names).
-fn sanitize_rel_path(path: &str) -> String {
-    let sanitized: PathBuf = Path::new(path)
-        .components()
-        .map(|c| match c {
-            std::path::Component::Normal(s) => {
-                std::ffi::OsString::from(sanitize_path_component(&s.to_string_lossy()))
+                std::ffi::OsString::from(links::sanitize_path_component(&s.to_string_lossy()))
             }
             other => other.as_os_str().to_owned(),
         })
@@ -453,6 +438,56 @@ mod tests {
         let parent = note_page.parent_link.as_ref().unwrap();
         assert_eq!(parent.href, "index.html");
         assert_eq!(parent.title, "Home");
+    }
+
+    #[test]
+    fn contents_link_to_excluded_page_is_dropped() {
+        // The root lists two children, but only one is in the render set (the
+        // other was excluded for this audience). Nav/contents must not link to
+        // the missing page — that's the source-side cause of the 404 sidebar
+        // entries.
+        let index = "---\ntitle: Home\ncontents:\n  - \"/public-child.md\"\n  - \"/private-child.md\"\n---\nHi.\n";
+        let public_child = "---\ntitle: Public Child\npart_of: \"/index.md\"\n---\nBody.\n";
+
+        let sources = vec![
+            src("index.md", index, true),
+            src("public-child.md", public_child, false),
+        ];
+        let pages = build_pages(&sources, None);
+
+        let home = pages.iter().find(|p| p.is_root).unwrap();
+        assert_eq!(home.contents_links.len(), 1, "excluded child dropped");
+        assert_eq!(home.contents_links[0].href, "public-child.html");
+
+        // And the rendered nav reflects only the included child.
+        let out = render_site(&sources, &SiteOptions::default());
+        let home_html = out
+            .pages
+            .iter()
+            .find(|p| p.dest_filename == "index.html")
+            .unwrap();
+        assert!(home_html.html.contains("public-child.html"));
+        assert!(!home_html.html.contains("private-child.html"));
+    }
+
+    #[test]
+    fn parent_link_to_excluded_page_is_dropped() {
+        // A page whose parent was excluded for this audience must not carry a
+        // dead breadcrumb/parent link.
+        let index = "---\ntitle: Home\n---\nHi.\n";
+        let orphan = "---\ntitle: Orphan\npart_of: \"/excluded.md\"\n---\nBody.\n";
+
+        let sources = vec![
+            src("index.md", index, true),
+            src("orphan.md", orphan, false),
+        ];
+        let pages = build_pages(&sources, None);
+
+        let orphan_page = pages
+            .iter()
+            .find(|p| p.dest_filename == "orphan.html")
+            .unwrap();
+        assert!(orphan_page.parent_link.is_none());
     }
 
     #[test]

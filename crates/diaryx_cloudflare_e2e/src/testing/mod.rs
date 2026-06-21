@@ -6,7 +6,7 @@
 //!   on drop.
 //! - [`sign_in_dev`] — drives the dev-mode magic-link → verify dance
 //!   against any Diaryx server base URL (sync_server or cloudflare), using
-//!   reqwest. Mirrors `diaryx_sync_server::testing::TestServer::sign_in_dev`
+//!   reqwest. Mirrors `diaryx_selfhosted::testing::TestServer::sign_in_dev`
 //!   but free-standing so consumers can point it at a live wrangler port.
 //!
 //! Both are intentionally live-process fixtures: the `tower::oneshot` /

@@ -1,22 +1,22 @@
 ---
-title: diaryx_sync_server src
+title: diaryx_selfhosted src
 description: Source code for the sync server
-part_of: '[README](/crates/diaryx_sync_server/README.md)'
+part_of: '[README](/crates/diaryx_selfhosted/README.md)'
 contents:
-- '[README](/crates/diaryx_sync_server/src/auth/README.md)'
-- '[README](/crates/diaryx_sync_server/src/db/README.md)'
-- '[README](/crates/diaryx_sync_server/src/email/README.md)'
-- '[README](/crates/diaryx_sync_server/src/handlers/README.md)'
-- '[README](/crates/diaryx_sync_server/src/sync_v2/README.md)'
+- '[README](/crates/diaryx_selfhosted/src/auth/README.md)'
+- '[README](/crates/diaryx_selfhosted/src/db/README.md)'
+- '[README](/crates/diaryx_selfhosted/src/email/README.md)'
+- '[README](/crates/diaryx_selfhosted/src/handlers/README.md)'
+- '[README](/crates/diaryx_selfhosted/src/sync_v2/README.md)'
 exclude:
 - '*.lock'
 ---
 
-# diaryx_sync_server Source
+# diaryx_selfhosted Source
 
 This directory contains the source code for the Diaryx sync server.
 
-`diaryx_sync_server` now acts as the native adapter around the shared
+`diaryx_selfhosted` now acts as the native adapter around the shared
 `diaryx_server` core so future platforms can bind to the same business logic
 without pulling Axum or cloud-runtime details into the core.
 

@@ -14,7 +14,7 @@ Platform-agnostic Rust core for Diaryx server-side business logic.
 
 This crate is intentionally independent from HTTP frameworks and cloud/runtime
 bindings. It exposes shared domain types, capability traits, and use cases that
-can be reused by native adapters (`diaryx_sync_server`) and future Cloudflare
+can be reused by native adapters (`diaryx_selfhosted`) and future Cloudflare
 adapters.
 
 The shared core now includes typed `ServerCoreError` variants plus portable
@@ -36,7 +36,7 @@ shared by every Diaryx server adapter:
 The entire module is wasm32-compatible (no tokio, axum, rusqlite, siphonophore,
 or git2). Native-only implementations (`SqliteStorage`, `StorageCache`,
 `DiarySyncHook`, axum WebSocket wiring, git history) live in
-`diaryx_sync_server::sync_v2`. The Cloudflare Workers adapter
+`diaryx_selfhosted::sync_v2`. The Cloudflare Workers adapter
 (`diaryx_cloudflare`) implements its own D1-backed `CrdtStorage` and Durable
 Object WebSocket layer against the same traits.
 
@@ -54,7 +54,7 @@ Two public modules exist for cross-adapter testing:
   **any** server adapter must pass. Includes the `URL_KEY_CORPUS` fixture of
   URL-encoding edge cases. Adapters wire up an `HttpDispatcher` and invoke
   the shared tests against their own router. Current consumers:
-  - [`diaryx_sync_server/tests/contract.rs`](../diaryx_sync_server/tests/contract.rs)
+  - [`diaryx_selfhosted/tests/contract.rs`](../diaryx_selfhosted/tests/contract.rs)
     — in-process Axum via `tower::ServiceExt::oneshot`.
   - [`diaryx_cloudflare_e2e`](../diaryx_cloudflare_e2e) — `wrangler dev --local`
     via [`contract::http::ReqwestDispatcher`] (gated behind the
@@ -86,5 +86,5 @@ helper that does the dev-mode magic-link → verify dance against whatever
 base URL the dispatcher talks to. Add new contract tests to
 [`src/contract/mod.rs`](src/contract/mod.rs); both adapter wrappers pick
 them up automatically once invocations land in
-`diaryx_sync_server/tests/contract.rs` and
+`diaryx_selfhosted/tests/contract.rs` and
 `diaryx_cloudflare_e2e/tests/contract.rs`.

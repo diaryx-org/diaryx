@@ -183,7 +183,7 @@ pub enum DiaryxError {
     /// Error from database operations.
     ///
     /// Stored as a string so `diaryx_core` stays free of any specific database
-    /// driver dependency. Callers in `diaryx_sync_server` (SQLite) and the
+    /// driver dependency. Callers in `diaryx_selfhosted` (SQLite) and the
     /// Cloudflare D1 adapter convert their native error types into this variant.
     #[error("Database error: {0}")]
     Database(String),

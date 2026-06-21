@@ -1,6 +1,6 @@
 [package]
-name = "diaryx_sync_server"
-description = "Multi-device sync server for Diaryx with magic link authentication"
+name = "diaryx_selfhosted"
+description = "Self-hosted Diaryx backend (Axum + SQLite) with magic link authentication"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

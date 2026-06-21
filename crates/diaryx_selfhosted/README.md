@@ -1,10 +1,10 @@
 ---
-title: diaryx_sync_server
+title: diaryx_selfhosted
 description: Sync server used by frontends
 author: adammharris
 part_of: '[README](/crates/README.md)'
 contents:
-- '[README](/crates/diaryx_sync_server/src/README.md)'
+- '[README](/crates/diaryx_selfhosted/src/README.md)'
 exclude:
 - '*.lock'
 - '*.db'
@@ -15,7 +15,7 @@ A Rust-based multi-device sync server for Diaryx with magic link authentication.
 
 ## Architecture
 
-`diaryx_sync_server` is the native runtime adapter for the platform-agnostic
+`diaryx_selfhosted` is the native runtime adapter for the platform-agnostic
 [`diaryx_server`](/crates/diaryx_server/README.md) crate. Shared business rules
 are moving into that core crate while this package continues to own the Axum
 HTTP layer, SQLite repositories, and the current Rust sync engine.
@@ -42,7 +42,7 @@ export EMAIL_FROM=noreply@yourapp.com
 export APP_BASE_URL=https://yourapp.com
 
 # Run the server
-cargo run -p diaryx_sync_server
+cargo run -p diaryx_selfhosted
 ```
 
 ## Environment Variables
@@ -454,7 +454,7 @@ The WebSocket connection uses the Y-sync protocol (compatible with y-protocols).
 
 ```text
 ┌─────────────────┐                    ┌─────────────────────────┐
-│   Web/Tauri     │◄──── WS (metadata) │  diaryx_sync_server     │
+│   Web/Tauri     │◄──── WS (metadata) │  diaryx_selfhosted     │
 │   Client        │◄──── WS (body 1)   │  (Rust + axum)          │
 │                 │◄──── WS (body 2)   │                         │
 └─────────────────┘◄──── WS (body N)   │  ┌─────────────────┐    │
@@ -480,24 +480,24 @@ Workspace metadata (titles, hierarchy) syncs via a single shared connection.
 
 ```bash
 # Without email (dev mode - magic link returned in response)
-cargo run -p diaryx_sync_server
+cargo run -p diaryx_selfhosted
 
 # With email
 SMTP_HOST=smtp.mailtrap.io \
 SMTP_USERNAME=xxx \
 SMTP_PASSWORD=xxx \
 SMTP_FROM_EMAIL=test@example.com \
-cargo run -p diaryx_sync_server
+cargo run -p diaryx_selfhosted
 ```
 
 ### Testing
 
 ```bash
 # Run all tests (unit + E2E)
-cargo test -p diaryx_sync_server
+cargo test -p diaryx_selfhosted
 
 # Run only E2E integration tests
-cargo test -p diaryx_sync_server --test e2e_sync -- --nocapture
+cargo test -p diaryx_selfhosted --test e2e_sync -- --nocapture
 ```
 
 #### E2E Test Suite

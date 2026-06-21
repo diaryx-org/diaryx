@@ -24,13 +24,13 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Build release binary
-        run: nix build .#diaryx-sync-server
+        run: nix build .#diaryx-selfhosted
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: sync-server-binary
-          path: result/bin/diaryx_sync_server
+          path: result/bin/diaryx_selfhosted
 
   deploy:
     name: Deploy to VPS
@@ -53,7 +53,7 @@ jobs:
           host: ${{ secrets.DEPLOY_SSH_HOST }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: artifact/diaryx_sync_server,deploy/deploy-sync-server.sh,deploy/Caddyfile,deploy/diaryx-sync.service
+          source: artifact/diaryx_selfhosted,deploy/deploy-sync-server.sh,deploy/Caddyfile,deploy/diaryx-sync.service
           target: /tmp/diaryx-deploy
           strip_components: 1
 

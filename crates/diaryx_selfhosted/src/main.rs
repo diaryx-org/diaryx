@@ -4,7 +4,7 @@ use axum::{
     http::{Method, header},
     routing::get,
 };
-use diaryx_sync_server::{
+use diaryx_selfhosted::{
     adapters::{
         NativeArkIndexStore, NativeAuthSessionStore, NativeAuthStore, NativeDomainMappingCache,
         NativeNamespaceStore, NativeObjectMetaStore, NativeSessionStore, NativeUserStore,
@@ -40,7 +40,7 @@ async fn main() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "diaryx_sync_server=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "diaryx_selfhosted=debug,tower_http=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -115,12 +115,12 @@ async fn main() {
     ));
 
     // Create shared rate limiter
-    let rate_limiter = diaryx_sync_server::rate_limit::RateLimiter::new();
+    let rate_limiter = diaryx_selfhosted::rate_limit::RateLimiter::new();
 
     let auth_extractor = AuthExtractor::new(auth_store.clone(), auth_session_store.clone());
 
     // Create handler states
-    let auth_state = diaryx_sync_server::handlers::auth::AuthState {
+    let auth_state = diaryx_selfhosted::handlers::auth::AuthState {
         magic_link_service,
         email_service: email_service.clone(),
         auth_store,
@@ -132,7 +132,7 @@ async fn main() {
         secure_cookies: config.secure_cookies,
     };
 
-    let ai_state = diaryx_sync_server::handlers::ai::AiState {
+    let ai_state = diaryx_selfhosted::handlers::ai::AiState {
         repo: repo.clone(),
         rate_limiter: Arc::new(rate_limiter.clone()),
         http_client: reqwest::Client::new(),
@@ -201,13 +201,13 @@ async fn main() {
     // Create Stripe state (if configured)
     let stripe_router = if let Some(stripe_config) = config.stripe.clone() {
         info!("Stripe billing: enabled (price={})", stripe_config.price_id);
-        let stripe_state = diaryx_sync_server::handlers::stripe::StripeState {
+        let stripe_state = diaryx_selfhosted::handlers::stripe::StripeState {
             repo: repo.clone(),
             user_store: user_store.clone(),
             config: stripe_config,
             app_base_url: config.app_base_url.clone(),
         };
-        Some(diaryx_sync_server::handlers::stripe::stripe_routes(
+        Some(diaryx_selfhosted::handlers::stripe::stripe_routes(
             stripe_state,
         ))
     } else {
@@ -226,12 +226,12 @@ async fn main() {
                 "⚠️  APPLE_IAP_SKIP_SIGNATURE_VERIFY is enabled — JWS signature verification is DISABLED. Do NOT use in production!"
             );
         }
-        let apple_state = diaryx_sync_server::handlers::apple::AppleIapState {
+        let apple_state = diaryx_selfhosted::handlers::apple::AppleIapState {
             repo: repo.clone(),
             user_store: user_store.clone(),
             config: apple_config,
         };
-        Some(diaryx_sync_server::handlers::apple::apple_iap_routes(
+        Some(diaryx_selfhosted::handlers::apple::apple_iap_routes(
             apple_state,
         ))
     } else {

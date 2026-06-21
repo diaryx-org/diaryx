@@ -24,7 +24,7 @@ No module in this crate depends on Axum, Cloudflare Worker bindings, or SQLite a
 
 ## Database Migrations
 
-The `schema/` module is the single source of truth for the database schema. It contains numbered `.sql` migration files and exposes them as `MIGRATIONS` in `schema/mod.rs`. Both the native sync server (`diaryx_sync_server`) and the Cloudflare adapter (`diaryx_cloudflare`) consume these migrations.
+The `schema/` module is the single source of truth for the database schema. It contains numbered `.sql` migration files and exposes them as `MIGRATIONS` in `schema/mod.rs`. Both the native sync server (`diaryx_selfhosted`) and the Cloudflare adapter (`diaryx_cloudflare`) consume these migrations.
 
 ### Adding a new migration
 
@@ -39,13 +39,13 @@ The `schema/` module is the single source of truth for the database schema. It c
    - All migrations apply cleanly to an empty database.
    - The Cloudflare migration files produce an identical schema to the canonical migrations (catches copy mistakes or drift).
 
-5. **Sync server** — no code changes needed. `diaryx_sync_server` tracks `PRAGMA user_version` and automatically applies any migration whose version is greater than the stored version on next startup.
+5. **Sync server** — no code changes needed. `diaryx_selfhosted` tracks `PRAGMA user_version` and automatically applies any migration whose version is greater than the stored version on next startup.
 
 ### How each adapter consumes migrations
 
 | Adapter | Mechanism |
 |---|---|
-| `diaryx_sync_server` | `db::schema::init_database()` reads `PRAGMA user_version`, applies pending migrations from `diaryx_server::schema::MIGRATIONS`, updates `user_version`. Legacy (pre-versioned) databases are detected and brought up to date via `legacy_migrate()`. |
+| `diaryx_selfhosted` | `db::schema::init_database()` reads `PRAGMA user_version`, applies pending migrations from `diaryx_server::schema::MIGRATIONS`, updates `user_version`. Legacy (pre-versioned) databases are detected and brought up to date via `legacy_migrate()`. |
 | `diaryx_cloudflare` | D1 migration files in `crates/diaryx_cloudflare/migrations/`. Applied automatically in CI/CD via `wrangler d1 migrations apply` upon deployment. Must be kept identical to the canonical SQL files. |
 
 ### Non-SQLite adapters

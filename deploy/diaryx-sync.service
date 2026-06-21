@@ -5,9 +5,9 @@ After=network.target
 [Service]
 Type=simple
 User=adammharris
-WorkingDirectory=/home/adammharris/diaryx/crates/diaryx_sync_server
-ExecStart=/home/adammharris/diaryx/target/release/diaryx_sync_server
-EnvironmentFile=/home/adammharris/diaryx/crates/diaryx_sync_server/.env
+WorkingDirectory=/home/adammharris/diaryx/crates/diaryx_selfhosted
+ExecStart=/home/adammharris/diaryx/target/release/diaryx_selfhosted
+EnvironmentFile=/home/adammharris/diaryx/crates/diaryx_selfhosted/.env
 StandardOutput=append:/home/adammharris/diaryx-sync.log
 StandardError=append:/home/adammharris/diaryx-sync.log
 Restart=always

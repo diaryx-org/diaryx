@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-06-20T02:12:17Z
+updated: 2026-06-21T03:28:44Z
 part_of: '[Diaryx](/Diaryx.md)'
 audience:
 - agents
@@ -68,12 +68,12 @@ Diaryx - README/repo for the Diaryx project - README.md
 │   │       ├── Utils module - Utility functions for date and path handling - crates/diaryx_core/src/utils/README.md
 │   │       └── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
-│   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
-│   │   └── diaryx_sync_server src - Source code for the sync server - crates/diaryx_sync_server/src/README.md
-│   │       ├── Auth module - Authentication middleware and magic link handling - crates/diaryx_sync_server/src/auth/README.md
-│   │       ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
-│   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
-│   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
+│   ├── diaryx_selfhosted - Sync server used by frontends - crates/diaryx_selfhosted/README.md
+│   │   └── diaryx_selfhosted src - Source code for the sync server - crates/diaryx_selfhosted/src/README.md
+│   │       ├── Auth module - Authentication middleware and magic link handling - crates/diaryx_selfhosted/src/auth/README.md
+│   │       ├── Database module - SQLite database schema and repository - crates/diaryx_selfhosted/src/db/README.md
+│   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_selfhosted/src/email/README.md
+│   │       └── Handlers module - HTTP route handlers - crates/diaryx_selfhosted/src/handlers/README.md
 │   ├── crates/diaryx_extism/README.md
 │   └── crates/plugins/diaryx_plugin_sdk/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
@@ -94,7 +94,7 @@ Read the root README.md first. For specific projects, use these entry points:
 | Web app          | apps/web/README.md                  |
 | Tauri app        | apps/tauri/README.md                |
 | WASM bindings    | crates/diaryx_wasm/README.md        |
-| Sync server      | crates/diaryx_sync_server/README.md |
+| Self-hosted backend | crates/diaryx_selfhosted/README.md |
 | Extism host      | crates/diaryx_extism/README.md      |
 | Plugin SDK       | crates/plugins/diaryx_plugin_sdk/README.md    |
 | Sync plugin      | crates/plugins/diaryx_sync_extism/README.md   |

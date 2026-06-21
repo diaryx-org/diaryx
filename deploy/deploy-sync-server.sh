@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-BINARY="/home/adammharris/diaryx/target/release/diaryx_sync_server"
-NEW_BINARY="/tmp/diaryx-deploy/diaryx_sync_server"
+BINARY="/home/adammharris/diaryx/target/release/diaryx_selfhosted"
+NEW_BINARY="/tmp/diaryx-deploy/diaryx_selfhosted"
 DEPLOY_DIR="/tmp/diaryx-deploy"
 
 # Ensure target directory exists

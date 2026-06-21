@@ -68,12 +68,12 @@
             nativeBuildInputs = [ pkgs.pkg-config ];
           };
 
-          diaryx-sync-server = rustPlatform.buildRustPackage {
-            pname = "diaryx-sync-server";
+          diaryx-selfhosted = rustPlatform.buildRustPackage {
+            pname = "diaryx-selfhosted";
             version = "1.6.1";
             inherit src;
             cargoLock.lockFile = ./Cargo.lock;
-            cargoBuildFlags = [ "-p" "diaryx_sync_server" ];
+            cargoBuildFlags = [ "-p" "diaryx_selfhosted" ];
             doCheck = false; # tests need network/DB
 
             buildInputs = lib.optionals pkgs.stdenv.isDarwin [
@@ -175,7 +175,7 @@
         in
         {
           default = diaryx-cli;
-          inherit diaryx-sync-server ts-bindings wasm-package;
+          inherit diaryx-selfhosted ts-bindings wasm-package;
           "wasm-bindgen-cli" = wasm-bindgen-cli;
         });
 

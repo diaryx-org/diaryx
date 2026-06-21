@@ -9,7 +9,7 @@
 //! ## Wire shapes
 //!
 //! Every type in this module serializes directly to the JSON the sync server
-//! returns (see `crates/diaryx_sync_server/src/handlers/namespaces.rs`). When
+//! returns (see `crates/diaryx_selfhosted/src/handlers/namespaces.rs`). When
 //! adding new endpoints, prefer `#[serde(default)]` + optional fields so
 //! we're resilient to server forward-compat additions.
 

@@ -43,7 +43,7 @@ jobs:
               - 'Cargo.lock'
             server:
               - 'crates/diaryx_server/**'
-              - 'crates/diaryx_sync_server/**'
+              - 'crates/diaryx_selfhosted/**'
               - 'crates/diaryx_cloudflare/**'
             tauri:
               - 'apps/tauri/**'
@@ -132,7 +132,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/setup-zig
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p diaryx_server -p diaryx_sync_server --verbose
+      - run: cargo test -p diaryx_server -p diaryx_selfhosted --verbose
 
   check-cloudflare:
     name: Check Cloudflare Worker

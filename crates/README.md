@@ -8,7 +8,7 @@ contents:
 - '[README](/crates/diaryx_server/README.md)'
 - '[README](/crates/diaryx_core/README.md)'
 - '[README](/crates/diaryx_wasm/README.md)'
-- '[README](/crates/diaryx_sync_server/README.md)'
+- '[README](/crates/diaryx_selfhosted/README.md)'
 - '[README](/crates/diaryx_extism/README.md)'
 - '[README](/crates/plugins/diaryx_plugin_sdk/README.md)'
 exclude:
@@ -30,7 +30,7 @@ This folder contains Diaryx crates for core features and platform bindings.
 - `[diaryx_server](/crates/diaryx_server/README.md)`: Platform-agnostic server core and adapter contracts
 - `[diaryx_core](/crates/diaryx_core/README.md)`: Core functions shared across all Diaryx clients
 - `[diaryx_wasm](/crates/diaryx_wasm/README.md)`: WASM version of `diaryx_core` to be used in the web client at `[../apps/web](/apps/web/README.md)`
-- `[diaryx_sync_server](/crates/diaryx_sync_server/README.md)`: Sync server to enable live sync/multi-device sync (soon publishing as well). The platform-agnostic CRDT/sync primitives it and `diaryx_cloudflare` share now live in `diaryx_server::sync`.
+- `[diaryx_selfhosted](/crates/diaryx_selfhosted/README.md)`: Self-hostable Diaryx backend (Axum + SQLite). A deployment target that, like `diaryx_cloudflare`, shares its server logic via `diaryx_server`.
 - `[diaryx_extism](/crates/diaryx_extism/README.md)`: Extism host runtime — loads WASM guest plugins at runtime
 - `tauri-plugin-icloud`: Tauri plugin for iCloud Drive workspace storage (iOS)
 - `tauri-plugin-iap`: Tauri plugin for Apple In-App Purchases via StoreKit 2

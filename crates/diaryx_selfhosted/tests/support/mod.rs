@@ -1,4 +1,4 @@
-//! Shared HTTP test harness for `diaryx_sync_server` integration tests.
+//! Shared HTTP test harness for `diaryx_selfhosted` integration tests.
 //!
 //! Builds an in-process [`Router`] wired to `:memory:` SQLite plus the
 //! in-memory blob store, with email and billing disabled. Tests drive it via
@@ -26,19 +26,19 @@ use axum::{Extension, Router, routing::get};
 use rusqlite::Connection;
 use tower::ServiceExt;
 
-use diaryx_sync_server::adapters::{
+use diaryx_selfhosted::adapters::{
     NativeArkIndexStore, NativeAuthSessionStore, NativeAuthStore, NativeNamespaceStore,
     NativeObjectMetaStore, NativeUserStore,
 };
-use diaryx_sync_server::auth::{AuthExtractor, MagicLinkService, PasskeyService};
-use diaryx_sync_server::blob_store::InMemoryBlobStore;
-use diaryx_sync_server::config::{
+use diaryx_selfhosted::auth::{AuthExtractor, MagicLinkService, PasskeyService};
+use diaryx_selfhosted::blob_store::InMemoryBlobStore;
+use diaryx_selfhosted::config::{
     AppleIapConfig, Config, EmailConfig, ManagedAiConfig, R2Config, StripeConfig,
 };
-use diaryx_sync_server::db::{AuthRepo, NamespaceRepo, init_database};
-use diaryx_sync_server::email::EmailService;
-use diaryx_sync_server::handlers::auth::{AuthState, auth_routes};
-use diaryx_sync_server::handlers::{
+use diaryx_selfhosted::db::{AuthRepo, NamespaceRepo, init_database};
+use diaryx_selfhosted::email::EmailService;
+use diaryx_selfhosted::handlers::auth::{AuthState, auth_routes};
+use diaryx_selfhosted::handlers::{
     AudienceState, NamespaceState, ObjectState, ark_routes, audience_routes, namespace_routes,
     object_routes,
 };

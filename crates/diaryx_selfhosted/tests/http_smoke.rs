@@ -1,4 +1,4 @@
-//! HTTP-level integration tests for `diaryx_sync_server`.
+//! HTTP-level integration tests for `diaryx_selfhosted`.
 //!
 //! These tests drive the real [`axum::Router`] via `tower::ServiceExt::oneshot`
 //! against `:memory:` SQLite — no ports, no fixture server, fast. See

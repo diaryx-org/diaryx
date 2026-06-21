@@ -2,7 +2,7 @@
 //! Diaryx server API must pass.
 //!
 //! The goal is to catch divergence between adapters (Axum + SQLite in
-//! [`diaryx_sync_server`], Workers + D1/R2 in `diaryx_cloudflare`) — the kind
+//! [`diaryx_selfhosted`], Workers + D1/R2 in `diaryx_cloudflare`) — the kind
 //! of bug where one adapter URL-decodes path segments and the other doesn't,
 //! or where they disagree on a response shape.
 //!
@@ -873,7 +873,7 @@ pub async fn test_batch_objects_json_returns_all_keys<D: HttpDispatcher>(dispatc
 /// `multipart/mixed` body with raw binary parts (no base64 overhead).
 ///
 /// **Currently expected to surface a real cloudflare gap**: the endpoint
-/// exists on `diaryx_sync_server` but not on `diaryx_cloudflare`. Keeping
+/// exists on `diaryx_selfhosted` but not on `diaryx_cloudflare`. Keeping
 /// the test here makes the drift visible at CI time rather than as a
 /// silent 404 + JSON fallback in the `HttpNamespaceProvider`.
 ///

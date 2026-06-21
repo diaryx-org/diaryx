@@ -335,7 +335,7 @@ pub async fn list_objects(req: Request, ctx: RouteContext<()>) -> Result<Respons
 
     match service.list(&ns_id, limit, offset, &user_id).await {
         Ok(objects) => {
-            // Must match `diaryx_sync_server::handlers::objects::ObjectMetaResponse`:
+            // Must match `diaryx_selfhosted::handlers::objects::ObjectMetaResponse`:
             // both adapters feed the same `HttpNamespaceProvider` deserializer
             // (`NamespaceObjectMeta`), which the sync engine uses to diff
             // local vs. remote. In particular, `content_hash` MUST be present
@@ -600,7 +600,7 @@ pub async fn batch_get_objects(mut req: Request, ctx: RouteContext<()>) -> Resul
 /// POST /namespaces/{ns_id}/batch/objects/multipart — retrieve multiple objects
 /// as a `multipart/mixed` response with raw binary parts (no base64 overhead).
 ///
-/// Must match the `diaryx_sync_server` multipart shape byte-for-byte so clients
+/// Must match the `diaryx_selfhosted` multipart shape byte-for-byte so clients
 /// parsing the boundary/headers work identically on both adapters.
 pub async fn batch_get_objects_multipart(
     mut req: Request,

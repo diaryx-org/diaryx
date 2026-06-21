@@ -1,6 +1,6 @@
 //! [`HttpDispatcher`] implementation backed by [`reqwest`], for driving the
 //! shared contract suite against any live HTTP server (typically
-//! `diaryx_sync_server` on a local port or `wrangler dev` serving
+//! `diaryx_selfhosted` on a local port or `wrangler dev` serving
 //! `diaryx_cloudflare`).
 //!
 //! Gated behind the `reqwest-dispatcher` feature so crates that don't need
@@ -15,7 +15,7 @@ use super::{ContractRequest, ContractResponse, HttpDispatcher};
 /// [`HttpDispatcher`] that issues real HTTP requests to a base URL.
 ///
 /// Intended for tests that need to drive a live server — e.g. a locally
-/// spawned `wrangler dev` or a `diaryx_sync_server` bound on
+/// spawned `wrangler dev` or a `diaryx_selfhosted` bound on
 /// `127.0.0.1:0`. The base URL must not end with a trailing slash; the
 /// dispatcher appends the request path verbatim.
 pub struct ReqwestDispatcher {

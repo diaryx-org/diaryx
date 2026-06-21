@@ -1,7 +1,7 @@
 ---
 title: Auth module
 description: Authentication middleware and magic link handling
-part_of: '[README](/crates/diaryx_sync_server/src/README.md)'
+part_of: '[README](/crates/diaryx_selfhosted/src/README.md)'
 exclude:
   - '*.lock'
 ---

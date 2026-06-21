@@ -11,7 +11,7 @@
 //! # URL contract
 //!
 //! `base_url` must include whatever API prefix the target server expects (e.g.
-//! `http://localhost:3030/api` for `diaryx_sync_server`,
+//! `http://localhost:3030/api` for `diaryx_selfhosted`,
 //! `http://localhost:8789/api` for `diaryx_cloudflare` under `wrangler dev`).
 //! The provider appends `/namespaces`, `/namespaces/{id}/objects/{key}`, etc.
 //!

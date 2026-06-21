@@ -1,4 +1,4 @@
-//! Native-target test helpers for `diaryx_sync_server`.
+//! Native-target test helpers for `diaryx_selfhosted`.
 //!
 //! Provides a real-TCP test server ([`TestServer`]) that spawns the full
 //! router on `127.0.0.1:0` with `:memory:` SQLite + [`InMemoryBlobStore`],
@@ -179,7 +179,7 @@ fn build_e2e_router(
 // TestServer
 // ---------------------------------------------------------------------------
 
-/// A running instance of `diaryx_sync_server` bound to `127.0.0.1` on an
+/// A running instance of `diaryx_selfhosted` bound to `127.0.0.1` on an
 /// OS-assigned port. Dropping it signals the background task to shut down.
 ///
 /// # URL conventions

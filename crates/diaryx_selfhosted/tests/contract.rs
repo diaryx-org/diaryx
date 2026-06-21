@@ -1,5 +1,5 @@
 //! Runs the shared [`diaryx_server::contract`] test suite against
-//! `diaryx_sync_server`, using the same `ReqwestDispatcher` that the
+//! `diaryx_selfhosted`, using the same `ReqwestDispatcher` that the
 //! cloudflare adapter uses against `wrangler dev`. The dispatcher hits a
 //! real `TestServer` bound on `127.0.0.1:0` so every request exercises the
 //! full router + Axum path extractors + SQLite — not a thin in-process
@@ -8,13 +8,13 @@
 //! Keeping this identical to the cloudflare wrapper means adapter drift
 //! surfaces immediately:
 //!
-//!     cargo test -p diaryx_sync_server --test contract        # this
+//!     cargo test -p diaryx_selfhosted --test contract        # this
 //!     cargo test -p diaryx_cloudflare_e2e --test contract -- --ignored
 //!
 //! Any scenario that passes one but not the other is drift.
 
+use diaryx_selfhosted::testing::TestServer;
 use diaryx_server::contract::{self, http::ReqwestDispatcher};
-use diaryx_sync_server::testing::TestServer;
 
 /// Every test spins up its own fresh server: `:memory:` SQLite, new
 /// in-memory blob store, clean slate. That's cheap (sub-second) and

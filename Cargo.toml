@@ -9,7 +9,7 @@ members = [
     "crates/diaryx_native",
     "crates/diaryx",
     "crates/diaryx_wasm",
-    "crates/diaryx_sync_server",
+    "crates/diaryx_selfhosted",
     "crates/diaryx_extism",
     "crates/plugins/diaryx_plugin_sdk",
     "crates/plugins/diaryx_ai_extism",

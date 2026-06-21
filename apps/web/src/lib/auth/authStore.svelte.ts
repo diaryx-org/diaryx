@@ -98,7 +98,7 @@ export interface AuthState {
 
 const STORAGE_KEYS = {
   TOKEN: "diaryx_auth_token",
-  SERVER_URL: "diaryx_sync_server_url",
+  SERVER_URL: "diaryx_server_url",
   USER: "diaryx_user",
 } as const;
 

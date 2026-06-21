@@ -1,5 +1,5 @@
 [Unit]
-Description=Diaryx Sync Server
+Description=Diaryx Self-Hosted Backend
 After=network.target
 
 [Service]
@@ -8,8 +8,8 @@ User=adammharris
 WorkingDirectory=/home/adammharris/diaryx/crates/diaryx_selfhosted
 ExecStart=/home/adammharris/diaryx/target/release/diaryx_selfhosted
 EnvironmentFile=/home/adammharris/diaryx/crates/diaryx_selfhosted/.env
-StandardOutput=append:/home/adammharris/diaryx-sync.log
-StandardError=append:/home/adammharris/diaryx-sync.log
+StandardOutput=append:/home/adammharris/diaryx-selfhosted.log
+StandardError=append:/home/adammharris/diaryx-selfhosted.log
 Restart=always
 RestartSec=3
 

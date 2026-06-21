@@ -33,9 +33,9 @@ fi
 # ── Deploy systemd service (diff-and-copy) ──────────────────────────────────
 
 SYSTEMD_CHANGED=false
-if [ -f "${DEPLOY_DIR}/diaryx-sync.service" ]; then
-  if ! diff -q "${DEPLOY_DIR}/diaryx-sync.service" /etc/systemd/system/diaryx-sync.service >/dev/null 2>&1; then
-    sudo cp "${DEPLOY_DIR}/diaryx-sync.service" /etc/systemd/system/diaryx-sync.service
+if [ -f "${DEPLOY_DIR}/diaryx-selfhosted.service" ]; then
+  if ! diff -q "${DEPLOY_DIR}/diaryx-selfhosted.service" /etc/systemd/system/diaryx-selfhosted.service >/dev/null 2>&1; then
+    sudo cp "${DEPLOY_DIR}/diaryx-selfhosted.service" /etc/systemd/system/diaryx-selfhosted.service
     SYSTEMD_CHANGED=true
     echo "systemd service updated"
   else
@@ -49,7 +49,7 @@ if [ "${SYSTEMD_CHANGED}" = true ]; then
   sudo systemctl daemon-reload
 fi
 
-sudo systemctl restart diaryx-sync
+sudo systemctl restart diaryx-selfhosted
 
 if [ "${CADDY_CHANGED}" = true ]; then
   sudo systemctl reload caddy
@@ -64,6 +64,6 @@ if curl -sf http://localhost:3030/health > /dev/null; then
 else
   echo "Health check failed! Rolling back..."
   cp "${BINARY}.bak" "${BINARY}"
-  sudo systemctl restart diaryx-sync
+  sudo systemctl restart diaryx-selfhosted
   exit 1
 fi

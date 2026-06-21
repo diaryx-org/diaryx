@@ -1088,7 +1088,7 @@
 
             // If no server URL is configured, set the default before verifying
             // This handles the case where user clicks magic link in a new browser/tab
-            const serverUrl = localStorage.getItem("diaryx_sync_server_url");
+            const serverUrl = localStorage.getItem("diaryx_server_url");
             if (!serverUrl) {
               setServerUrl("https://app.diaryx.org/api");
             }

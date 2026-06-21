@@ -1,6 +1,6 @@
-name: Deploy Sync Server (Self-Host)
+name: Deploy Self-Hosted Backend
 
-# Disabled: sync server now deploys to Cloudflare via CI.
+# Disabled: the managed backend now deploys to Cloudflare via CI.
 # Kept as a reference for self-hosting on a VPS.
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    name: Build Sync Server
+    name: Build Self-Hosted Backend
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,7 +29,7 @@ jobs:
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sync-server-binary
+          name: selfhosted-binary
           path: result/bin/diaryx_selfhosted
 
   deploy:
@@ -44,7 +44,7 @@ jobs:
       - name: Download binary artifact
         uses: actions/download-artifact@v4
         with:
-          name: sync-server-binary
+          name: selfhosted-binary
           path: artifact/
 
       - name: Copy binary, deploy script, and config to VPS
@@ -53,7 +53,7 @@ jobs:
           host: ${{ secrets.DEPLOY_SSH_HOST }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: artifact/diaryx_selfhosted,deploy/deploy-sync-server.sh,deploy/Caddyfile,deploy/diaryx-sync.service
+          source: artifact/diaryx_selfhosted,deploy/deploy-selfhosted.sh,deploy/Caddyfile,deploy/diaryx-selfhosted.service
           target: /tmp/diaryx-deploy
           strip_components: 1
 
@@ -63,4 +63,4 @@ jobs:
           host: ${{ secrets.DEPLOY_SSH_HOST }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: bash /tmp/diaryx-deploy/deploy-sync-server.sh
+          script: bash /tmp/diaryx-deploy/deploy-selfhosted.sh

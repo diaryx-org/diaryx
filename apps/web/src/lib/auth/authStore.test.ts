@@ -229,7 +229,7 @@ describe("authStore", () => {
 
       expect(getServerUrl()).toBe("https://sync.example.com");
       expect(localStorage.setItem).toHaveBeenCalledWith(
-        "diaryx_sync_server_url",
+        "diaryx_server_url",
         "https://sync.example.com",
       );
       expect(mockCreateAuthService).toHaveBeenCalledWith(
@@ -243,7 +243,7 @@ describe("authStore", () => {
 
       expect(getServerUrl()).toBeNull();
       expect(localStorage.removeItem).toHaveBeenCalledWith(
-        "diaryx_sync_server_url",
+        "diaryx_server_url",
       );
     });
   });
@@ -332,7 +332,7 @@ describe("authStore", () => {
     });
 
     it("restores serverUrl from localStorage and creates authService", async () => {
-      localStorage.setItem("diaryx_sync_server_url", "https://sync.example.com");
+      localStorage.setItem("diaryx_server_url", "https://sync.example.com");
       // Health check passes, getMe succeeds
       mockProxyFetch.mockResolvedValue({ ok: true });
       mockAuthService.getMe.mockResolvedValue(makeMeResponse());
@@ -346,7 +346,7 @@ describe("authStore", () => {
     });
 
     it("enters offline mode when server is unreachable", async () => {
-      localStorage.setItem("diaryx_sync_server_url", "https://sync.example.com");
+      localStorage.setItem("diaryx_server_url", "https://sync.example.com");
       localStorage.setItem(
         "diaryx_user",
         JSON.stringify({ id: "u1", email: "test@example.com" }),
@@ -362,7 +362,7 @@ describe("authStore", () => {
     });
 
     it("validates session and populates state on successful getMe", async () => {
-      localStorage.setItem("diaryx_sync_server_url", "https://sync.example.com");
+      localStorage.setItem("diaryx_server_url", "https://sync.example.com");
       mockProxyFetch.mockResolvedValue({ ok: true });
       const meResponse = makeMeResponse();
       mockAuthService.getMe.mockResolvedValue(meResponse);
@@ -378,7 +378,7 @@ describe("authStore", () => {
     });
 
     it("clears auth on 401 from getMe", async () => {
-      localStorage.setItem("diaryx_sync_server_url", "https://sync.example.com");
+      localStorage.setItem("diaryx_server_url", "https://sync.example.com");
       mockProxyFetch.mockResolvedValue({ ok: true });
       mockAuthService.getMe.mockRejectedValue(
         new AuthError("Unauthorized", 401),
@@ -393,7 +393,7 @@ describe("authStore", () => {
     });
 
     it("keeps cached user on non-401 errors", async () => {
-      localStorage.setItem("diaryx_sync_server_url", "https://sync.example.com");
+      localStorage.setItem("diaryx_server_url", "https://sync.example.com");
       localStorage.setItem(
         "diaryx_user",
         JSON.stringify({ id: "u1", email: "cached@example.com" }),

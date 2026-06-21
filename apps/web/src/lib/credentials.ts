@@ -35,7 +35,7 @@ export async function removeCredential(key: string): Promise<void> {
 }
 
 // Live Sync specific helpers - using localStorage for reliability
-const SYNC_SERVER_URL = 'diaryx_sync_server_url';
+const SYNC_SERVER_URL = 'diaryx_server_url';
 const SYNC_ENABLED = 'diaryx_sync_enabled';
 
 export interface SyncConfig {

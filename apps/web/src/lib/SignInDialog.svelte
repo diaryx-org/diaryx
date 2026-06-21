@@ -49,7 +49,7 @@
   const defaultServerUrl = "https://app.diaryx.org/api";
   let serverUrl = $state(
     typeof window !== "undefined"
-      ? localStorage.getItem("diaryx_sync_server_url") || defaultServerUrl
+      ? localStorage.getItem("diaryx_server_url") || defaultServerUrl
       : defaultServerUrl
   );
   let showAdvanced = $state(false);

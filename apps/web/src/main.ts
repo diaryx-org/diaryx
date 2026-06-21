@@ -1,6 +1,24 @@
 import "./app.css";
 import { mount } from "svelte";
 
+// One-time migration: the backend server URL was stored under
+// `diaryx_sync_server_url`. The "sync server" is now just the self-hosted /
+// cloud backend, so the key was renamed to `diaryx_server_url`. Carry any
+// existing value forward so self-hosters don't lose their saved URL.
+if (typeof localStorage !== "undefined") {
+  try {
+    const legacy = localStorage.getItem("diaryx_sync_server_url");
+    if (legacy !== null) {
+      if (localStorage.getItem("diaryx_server_url") === null) {
+        localStorage.setItem("diaryx_server_url", legacy);
+      }
+      localStorage.removeItem("diaryx_sync_server_url");
+    }
+  } catch {
+    /* localStorage unavailable (private mode / SSR) — nothing to migrate */
+  }
+}
+
 // Eagerly prime the browser HTTP cache with the WASM binary so the Web Worker
 // gets a cache hit when it initialises the backend. No-op in Tauri (native backend).
 if (!("__TAURI_INTERNALS__" in window)) {

@@ -115,12 +115,7 @@ fn replace_json_version(text: &str, version: &str) -> String {
 fn update_flake_nix(path: &Path, version: &str) -> Result<(), String> {
     let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let mut out = text;
-    for pname in [
-        "diaryx",
-        "diaryx-sync-server",
-        "ts-bindings",
-        "wasm-package",
-    ] {
+    for pname in ["diaryx", "diaryx-selfhosted", "ts-bindings", "wasm-package"] {
         out = replace_nix_pname_version(&out, pname, version);
     }
     fs::write(path, out).map_err(|e| format!("write {}: {e}", path.display()))?;

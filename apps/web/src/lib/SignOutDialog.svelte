@@ -25,7 +25,7 @@
     try {
       // Delete this device from the server while credentials are still valid
       const deviceId = getDeviceId();
-      const serverUrl = localStorage.getItem('diaryx_sync_server_url');
+      const serverUrl = localStorage.getItem('diaryx_server_url');
       if (deviceId && serverUrl) {
         try {
           await proxyFetch(`${serverUrl}/auth/devices/${deviceId}`, {

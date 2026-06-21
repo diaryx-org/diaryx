@@ -17,7 +17,7 @@ import { createTauriNamespaceService } from "./tauriNamespaceService";
 // user-configured server URL without additional state.
 function readServerUrl(): string | null {
   if (typeof localStorage === "undefined") return null;
-  return localStorage.getItem("diaryx_sync_server_url");
+  return localStorage.getItem("diaryx_server_url");
 }
 
 const wasmService = createWasmNamespaceService(readServerUrl);

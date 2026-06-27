@@ -65,7 +65,7 @@ pub fn parse_mapping(s: &str) -> Result<Mapping, Error> {
     match parse_value(s)? {
         Value::Mapping(map) => Ok(map),
         Value::Null => Ok(Mapping::new()),
-        _ => Err(Error::Parse),
+        _ => Err(Error::expected_mapping("frontmatter mapping")),
     }
 }
 

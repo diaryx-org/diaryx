@@ -3602,8 +3602,9 @@ dependencies = [
 
 [[package]]
 name = "fig"
-version = "0.0.0"
-source = "git+https://github.com/adammharris/fig.git?rev=adfea95499f5120ff0ee8ece07d946feda220b6e#adfea95499f5120ff0ee8ece07d946feda220b6e"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ab9eac3ce45ff25b55fe285cdfa57ea33597aeabab18d6a4671fac11ea82ab0"
 dependencies = [
  "fig-macros",
  "indexmap 2.13.1",
@@ -3612,8 +3613,9 @@ dependencies = [
 
 [[package]]
 name = "fig-macros"
-version = "0.0.0"
-source = "git+https://github.com/adammharris/fig.git?rev=adfea95499f5120ff0ee8ece07d946feda220b6e#adfea95499f5120ff0ee8ece07d946feda220b6e"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b55e23ca863760547de884b141cc6dc1d2c2c3de1b7b68fe961c3649b18c0c85"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -3639,6 +3639,76 @@ and is intentionally kept out of the content hierarchy.\n";
         candidate
     }
 
+    /// Write a brand-new entry file to disk, minting and injecting its ARK
+    /// file id (the `id` frontmatter property) unless `content` already carries
+    /// a valid blade that is unused in this workspace.
+    ///
+    /// This is the single chokepoint for creating entry files. Every creation
+    /// path — top-level entries, child entries, future importers — funnels
+    /// through here so the ARK `id` invariant lives in exactly one place and a
+    /// new creation path cannot silently forget it. Only the file blade is
+    /// stored; the full ARK is composed with the workspace blade at
+    /// publish/resolve time.
+    ///
+    /// Minting draws entropy from v4 UUIDs, so it is active only when the
+    /// `uuid` feature is enabled. Builds without it (the dumb server, isolated
+    /// plugin builds) never create entries at runtime, so they write `content`
+    /// unchanged.
+    pub async fn write_new_entry(&self, path: &Path, content: &str) -> Result<()> {
+        #[cfg(feature = "uuid")]
+        let content = {
+            // Scope blade-uniqueness to the workspace root when one is set,
+            // otherwise to the new file's own directory (loose files, or a
+            // command that supplies its root per-call rather than via an open
+            // workspace).
+            let scope = self
+                .root_path
+                .clone()
+                .or_else(|| path.parent().map(|p| p.to_path_buf()));
+            let existing: std::collections::HashSet<String> = match scope {
+                Some(ref dir) => self.collect_file_blades(dir).await,
+                None => std::collections::HashSet::new(),
+            };
+
+            let parsed = crate::frontmatter::parse_or_empty(content)?;
+            let preset_ok = crate::frontmatter::get_string(&parsed.frontmatter, "id")
+                .map(|id| diaryx_ark::validate_file_blade(id).is_ok() && !existing.contains(id))
+                .unwrap_or(false);
+
+            if preset_ok {
+                content.to_string()
+            } else {
+                // Entropy from v4 UUIDs (already a dependency); refill a small
+                // byte buffer as the minter consumes it.
+                let mut buf: Vec<u8> = Vec::new();
+                let mut rng = move || {
+                    if buf.is_empty() {
+                        buf.extend_from_slice(&uuid::Uuid::new_v4().into_bytes());
+                    }
+                    buf.pop().unwrap()
+                };
+                let blade = diaryx_ark::mint_file_blade_unique(&mut rng, |b| existing.contains(b));
+                crate::frontmatter::set_property_in_text(
+                    content,
+                    "id",
+                    &yaml::Value::String(blade),
+                )?
+            }
+        };
+        #[cfg(not(feature = "uuid"))]
+        let content = content.to_string();
+
+        self.fs
+            .create_new(path, content.as_bytes())
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
+
+        Ok(())
+    }
+
     /// Create a new child entry under a parent index.
     ///
     /// This method:
@@ -3648,75 +3718,19 @@ and is intentionally kept out of the content hierarchy.\n";
     /// - Sets the child's `part_of` to point to the parent
     ///
     /// Returns the path to the new child entry.
+    ///
+    /// Thin wrapper over [`create_child_entry_with_result`](Self::create_child_entry_with_result)
+    /// for callers that only need the new child's path and not the
+    /// parent-conversion details.
     pub async fn create_child_entry(
         &self,
         parent_index_path: &Path,
         title: Option<&str>,
     ) -> Result<PathBuf> {
-        use crate::path_utils::relative_path_from_file_to_target;
-
-        // Parse parent - if it's a leaf (not an index), convert it to an index first
-        let effective_parent = if let Ok(parent_index) = self.parse_index(parent_index_path).await {
-            if parent_index.frontmatter.is_index() {
-                parent_index_path.to_path_buf()
-            } else {
-                // Parent is a leaf file - convert to index first
-                self.convert_to_index(parent_index_path).await?
-            }
-        } else {
-            // Parent doesn't exist or couldn't be parsed - try to convert anyway
-            // (convert_to_index will fail with a proper error if file doesn't exist)
-            return Err(DiaryxError::FileRead {
-                path: parent_index_path.to_path_buf(),
-                source: std::io::Error::new(std::io::ErrorKind::NotFound, "Parent file not found"),
-            });
-        };
-
-        // Determine parent directory (from effective parent, which may have moved)
-        let parent_dir = effective_parent
-            .parent()
-            .ok_or_else(|| DiaryxError::InvalidPath {
-                path: effective_parent.clone(),
-                message: "Parent index has no directory".to_string(),
-            })?;
-
-        // Generate unique filename
-        let child_filename = self.generate_unique_child_name(parent_dir).await;
-        let child_path = parent_dir.join(&child_filename);
-
-        // Format part_of link based on configured format
-        let display_title = title.unwrap_or("New Entry");
-        let part_of_value = if self.root_path.is_some() {
-            // Use link formatting - resolve parent's title for the link display
-            let child_canonical = self.get_canonical_path(&child_path);
-            let parent_canonical = self.get_canonical_path(&effective_parent);
-            let parent_title = self.resolve_title(&parent_canonical).await;
-            self.format_link_sync(&parent_canonical, &parent_title, &child_canonical)
-        } else {
-            // Fallback: use relative path
-            relative_path_from_file_to_target(&child_path, &effective_parent)
-        };
-
-        // Create child file with frontmatter
-        let content = format!(
-            "---\ntitle: \"{}\"\npart_of: \"{}\"\n---\n\n# {}\n\n",
-            display_title, part_of_value, display_title
-        );
-
-        self.fs
-            .create_new(&child_path, content.as_bytes())
-            .await
-            .map_err(|e| DiaryxError::FileWrite {
-                path: child_path.clone(),
-                source: e,
-            })?;
-
-        // Add to parent's contents (using formatted link)
-        let child_canonical = self.get_canonical_path(&child_path);
-        self.add_to_index_contents_canonical(&effective_parent, &child_canonical, display_title)
+        let result = self
+            .create_child_entry_with_result(parent_index_path, title)
             .await?;
-
-        Ok(child_path)
+        Ok(PathBuf::from(result.child_path))
     }
 
     /// Create a new child entry under a parent index, returning detailed result.
@@ -3784,19 +3798,14 @@ and is intentionally kept out of the content hierarchy.\n";
             relative_path_from_file_to_target(&child_path, &effective_parent)
         };
 
-        // Create child file with frontmatter
+        // Create child file with frontmatter, minting its ARK id via the
+        // shared entry-creation chokepoint.
         let content = format!(
             "---\ntitle: \"{}\"\npart_of: \"{}\"\n---\n\n# {}\n\n",
             display_title, part_of_value, display_title
         );
 
-        self.fs
-            .create_new(&child_path, content.as_bytes())
-            .await
-            .map_err(|e| DiaryxError::FileWrite {
-                path: child_path.clone(),
-                source: e,
-            })?;
+        self.write_new_entry(&child_path, &content).await?;
 
         // Add to parent's contents (using formatted link)
         let child_canonical = self.get_canonical_path(&child_path);

@@ -88,19 +88,6 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
         &self.fs
     }
 
-    /// Create a new entry.
-    pub async fn create_entry(&self, path: &str) -> Result<()> {
-        let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", path, path);
-        self.fs
-            .create_new(std::path::Path::new(path), content.as_bytes())
-            .await
-            .map_err(|e| DiaryxError::FileWrite {
-                path: PathBuf::from(path),
-                source: e,
-            })?;
-        Ok(())
-    }
-
     /// Parses a markdown file and extracts frontmatter and body.
     /// Returns an error if no frontmatter is found.
     async fn parse_file(&self, path: &str) -> Result<(IndexMap<String, yaml::Value>, String)> {
@@ -472,14 +459,6 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     /// Access the underlying filesystem.
     pub fn fs(&self) -> &FS {
         &self.fs
-    }
-
-    /// Create a new entry
-    pub fn create_entry(&self, path: &str) -> Result<()> {
-        let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", path, path);
-        self.fs
-            .create_new(std::path::Path::new(path), content.as_bytes())?;
-        Ok(())
     }
 
     /// Parses a markdown file and extracts frontmatter and body

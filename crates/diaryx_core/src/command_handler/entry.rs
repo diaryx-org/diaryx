@@ -212,62 +212,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             format!("---\ntitle: {}\n---\n\n# {}\n\n", title, title)
         };
 
-        // Mint an opaque, workspace-scoped ARK file id and inject it into the
-        // new file's frontmatter, unless the template already set a valid,
-        // unused one. Only the file blade is stored here; the full ARK is
-        // composed with the workspace blade at publish/resolve time.
-        //
-        // Entropy comes from v4 UUIDs, so minting is active only when the
-        // `uuid` feature is enabled. The build configurations that compile
-        // diaryx_core without it (the dumb server, isolated plugin builds)
-        // never create entries at runtime, so they keep the template `content`
-        // unchanged.
-        #[cfg(feature = "uuid")]
-        let content = {
-            // Existing file blades in this workspace, for rejection-checking.
-            // Empty when there is no workspace context (a loose file).
-            let existing: std::collections::HashSet<String> = match options.root_index_path {
-                Some(ref rip) => {
-                    let root_index = self.resolve_fs_path(rip);
-                    let ws_dir = root_index
-                        .parent()
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or(root_index);
-                    self.workspace().inner().collect_file_blades(&ws_dir).await
-                }
-                None => std::collections::HashSet::new(),
-            };
-
-            let parsed = frontmatter::parse_or_empty(&content)?;
-            let preset_ok = frontmatter::get_string(&parsed.frontmatter, "id")
-                .map(|id| diaryx_ark::validate_file_blade(id).is_ok() && !existing.contains(id))
-                .unwrap_or(false);
-
-            if preset_ok {
-                content
-            } else {
-                // Entropy from v4 UUIDs (already a dependency); refill a small
-                // byte buffer as the minter consumes it.
-                let mut buf: Vec<u8> = Vec::new();
-                let mut rng = move || {
-                    if buf.is_empty() {
-                        buf.extend_from_slice(&uuid::Uuid::new_v4().into_bytes());
-                    }
-                    buf.pop().unwrap()
-                };
-                let blade = diaryx_ark::mint_file_blade_unique(&mut rng, |b| existing.contains(b));
-                frontmatter::set_property_in_text(&content, "id", &yaml::Value::String(blade))?
-            }
-        };
-
+        // Scaffold the file through the shared entry-creation chokepoint, which
+        // mints and injects the workspace-scoped ARK file `id` (unless the
+        // template already set a valid, unused one) and writes the file.
         let resolved_path = self.resolve_fs_path(&path);
-        self.fs()
-            .create_new(&resolved_path, content.as_bytes())
-            .await
-            .map_err(|e| crate::error::DiaryxError::FileWrite {
-                path: resolved_path.clone(),
-                source: e,
-            })?;
+        self.workspace()
+            .inner()
+            .write_new_entry(&resolved_path, &content)
+            .await?;
 
         // Set part_of if provided - format based on configured link format
         if let Some(ref parent) = options.part_of {
@@ -527,5 +479,33 @@ mod tests {
         assert!(diaryx_ark::validate_file_blade(id).is_ok());
         assert_ne!(id, "bcdfgr");
         assert_ne!(id, "ghjkmn");
+    }
+
+    #[test]
+    fn create_child_entry_injects_valid_file_id() {
+        // Child creation funnels through the same `write_new_entry` chokepoint
+        // as top-level creation, so the new child must also get a minted `id`.
+        // (Regression guard: this path previously bypassed minting entirely.)
+        // Parent already has non-empty `contents`, so it is treated as an index
+        // and not converted from a leaf.
+        let fs = MockFileSystem::new().with_file(
+            "parent.md",
+            "---\ntitle: Parent\ncontents:\n  - seed.md\n---\n",
+        );
+        let diaryx = Diaryx::new(SyncToAsyncFs::new(fs.clone()));
+
+        let resp = block_on_test(diaryx.cmd_create_child_entry("parent.md".to_string())).unwrap();
+        let child_path = match resp {
+            crate::command::Response::CreateChildResult(r) => r.child_path,
+            other => panic!("expected CreateChildResult, got {other:?}"),
+        };
+
+        let content = fs.get_content(&child_path).expect("child file created");
+        let parsed = frontmatter::parse_or_empty(&content).unwrap();
+        let id = frontmatter::get_string(&parsed.frontmatter, "id").expect("child file id present");
+        assert!(
+            diaryx_ark::validate_file_blade(id).is_ok(),
+            "minted child id `{id}` should be a valid file blade"
+        );
     }
 }

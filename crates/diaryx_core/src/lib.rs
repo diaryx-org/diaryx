@@ -55,6 +55,10 @@ pub mod visibility;
 /// Metadata-to-frontmatter conversion and file writing utilities
 pub mod metadata_writer;
 
+/// Centralized ARK blade minting (uuid-entropy plumbing in one place).
+#[cfg(feature = "uuid")]
+mod mint;
+
 /// Server-namespace management (metadata lookup, deletion) shared across
 /// CLI, Tauri, and Web hosts
 pub mod namespace;

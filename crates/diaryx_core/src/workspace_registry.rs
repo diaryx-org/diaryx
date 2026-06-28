@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct WorkspaceEntry {
-    /// Stable identifier (`local-<uuid>`).
+    /// Stable identifier (`local-<ark-workspace-blade>`).
     pub id: String,
     /// Display name.
     pub name: String,
@@ -53,8 +53,12 @@ impl WorkspaceRegistry {
 
     /// Register a new workspace, returning a reference to the created entry.
     ///
-    /// Generates a `local-<uuid>` ID. If a workspace with the same path already
-    /// exists, returns a reference to the existing entry instead.
+    /// Generates a `local-<ark-workspace-blade>` ID: the body is minted via
+    /// [`diaryx_ark`] (guarding against collisions with existing entries), and
+    /// the `local-` prefix marks a local-only, not-yet-published workspace —
+    /// distinct from a server-minted namespace blade. If a workspace with the
+    /// same path already exists, returns a reference to the existing entry
+    /// instead.
     #[cfg(feature = "uuid")]
     pub fn register(&mut self, name: String, path: Option<PathBuf>) -> &WorkspaceEntry {
         // Dedup by path if one is provided
@@ -67,8 +71,14 @@ impl WorkspaceRegistry {
             return &self.entries[idx];
         }
 
+        // Mint over the much smaller ARK workspace-blade space (vs a v4 UUID),
+        // so guard against collisions with already-registered IDs.
+        let blade = crate::mint::mint_workspace_blade(|b| {
+            let candidate = format!("local-{b}");
+            self.entries.iter().any(|e| e.id == candidate)
+        });
         let entry = WorkspaceEntry {
-            id: format!("local-{}", uuid::Uuid::new_v4()),
+            id: format!("local-{blade}"),
             name,
             path,
         };

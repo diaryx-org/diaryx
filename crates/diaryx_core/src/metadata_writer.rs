@@ -275,159 +275,90 @@ impl FrontmatterMetadata {
     }
 
     /// Convert to YAML frontmatter string.
+    ///
+    /// Builds an ordered [`yaml::Mapping`] in the canonical frontmatter field
+    /// order and serializes it through `fig` (via [`yaml::serialize_mapping`]),
+    /// the same backend the comment-preserving editor uses for in-place property
+    /// edits — so fresh whole-file writes and incremental edits share one YAML
+    /// style and one escaping implementation. The trailing newline fig appends is
+    /// trimmed so the caller's `---\n{yaml}\n---` framing stays tight.
     pub fn to_yaml(&self) -> String {
-        let mut lines: Vec<String> = Vec::new();
+        let mut map = yaml::Mapping::new();
 
         if let Some(title) = &self.title {
-            lines.push(format!("title: {}", yaml_string(title)));
+            map.insert("title".to_string(), yaml::Value::String(title.clone()));
         }
 
         if let Some(link) = &self.link {
-            lines.push(format!("link: {}", yaml_string(link)));
+            map.insert("link".to_string(), yaml::Value::String(link.clone()));
         }
 
         if let Some(links) = &self.links
             && !links.is_empty()
         {
-            lines.push("links:".to_string());
-            for item in links {
-                lines.push(format!("  - {}", yaml_string(item)));
-            }
+            map.insert("links".to_string(), str_seq(links));
         }
 
         if let Some(link_of) = &self.link_of
             && !link_of.is_empty()
         {
-            lines.push("link_of:".to_string());
-            for item in link_of {
-                lines.push(format!("  - {}", yaml_string(item)));
-            }
+            map.insert("link_of".to_string(), str_seq(link_of));
         }
 
         if let Some(part_of) = &self.part_of {
-            lines.push(format!("part_of: {}", yaml_string(part_of)));
+            map.insert("part_of".to_string(), yaml::Value::String(part_of.clone()));
         }
 
         if let Some(contents) = &self.contents {
-            if contents.is_empty() {
-                // Write empty array explicitly to preserve index file identity
-                lines.push("contents: []".to_string());
-            } else {
-                lines.push("contents:".to_string());
-                for item in contents {
-                    lines.push(format!("  - {}", yaml_string(item)));
-                }
-            }
+            // An explicit empty sequence is preserved (serializes to `[]`) so an
+            // index file keeps its identity even with no children.
+            map.insert("contents".to_string(), str_seq(contents));
         }
 
         if let Some(audience) = &self.audience
             && !audience.is_empty()
         {
-            lines.push("audience:".to_string());
-            for item in audience {
-                lines.push(format!("  - {}", yaml_string(item)));
-            }
+            map.insert("audience".to_string(), str_seq(audience));
         }
 
         if let Some(description) = &self.description {
-            lines.push(format!("description: {}", yaml_string(description)));
+            map.insert(
+                "description".to_string(),
+                yaml::Value::String(description.clone()),
+            );
         }
 
         if let Some(attachments) = &self.attachments
             && !attachments.is_empty()
         {
-            lines.push("attachments:".to_string());
-            for item in attachments {
-                lines.push(format!("  - {}", yaml_string(item)));
-            }
+            map.insert("attachments".to_string(), str_seq(attachments));
         }
 
-        // Write updated timestamp if present (RFC3339 string)
+        // Write updated timestamp as a local RFC3339 string, falling back to the
+        // raw millis if the timestamp can't be formatted.
         if let Some(updated) = self.updated {
-            if let Some(formatted) = date::timestamp_millis_to_local_rfc3339(updated) {
-                lines.push(format!("updated: {}", yaml_string(&formatted)));
-            } else {
-                // Fallback to raw number if timestamp is invalid
-                lines.push(format!("updated: {}", updated));
-            }
+            let value = match date::timestamp_millis_to_local_rfc3339(updated) {
+                Some(formatted) => yaml::Value::String(formatted),
+                None => yaml::Value::Int(updated),
+            };
+            map.insert("updated".to_string(), value);
         }
 
         // Add extra properties
         for (key, value) in &self.extra {
-            lines.push(format!("{}: {}", key, yaml_value(value)));
+            map.insert(key.clone(), value.clone());
         }
 
-        lines.join("\n")
+        yaml::serialize_mapping(&map)
+            .unwrap_or_default()
+            .trim_end()
+            .to_string()
     }
 }
 
-/// Format a string for YAML (quote if necessary).
-fn yaml_string(value: &str) -> String {
-    // Check if the string needs quoting
-    if value.is_empty()
-        || value.contains(':')
-        || value.contains('#')
-        || value.contains('[')
-        || value.contains(']')
-        || value.contains('{')
-        || value.contains('}')
-        || value.contains('|')
-        || value.contains('>')
-        || value.contains('&')
-        || value.contains('*')
-        || value.contains('!')
-        || value.contains('?')
-        || value.contains('\'')
-        || value.contains('"')
-        || value.contains('%')
-        || value.contains('@')
-        || value.contains('`')
-        || value.contains('\n')
-        || value.starts_with(' ')
-        || value.ends_with(' ')
-        || looks_like_number(value)
-        || is_yaml_keyword(value)
-    {
-        // Use double quotes and escape internal quotes
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-    } else {
-        value.to_string()
-    }
-}
-
-/// Check if a string looks like a number.
-fn looks_like_number(s: &str) -> bool {
-    s.parse::<f64>().is_ok()
-}
-
-/// Check if a string is a YAML keyword.
-fn is_yaml_keyword(s: &str) -> bool {
-    matches!(
-        s.to_lowercase().as_str(),
-        "true" | "false" | "null" | "yes" | "no" | "on" | "off"
-    )
-}
-
-/// Format a JSON value for YAML.
-fn yaml_value(value: &yaml::Value) -> String {
-    match value {
-        yaml::Value::Null => "null".to_string(),
-        yaml::Value::Bool(b) => b.to_string(),
-        yaml::Value::Int(i) => i.to_string(),
-        yaml::Value::Float(f) => {
-            let mut buf = ryu::Buffer::new();
-            buf.format(*f).to_string()
-        }
-        yaml::Value::String(s) => yaml_string(s),
-        yaml::Value::Sequence(arr) => {
-            let items: Vec<String> = arr.iter().map(yaml_value).collect();
-            format!("[{}]", items.join(", "))
-        }
-        yaml::Value::Mapping(_) => {
-            // For objects, use JSON format as YAML flow style
-            value.to_json().unwrap_or_else(|_| "{}".to_string())
-        }
-    }
+/// Build a YAML sequence value from a slice of strings.
+fn str_seq(items: &[String]) -> yaml::Value {
+    yaml::Value::Sequence(items.iter().cloned().map(yaml::Value::String).collect())
 }
 
 /// Write a file with metadata as YAML frontmatter and body content.
@@ -791,26 +722,6 @@ mod tests {
     }
 
     #[test]
-    fn test_yaml_string_simple() {
-        assert_eq!(yaml_string("hello"), "hello");
-        assert_eq!(yaml_string("hello world"), "hello world");
-    }
-
-    #[test]
-    fn test_yaml_string_needs_quoting() {
-        assert_eq!(yaml_string("hello: world"), "\"hello: world\"");
-        assert_eq!(yaml_string("has #comment"), "\"has #comment\"");
-        assert_eq!(yaml_string("true"), "\"true\"");
-        assert_eq!(yaml_string("123"), "\"123\"");
-        assert_eq!(yaml_string(" leading space"), "\" leading space\"");
-    }
-
-    #[test]
-    fn test_yaml_string_escaping() {
-        assert_eq!(yaml_string("has \"quotes\""), "\"has \\\"quotes\\\"\"");
-    }
-
-    #[test]
     fn test_frontmatter_metadata_from_json() {
         let json = serde_json::json!({
             "title": "Test Title",
@@ -861,10 +772,11 @@ mod tests {
 
         let yaml = fm.to_yaml();
         assert!(yaml.contains("title: Test Title"));
-        // Markdown links are quoted in YAML because they contain special characters
-        assert!(yaml.contains("part_of: \"[Parent Index](/folder/parent.md)\""));
+        // Markdown links are quoted in YAML because they contain special
+        // characters; fig emits single-quoted scalars and column-0 block items.
+        assert!(yaml.contains("part_of: '[Parent Index](/folder/parent.md)'"));
         assert!(yaml.contains("contents:"));
-        assert!(yaml.contains("  - \"[Child](/folder/child.md)\""));
+        assert!(yaml.contains("- '[Child](/folder/child.md)'"));
         assert!(yaml.contains("description: A description"));
     }
 
@@ -1049,14 +961,6 @@ mod tests {
     }
 
     #[test]
-    fn test_yaml_string_quotes_markdown_links() {
-        // Markdown links contain [ and ] which require quoting
-        let link = "[Title](/path/to/file.md)";
-        let quoted = yaml_string(link);
-        assert_eq!(quoted, "\"[Title](/path/to/file.md)\"");
-    }
-
-    #[test]
     fn test_roundtrip_markdown_link_to_yaml() {
         let fm = FrontmatterMetadata {
             title: Some("Test Entry".to_string()),
@@ -1073,9 +977,22 @@ mod tests {
         };
 
         let yaml = fm.to_yaml();
-        // The markdown links should be properly quoted
-        assert!(yaml.contains("part_of: \"[Parent Index](/Folder/index.md)\""));
-        assert!(yaml.contains("  - \"[Child Entry](/Folder/child.md)\""));
+        // Genuine round-trip: the serialized YAML must reparse to the same
+        // scalar values. This proves fig quotes the special-character links
+        // correctly regardless of the exact quote style it chooses.
+        let map = crate::yaml::parse_mapping(&yaml).expect("reparse to_yaml output");
+        assert_eq!(
+            map.get("part_of").and_then(|v| v.as_str()),
+            Some("[Parent Index](/Folder/index.md)")
+        );
+        let contents = map
+            .get("contents")
+            .and_then(|v| v.as_sequence())
+            .expect("contents sequence");
+        assert_eq!(
+            contents.first().and_then(|v| v.as_str()),
+            Some("[Child Entry](/Folder/child.md)")
+        );
     }
 
     #[test]

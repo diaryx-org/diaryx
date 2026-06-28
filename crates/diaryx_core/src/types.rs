@@ -48,8 +48,9 @@ pub struct FileInfo {
 ///
 /// ## Doc-ID Based Architecture
 ///
-/// Files are keyed by stable document IDs (UUIDs) rather than file paths.
-/// This makes renames trivial property updates rather than delete+create operations.
+/// Files are keyed by stable document IDs (ARK file blades) rather than file
+/// paths. This makes renames trivial property updates rather than delete+create
+/// operations.
 ///
 /// The actual filesystem path is derived from the `filename` field and the parent chain:
 /// - `filename`: The file's name on disk (e.g., "my-note.md")
@@ -80,9 +81,9 @@ pub struct FileMetadata {
     #[fig(default)]
     pub link_of: Option<Vec<String>>,
 
-    /// Document ID of parent file (e.g., "abc123-uuid"), or None for root files.
-    /// Note: For backward compatibility during migration, this may temporarily
-    /// contain absolute paths which will be converted to doc_ids.
+    /// Document ID of parent file (e.g., "qx4r9d", an ARK file blade), or None
+    /// for root files. Note: For backward compatibility during migration, this
+    /// may temporarily contain absolute paths which will be converted to doc_ids.
     #[fig(default)]
     pub part_of: Option<String>,
 
@@ -416,7 +417,7 @@ impl FileMetadata {
 
     /// Check if this metadata uses the legacy path-based format.
     ///
-    /// Returns true if part_of contains a path (has '/') rather than a UUID.
+    /// Returns true if part_of contains a path (has '/') rather than an ID blade.
     pub fn is_legacy_format(&self) -> bool {
         self.part_of
             .as_ref()
@@ -550,8 +551,8 @@ mod tests {
         let mut meta = FileMetadata::default();
         assert!(!meta.is_legacy_format()); // No part_of
 
-        meta.part_of = Some("abc123-uuid".to_string());
-        assert!(!meta.is_legacy_format()); // UUID format
+        meta.part_of = Some("qx4r9d".to_string());
+        assert!(!meta.is_legacy_format()); // ID blade format
 
         meta.part_of = Some("workspace/index.md".to_string());
         assert!(meta.is_legacy_format()); // Path format

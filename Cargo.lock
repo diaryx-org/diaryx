@@ -2677,6 +2677,7 @@ dependencies = [
  "base64 0.22.1",
  "comrak",
  "diaryx_core",
+ "fig",
  "handlebars",
  "indexmap 2.13.1",
  "serde",

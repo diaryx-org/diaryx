@@ -1,9 +1,13 @@
-//! Workspace appearance types.
+//! Workspace appearance types: theme colors, typography, and favicon.
 //!
 //! These types represent the resolved appearance settings for a workspace,
 //! including theme colors, typography, and favicon. They mirror the frontend
 //! `ThemeDefinition` / `TypographySettings` structures and are the canonical
-//! Rust representation used by publish, export, and other consumers.
+//! Rust representation consumed by the rendering engine.
+//!
+//! The frontend persists the underlying settings to `.diaryx/` config files
+//! and supplies the resolved [`ThemeAppearance`] to the renderer; this crate
+//! only models the rendered shape (it does not read those files).
 
 use std::collections::HashMap;
 
@@ -229,7 +233,7 @@ pub struct FaviconAsset {
 
 /// Resolved workspace appearance: theme colors, typography, and favicon.
 ///
-/// This is the top-level type returned by [`super::resolve_appearance`].
+/// This is the top-level appearance type supplied to the renderer.
 #[derive(Debug, Clone, Default, fig::ToValue, fig::FromValue)]
 pub struct ThemeAppearance {
     /// Theme identifier (e.g. "default", "sepia", "nord").

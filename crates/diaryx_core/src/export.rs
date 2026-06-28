@@ -485,7 +485,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
 }
 
 /// Check if a file is a binary attachment (not markdown/text).
-pub fn is_binary_file(path: &Path) -> bool {
+fn is_binary_file(path: &Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())

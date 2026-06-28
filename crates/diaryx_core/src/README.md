@@ -8,7 +8,6 @@ contents:
 - '[README](/crates/diaryx_core/src/plugin/README.md)'
 - '[README](/crates/diaryx_core/src/utils/README.md)'
 - '[README](/crates/diaryx_core/src/workspace/README.md)'
-- '[README](/crates/diaryx_core/src/import/README.md)'
 exclude:
 - '*.lock'
 - '**/*.rs'
@@ -23,19 +22,18 @@ This directory contains the source code for the core Diaryx library.
 | File                 | Purpose                                                |
 | -------------------- | ------------------------------------------------------ |
 | `lib.rs`             | Library entry point and public API exports             |
-| `backup.rs`          | Create ZIP backups of markdown files                   |
 | `command.rs`         | Command pattern API for unified WASM/Tauri operations  |
-| `command_handler.rs` | Command execution implementation                       |
 | `config.rs`          | Configuration management                               |
 | `diaryx.rs`          | Central Diaryx data structure                          |
 | `error.rs`           | Shared error types                                     |
 | `export.rs`          | Export with audience filtering (case-insensitive, trim-aware, no special "private" value) |
-| `frontmatter.rs`     | Frontmatter parsing and manipulation                   |
 | `link_parser.rs`     | Parse markdown links                                   |
 | `metadata_writer.rs` | Write frontmatter metadata (temp + backup safe writes) |
+| `mint.rs`            | Centralized ARK blade minting (uuid-entropy plumbing in one place) |
+| `namespace.rs`       | Server-namespace management (metadata lookup, deletion) shared across hosts |
 | `search.rs`          | Search functionality                                   |
-| `body_template.rs`   | Render-time body templating via Handlebars (`templating` feature) |
-| `template.rs`        | Creation-time template management                      |
+| `types.rs`           | Core data types (`FileMetadata`, `BinaryRef`, history types) |
+| `visibility.rs`      | Audience visibility directive filtering for markdown bodies |
 | `test_utils.rs`      | Feature-gated test utilities                           |
 | `workspace_registry.rs` | Multi-workspace registry types (shared across frontends) |
 
@@ -44,14 +42,16 @@ This directory contains the source code for the core Diaryx library.
 | Directory      | Purpose                                                     |
 | -------------- | ----------------------------------------------------------- |
 | `appearance/`  | Workspace appearance: theme colors, typography, favicon resolution |
+| `command_handler/` | Command execution implementation (`execute()` for `Diaryx`) |
+| `entry/`       | Entry manipulation functionality                            |
+| `frontmatter/` | Frontmatter parsing and manipulation (YAML between `---` fences) |
+| `fs/`          | Filesystem abstraction layer                                |
 | `plugin/`      | Plugin architecture: traits, events, registry               |
 | `publish/`     | HTML publishing pipeline (includes `ContentProvider` trait)  |
-| `entry/`       | Entry manipulation functionality                            |
-| `fs/`          | Filesystem abstraction layer                                |
 | `utils/`       | Utility functions (date, path)                              |
 | `validate/`    | Workspace validation and auto-fixing (split by concern)     |
 | `workspace/`   | Workspace tree organization                                 |
-| `import/`      | Import external formats                                     |
+| `yaml/`        | YAML format primitives (`Value`, `Mapping`, parse/serialize) |
 
 ### `validate/` submodules
 

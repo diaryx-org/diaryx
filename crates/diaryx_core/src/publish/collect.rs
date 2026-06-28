@@ -238,16 +238,7 @@ where
 
     #[cfg(feature = "uuid")]
     {
-        // Entropy from v4 UUIDs (refill a small byte buffer as the minter
-        // consumes it) — mirrors entry creation's minting.
-        let mut buf: Vec<u8> = Vec::new();
-        let mut rng = move || {
-            if buf.is_empty() {
-                buf.extend_from_slice(&uuid::Uuid::new_v4().into_bytes());
-            }
-            buf.pop().unwrap()
-        };
-        let blade = diaryx_ark::mint_file_blade_unique(&mut rng, |b| existing_blades.contains(b));
+        let blade = crate::mint::mint_file_blade(existing_blades);
 
         let new_content = frontmatter::set_property_in_text(
             content,

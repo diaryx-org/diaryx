@@ -4,8 +4,8 @@
 //! live here so the rendering engine can be shared by the publish plugin
 //! (client-side) and the sync server / Cloudflare worker (server-side render).
 //!
-//! Appearance types (colors, typography, favicon, theme) remain in
-//! `diaryx_core::appearance`; the plugin re-exports those under their legacy
+//! Appearance types (colors, typography, favicon, theme) live in
+//! [`crate::appearance`]; the plugin re-exports those under their legacy
 //! `Publish*` names.
 
 use std::path::PathBuf;

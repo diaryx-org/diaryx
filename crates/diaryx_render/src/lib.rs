@@ -8,6 +8,7 @@
 //! It must remain portable to `wasm32-unknown-unknown` (the Cloudflare worker
 //! target): no Extism, no host functions, no filesystem, no entropy/clock.
 
+pub mod appearance;
 pub mod html;
 mod links;
 mod markdown;
@@ -19,6 +20,9 @@ pub mod site;
 pub mod template;
 pub mod types;
 
+pub use appearance::{
+    ColorPalette, ContentWidth, FaviconAsset, FontFamily, ThemeAppearance, TypographySettings,
+};
 pub use html::{HtmlRenderer, SiteStyle};
 pub use links::{percent_decode, root_prefix, transform_links};
 pub use markdown::{markdown_to_html, preprocess_custom_syntax};

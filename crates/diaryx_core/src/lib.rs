@@ -7,14 +7,8 @@
 /// own `fig` dependency.
 pub use fig;
 
-/// Workspace appearance: theme colors, typography, and favicon resolution
-pub mod appearance;
-
 /// Authentication module for sync server
 pub mod auth;
-
-/// Billing tier model and feature gates
-pub mod billing;
 
 /// Command pattern API for unified command execution
 pub mod command;

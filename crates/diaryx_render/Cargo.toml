@@ -22,6 +22,7 @@ templating = ["dep:handlebars", "dep:serde_json", "dep:indexmap", "diaryx_core/s
 [dependencies]
 comrak = "0.49"
 diaryx_core = { workspace = true }
+fig = { workspace = true }
 serde = { workspace = true }
 base64 = "0.22"
 handlebars = { version = "6", optional = true }

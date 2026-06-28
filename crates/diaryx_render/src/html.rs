@@ -8,7 +8,7 @@
 //! (the bundled stylesheet, no favicon) is used. The same renderer runs
 //! client-side (publish plugin) and server-side (ARK Layer 3 render-on-write).
 
-use diaryx_core::appearance::{FaviconAsset, ThemeAppearance};
+use crate::appearance::{FaviconAsset, ThemeAppearance};
 
 use crate::links::root_prefix;
 use crate::page::{
@@ -395,7 +395,7 @@ fn get_base_css() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diaryx_core::appearance::{ColorPalette, ThemeAppearance};
+    use crate::appearance::{ColorPalette, ThemeAppearance};
     use std::path::PathBuf;
 
     fn make_page(dest: &str, title: &str, is_root: bool) -> PublishedPage {

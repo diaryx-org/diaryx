@@ -1625,14 +1625,19 @@ describe('api', () => {
     })
 
     it('should set plugin config', async () => {
-      vi.mocked(mockBackend.execute).mockResolvedValue({ type: 'Ok' })
+      const mockReconcile = { permission_request: null, migrations: [] }
+      vi.mocked(mockBackend.execute).mockResolvedValue({
+        type: 'PluginResult',
+        data: mockReconcile,
+      })
 
-      await api.setPluginConfig('diaryx.daily', { theme: 'light' })
+      const result = await api.setPluginConfig('diaryx.daily', { theme: 'light' })
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'SetPluginConfig',
         params: { plugin: 'diaryx.daily', config: { theme: 'light' } },
       })
+      expect(result).toEqual(mockReconcile)
     })
 
     it('should remove workspace plugin data', async () => {
